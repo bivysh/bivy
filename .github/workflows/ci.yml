@@ -43,8 +43,10 @@ permissions:
 #   queue  the merge queue: every unit suite, the web build, the release
 #          package, a desktop browser smoke, plus packaging/e2e lanes only when
 #          their own inputs changed.
-#   full   nightly, manual, release (force_all) and any change to this file:
-#          everything, on every OS family and viewport.
+#   full   nightly, manual, release (force_all), a queued release commit and
+#          any change to this file: everything, on every OS family and
+#          viewport. Every job runs and must succeed, so release.yml can reuse
+#          a full run on the same SHA; keep event-specific jobs out of here.
 jobs:
   # Detect which areas a change actually touches so we only run relevant jobs,
   # and which tier this run is. Changing ci.yml itself runs the full tier so CI
@@ -141,8 +143,17 @@ jobs:
           EVENT: ${{ github.event_name }}
           CI_CHANGED: ${{ steps.filter.outputs.common }}
           PR_BASE: ${{ github.event.pull_request.base.sha }}
+          QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
-          if [ "$FORCE_ALL" = true ] || [ "$EVENT" = schedule ] || [ "$EVENT" = workflow_dispatch ] || [ "$CI_CHANGED" = true ]; then
+          # A queued release commit (`pnpm release` bumps package.json's version)
+          # runs the full tier: release.yml then reuses this run on the merged
+          # SHA instead of repeating full CI before promotion.
+          release=false
+          if [ "$EVENT" = merge_group ]; then
+            version() { node -e 'console.log(JSON.parse(require("fs").readFileSync(0, "utf8")).version)'; }
+            if [ "$(git show "$QUEUE_BASE:package.json" | version)" != "$(version < package.json)" ]; then release=true; fi
+          fi
+          if [ "$FORCE_ALL" = true ] || [ "$EVENT" = schedule ] || [ "$EVENT" = workflow_dispatch ] || [ "$CI_CHANGED" = true ] || [ "$release" = true ]; then
             tier=full; shards='[1,2,3,4,5,6]'
           elif [ "$EVENT" = merge_group ]; then
             tier=queue; shards='[1]'
@@ -546,27 +557,3 @@ jobs:
             exit 1
           fi
           echo "CI passed (skipped jobs are expected when their area was untouched)."
-
-  # Nobody watches a scheduled run. Keep one open issue for a red nightly and
-  # comment on it again for each further failure, so it cannot go unnoticed.
-  nightly-alert:
-    needs: ci-ok
-    if: ${{ always() && github.event_name == 'schedule' && needs.ci-ok.result == 'failure' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      issues: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-    steps:
-      - run: |
-          title="Nightly full CI is failing"
-          issue=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
-          body="Nightly full CI failed: $RUN_URL"
-          if [ -n "$issue" ]; then
-            gh issue comment "$issue" --body "$body"
-          else
-            gh issue create --title "$title" --body "$body"
-          fi

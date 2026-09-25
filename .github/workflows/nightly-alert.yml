@@ -1,0 +1,36 @@
+name: Nightly CI alert
+
+# Nobody watches a scheduled run. Keep one open issue for a red nightly full CI
+# and comment on it again for each further failure, so it cannot go unnoticed.
+# This lives outside ci.yml because a job there that only runs on schedule
+# would be skipped in every other full run, and release.yml reuses a CI run
+# only when every one of its jobs succeeded.
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  alert:
+    if: github.event.workflow_run.event == 'schedule' && github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.event.workflow_run.html_url }}
+    steps:
+      - run: |
+          title="Nightly full CI is failing"
+          issue=$(gh issue list --state open --search "\"$title\" in:title" --json number --jq '.[0].number')
+          body="Nightly full CI failed: $RUN_URL"
+          if [ -n "$issue" ]; then
+            gh issue comment "$issue" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body"
+          fi

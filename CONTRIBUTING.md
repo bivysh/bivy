@@ -33,7 +33,7 @@ path-filtered to the areas your change touches:
   unit suites that depend on your change.
 - **Merge queue:** every unit suite, the web build, the release package, and a
   desktop browser smoke set, plus packaging and remote e2e when their inputs change.
-- **Nightly, releases, and any change to `ci.yml`:** everything, including
+- **Nightly, releases, queued release commits, and any change to `ci.yml`:** everything, including
   macOS, clean-installer, full browser coverage on every viewport, and remote e2e.
   A failed nightly opens or updates a "Nightly full CI is failing" issue.
 

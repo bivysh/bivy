@@ -38,6 +38,19 @@ test("the CI reuse check only accepts a run where every job succeeded", () => {
   assert.match(plan, /select\(\.conclusion != "success"\)/);
 });
 
+test("a full-tier CI run executes every job, so the release plan can reuse it", () => {
+  // The plan reuses a run only when no job concluded other than success; a
+  // job that a full-tier run skips would force full CI again before every release.
+  for (const [name, job] of Object.entries(ci.jobs) as [string, { if?: string }][]) {
+    if (!job.if || job.if === "${{ always() }}") continue;
+    assert.match(job.if, /^needs\.changes\.outputs\.tier == 'full'( \|\| |$)/, `${name} is skipped in a full run`);
+  }
+  // Queued release commits run the full tier, which is what the plan reuses.
+  const tierStep = ci.jobs.changes.steps.find((step: { id?: string }) => step.id === "tier");
+  assert.match(tierStep.run, /\$QUEUE_BASE:package\.json/);
+  assert.match(tierStep.run, /\|\| \[ "\$release" = true \]; then\n\s*tier=full/);
+});
+
 test("every path-filtered CI job runs in the full tier that a production release forces", () => {
   assert.equal(ci.on.workflow_call.inputs.force_all.type, "boolean");
   const tierStep = ci.jobs.changes.steps.find((step: { id?: string }) => step.id === "tier");
