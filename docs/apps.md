@@ -59,14 +59,15 @@ view IDs. API callers can use the same `apps.publish/list/open/remove` commands.
 
 Publishing adds a durable **Open app** button to the chat. You can also use the
 session menu → **Apps**. Both open the same view selector. **Open preview** opens
-a separate preview tab with a Bivy-owned **Back to chat** / **Reload** header.
+a separate preview tab with Bivy's controls in a floating pill (see
+[Preview controls](#preview-controls)).
 If the browser blocks popups, a normal link is offered instead. **Back to chat**
 closes the preview tab where permitted, otherwise navigates to the originating
 session. Closing the view does not stop an external app server.
 
 Web apps do not currently open inside the Bivy PWA itself. The preview tab hosts
 a Bivy-owned shell, and the generated app is framed on a separate, same-site
-origin. This keeps app code away from the header and avoids depending on
+origin. This keeps app code away from Bivy's controls and avoids depending on
 cross-site iframe cookies inside the PWA. Terminal views ask for confirmation,
 then open inside Bivy's existing terminal with input, output, resizing and mobile
 controls. Chat launchers survive reload, but opening a removed app or one cleared
@@ -245,8 +246,31 @@ and sandboxed popups are allowed; top-level navigation is not. Upstream
 `X-Frame-Options` and CSP `frame-ancestors` are replaced with a policy allowing
 only that view's shell; other CSP directives are preserved. If an app depends on
 escaping its frame or unsandboxed OAuth popups, it needs its normal development
-URL outside this preview mode. The header remains available even when app access
-expires. Reload resets the app frame to its root URL.
+URL outside this preview mode. The controls remain available even when app access
+expires. Reload reloads the page the app is on.
+
+### Preview controls
+
+The preview shell floats one pill over the app, so the app keeps the whole
+screen. **⌄** collapses it to a small **Bivy** button when it covers the app's
+own bottom bar.
+
+- **Point**: tap any element in the app. A draft for the agent opens with the
+  element's selector, text, size and position, the page, the viewport and
+  recent errors. You add what should change, then **Add to chat** puts it in the
+  session's composer. The tap you point with is not passed to the app.
+- **Console**: errors and warnings from the page, with a count on the pill.
+  **Send to agent…** drafts them the same way.
+- **Full / Tablet / Phone** (wide screens): constrains the app to 768 or 390 px.
+
+These work through a small inspector script that the gateway adds to the app's
+HTML page loads, served from the app's own origin (`/__bivy/inspector.js`). The
+gateway requests uncompressed HTML for page loads, and adds that exact script URL
+to the app's `script-src` (or `default-src`) CSP directive; other directives are
+unchanged. A CSP delivered in a `<meta>` tag, `'strict-dynamic'`, or HTML over
+5 MiB leaves the inspector out; the preview still works without it. The
+inspector only reports to the framing shell. Everything it reports is untrusted
+app data, and becomes a draft you review — never a message sent for you.
 
 Preview data uses HTTPS to the deployment's preview ingress and, in automatic
 mode, a separate outbound WebSocket tunnel to the node, **not Bivy session E2E
@@ -288,7 +312,7 @@ preview gate; PWA/offline behavior must be tested outside this preview mode.
   and relay control. The CLI uses these same endpoints.
 - `AppMessage.tsx`: durable, ID-based chat launcher; the event log and live
   transcript reducer carry references, never access grants.
-- `src/apps/preview-shell.ts`: trusted preview header on a separate origin from
+- `src/apps/preview-shell.ts`: trusted preview controls on a separate origin from
   generated content. It uses the canonical styles and design tokens, also copied
   into standalone node releases.
 - `AppsSheet.tsx`: app discovery and view selection; terminal views delegate to

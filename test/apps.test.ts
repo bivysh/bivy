@@ -282,7 +282,8 @@ test("static page loads fall back for client-side routes; assets still 404", asy
     const id = registry.publish("s", dir, staticManifest).views[0].id;
     const { url, cookie } = await grant(gateway, port, id);
     const page = { cookie, "sec-fetch-dest": "iframe" };
-    assert.equal((await request(port, url.host, "/invoices/42", { headers: page })).body, "<h1>Preview</h1>");
+    // Page loads also carry the injected inspector, ahead of the app's markup.
+    assert.equal((await request(port, url.host, "/invoices/42", { headers: page })).body, '<script src="/__bivy/inspector.js"></script><h1>Preview</h1>');
     assert.equal((await request(port, url.host, "/invoices/42", { headers: { cookie, accept: "text/html" } })).status, 200);
     assert.equal((await request(port, url.host, "/app.js", { headers: page })).status, 404);
     assert.equal((await request(port, url.host, "/invoices/42", { headers: { cookie, "sec-fetch-dest": "empty" } })).status, 404);
@@ -290,7 +291,7 @@ test("static page loads fall back for client-side routes; assets still 404", asy
     const withNotFound = registry.publish("s", dir, staticManifest).views[0].id;
     const second = await grant(gateway, port, withNotFound);
     const missing = await request(port, second.url.host, "/nope", { headers: { cookie: second.cookie, "sec-fetch-dest": "document" } });
-    assert.equal(missing.status, 404); assert.equal(missing.body, "<h1>Not here</h1>");
+    assert.equal(missing.status, 404); assert.match(missing.body, /<h1>Not here<\/h1>$/);
   } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

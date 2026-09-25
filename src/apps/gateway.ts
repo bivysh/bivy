@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { readFileSync } from "node:fs";
 import { previewShell } from "./preview-shell.js";
+import { inspectorScript } from "./inspector.js";
 import type { AppRegistry, RegisteredView } from "./registry.js";
 
 const MIME: Record<string, string> = {
@@ -20,6 +21,32 @@ const COOKIE = "__Host-bivy-preview";
 const OPEN_PATH = "/__bivy/open";
 const REDEEM_PATH = "/__bivy/redeem";
 const REVISION_PATH = "/__bivy/revision";
+const INSPECTOR_PATH = "/__bivy/inspector.js";
+/** Larger HTML documents pass through without the inspector. */
+const MAX_INJECT_BYTES = 5 * 1024 * 1024;
+
+/** Put the inspector first in <head>, so it sees errors from the app's own scripts. */
+function withInspector(html: Buffer): Buffer {
+  const text = html.toString("utf8");
+  const tag = `<script src="${INSPECTOR_PATH}"></script>`;
+  const at = /<head\b[^>]*>/i.exec(text) ?? /<html\b[^>]*>/i.exec(text);
+  return Buffer.from(at ? text.slice(0, at.index + at[0].length) + tag + text.slice(at.index + at[0].length) : tag + text);
+}
+
+/** Let the inspector through an app's CSP by exact URL; other sources are unchanged. */
+function allowInspector(policy: string, url: string): string {
+  const directives = policy.split(";").map((d) => d.trim()).filter(Boolean);
+  const find = (name: string) => directives.findIndex((d) => d.toLowerCase().split(/\s+/)[0] === name);
+  const index = [find("script-src-elem"), find("script-src")].find((i) => i >= 0) ?? -1;
+  const add = (directive: string) => directive.replace(/\s'none'/i, "") + " " + url;
+  if (index >= 0) directives[index] = add(directives[index]);
+  else {
+    const fallback = find("default-src");
+    if (fallback < 0) return policy;
+    directives.push(add(directives[fallback].replace(/^default-src/i, "script-src")));
+  }
+  return directives.join("; ");
+}
 const HOUR = 60 * 60_000;
 /** Marks gateway-generated "server not answering" responses, so recovery
  * polling can tell them apart from an app's own 502s. */
@@ -67,7 +94,7 @@ function upstreamHeaders(req: IncomingMessage, origin: string): OutgoingHttpHead
   headers["x-forwarded-proto"] = "https";
   return headers;
 }
-function responseHeaders(headers: IncomingMessage["headers"], shellOrigin: string): OutgoingHttpHeaders {
+function responseHeaders(headers: IncomingMessage["headers"], shellOrigin: string, inspector?: string): OutgoingHttpHeaders {
   const result = cleanHeaders(headers);
   if (headers["set-cookie"]) {
     result["set-cookie"] = headers["set-cookie"].filter((cookie) => cookie.split("=", 1)[0].trim() !== COOKIE)
@@ -83,7 +110,9 @@ function responseHeaders(headers: IncomingMessage["headers"], shellOrigin: strin
   // CSP directives, but replace framing restrictions with this narrower host.
   delete result["x-frame-options"];
   const csp = result["content-security-policy"];
-  const policies = (Array.isArray(csp) ? csp : csp ? [String(csp)] : []).map((policy) => policy.replace(/(^|[;,])\s*frame-ancestors[^;,]*/gi, "$1"));
+  const policies = (Array.isArray(csp) ? csp : csp ? [String(csp)] : []).flatMap((policy) => policy.split(","))
+    .map((policy) => policy.replace(/(^|;)\s*frame-ancestors[^;]*/gi, "$1"))
+    .map((policy) => inspector ? allowInspector(policy, inspector) : policy);
   result["content-security-policy"] = [...policies, `frame-ancestors ${shellOrigin}; worker-src 'none'`].join(", ");
   return result;
 }
@@ -243,6 +272,11 @@ export class AppGateway {
     if (!req.url?.startsWith("/") || req.url.startsWith("//")) { res.writeHead(400); res.end(); return; }
     this.track(id, req.socket, expires);
     if (req.url.startsWith(`${REVISION_PATH}?`) && req.method === "GET") { this.revision(req, res, entry); return; }
+    if (req.url === INSPECTOR_PATH && req.method === "GET") {
+      res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+      res.end(inspectorScript(this.shellOrigin(id))); return;
+    }
+    const inspect = isPageLoad(req);
     // Remember the framed page so a turn reload lands where the user was.
     if (req.method === "GET" && req.headers["sec-fetch-dest"] === "iframe" && req.url.length <= 2048) entry.lastPath = req.url;
     if (entry.target.kind === "static") {
@@ -263,15 +297,31 @@ export class AppGateway {
       if (!data) { res.writeHead(404); res.end("File not found."); return; }
       const headers = responseHeaders({}, this.shellOrigin(id));
       headers["content-type"] = MIME[path.extname(file).toLowerCase()] || "application/octet-stream";
+      if (inspect && path.extname(file).toLowerCase() === ".html" && data.length <= MAX_INJECT_BYTES) data = withInspector(data);
       res.writeHead(status, { ...headers, "content-length": data.length });
       res.end(req.method === "HEAD" ? undefined : data); return;
     }
     if (entry.target.kind !== "service") { res.writeHead(404); res.end(); return; }
     const port = entry.target.port;
-    const upstream = http.request({ hostname: "127.0.0.1", port, path: req.url, method: req.method, headers: upstreamHeaders(req, this.origin(id)) }, (response) => {
-      res.writeHead(response.statusCode ?? 502, responseHeaders(response.headers, this.shellOrigin(id)));
+    const forward = upstreamHeaders(req, this.origin(id));
+    // Uncompressed HTML so the inspector can be added to page loads.
+    if (inspect) forward["accept-encoding"] = "identity";
+    const upstream = http.request({ hostname: "127.0.0.1", port, path: req.url, method: req.method, headers: forward }, (response) => {
       response.on("error", () => res.destroy());
-      response.pipe(res);
+      const html = inspect && /^text\/html/i.test(response.headers["content-type"] ?? "") && !response.headers["content-encoding"] && Number(response.headers["content-length"] ?? 0) <= MAX_INJECT_BYTES;
+      if (!html) {
+        res.writeHead(response.statusCode ?? 502, responseHeaders(response.headers, this.shellOrigin(id)));
+        response.pipe(res); return;
+      }
+      const chunks: Buffer[] = []; let size = 0;
+      response.on("data", (chunk: Buffer) => { size += chunk.length; if (size > MAX_INJECT_BYTES) { response.destroy(); res.destroy(); return; } chunks.push(chunk); });
+      response.on("end", () => {
+        const body = withInspector(Buffer.concat(chunks));
+        const headers = responseHeaders(response.headers, this.shellOrigin(id), `${this.origin(id)}${INSPECTOR_PATH}`);
+        delete headers["content-length"];
+        res.writeHead(response.statusCode ?? 200, { ...headers, "content-length": body.length });
+        res.end(body);
+      });
     });
     upstream.setTimeout(60_000, () => upstream.destroy(new Error("Preview timed out")));
     upstream.on("error", () => {
