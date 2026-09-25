@@ -46,6 +46,18 @@ describe("Receipt v1 projection", () => {
     expect(receipt.missingEvidence).toContain("effective_protection");
   });
 
+  it("projects automation runs whose source carries a long identifier", () => {
+    const run: Run = {
+      id: "run-2", origin: { projection: "automation_run", status: "succeeded" }, lifecycle: "finished",
+      outcome: { kind: "succeeded", label: "Succeeded", tone: "success", terminal: true, reviewable: false }, attempt: 1,
+      title: "Nightly", source: { kind: "automation:0f8c2d4e-5b6a-4c3d-9e8f-1a2b3c4d5e6f", automationId: "0f8c2d4e-5b6a-4c3d-9e8f-1a2b3c4d5e6f" },
+      timestamps: { createdAt: "2026-08-13T12:00:00Z" }, requested: {}, checks: [], events: [], references: {}, actions: [],
+    };
+    const receipt = receiptV1FromRun(run, "2026-08-13T12:03:00Z");
+    expect(receipt.run.source).toEqual({ kind: "automation", reference: "0f8c2d4e-5b6a-4c3d-9e8f-1a2b3c4d5e6f" });
+    expect(() => receiptV1Json(receipt)).not.toThrow();
+  });
+
   it("stays partial when current run evidence lacks audit and effective protection", () => {
     const receipt = projectReceiptV1(base());
     expect(receipt.completeness).toBe("partial");

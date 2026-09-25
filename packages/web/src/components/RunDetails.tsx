@@ -353,13 +353,18 @@ function RunBody({
     && (isSessionResolvable ? isSessionResolvable(run.sessionId!) : false);
   const agentLine = [run.requested.runtimeId, run.requested.model].filter(Boolean).join(" · ");
   const startedAt = run.timestamps.startedAt ?? run.timestamps.claimedAt;
-  const receipt = useMemo(() => receiptV1FromRun(run, new Date().toISOString()), [run]);
+  // The Receipt projection fails closed on unexpected evidence; that must hide
+  // the Receipt row, not take down the whole Run view.
+  const receipt = useMemo(() => {
+    try { return receiptV1FromRun(run, new Date().toISOString()); } catch { return null; }
+  }, [run]);
   const checksRef = useRef<HTMLDivElement>(null);
   const startReauthentication = useCallback(async () => {
     if (!onReauthenticate || !reauthenticate?.provider) return;
     await onReauthenticate(reauthenticate.provider, run.machine?.id, run.failureSummary || "Authentication failed");
   }, [onReauthenticate, reauthenticate, run.failureSummary, run.machine?.id]);
   const exportReceipt = useCallback(() => {
+    if (!receipt) return;
     const blob = new Blob([`${receiptV1Json(receipt)}\n`], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -485,7 +490,7 @@ function RunBody({
         </div>
       )}
 
-      <div className="run-sheet-rows run-details-receipt">
+      {receipt && <div className="run-sheet-rows run-details-receipt">
         <div className="run-sheet-row">
           <span className="k">Receipt</span>
           <span className="v">
@@ -500,7 +505,7 @@ function RunBody({
             <span className="v run-details-muted">{limitation.message}</span>
           </div>
         ))}
-      </div>
+      </div>}
 
       {actionError && <div className="run-sheet-failure" role="alert">{actionError}</div>}
 

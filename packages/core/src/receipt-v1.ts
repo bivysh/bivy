@@ -274,8 +274,13 @@ export function projectReceiptV1(input: ReceiptV1ProjectionInput): ReceiptV1 {
  * an existing durable Run can produce a useful partial Receipt without the UI
  * inventing facts. */
 export function receiptV1FromRun(run: Run, createdAt: string): ReceiptV1 {
-  const source = run.source.kind || "unknown";
-  const reference = run.source.reference;
+  // Run sources are often `<kind>:<identifier>` (e.g. `automation:<uuid>`,
+  // `issue:owner/repo#12`). The Receipt kind is a short category, so keep the
+  // prefix as the kind and carry the identifier as the reference instead.
+  const rawSource = run.source.kind || "unknown";
+  const [, prefix, identifier] = (rawSource.length > 40 && rawSource.match(/^([^:]{1,40}):(.+)$/)) || [];
+  const source = prefix ?? rawSource.slice(0, 40);
+  const reference = run.source.reference || identifier?.slice(0, 200);
   const repoMatch = reference?.match(/^([^#]+)#(\d+)$/);
   return projectReceiptV1({
     receiptId: `receipt-${run.id}`,
