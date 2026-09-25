@@ -244,8 +244,11 @@ test("native subscription management is opt-in, account-scoped, and cleared at l
   await page.getByRole("button", { name: "Cancel", exact: true }).click();
   const calls = await page.evaluate(async () => {
     const path = "/src/store/controller.ts";
-    await (await import(path)).controller.signOut();
-    return (globalThis as unknown as { subscriptionCalls: unknown[] }).subscriptionCalls;
+    // signOut() ends by navigating to "/", which would destroy this context
+    // before an awaited result returns. The native clear runs synchronously
+    // when it starts, so read the calls then and let the navigation proceed.
+    void (await import(path)).controller.signOut();
+    return [...(globalThis as unknown as { subscriptionCalls: unknown[] }).subscriptionCalls];
   });
   expect(calls).toContainEqual(["synchronize", { token: "native-subscription-session", controlPlane: cp }]);
   expect(calls).toContainEqual(["open", { token: "native-subscription-session", controlPlane: cp }]);
@@ -285,8 +288,11 @@ test("native Notifications settings use the host lifecycle and clear it at logou
   await expect(toggle).toHaveAttribute('aria-checked', 'false');
   const calls = await page.evaluate(async () => {
     const path = '/src/store/controller.ts';
-    await (await import(path)).controller.signOut();
-    return (globalThis as unknown as { notificationCalls: unknown[] }).notificationCalls;
+    // signOut() ends by navigating to "/", which would destroy this context
+    // before an awaited result returns. The native clear runs synchronously
+    // when it starts, so read the calls then and let the navigation proceed.
+    void (await import(path)).controller.signOut();
+    return [...(globalThis as unknown as { notificationCalls: unknown[] }).notificationCalls];
   });
   expect(calls).toContainEqual(['sync', { token: 'native-push-session', controlPlane: cp }]);
   expect(calls).toContainEqual(['enable', { token: 'native-push-session', controlPlane: cp }]);

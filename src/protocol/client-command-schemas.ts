@@ -13,6 +13,8 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
   "apps.list": Type.Object({ ...request, ...session }),
   "apps.publish": Type.Object({ ...request, ...session, manifest: Type.Unknown() }),
   "apps.open": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String(), returnTo: Type.Optional(Type.String({ maxLength: 2048 })) }),
+  "apps.share": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),
+  "apps.revoke": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),
   "apps.remove": Type.Object({ ...request, ...session, appId: Type.String() }),
   "credentials.native.preview": Type.Object({ ...request, label: Type.Optional(Type.String({ maxLength: 100 })) }),
   "credentials.native.import": Type.Object({

@@ -168,6 +168,13 @@ test("app commands validate both transport inputs and session/view ownership", a
     assert.equal(replies.at(-1).type, "apps.open.error");
     await commands.dispatch("apps.open", { kind: "apps.open", sessionId: "s", appId: app.id }, ctx);
     assert.equal(replies.at(-1).type, "apps.open.error");
+    for (const kind of ["apps.share", "apps.revoke"]) {
+      await commands.dispatch(kind, { kind, sessionId: "other", appId: app.id, viewId: app.views[0].id }, ctx);
+      assert.equal(replies.at(-1).type, `${kind}.error`);
+    }
+    // Terminal views have no preview link to hand out.
+    await commands.dispatch("apps.share", { kind: "apps.share", sessionId: "s", appId: app.id, viewId: app.views[0].id }, ctx);
+    assert.match(replies.at(-1).error, /Only web views/);
     await commands.dispatch("apps.list", { kind: "apps.list", sessionId: "s" }, ctx);
     assert.equal(replies.at(-1).apps.length, 1);
     await commands.dispatch("apps.remove", { kind: "apps.remove", sessionId: "s", appId: app.id }, ctx);
@@ -229,6 +236,40 @@ test("preview grants and browser sessions expire; unavailable services return an
     const access = await grant(gateway, port, service.views[0].id);
     const response = await request(port, access.url.host, "/", { headers: { cookie: access.cookie } });
     assert.equal(response.status, 502); assert.match(response.body, /Start it on the registered port/);
+  } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("copied links open the app unframed, are reusable until revoked and lapse after a day", async (t) => {
+  const registry = new AppRegistry(); const gateway = new AppGateway(registry, "https://{app}.preview.example.net");
+  const dir = workspace(); const port = await listen(gateway.server);
+  let now = Date.now(); t.mock.method(Date, "now", () => now);
+  try {
+    const app = registry.publish("s", dir, staticManifest); const id = app.views[0].id;
+    const shared = gateway.share(id);
+    const url = new URL(shared.url);
+    assert.equal(url.origin, gateway.origin(id)); assert.equal(url.pathname, "/__bivy/open"); assert.equal(url.search, "");
+    assert.equal(shared.expiresAt, now + 24 * 3_600_000);
+    const redeem = () => request(port, url.host, "/__bivy/redeem", { method: "POST", headers: { origin: url.origin }, body: url.hash.slice(1) });
+    const first = await redeem(); const second = await redeem();
+    assert.equal(first.status, 204); assert.equal(second.status, 204);
+    assert.match(first.headers["set-cookie"]![0], /Max-Age=3600/);
+    const cookie = second.headers["set-cookie"]![0].split(";")[0];
+    assert.equal((await request(port, url.host, "/", { headers: { cookie } })).body, "<h1>Preview</h1>");
+    // Near the cap, the browser session ends with the link rather than an hour later.
+    now += 24 * 3_600_000 - 60_000;
+    const late = await redeem();
+    assert.match(late.headers["set-cookie"]![0], /Max-Age=60;?/);
+    now += 60_001;
+    assert.equal((await redeem()).status, 401);
+    const fresh = new URL(gateway.share(id).url);
+    const again = await request(port, url.host, "/__bivy/redeem", { method: "POST", headers: { origin: url.origin }, body: fresh.hash.slice(1) });
+    const freshCookie = again.headers["set-cookie"]![0].split(";")[0];
+    gateway.revoke(id);
+    assert.equal((await request(port, url.host, "/__bivy/redeem", { method: "POST", headers: { origin: url.origin }, body: fresh.hash.slice(1) })).status, 401);
+    assert.equal((await request(port, url.host, "/", { headers: { cookie: freshCookie } })).status, 401);
+    // Revoke ends existing access only; a newly copied link works again.
+    assert.equal((await request(port, url.host, "/__bivy/redeem", { method: "POST", headers: { origin: url.origin }, body: new URL(gateway.share(id).url).hash.slice(1) })).status, 204);
+    assert.throws(() => gateway.share("0".repeat(32)), /not found/);
   } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

@@ -46,6 +46,7 @@ for (const theme of themes) {
         if(window.mode === 'error') throw Error('Machine unavailable. Reconnect and try again.');
         if(kind === 'apps.list') return {apps:window.mode === 'empty' ? [] : [app], previewAvailable:window.mode !== 'unconfigured'};
         if(kind === 'apps.open') return fields.viewId === 'web' ? {kind:'web',url:'https://random.preview.example.net/__bivy/open#ticket'} : {kind:'terminal',termId:'test-terminal'};
+        if(kind === 'apps.share') return {url:'https://random.preview.example.net/__bivy/open#shared', expiresAt:Date.now() + 24 * 3600000};
         return {ok:true};
       };
       const handlers = new Set();
@@ -69,6 +70,15 @@ for (const theme of themes) {
     await expect(page.getByRole("button", { name: "Open preview" })).toBeEnabled();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`apps-${theme}.png`), fullPage: true });
+    // A copied link is reusable, so the sheet states who can use it and for how long.
+    await page.getByRole("button", { name: "Copy link to Website and invoice editor" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "for 24 hours, or until you revoke access" })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`apps-copied-${theme}.png`), fullPage: true });
+    await page.getByRole("button", { name: "Revoke access to Website and invoice editor" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Access revoked" })).toBeVisible();
+    expect(await page.evaluate(() => (window as any).commands.filter((c: any) => c.kind === "apps.share" || c.kind === "apps.revoke").map((c: any) => [c.kind, c.viewId]))).toEqual([["apps.share", "web"], ["apps.revoke", "web"]]);
+    await expect(page.getByRole("button", { name: /^Copy link to Interactive/ })).toHaveCount(0);
     await page.getByRole("button", { name: "Open preview" }).focus();
     await page.keyboard.press("Enter");
     const link = page.getByRole("link", { name: "Open preview" });

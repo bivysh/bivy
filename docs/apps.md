@@ -207,6 +207,16 @@ to one view. Removing an app revokes grants and closes active gateway connection
 Reopen from Bivy after expiry. Launch links are bearer capabilities until redeemed;
 do not share them.
 
+**Copy link** in the Apps sheet mints a separate, reusable link for one web view.
+It points at the app's own origin rather than the shell, so it opens unframed in
+any browser (useful for devtools or another device). Every visit exchanges it for
+the same host-only cookie, capped so a browser session never outlives the link.
+It stays valid for 24 hours, until **Revoke access**, until the app is removed,
+or until the machine restarts. Revoke access ends every link, browser session and
+open connection for that view without removing the app. A copied link is a
+bearer capability: anyone holding it can use the app, including a live server's
+backend, until it lapses or is revoked.
+
 The app iframe is sandboxed: scripts, forms, same-origin app storage, downloads
 and sandboxed popups are allowed; top-level navigation is not. Upstream
 `X-Frame-Options` and CSP `frame-ancestors` are replaced with a policy allowing
