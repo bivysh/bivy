@@ -158,6 +158,16 @@ test("mergeBases folds a reopen even when the native reload re-chunks the turn d
   assert.equal(merged.length, streamed.length, "the minimal native reload adds no duplicate turn");
 });
 
+test("mergeBases folds a reloaded thinking-only message instead of appending it after the final answer", () => {
+  // Claude persists each thinking block as its own assistant message. On reopen
+  // the native reload restamps it; with no tool id or text it used to count as
+  // opaque and land at the very end of the transcript.
+  const thinking = (text: string, ts: number) => ({ role: "assistant", content: [{ type: "thinking", thinking: text, signature: "sig" }], timestamp: ts });
+  const streamed = [baseMsg("user", "go", 1000), thinking("plan the work", 1001), baseMsg("assistant", "done", 1002)];
+  const reloaded = [baseMsg("user", "go", 5000), thinking("plan the work", 5001), baseMsg("assistant", "done", 5002)];
+  assert.deepEqual(mergeBases(streamed, reloaded), streamed);
+});
+
 test("mergeBases keeps a genuinely repeated message (positional, not set-based, dedup)", () => {
   // A user who sends "run tests" twice must keep BOTH turns — the content fold is
   // positional (aligns two serializations of ONE conversation), never a flat set
