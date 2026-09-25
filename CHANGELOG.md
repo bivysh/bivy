@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-09-25
+
 ### Added
 
 - Edit a webhook automation's pre-agent filter — command, trusted directory, and timeout — from the automation editor, instead of only through `bivy automation apply`. The filter lives in the encrypted instruction template, so saving an automation from the app no longer silently drops a filter that was applied from the CLI.
