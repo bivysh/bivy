@@ -175,3 +175,19 @@ export function mergeProviderCatalog(base: ProviderStatus[], catalog: Aggregated
   }
   return [...byId.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
+
+/**
+ * Reply to a models.list query. A catalog read failure must never answer with
+ * silence: the client (notably a Cloud launch validating its saved model) could
+ * only time out without a cause. Name the real reason on the session instead.
+ */
+export async function catalogReplyEvent<E>(
+  load: () => Promise<E>,
+  sessionId: string,
+): Promise<E | { type: "session.error"; sessionId: string; error: string }> {
+  try {
+    return await load();
+  } catch (error) {
+    return { type: "session.error", sessionId, error: `Couldn't read this machine's model catalog: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}

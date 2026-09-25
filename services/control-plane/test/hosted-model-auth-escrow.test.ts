@@ -8,6 +8,7 @@ import fs from "node:fs";
 process.env.HOSTED_CREDENTIAL_KEY = Buffer.alloc(32, 5).toString("base64");
 import { createPgMemStore } from "../src/pg-mem-store.js";
 import { encryptSecret, decryptSecret } from "../src/hosted-crypto.js";
+import { hostedVaultWriteRejection, legacyEscrowWriteRejection } from "../src/hosted-vault-policy.js";
 
 async function makeStore() {
   const store = createPgMemStore();
@@ -52,16 +53,6 @@ await test("generation and revision reject stale hosted snapshots", async () => 
   assert.deepEqual(await store.getHostedModelAuthVault(acct.id), { ciphertext: "v2", generation: 2, revision: 22 });
 });
 
-await test("hosted recipients apply removals while setup guests can publish only the initial snapshot", async () => {
-  const source = fs.readFileSync(new URL("../../../src/server.ts", import.meta.url), "utf8");
-  const controlPlane = fs.readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
-  assert.match(source, /readHostedImportedRecords\(\)/);
-  assert.match(source, /BIVY_HOSTED_CREDENTIAL_PUBLISH/);
-  assert.match(source, /Object\.keys\(records\)\.length === 0/);
-  assert.match(controlPlane, /managed guests cannot replace hosted credentials/);
-  assert.match(source, /modelAuthFetch\("\/node\/model-auth-hosted-vault"\)/, "hosted custody uses its versioned endpoint");
-});
-
 await test("model-auth key requests wake peers once without provisioning or self-notification", async () => {
   const controlPlane = fs.readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
   const relay = fs.readFileSync(new URL("../../relay/src/index.ts", import.meta.url), "utf8");
@@ -70,9 +61,18 @@ await test("model-auth key requests wake peers once without provisioning or self
   assert.match(relay, /roomNodeId !== excludeNodeId/);
 });
 
-await test("legacy key-only writes cannot overwrite an active filtered snapshot", async () => {
-  const source = fs.readFileSync(new URL("../src/index.ts", import.meta.url), "utf8");
-  assert.match(source, /if \(await store\.getHostedModelAuthVault\(node\.accountId\)\) \{\s*return res\.status\(409\)/);
+await test("only personal Machines replace hosted custody; a managed guest may publish the first snapshot", () => {
+  const on = { provisioningEnabled: true };
+  assert.equal(hostedVaultWriteRejection({ ...on, managedGuest: true, vaultActive: false }), null, "a setup guest publishes the initial snapshot");
+  assert.deepEqual(hostedVaultWriteRejection({ ...on, managedGuest: true, vaultActive: true }), { status: 403, error: "managed guests cannot replace hosted credentials" });
+  assert.equal(hostedVaultWriteRejection({ ...on, managedGuest: false, vaultActive: true }), null, "a personal Machine stays the authority");
+  assert.equal(hostedVaultWriteRejection({ provisioningEnabled: false, managedGuest: false, vaultActive: false })?.status, 403);
+});
+
+await test("legacy key-only writes cannot overwrite an active filtered snapshot", () => {
+  assert.deepEqual(legacyEscrowWriteRejection({ provisioningEnabled: true, vaultActive: true }), { status: 409, error: "filtered hosted credential vault already active" });
+  assert.equal(legacyEscrowWriteRejection({ provisioningEnabled: true, vaultActive: false }), null);
+  assert.equal(legacyEscrowWriteRejection({ provisioningEnabled: false, vaultActive: false })?.status, 403);
 });
 
 await test("upsert overwrites; account-scoped", async () => {

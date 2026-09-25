@@ -309,6 +309,13 @@ const explicitFacadeChecks = [
     reject: /\bid\s*===\s*["'](?:codex|opencode|grok|claude-code|pi|gemini)["']/,
     reason: "the generic runtime wrapper must interpret profile behavior data, not branch on agent ids",
   },
+  // Billable machines launch only through the control plane's auto-provision
+  // policy (dedupe, rate cap, teardown), never from opening the queue panel.
+  {
+    file: "packages/web/src/components/GithubQueue.tsx",
+    reject: /launchEphemeralQueueWorker\(/,
+    reason: "the queue panel must not launch billable machines; maybeAutoProvision owns that",
+  },
   // Coordinators receive state and effects as explicit ports.
   ...fs.readdirSync(path.join(repoRoot, "packages/web/src/store/coordinators"))
     .filter((name) => name.endsWith(".ts"))

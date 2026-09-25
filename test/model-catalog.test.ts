@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createCredentialVault } from "../src/runtime/credential-store.js";
-import { aggregateModelCatalog, mergeProviderCatalog } from "../src/runtime/model-catalog.js";
+import { aggregateModelCatalog, catalogReplyEvent, mergeProviderCatalog } from "../src/runtime/model-catalog.js";
 import { BIVY_PROVIDER_CATALOG as nodeProviderCatalog, BIVY_PROVIDER_CATALOG_VERSION } from "../src/runtime/bivy-provider-catalog.js";
 import { BIVY_PROVIDER_CATALOG as webProviderCatalog } from "../packages/core/src/provider-catalog.js";
 import { ProcessRuntime } from "../src/runtime/process.js";
@@ -118,6 +118,17 @@ await check("ProcessRuntime.listCatalog groups its configured models by provider
   const catalog = runtime.listCatalog();
   assert.equal(catalog.length, 2, "two distinct providers");
   assert.equal(catalog.find((p) => p.id === "openai")!.models.length, 2, "both openai models grouped");
+});
+
+await check("a models.list catalog failure answers with the real error instead of silence", async () => {
+  const ok = { type: "models.list", models: [] };
+  assert.equal(await catalogReplyEvent(async () => ok, "s1"), ok);
+  // Silence would strand a Cloud launch waiting to validate its saved model.
+  assert.deepEqual(await catalogReplyEvent(async () => { throw new Error("auth.json unreadable"); }, "s1"), {
+    type: "session.error",
+    sessionId: "s1",
+    error: "Couldn't read this machine's model catalog: auth.json unreadable",
+  });
 });
 
 if (failures > 0) {

@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import { createNodeUpdateChecker, updateRegistryUrl } from "./node-update.js";
 import { createRemoteSessionAdmission, RemoteSessionAdmissionError } from "./session/remote-session-admission.js";
+import { requiresExistingSession, resolveTargetSession } from "./session/target-session.js";
 import path from "node:path";
 import os from "node:os";
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
@@ -34,7 +35,7 @@ import { AppService } from "./apps/service.js";
 import { createAppCommands } from "./controllers/app-commands.js";
 import { bindClientCommandRoutes } from "./http/client-command-routes.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
-import { aggregateModelCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
+import { aggregateModelCatalog, catalogReplyEvent, mergeProviderCatalog } from "./runtime/model-catalog.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
 import { RemoteRuntime, RemoteRuntimeSession } from "./runtime/remote.js";
 import { InMemorySessionLocationRegistry, type SessionLocation, type SessionLocationRegistry } from "./runtime/session-location.js";
@@ -2628,17 +2629,8 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     // this a models.list answered for one agent (e.g. Codex's models) could
     // linger on the composer/picker after the user switched to another agent
     // (e.g. Claude) — the "Claude shows Codex models" bug.
-    let event;
-    try {
-      event = await modelsListEventFor(record);
-    } catch (error) {
-      // A catalog read failure must never answer with silence: the generic
-      // relay catch would swallow the rejection and the client (notably a
-      // Cloud launch waiting to validate its saved model) could only guess
-      // via timeout. Name the real reason on the session instead.
-      relay?.sendEvent({ type: "session.error", sessionId: requestedSessionId ?? record.id, error: `Couldn't read this machine's model catalog: ${error instanceof Error ? error.message : String(error)}` });
-      return;
-    }
+    // A catalog read failure answers with the real error, never silence.
+    const event = await catalogReplyEvent(() => modelsListEventFor(record), requestedSessionId ?? record.id);
     relay?.sendEvent(event);
   },
   "models.prefetch"(msg) {
@@ -5108,29 +5100,12 @@ async function continueCorrelatedSession(
   report: (patch: EvidencePatch) => Promise<void>,
   opts?: { resumeOnMissing?: boolean; isMessage?: boolean; signal?: AbortSignal; credentialLabels?: Record<string, string> },
 ): Promise<boolean> {
-  if (item.targetKind !== "existing_session" || !item.targetSessionId) return false;
-  let record = openSessions.get(item.targetSessionId);
-  if (!record && opts?.resumeOnMissing) {
-    // Same-node resume: reopen a closed session from its durable metadata +
-    // transcript — exactly how a prompt to an old session from the app is
-    // handled (resolveOrResumeSession). Best-effort: an unresolvable session
-    // falls through to the snapshot restore / fail handling below.
-    record = await resolveOrResumeSession(item.targetSessionId).catch(() => undefined);
-  }
-  if (!record) {
-    const restored = await restoreSessionFromSnapshot(item.targetSessionId);
-    if (restored) record = await resolveOrResumeSession(item.targetSessionId).catch(() => undefined);
-  }
-  if (!record) {
-    // Strict mode (a scheduled message to a specific session): the session must
-    // be resumed in place, so a genuinely-unavailable one is surfaced as a
-    // failed run rather than silently starting a new session. Everything else
-    // keeps the established best-effort fall-through to a fresh pickup.
-    if (opts?.resumeOnMissing) {
-      throw new Error(`This Run could not continue session ${item.targetSessionId}: the session is not available on this Machine`);
-    }
-    return false;
-  }
+  const record = await resolveTargetSession(item, {
+    open: (id) => openSessions.get(id),
+    resume: (id) => resolveOrResumeSession(id),
+    restoreSnapshot: async (id) => Boolean(await restoreSessionFromSnapshot(id)),
+  }, opts?.resumeOnMissing === true);
+  if (!record) return false;
   assertSessionAccounts(record, opts?.credentialLabels);
   const branch = record.worktree?.branch;
   if (opts?.resumeOnMissing) {
@@ -5366,7 +5341,7 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
   // Scheduled runs targeting an existing session are STRICT: the message must
   // land in that session (resumed from disk if needed), never silently in a new
   // one — so a session that can't be resumed fails the run instead.
-  if (await continueCorrelatedSession(item, request, report, { resumeOnMissing: item.source === "schedule" || item.targetKind === "existing_session", isMessage, signal, credentialLabels })) return;
+  if (await continueCorrelatedSession(item, request, report, { resumeOnMissing: requiresExistingSession(item), isMessage, signal, credentialLabels })) return;
   const requestedSandbox = normalizeSandboxTier(item.sandbox);
   // Prepare an explicit repository before resolving its policy. Otherwise a
   // first-ever run would inspect a not-yet-cloned path and miss the policy on
