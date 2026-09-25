@@ -12,6 +12,7 @@ import { requestPersistentStorage } from "./storage.js";
 import { initializeInstallLifecycle } from "./pwaLifecycle.js";
 import { controller } from "./store/useStore.js";
 import { consumeShareTarget } from "./shareTarget.js";
+import { consumePreviewLanding } from "./previewLanding.js";
 import "@bivy/ui/tokens.css";
 import "./styles.css";
 import "./ux-cleanup.css";
@@ -24,6 +25,9 @@ applyTheme();
 // URL to /sessions/new. Must happen before the app mounts so the App's
 // pending-share read sees it.
 consumeShareTarget();
+// A signed-out visit to an app preview's stable address returns here; stash
+// it before the router strips the session deep link.
+consumePreviewLanding();
 // Track the visual viewport so the shell stays pinned above the keyboard.
 initViewport();
 // Ask for durable storage so the device keypair + session token survive relaunch

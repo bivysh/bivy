@@ -26,7 +26,7 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
       published(app);
       return { app };
     },
-    "apps.open": (msg) => service.open(String(msg.sessionId), String(msg.appId), String(msg.viewId), typeof msg.returnTo === "string" ? msg.returnTo : undefined),
+    "apps.open": (msg) => service.open(String(msg.sessionId), String(msg.appId), String(msg.viewId), typeof msg.returnTo === "string" ? msg.returnTo : undefined, msg.direct === true),
     "apps.logs": (msg) => service.logs(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
     "apps.share": (msg) => service.share(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
     "apps.revoke": (msg) => service.revoke(String(msg.sessionId), String(msg.appId), String(msg.viewId)),

@@ -2120,8 +2120,15 @@ const appReturnOrigins = () => {
   return [config?.clientBaseUrl, config?.controlPlaneUrl, ...(process.env.BIVY_APPS_RETURN_ORIGINS ?? "").split(",")]
     .filter((value): value is string => Boolean(value?.trim())).map((value) => new URL(value.trim()).origin);
 };
-const appGateway = process.env.BIVY_APPS_ORIGIN ? new AppGateway(appRegistry, process.env.BIVY_APPS_ORIGIN, appReturnOrigins) : undefined;
-const remotePreview = new RemotePreview(appRegistry, appReturnOrigins);
+// A signed-out visit to a preview's stable address goes through the Bivy
+// client: open the session on this node, then the client re-opens the view.
+const appSignIn = (view: { app: { id: string; sessionId: string }; view: { id: string } }, pagePath: string) => {
+  const client = loadRelayConfig(appDir)?.clientBaseUrl;
+  if (!client) return undefined;
+  return `${new URL(client).origin}/sessions/${encodeURIComponent(view.app.sessionId)}?node=${encodeURIComponent(identity.nodeId)}#preview=${view.app.id}.${view.view.id}.${encodeURIComponent(pagePath)}`;
+};
+const appGateway = process.env.BIVY_APPS_ORIGIN ? new AppGateway(appRegistry, process.env.BIVY_APPS_ORIGIN, appReturnOrigins, appSignIn) : undefined;
+const remotePreview = new RemotePreview(appRegistry, appReturnOrigins, appSignIn);
 const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   start: async (spec) => {
     let failure = "Could not start the app terminal.";

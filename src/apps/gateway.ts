@@ -128,7 +128,9 @@ export class AppGateway {
   private readonly sessions = new Map<string, { appId: string; expires: number }>();
   private readonly sockets = new Map<string, Set<Duplex>>();
 
-  constructor(private readonly registry: AppRegistry, originTemplate: string, private readonly returnOrigins: () => readonly string[] = () => []) {
+  /** `signIn` sends a signed-out visit to a view's stable address back
+   * through Bivy, which re-opens it for a signed-in device. */
+  constructor(private readonly registry: AppRegistry, originTemplate: string, private readonly returnOrigins: () => readonly string[] = () => [], private readonly signIn?: (view: RegisteredView, path: string) => string | undefined) {
     this.template = previewOriginTemplate(originTemplate);
     this.server = http.createServer((req, res) => { void this.handle(req, res).catch(() => { if (!res.headersSent) res.writeHead(502); res.end("Preview request failed."); }); });
     this.server.maxConnections = 256;
@@ -152,6 +154,14 @@ export class AppGateway {
     }
     // Fragment never reaches reverse-proxy access logs or the application.
     return `${this.shellOrigin(id)}${OPEN_PATH}#${this.grant({ appId: id, expires: Date.now() + 60_000, returnTo })}`;
+  }
+  /** The view's stable address: grants nothing by itself. */
+  address(id: string): string { this.requireWeb(id); return `${this.origin(id)}/`; }
+  /** A one-use link straight to the app origin (no shell), for a signed-in
+   * device returning to a stable address. `~path` resumes the page. */
+  openDirect(id: string): string {
+    this.requireWeb(id);
+    return `${this.origin(id)}${OPEN_PATH}#${this.grant({ appId: id, expires: Date.now() + 60_000 })}`;
   }
   /** A reusable link straight to the app origin (no shell frame), so it opens
    * in any browser and can be inspected. Valid until revoked or SHARE_TTL. */
@@ -251,9 +261,9 @@ export class AppGateway {
       // An embedded launch ("e:" prefix) comes from a shell framed inside Bivy.
       // After redeeming, check the cookie stuck: browsers that refuse framed
       // cookies are reported to the shell, which falls back to a tab.
-      res.end(`<!doctype html><html lang="en"><meta name="viewport" content="width=device-width"><title>Open Bivy preview</title><p id="status" role="status">Opening preview…</p><script nonce="${nonce}">const ticket=location.hash.slice(1);history.replaceState(null,'',location.pathname);
+      res.end(`<!doctype html><html lang="en"><meta name="viewport" content="width=device-width"><title>Open Bivy preview</title><p id="status" role="status">Opening preview…</p><script nonce="${nonce}">const [ticket,after='/']=location.hash.slice(1).split('~');history.replaceState(null,'',location.pathname);let next='/';try{next=decodeURIComponent(after);}catch{}if(!next.startsWith('/')||next.startsWith('//'))next='/';
 const fail=blocked=>{if(blocked&&parent!==window)parent.postMessage({type:'bivy:access',state:'blocked'},${JSON.stringify(this.shellOrigin(id))});document.getElementById('status').textContent=blocked?'This browser blocks preview cookies here. Open the preview in a new tab from Bivy.':'Preview link expired or cookies are blocked. Open a new link from Bivy.';};
-fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body:ticket}).then(async r=>{if(!r.ok)return fail(false);const check=await fetch('${REVISION_PATH}?after=-2',{cache:'no-store'});if(!check.ok)return fail(true);location.replace('/');}).catch(()=>fail(false));</script></html>`);
+fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body:ticket}).then(async r=>{if(!r.ok)return fail(false);const check=await fetch('${REVISION_PATH}?after=-2',{cache:'no-store'});if(!check.ok)return fail(true);location.replace(next);}).catch(()=>fail(false));</script></html>`);
       return;
     }
     if (req.url === REDEEM_PATH && req.method === "POST") {
@@ -277,6 +287,10 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
       res.writeHead(204); res.end(); return;
     }
     const expires = this.authorize(req, id);
+    // A home-screen visit without access goes through Bivy to sign in, then
+    // comes back to the same page. Framed loads keep the plain message.
+    const signIn = !expires && req.method === "GET" && req.headers["sec-fetch-dest"] === "document" && req.url?.startsWith("/") ? this.signIn?.(entry, req.url) : undefined;
+    if (signIn) { res.writeHead(303, { location: signIn }); res.end(); return; }
     if (!expires) { res.writeHead(401); res.end("Preview access expired. Open a new preview link from Bivy."); return; }
     // Block cross-site mutations even if a client sends the preview cookie.
     if (!["GET", "HEAD"].includes(req.method ?? "") && req.headers.origin !== this.origin(id)) { res.writeHead(403); res.end("Forbidden origin."); return; }

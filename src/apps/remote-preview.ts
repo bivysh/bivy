@@ -13,7 +13,7 @@ export class RemotePreview {
   private relayUrl?: string;
   private online = false;
   private sockets = new Set<WebSocket>();
-  constructor(private readonly registry: AppRegistry, private readonly returnOrigins: () => readonly string[]) {}
+  constructor(private readonly registry: AppRegistry, private readonly returnOrigins: () => readonly string[], private readonly signIn?: ConstructorParameters<typeof AppGateway>[3]) {}
 
   get available(): boolean { return this.online && Boolean(this.gateway); }
   ready(origin: string | undefined, relayUrl: string): void {
@@ -24,7 +24,7 @@ export class RemotePreview {
     if (target.protocol !== "wss:" && !(target.protocol === "ws:" && ["localhost", "127.0.0.1", "[::1]"].includes(target.hostname))) return;
     if (this.origin !== template) {
       this.gateway?.close();
-      this.gateway = new AppGateway(this.registry, template, this.returnOrigins);
+      this.gateway = new AppGateway(this.registry, template, this.returnOrigins, this.signIn);
       this.origin = template;
     }
     this.relayUrl = relayUrl.replace(/\/$/, "") + "/preview/stream";
@@ -55,6 +55,11 @@ export class RemotePreview {
     return this.gateway!.share(id);
   }
   revoke(id: string): void { this.gateway?.revoke(id); }
+  address(id: string): string | undefined { return this.available ? this.gateway!.address(id) : undefined; }
+  openDirect(id: string): string {
+    if (!this.available) throw new Error("Preview delivery is unavailable. Reconnect the machine and try again.");
+    return this.gateway!.openDirect(id);
+  }
   disconnect(): void {
     this.online = false;
     for (const ws of this.sockets) ws.terminate();

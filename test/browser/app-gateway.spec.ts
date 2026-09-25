@@ -261,3 +261,27 @@ test("the preview works framed inside Bivy and hands drafts to it", async ({ pag
     await expect.poll(() => page.evaluate(() => (window as any).drafts)).toEqual([{ source: "bivy-preview", type: "blocked" }]);
   } finally { fixture.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+// A stable address on a home screen: the signed-out redirect is covered in
+// test/apps.test.ts. Here, the return leg: the signed-in client's one-use
+// direct link lands on the same page, unframed.
+test("a stable address comes back from Bivy to the same page", async ({ page }) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bivy-address-"));
+  const registry = new AppRegistry();
+  const fixture = await delivery(registry, false);
+  const gateway = fixture.gateway as AppGateway;
+  try {
+    await fs.writeFile(path.join(dir, "index.html"), '<!doctype html><html lang="en"><title>Ledger</title><h1>Ledger</h1><script>document.body.append(location.pathname)</script></html>');
+    const id = registry.publish("s", dir, { version: 1, name: "Ledger", views: [{ kind: "web", name: "Ledger", source: { kind: "static", directory: "." } }] }).views[0].id;
+    await page.route("https://*.preview.example.net/**", async (route) => {
+      const request = route.request(); const url = new URL(request.url());
+      const response = await route.fetch({ url: `http://127.0.0.1:${fixture.port}${url.pathname}${url.search}`, headers: { ...await request.allHeaders(), host: url.host }, maxRedirects: 0 }).catch(() => undefined);
+      await (response ? route.fulfill({ response }) : route.abort()).catch(() => {});
+    });
+    await page.goto(`${gateway.openDirect(id)}~${encodeURIComponent("/invoices")}`);
+    await expect(page).toHaveURL(`${gateway.origin(id)}/invoices`);
+    await expect(page.getByRole("heading", { name: "Ledger" })).toBeVisible();
+    await expect(page.locator("body")).toContainText("/invoices");
+    expect(await page.evaluate(() => window.top === window)).toBe(true);
+  } finally { fixture.close(); await fs.rm(dir, { recursive: true, force: true }); }
+});

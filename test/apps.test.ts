@@ -349,6 +349,29 @@ test("static page loads fall back for client-side routes; assets still 404", asy
   } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a view's stable address sends signed-out visits through Bivy and back to the same page", async () => {
+  const registry = new AppRegistry();
+  const gateway = new AppGateway(registry, "https://{app}.preview.example.net", () => ["https://bivy.example"], (view, page) => `https://bivy.example/sessions/${view.app.sessionId}#preview=${view.app.id}.${view.view.id}.${encodeURIComponent(page)}`);
+  const dir = workspace(); const port = await listen(gateway.server);
+  try {
+    const app = registry.publish("s", dir, staticManifest); const id = app.views[0].id;
+    const host = new URL(gateway.origin(id)).host;
+    assert.equal(gateway.address(id), `${gateway.origin(id)}/`);
+    const visit = await request(port, host, "/invoices?q=1", { headers: { "sec-fetch-dest": "document" } });
+    assert.equal(visit.status, 303);
+    assert.equal(visit.headers.location, `https://bivy.example/sessions/s#preview=${app.id}.${id}.${encodeURIComponent("/invoices?q=1")}`);
+    // Framed and non-page requests still just say access expired.
+    assert.equal((await request(port, host, "/", { headers: { "sec-fetch-dest": "iframe" } })).status, 401);
+    assert.equal((await request(port, host, "/app.js")).status, 401);
+    // The signed-in client's direct link is one-use and lands on the app origin itself.
+    const direct = new URL(gateway.openDirect(id));
+    assert.equal(direct.origin, gateway.origin(id));
+    const redeem = () => request(port, host, "/__bivy/redeem", { method: "POST", headers: { origin: direct.origin }, body: direct.hash.slice(1) });
+    assert.equal((await redeem()).status, 204);
+    assert.equal((await redeem()).status, 401);
+  } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("copied links open the app unframed, are reusable until revoked and lapse after a day", async (t) => {
   const registry = new AppRegistry(); const gateway = new AppGateway(registry, "https://{app}.preview.example.net");
   const dir = workspace(); const port = await listen(gateway.server);

@@ -7,6 +7,8 @@ import { scanListeners } from "./listeners.js";
 export interface AppPreviewProvider {
   readonly available?: boolean;
   open(id: string, returnTo?: string): string;
+  openDirect?(id: string): string;
+  address?(id: string): string | undefined;
   share(id: string): ShareAppViewResult;
   revoke(id: string): void;
 }
@@ -29,7 +31,12 @@ export class AppService {
   private servers = new Map<string, { termId?: string; pending?: Promise<string>; restarts: number[]; timer?: NodeJS.Timeout }>();
   constructor(readonly registry: AppRegistry, readonly gateway: AppPreviewProvider | undefined, private readonly terminals: AppTerminalProvider, private readonly scan: (workspace: string) => Promise<AppOffer[]> = scanListeners, private readonly serverWatchMs = 5_000) {}
 
-  list(sessionId: string): SessionAppsResult { return { apps: this.registry.list(sessionId), previewAvailable: Boolean(this.gateway) && this.gateway?.available !== false }; }
+  list(sessionId: string): SessionAppsResult {
+    const available = Boolean(this.gateway) && this.gateway?.available !== false;
+    const apps = this.registry.list(sessionId);
+    if (available) for (const app of apps) for (const view of app.views) if (view.kind === "web") view.address = this.gateway?.address?.(view.id);
+    return { apps, previewAvailable: available };
+  }
   publish(sessionId: string, workspace: string, manifest: AppManifest) { return this.registry.publish(sessionId, workspace, manifest); }
   /** An agent turn changed files in this session's workspace. */
   turnChanged(sessionId: string): string[] { return this.registry.touch(sessionId); }
@@ -44,11 +51,14 @@ export class AppService {
     if (!offer) throw new Error(`Nothing in this session's workspace is listening on port ${port} any more.`);
     return this.registry.publish(sessionId, workspace, { version: 1, name: `${offer.command} · :${port}`.slice(0, 100), views: [{ kind: "web", name: `Port ${port}`, source: { kind: "service", port } }] });
   }
-  async open(sessionId: string, appId: string, viewId: string, returnTo?: string): Promise<OpenAppViewResult> {
+  /** `direct` opens the app origin itself (no shell): a signed-in device
+   * returning to a view's stable address. */
+  async open(sessionId: string, appId: string, viewId: string, returnTo?: string, direct = false): Promise<OpenAppViewResult> {
     const entry = this.registry.requireView(sessionId, appId, viewId);
     if (entry.view.kind === "web") {
       if (!this.gateway) throw new Error("Bivy's preview service is unavailable on this connection.");
-      const url = this.gateway.open(viewId, returnTo);
+      if (direct && !this.gateway.openDirect) throw new Error("This machine can't open previews directly.");
+      const url = direct ? this.gateway.openDirect!(viewId) : this.gateway.open(viewId, returnTo);
       // Don't wait for a managed server to boot: the preview shows it starting
       // and reloads itself once it answers.
       if (this.servers.get(viewId)) this.servers.get(viewId)!.restarts = [];

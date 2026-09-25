@@ -126,6 +126,12 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
     } catch (e) { if (generation.current === current) setError(e instanceof Error ? e.message : "Could not create a link."); }
     finally { if (generation.current === current) setBusy(false); }
   };
+  /** The stable address grants nothing by itself, so it can go on a home screen. */
+  const copyAddress = async (view: AppView & { kind: "web" }) => {
+    if (!view.address) return;
+    const text = "Add it to your home screen: it always opens the latest version, on devices signed in to your Bivy account.";
+    setNotice(await writeClipboard(view.address) ? { viewId: view.id, text: `Address copied. ${text}` } : { viewId: view.id, text: `Copy this address. ${text}`, url: view.address });
+  };
   const revoke = async (app: SessionApp, view: AppView) => {
     const current = generation.current;
     setBusy(true); setError(""); setNotice(null); setLink(null);
@@ -182,6 +188,7 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
           {view.kind === "terminal" && <code className="app-view-command">{[view.command, ...view.args.map((arg) => JSON.stringify(arg))].join(" ")}</code>}
         </div>
         <div className="app-view-actions">
+          {view.kind === "web" && view.address && <button className="btn sm ghost" disabled={busy} onClick={() => void copyAddress(view)} aria-label={`Copy address of ${view.name}`}>Copy address</button>}
           {view.kind === "web" && view.managed && <button className="btn sm ghost" disabled={busy || !online} onClick={() => void logs(app, view)} aria-label={`Server logs for ${view.name}`}>Logs</button>}
           {view.kind === "web" && <>
             <button className="btn sm ghost" disabled={busy || !online || !result.previewAvailable} onClick={() => void revoke(app, view)} aria-label={`Revoke access to ${view.name}`}>Revoke access</button>

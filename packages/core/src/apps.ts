@@ -10,7 +10,9 @@ export type AppViewSpec =
 export interface AppCommandSpec { command: string; args?: string[] }
 export interface AppManifest { version: 1; name: string; views: AppViewSpec[] }
 export type AppView =
-  | { id: string; kind: "web"; name: string; source: "static" | "service"; managed?: boolean }
+  | { id: string; kind: "web"; name: string; source: "static" | "service"; managed?: boolean;
+      /** Stable address for a home screen; opens only on signed-in devices. */
+      address?: string }
   | { id: string; kind: "terminal"; name: string; command: string; args: string[] };
 export interface SessionApp {
   id: string;

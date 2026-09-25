@@ -252,6 +252,15 @@ to one view. Removing an app revokes grants and closes active gateway connection
 Reopen from Bivy after expiry. Launch links are bearer capabilities until redeemed;
 do not share them.
 
+**Copy address** in the Apps sheet gives a web view's stable address, e.g.
+`https://<view>.preview.example.net/`. The address grants nothing by itself, so
+it is safe to put on a home screen. A visit without access is sent to the Bivy
+client (`/sessions/<id>?node=<node>#preview=…`). There you sign in if needed, and
+the client opens that session on its machine. It then asks the node for a
+one-use direct link and returns to the same page of the app. So the address
+works on devices signed in to the account that owns the machine, and nowhere
+else. Addresses stay the same across node restarts, because apps keep their IDs.
+
 **Copy link** in the Apps sheet mints a separate, reusable link for one web view.
 It points at the app's own origin rather than the shell, so it opens unframed in
 any browser (useful for devtools or another device). Every visit exchanges it for
