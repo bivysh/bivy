@@ -3,6 +3,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 
+import { classifyAttachFailure } from "../src/runtime/adoption.js";
 import { AgentService } from "../src/runtime/agent-service.js";
 import { RemoteRuntime, RemoteRuntimeSession } from "../src/runtime/remote.js";
 import type { ToolCallDecision } from "../src/runtime/types.js";
@@ -114,5 +115,8 @@ test("attaching to an unknown session id fails cleanly", async () => {
   const pair = memoryPair();
   service.accept(pair.server);
   const d = daemon(runtime, async () => pair.client);
-  await assert.rejects(d.attachSession("does-not-exist"), /No detached session to attach/);
+  // Adoption forgets the session only when the service's real reply classifies
+  // as definitively gone, not as a transient failure.
+  await assert.rejects(d.attachSession("does-not-exist"), (error: Error) =>
+    /No detached session to attach/.test(error.message) && classifyAttachFailure(error) === "gone");
 });

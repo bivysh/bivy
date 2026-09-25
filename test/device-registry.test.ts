@@ -5,7 +5,9 @@ import path from "node:path";
 import { PairingStore } from "../src/device-registry.js";
 import {
   generatePairingKeypair,
+  generatePairSecret,
   pairingProof,
+  verifyPairingProof,
   deriveWrapKey,
   unwrapRoomKey,
 } from "../src/pairing-crypto.js";
@@ -142,6 +144,16 @@ await test("persist() writes atomically: no leftover .tmp file, dir is private",
     assert.equal(fs.statSync(dir).mode & 0o777, 0o700, "data dir should be created with mode 0700");
     assert.equal(fs.statSync(path.join(dir, "pairing.json")).mode & 0o777, 0o600);
   }
+});
+
+await test("a pairing proof is bound to the device key, and pair/rotate keys are separate", () => {
+  const secret = generatePairSecret();
+  const device = generatePairingKeypair();
+  const node = generatePairingKeypair();
+  // A relay that substitutes its own public key cannot reuse the device's proof.
+  assert.ok(!verifyPairingProof(secret, generatePairingKeypair().publicKeyB64, pairingProof(secret, device.publicKeyB64)));
+  const pair = deriveWrapKey(node.privateKeyB64, device.publicKeyB64, "pair");
+  assert.ok(!pair.equals(deriveWrapKey(node.privateKeyB64, device.publicKeyB64, "rotate")));
 });
 
 console.log(`\nAll ${passed} device-registry tests passed.`);

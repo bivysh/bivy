@@ -104,7 +104,7 @@ const allSuites = [...tsSuites, ...shSuites];
 const SUITE_DURATION_HINTS = new Map(Object.entries({
   "opencode-sessions.test.ts": 54,
   "plugin-cli.test.ts": 32,
-  "model-oauth.test.ts": 27,
+  "model-oauth.test.ts": 2,
   "pi-models-auth-refresh.test.ts": 25,
   "fork-transport.test.ts": 25,
   "pi-session-discovery.test.ts": 23,
@@ -263,12 +263,17 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   });
 }
 
+const coverageDir = process.env.TEST_COVERAGE_DIR ? path.resolve(process.env.TEST_COVERAGE_DIR) : null;
+
 function runSuite(suite) {
   return new Promise((resolve) => {
     const suiteStart = Date.now();
     // detached → own process group, so a timeout can kill grandchildren (a
     // suite's spawned servers) too, not just the tsx/bash wrapper.
-    const child = spawn(suite.cmd, suite.args, { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    // TEST_COVERAGE_DIR=<dir> records V8 coverage per suite (children included)
+    // under <dir>/<suite>, for scripts/test-redundancy.mjs.
+    const env = coverageDir ? { ...process.env, NODE_V8_COVERAGE: path.join(coverageDir, suite.name) } : process.env;
+    const child = spawn(suite.cmd, suite.args, { cwd: repoRoot, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
     activeChildren.add(child);
     const chunks = [];
     child.stdout.on("data", (d) => chunks.push(d));

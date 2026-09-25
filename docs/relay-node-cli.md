@@ -70,7 +70,8 @@ target node, resumable from a phone, the web app, or another terminal.
 Crypto/framing are the already-unit-tested core:
 `src/relay-cli-crypto.ts` (`acceptWelcome`, `RoomCipher`) and
 `src/relay-chunk.ts` (`frameMessages`, `FrameReassembler`). The bridge's
-passthrough invariant is pinned by `test/relay-attach-bridge.test.ts`.
+passthrough invariant (a wrong room key cannot open a frame) is pinned by
+`test/relay-cli-crypto.test.ts`.
 
 ## Constraints
 

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -73,6 +74,12 @@ check("acceptWelcome rejects a tampered wrapped room key", () => {
   const welcome = store.handleHello(buildHello(secret, kp))!;
   const tampered = { ...welcome, wrapped: welcome.wrapped.slice(0, -4) + (welcome.wrapped.slice(-4) === "AAAA" ? "BBBB" : "AAAA") };
   assert.throws(() => acceptWelcome(kp, tampered), "a tampered wrap must not silently yield a key");
+});
+
+// E2E: the relay only forwards sealed frames; without the room key it stays blind.
+check("a wrong room key cannot open a frame", () => {
+  const frame = sealFrame(crypto.randomBytes(32), { type: "terminal.output", data: "secret" });
+  assert.throws(() => new RoomCipher(crypto.randomBytes(32)).open(frame));
 });
 
 if (failures > 0) { console.error(`\n${failures} relay-cli-crypto test(s) failed.`); process.exit(1); }

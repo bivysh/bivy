@@ -11,7 +11,7 @@
 // MCP CallToolResult shape correctly.
 
 import assert from "node:assert/strict";
-import { ClaudeCodeRuntime, BIVY_ATTACH_MCP_SERVER_NAME, BIVY_ATTACH_TOOL_NAME } from "../src/runtime/claude-code.js";
+import { ClaudeCodeRuntime, BIVY_ATTACH_MCP_SERVER_NAME, BIVY_ATTACH_SYSTEM_PROMPT, BIVY_ATTACH_TOOL_NAME } from "../src/runtime/claude-code.js";
 
 process.env.ANTHROPIC_API_KEY ||= "test-key-for-preflight";
 
@@ -63,6 +63,11 @@ async function waitFor(cond: () => boolean, ms = 1000): Promise<void> {
   await session.prompt("hi");
   await waitFor(() => queries.length === 1);
   assert.equal(queries[0].options.mcpServers, undefined, "no attachToChat callback -> no mcpServers registered");
+  // The prompt hint path: keep the claude_code preset, append the instructions,
+  // and put the session id in the env so `bivy attach` resolves this session.
+  assert.deepEqual(queries[0].options.systemPrompt, { type: "preset", preset: "claude_code", append: BIVY_ATTACH_SYSTEM_PROMPT });
+  assert.match(BIVY_ATTACH_SYSTEM_PROMPT, /bivy attach/, "the hint must name the command the agent should run");
+  assert.equal(queries[0].options.env.BIVY_SESSION_ID, session.id);
 }
 
 // --- attachToChat callback supplied -> tool registered and bound to this session ---
