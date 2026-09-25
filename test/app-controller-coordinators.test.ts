@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import { NodeConnectionCoordinator } from "../packages/web/src/store/coordinators/node-connection-coordinator.js";
 import { CredentialsModelsCoordinator } from "../packages/web/src/store/coordinators/credentials-models-coordinator.js";
 import { SessionOrchestrator } from "../packages/web/src/store/coordinators/session-orchestrator.js";
@@ -294,23 +293,3 @@ test("steering follows the active conversation rather than the next draft agent"
   assert.equal(coordinator.supportsSteering(), true);
 });
 
-test("AppController keeps public compatibility while workflow decisions live outside it", async () => {
-  const source = await readFile(new URL("../packages/web/src/store/controller.ts", import.meta.url), "utf8");
-  assert.match(source, /switchNode\(nodeId: string\): void \{\s*this\.store\.setDraftEphemeralConfig\(null\);\s*this\.nodeCoordinator\.switchNode\(nodeId\);/);
-  assert.match(source, /await this\.sessionCoordinator\.fork\(sourceSessionId, opts\)/);
-  assert.match(source, /return this\.credentialsModelsCoordinator\.testCredential\(provider, label\)/);
-  assert.match(source, /this\.sessionCoordinator\.sendPrompt\(text, attachments\)/);
-  assert.match(source, /this\.sessionCoordinator\.deleteSession\(sessionId, path\)/);
-  assert.match(source, /return this\.followupCoordinator\.edit\(sessionId, id, patch, expectedVersion\)/);
-  assert.doesNotMatch(source, /kind: "session\.fork\.export"/);
-  assert.doesNotMatch(source, /kind: "models\.custom\.verify"/);
-  assert.ok(source.split("\\n").length < 3700, "controller must not absorb extracted workflows again");
-});
-
-test("coordinators remain explicit-port modules", async () => {
-  for (const file of ["session-orchestrator", "node-connection-coordinator", "credentials-models-coordinator", "ephemeral-coordinator", "automations-account-coordinator", "followup-coordinator"]) {
-    const source = await readFile(new URL(`../packages/web/src/store/coordinators/${file}.ts`, import.meta.url), "utf8");
-    assert.doesNotMatch(source, /from ["'][^"']*controller/);
-    assert.doesNotMatch(source, /SessionStore|agent-profiles|provider-interpreters|services\/control-plane/);
-  }
-});

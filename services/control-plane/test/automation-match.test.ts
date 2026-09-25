@@ -6,6 +6,7 @@ import {
   eventRuleMatches,
   evaluateAccountAutomation,
   findAutomationOverlaps,
+  gatherPreflightSignals,
   labelsMatch,
   matchSourceAutomation,
   normalizeEventRules,
@@ -364,5 +365,13 @@ assert.equal(
   "GitHub source automations can be scoped to a specific hosted or custom app",
 );
 
+
+// Legacy github_ci automations run on the server's default fix-CI prompt when
+// no instructions are stored, so preflight must not demand encrypted ones;
+// every other trigger still does.
+for (const trigger of ["github_ci", "github", "linear", "schedule", "manual"] as const) {
+  const { encryptedKeyOwnership } = gatherPreflightSignals({ trigger }, { hooks: [], nodes: [] });
+  assert.equal(encryptedKeyOwnership.required, trigger !== "github_ci", `${trigger} instruction requirement`);
+}
 
 console.log("automation-match tests passed");

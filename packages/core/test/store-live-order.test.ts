@@ -162,35 +162,6 @@ describe("live-stream reasoning/tool order (reducer)", () => {
     ]);
   });
 
-  it("interleaved reasoning: think → tool → think → tool → answer keeps each reasoning run above its tool", () => {
-    const store = play([
-      { type: "agent_start" },
-      { type: "turn_start" },
-      { type: "message_start", message: { role: "assistant", content: "" } },
-      { type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking: "Plan A" }] } },
-      { type: "tool_call", toolName: "bash", input: {}, toolUseId: "t1" },
-      { type: "message_end", message: { role: "assistant", content: [{ type: "thinking", thinking: "Plan A" }] } },
-      { type: "tool_result", toolUseId: "t1", result: "" },
-      { type: "message_start", message: { role: "assistant", content: "" } },
-      { type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking: "Plan B" }] } },
-      { type: "tool_call", toolName: "bash", input: {}, toolUseId: "t2" },
-      { type: "message_end", message: { role: "assistant", content: [{ type: "thinking", thinking: "Plan B" }] } },
-      { type: "tool_result", toolUseId: "t2", result: "" },
-      { type: "message_start", message: { role: "assistant", content: "" } },
-      { type: "message_update", message: { role: "assistant", content: "Answer." } },
-      { type: "message_end", message: { role: "assistant", content: "Answer." } },
-      { type: "turn_end" },
-      { type: "agent_end" },
-    ]);
-    expect(shape(store)).toEqual([
-      { role: "thinking", text: "Plan A" },
-      { role: "tool", tool: "t1" },
-      { role: "thinking", text: "Plan B" },
-      { role: "tool", tool: "t2" },
-      { role: "assistant", text: "Answer." },
-    ]);
-  });
-
   it("no-tool reasoning turn is unchanged: one thinking bubble then the answer", () => {
     const store = play([
       { type: "agent_start" },

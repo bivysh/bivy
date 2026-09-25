@@ -69,6 +69,13 @@ Before finishing UI work, run `pnpm run check:design` and
 visual or test limitation instead of claiming the UI was verified when it was
 not.
 
+## Tests
+
+Read [`test/README.md`](test/README.md) before adding a test: five rules decide
+whether it earns a place (real behavior, not source text, nothing cheaper covers
+it, lowest level that can see it, one case per code path). Prefer deleting or
+merging a redundant test over adding another.
+
 ## Useful checks
 
 - `pnpm run check:design` — design-token single-source-of-truth guard

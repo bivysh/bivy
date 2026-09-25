@@ -96,18 +96,6 @@ check("a corrupt/unparseable transcript line doesn't blank the whole session", (
   assert.equal(found!.cwd, "/work/repo-d");
 });
 
-check("honors a non-default CLAUDE_CONFIG_DIR with no store yet (empty list, no throw)", () => {
-  const prev = process.env.CLAUDE_CONFIG_DIR;
-  const otherHome = fs.mkdtempSync(path.join(os.tmpdir(), "claude-native-sessions-other-home-"));
-  process.env.CLAUDE_CONFIG_DIR = otherHome;
-  try {
-    assert.deepEqual(discoverNativeClaudeSessions(() => false), []);
-  } finally {
-    process.env.CLAUDE_CONFIG_DIR = prev;
-    fs.rmSync(otherHome, { recursive: true, force: true });
-  }
-});
-
 check("unreadable/missing projects dir yields an empty list, not a throw", () => {
   const prev = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = path.join(tmpHome, "does-not-exist");

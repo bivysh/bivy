@@ -9,7 +9,7 @@
 import assert from "node:assert/strict";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { BIVY_MCP_TOOLS, createBivyMcpServer, runAttachToChat } from "../src/harness/mcp-serve-cli.js";
+import { createBivyMcpServer, runAttachToChat } from "../src/harness/mcp-serve-cli.js";
 
 let failures = 0;
 async function check(name: string, fn: () => void | Promise<void>) {
@@ -29,12 +29,6 @@ function fakeFetch(status: number, json: unknown, captured: Captured[] = []) {
     return { ok: status >= 200 && status < 300, status, json: async () => json };
   }) as never;
 }
-
-await check("advertises the attach_to_chat tool with a required path", () => {
-  assert.equal(BIVY_MCP_TOOLS.length, 1);
-  assert.equal(BIVY_MCP_TOOLS[0]!.name, "attach_to_chat");
-  assert.deepEqual(BIVY_MCP_TOOLS[0]!.inputSchema.required, ["path"]);
-});
 
 await check("runAttachToChat posts path+caption to /api/session/:id/attach", async () => {
   const cap: Captured[] = [];

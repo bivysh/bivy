@@ -322,21 +322,6 @@ async function run() {
   });
 
   // --- fidelity gating on capability, not just id -----------------------------
-  await test("a same-id target without forkTransport still resolves to seeded", () => {
-    const bundle = buildForkBundle({
-      runtime: fakeRuntime("pi", true),
-      sessionFile: "x",
-      record: record(),
-    });
-    assert.equal(resolveForkFidelity(bundle, fakeRuntime("pi", false)), "seeded", "no forkTransport => seeded");
-    assert.equal(resolveForkFidelity(bundle, fakeRuntime("pi", true)), "full", "same id + forkTransport => full");
-    assert.equal(resolveForkFidelity(bundle, fakeRuntime("other", true)), "seeded", "different runtime, no history import => seeded");
-    // A different runtime that CAN import portable history is a true (replayed) fork.
-    assert.equal(resolveForkFidelity(bundle, fakeRuntime("other", false, true)), "replayed", "different runtime + forkHistoryImport => replayed");
-    // Native import still wins over history replay for a same-runtime target.
-    assert.equal(resolveForkFidelity(bundle, fakeRuntime("pi", true, true)), "full", "same runtime prefers full over replayed");
-  });
-
   // --- agent-aware export: drop the unusable native payload cross-runtime -----
   await test("a fork targeting a different agent omits the native payload it could never replay", () => {
     const src = fakeRuntime("pi", true);

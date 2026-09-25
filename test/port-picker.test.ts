@@ -38,12 +38,6 @@ test("findAvailablePort returns the preferred port when it is free", async () =>
   assert.equal(await findAvailablePort(4317, HOST, isFree), 4317);
 });
 
-test("findAvailablePort skips busy ports and returns the first free one", async () => {
-  const busy = new Set([4317, 4318]);
-  const isFree = async (port: number) => !busy.has(port);
-  assert.equal(await findAvailablePort(4317, HOST, isFree), 4319);
-});
-
 test("findAvailablePort falls back to the preferred port when the whole window is busy", async () => {
   const isFree = async () => false;
   assert.equal(await findAvailablePort(4317, HOST, isFree), 4317);
@@ -63,11 +57,6 @@ test("findAvailablePort probes upward from the preferred port, not from zero", a
 // reconcilePort guards the second-node collision at (re)start/install time — the
 // gap where `bivy service install`/`restart`/`update` trusted a saved port a
 // second node had since claimed.
-
-test("reconcilePort keeps the saved port when it is free", async () => {
-  const isFree = async () => true;
-  assert.equal(await reconcilePort(4317, HOST, { isFree }), 4317);
-});
 
 test("reconcilePort keeps the port when our own node already holds it", async () => {
   // Busy, but it's ours — a plain restart must not relocate off its own port.

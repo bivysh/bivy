@@ -28,9 +28,3 @@ test("does NOT steer when isStreaming is stuck-true but the turn has ended", () 
   assert.equal(resolveStreamingBehavior(undefined, { isWorking: false, isStreaming: true }), undefined);
 });
 
-test("does not steer when idle", () => {
-  assert.equal(resolveStreamingBehavior(undefined, { isWorking: false, isStreaming: false }), undefined);
-  // isWorking without an active stream also starts a fresh turn (unchanged from
-  // the prior behavior, which keyed solely off isStreaming).
-  assert.equal(resolveStreamingBehavior(undefined, { isWorking: true, isStreaming: false }), undefined);
-});

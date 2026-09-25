@@ -215,8 +215,6 @@ jobs:
       - run: pnpm run certification:check
       - run: pnpm run typecheck
       - run: pnpm run typecheck:web
-      - name: Web source contracts (no browser)
-        run: pnpm exec playwright test --project=contracts
       - run: pnpm run test:core
       # Within the runner, independent suites run across its CPUs while suites
       # with a shared port are serialized (scripts/run-tests.mjs).

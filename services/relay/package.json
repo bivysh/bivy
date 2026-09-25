@@ -11,7 +11,8 @@
     "test:process": "tsx test/service-process.test.ts",
     "test:e2e": "tsx test/e2e.ts",
     "test:solo": "tsx test/solo-admission.test.ts",
-    "test:unit": "npm run test:process && npm run test:e2e && npm run test:solo"
+    "test:backpressure": "tsx test/backpressure.test.ts",
+    "test:unit": "npm run test:process && npm run test:backpressure && npm run test:e2e && npm run test:solo"
   },
   "dependencies": {
     "@sentry/node": "^10.74.0",

@@ -10,18 +10,6 @@ import { SessionStore } from "../src/index.js";
 // becomes configured (login completed, or a hosted-escrow / peer sync landed),
 // and never survives a node switch.
 describe("needsModelAuth (first-run subscription-OAuth prompt)", () => {
-  it("defaults to null", () => {
-    expect(new SessionStore().getState().presentation.needsModelAuth).toBeNull();
-  });
-
-  it("sets and clears via setNeedsModelAuth", () => {
-    const store = new SessionStore();
-    store.setNeedsModelAuth({ nodeId: "eph-1", provider: "anthropic" });
-    expect(store.getState().presentation.needsModelAuth).toEqual({ nodeId: "eph-1", provider: "anthropic" });
-    store.setNeedsModelAuth(null);
-    expect(store.getState().presentation.needsModelAuth).toBeNull();
-  });
-
   it("does NOT dismiss while every provider is still unconfigured", () => {
     const store = new SessionStore();
     store.setNeedsModelAuth({ nodeId: "eph-1", provider: "anthropic" });

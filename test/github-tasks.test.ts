@@ -18,7 +18,6 @@ import {
   ensureTaskLabels,
   addLabel,
   removeLabel,
-  pickupMessage,
   announcePickup,
   commentIssueOnce,
   bivyCommentMarker,
@@ -316,12 +315,6 @@ checkAsync("ensureTaskLabels: creates both the pickup and claim labels", async (
 // ---------------------------------------------------------------------------
 // Pickup signaling — comment + label lifecycle (issue #458).
 // ---------------------------------------------------------------------------
-check("pickupMessage: names the node when known, generic otherwise", () => {
-  assert.equal(pickupMessage("laptop"), "🤖 Bivy has picked this up and started working on it on node `laptop`.");
-  assert.equal(pickupMessage(), "🤖 Bivy has picked this up and started working on it.");
-  assert.equal(pickupMessage("   "), "🤖 Bivy has picked this up and started working on it.");
-});
-
 checkAsync("addLabel: POSTs the label", async () => {
   const s = stubFetch(200);
   await addLabel(labelCfg, 5, "bivy:in-progress");

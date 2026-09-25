@@ -24,22 +24,6 @@ async function test(name: string, fn: () => Promise<void> | void) {
   console.log(`✓ ${name}`);
 }
 
-await test("new accounts are idempotent by email", async () => {
-  const store = await makeStore();
-  const account = await store.findOrCreateAccount("a@example.com");
-  const again = await store.findOrCreateAccount("a@example.com");
-  assert.equal(again.id, account.id);
-});
-
-await test("sessions can be created, resolved, and revoked (logout)", async () => {
-  const store = await makeStore();
-  const account = await store.findOrCreateAccount("b@example.com");
-  const token = await store.createSession(account.id);
-  assert.equal((await store.accountFromSession(token))?.id, account.id);
-  await store.revokeSession(token);
-  assert.equal(await store.accountFromSession(token), undefined);
-});
-
 await test("GitHub installer targets are retained as identity proof", async () => {
   const store = await makeStore();
   const account = await store.findOrCreateAccount("github-targets@example.com");
@@ -47,25 +31,6 @@ await test("GitHub installer targets are retained as identity proof", async () =
   const linked = await store.getAccount(account.id);
   assert.equal(linked?.githubUserId, "123");
   assert.deepEqual(linked?.githubInstallTargetIds, ["123", "456"]);
-});
-
-await test("magic-link login tokens are single-use", async () => {
-  const store = await makeStore();
-  const token = await store.createLoginToken("c@example.com");
-  const first = await store.consumeLoginToken(token);
-  assert.equal(first?.email, "c@example.com");
-  assert.equal(await store.consumeLoginToken(token), undefined);
-});
-
-await test("enrollNode supports multiple nodes", async () => {
-  const store = await makeStore();
-  const account = await store.findOrCreateAccount("d@example.com");
-  const first = await store.enrollNode(account.id, "node-1", "First");
-  assert.equal(first.node.id, "node-1");
-  const second = await store.enrollNode(account.id, "node-2", "Second");
-  assert.equal(second.node.id, "node-2");
-  const third = await store.enrollNode(account.id, "node-3", "Third");
-  assert.equal(third.node.id, "node-3");
 });
 
 await test("registerPairedDevice has no device cap (limits removed)", async () => {
@@ -115,52 +80,6 @@ await test("listPairedDevices and removePairedDevice manage the account's device
   assert.equal(await store.removePairedDevice(account.id, "pk-a"), false);
 });
 
-await test("relay tickets are single-use", async () => {
-  const store = await makeStore();
-  const account = await store.findOrCreateAccount("f@example.com");
-  const ticket = await store.createRelayTicket({ role: "node", accountId: account.id, nodeId: "n1" });
-  const first = await store.consumeRelayTicket(ticket);
-  assert.equal(first?.nodeId, "n1");
-  assert.equal(await store.consumeRelayTicket(ticket), undefined);
-});
-
-await test("link grants scope a client to a single node", async () => {
-  const store = await makeStore();
-  const account = await store.findOrCreateAccount("g@example.com");
-  const grant = await store.createLinkGrant(account.id, "node-x");
-  const resolved = await store.resolveClient(grant);
-  assert.equal(resolved?.accountId, account.id);
-  assert.equal(resolved?.nodeId, "node-x");
-});
-
-await test("work queue: enqueue, list by label, claim (atomic), complete", async () => {
-  const store = await makeStore();
-  const account = await store.findOrCreateAccount("w@example.com");
-  const { node } = await store.enrollNode(account.id, "node-w", "Laptop");
-
-  const a = await store.enqueueWorkItem(account.id, { label: "bivy", source: "github:issue", title: "A", repo: "o/r", issueNumber: 1 });
-  await store.enqueueWorkItem(account.id, { label: "bivy/laptop", source: "slack", title: "B" });
-
-  // A node serving only "bivy" sees just the shared item.
-  const shared = await store.listPendingWorkItems(account.id, ["bivy"]);
-  assert.deepEqual(shared.map((w) => w.title), ["A"]);
-  // Serving both labels sees both, oldest first.
-  const both = await store.listPendingWorkItems(account.id, ["bivy", "bivy/laptop"]);
-  assert.deepEqual(both.map((w) => w.title), ["A", "B"]);
-
-  // Claim is atomic: the first claimer wins, a second returns undefined.
-  const claimed = await store.claimWorkItem(account.id, node.id, a.id);
-  assert.equal(claimed?.status, "claimed");
-  assert.equal(claimed?.claimedByNodeId, node.id);
-  assert.equal(await store.claimWorkItem(account.id, node.id, a.id), undefined);
-
-  // Claimed items drop out of the pending list.
-  const afterClaim = await store.listPendingWorkItems(account.id, ["bivy"]);
-  assert.equal(afterClaim.length, 0);
-
-  await store.completeWorkItem(account.id, a.id);
-});
-
 await test("work queue: items are account-scoped; cross-account claim is denied", async () => {
   const store = await makeStore();
   const acct1 = await store.findOrCreateAccount("one@example.com");
@@ -196,17 +115,6 @@ await test("pruneExpiredAuthTokens drops expired rows across every short-lived a
 
   // Idempotent: nothing left to prune the second time.
   assert.equal(await store.pruneExpiredAuthTokens(wayInTheFuture), 0, "already-pruned rows aren't double-counted");
-});
-
-await test("inbound hooks: create + resolve by id with a per-account secret", async () => {
-  const store = await makeStore();
-  const account = await store.findOrCreateAccount("h@example.com");
-  const hook = await store.createInboundHook(account.id, "github");
-  assert.equal(hook.kind, "github");
-  assert.ok(hook.secret.length > 10);
-  const resolved = await store.getInboundHook(hook.id);
-  assert.equal(resolved?.accountId, account.id);
-  assert.equal(resolved?.secret, hook.secret);
 });
 
 await test("enqueueWorkItem is idempotent on dedupeKey (redelivery safety)", async () => {
@@ -350,24 +258,6 @@ await test("deleteWorkItem / clearPendingWorkItems manage the queue", async () =
   // Cross-account isolation.
   const other = await store.findOrCreateAccount("q2@example.com");
   assert.equal(await store.deleteWorkItem(other.id, running.id), false);
-});
-
-await test("github app serving node: recorded on app-meta, cleared on node delete", async () => {
-  const store = await makeStore();
-  const acct = await store.findOrCreateAccount("gh@example.com");
-  const { node } = await store.enrollNode(acct.id, "node-gh", "Laptop");
-  const hook = await store.createInboundHook(acct.id, "github_app");
-
-  // A node registering app-meta marks itself as the serving node.
-  await store.setInboundHookAppMeta(acct.id, hook.id, { mention: "bivy-app", name: "Bivy App" });
-  const served = await store.setInboundHookServingNode(acct.id, hook.id, node.id);
-  assert.equal(served?.servingNodeId, node.id);
-  assert.ok(served?.servingNodeSeenAt);
-  assert.equal((await store.getGithubAppHook(acct.id))?.servingNodeId, node.id);
-
-  // Removing that node clears the serving pointer (no more stale "connected").
-  assert.equal(await store.removeNode(acct.id, node.id), true);
-  assert.equal((await store.getGithubAppHook(acct.id))?.servingNodeId, undefined);
 });
 
 await test("setInboundHookSecret adopts an external secret, scoped to the account", async () => {

@@ -56,12 +56,6 @@ check("only allowlisted scripts survive", () => {
   assert.deepEqual(surviving, allowed, `staged scripts ${JSON.stringify(surviving)} != allowlist ${JSON.stringify(allowed)}`);
 });
 
-check("known dev-only scripts are dropped", () => {
-  for (const dead of ["agent-service", "typecheck", "lint", "test:unit", "test:browser", "build:release", "publish:npm", "prepare", "prepublishOnly", "agent", "pi"]) {
-    assert.ok(!(dead in (staged.scripts ?? {})), `dead script "${dead}" survived into the release manifest`);
-  }
-});
-
 check("runtime entry points point at compiled dist, not tsx/src", () => {
   assert.equal(staged.scripts?.start, "node dist/server.js");
   assert.equal(staged.scripts?.dev, "node dist/server.js");

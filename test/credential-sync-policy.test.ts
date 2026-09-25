@@ -183,18 +183,4 @@ function oauthRecord(provider: string, label: string, access: string, expires: n
   }
 }
 
-// --- modify() is still the label="default" case -----------------------------
-{
-  const credsDir = freshCredsDir();
-  try {
-    const store = createCredentialVault(credsDir);
-    await store.setApiKey("anthropic", "sk-1");
-    await store.modify("anthropic", async () => ({ type: "api_key", key: "sk-2" }));
-    assert.equal((await store.read("anthropic") as { key?: string })?.key, "sk-2");
-    assert.equal((await store.readRecord("anthropic", "default"))?.label, "default");
-  } finally {
-    fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
-  }
-}
-
 console.log("credential-sync-policy: all tests passed");

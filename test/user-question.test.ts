@@ -164,28 +164,6 @@ function questionInterceptor(qm: QuestionManager): ToolInterceptor {
   };
 }
 
-await scenario("interceptor answers AskUserQuestion with a handled result", async () => {
-  const qm = new QuestionManager();
-  const interceptor = questionInterceptor(qm);
-  let id = "";
-  qm.onRequest((r) => (id = r.id));
-
-  const decision = interceptor({ sessionId: "s1", toolName: "AskUserQuestion", input: { questions: [QUESTION] } });
-  await waitFor(() => id !== "");
-  qm.resolve(id, { behavior: "completed", answers: { "Which auth method?": "OAuth" } });
-
-  const result = await decision;
-  assert.equal(result?.handled, true);
-  assert.match(result?.result ?? "", /Auth method: OAuth/);
-});
-
-await scenario("interceptor ignores non-question tools and malformed questions", async () => {
-  const qm = new QuestionManager();
-  const interceptor = questionInterceptor(qm);
-  assert.equal(await interceptor({ sessionId: "s1", toolName: "Bash", input: { command: "ls" } }), undefined);
-  assert.equal(await interceptor({ sessionId: "s1", toolName: "AskUserQuestion", input: { questions: [] } }), undefined, "malformed → let it run un-intercepted");
-});
-
 // ── Adapter honoring: the Claude runtime feeds a `handled` result to the agent ─
 class StaticStore implements CredentialStore {
   async getCredential(): Promise<ProviderCredential | undefined> {

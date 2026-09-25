@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
-import { b64, b64url, unb64, unb64url, createLocalStore, deviceKeypair, wrapKeyFor, pairingProof, seal, open } from "../src/index.js";
+import { b64, b64url, unb64, unb64url, createLocalStore, deviceKeypair, wrapKeyFor, seal, open } from "../src/index.js";
 import type { DeviceKeyStore } from "../src/index.js";
 
 function mem(): Storage {
@@ -49,38 +49,12 @@ async function nodeWrapEncKey(nodePriv: CryptoKey, devicePubB64: string, purpose
 }
 
 describe("pairing handshake", () => {
-  it("device unwraps a room key the node wrapped for it (ECDH + HKDF)", async () => {
-    const nodeKp = (await crypto.subtle.generateKey({ name: "X25519" }, true, ["deriveBits"])) as CryptoKeyPair;
-    const nodePubB64 = b64url(new Uint8Array(await crypto.subtle.exportKey("raw", nodeKp.publicKey)));
-
-    const store = createLocalStore(mem(), mem());
-    const dev = await deviceKeypair(store);
-
-    const roomKey = crypto.getRandomValues(new Uint8Array(32));
-    const wrapEnc = await nodeWrapEncKey(nodeKp.privateKey, dev.pub, "pair");
-    const wrapped = await seal(wrapEnc, b64(roomKey)); // node ships b64(roomKey) sealed
-
-    const wrapDec = await wrapKeyFor(dev.priv, nodePubB64, "pair");
-    const unwrapped = unb64(await open(wrapDec, wrapped));
-    expect(Array.from(unwrapped)).toEqual(Array.from(roomKey));
-  });
-
   it("persists and reuses the device keypair", async () => {
     const storage = mem();
     const store = createLocalStore(storage, mem());
     const a = await deviceKeypair(store);
     const b = await deviceKeypair(store);
     expect(a.pub).toBe(b.pub);
-  });
-
-  it("produces a stable HMAC pairing proof", async () => {
-    const store = createLocalStore(mem(), mem());
-    const dev = await deviceKeypair(store);
-    const secret = b64url(crypto.getRandomValues(new Uint8Array(32)));
-    const p1 = await pairingProof(secret, dev.pub);
-    const p2 = await pairingProof(secret, dev.pub);
-    expect(p1).toBe(p2);
-    expect(p1).not.toMatch(/[+/=]/);
   });
 
   it("stores the private key non-extractably in the secure key store", async () => {

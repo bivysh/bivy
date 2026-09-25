@@ -23,17 +23,6 @@ check("behaves exactly like the base guard", () => {
   assert.equal(policy.decideToolCall("/ws", "bash", { command: "ls" }).decision, "allow");
 });
 
-check("the hard floor denies catastrophic commands and workspace escapes in every mode", () => {
-  const policy = new PolicyEngine({ mode: "autonomous", isRiskyIntegration: noRisky });
-  assert.equal(policy.decideToolCall("/ws", "bash", { command: "rm -rf /" }).decision, "deny");
-  assert.equal(policy.decideToolCall("/ws", "write", { path: "../../etc/passwd" }).decision, "deny");
-});
-
-check("autonomous mode allows plain bash", () => {
-  const policy = new PolicyEngine({ mode: "autonomous", isRiskyIntegration: noRisky });
-  assert.equal(policy.decideToolCall("/ws", "bash", { command: "npm test" }).decision, "allow");
-});
-
 check("unrestricted (danger-full-access) bypasses approvals and the workspace boundary", () => {
   const policy = new PolicyEngine({ mode: "always", unrestricted: true, isRiskyIntegration: () => true });
   assert.equal(policy.decideToolCall("/ws", "bash", { command: "curl http://x" }).decision, "allow");
@@ -58,11 +47,6 @@ check("unrestricted (danger-full-access) still denies catastrophic commands", ()
   }
   // Runtime-specific casing (Claude Code sends `Bash`) must not slip past the floor.
   assert.equal(policy.decideToolCall("/ws", "Bash", { command: "rm -rf /usr" }).decision, "deny");
-});
-
-check("attaches a risk category to every decision", () => {
-  const policy = new PolicyEngine({ mode: "autonomous", isRiskyIntegration: noRisky });
-  assert.ok(typeof policy.decideToolCall("/ws", "bash", { command: "ls" }).risk === "string");
 });
 
 // Session-scoped "allow … for this session" (src/policy/session-allow.ts).

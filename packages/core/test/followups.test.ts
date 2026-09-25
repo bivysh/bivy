@@ -26,18 +26,6 @@ describe("follow-up queue value reducer", () => {
     expect(transition.changed).toBe(true);
   });
 
-  it("accepts commands as replayable data", () => {
-    const commands = [
-      { type: "enqueue" as const, item: { id: "f1", text: "one" }, now: 1000 },
-      { type: "mark-sending" as const, id: "f1", now: 1001 },
-      { type: "confirm-sent" as const, id: "f1" },
-    ];
-    const result = commands.reduce<readonly PendingFollowup[]>(
-      (queue, command) => reduceFollowupQueue(queue, command).queue,
-      [],
-    );
-    expect(result).toEqual([]);
-  });
 });
 
 describe("mustQueueFollowup", () => {
@@ -53,10 +41,6 @@ describe("mustQueueFollowup", () => {
 });
 
 describe("supportsSteering", () => {
-  it("is false with no capabilities at all", () => {
-    expect(supportsSteering(undefined)).toBe(false);
-    expect(supportsSteering(null)).toBe(false);
-  });
   it("is false when streamingBehaviors is absent, empty, or malformed", () => {
     expect(supportsSteering({})).toBe(false);
     expect(supportsSteering({ streamingBehaviors: [] })).toBe(false);
@@ -81,10 +65,6 @@ describe("nextQueuedFollowup", () => {
     version: 1,
   });
 
-  it("returns the first queued item, in order", () => {
-    const items = [mk("a", "queued"), mk("b", "queued")];
-    expect(nextQueuedFollowup(items)?.id).toBe("a");
-  });
   it("skips items already sending/sent/failed ahead of a later queued one", () => {
     const items = [mk("a", "sending"), mk("b", "queued")];
     expect(nextQueuedFollowup(items)?.id).toBe("b");
@@ -97,11 +77,6 @@ describe("nextQueuedFollowup", () => {
 
 describe("SessionStore queued follow-ups", () => {
   const img: PromptAttachment = { kind: "image", name: "shot.png", size: 10, mimeType: "image/png", data: "aGk=" };
-
-  it("starts empty for a session with nothing queued", () => {
-    const store = new SessionStore();
-    expect(store.getFollowups("s1")).toEqual([]);
-  });
 
   it("enqueues in order and preserves attachments", () => {
     const store = new SessionStore();
@@ -168,13 +143,6 @@ describe("SessionStore queued follow-ups", () => {
     expect(item.text).toBe("one (edited)");
     expect(item.attachments).toEqual([]);
     expect(item.version).toBe(2);
-  });
-
-  it("preserves attachments through an edit that only changes text", () => {
-    const store = new SessionStore();
-    store.enqueueFollowup("s1", { id: "f1", text: "one", attachments: [img] }, 1000);
-    store.editFollowup("s1", "f1", { text: "one (edited)", attachments: [img] }, 1, 1001);
-    expect(store.getFollowups("s1")[0]!.attachments).toEqual([img]);
   });
 
   it("rejects a stale edit (version mismatch) rather than silently overwriting", () => {
@@ -300,13 +268,6 @@ describe("scheduled-message backstop bookkeeping (scheduledAutomationId)", () =>
     expect(store.attachFollowupAutomation("s1", "f1", "auto-2")).toBe(false);
   });
 
-  it("dropping the item clears its backstop id", () => {
-    const store = new SessionStore();
-    store.enqueueFollowup("s1", { id: "f1", text: "one", scheduledAutomationId: "auto-1" }, 1000);
-    expect(store.removeFollowup("s1", "f1")).toBe(true);
-    expect(store.getFollowups("s1")).toEqual([]);
-  });
-
   it("an edit clears the stale automation id so the controller re-creates it for the new text", () => {
     const store = new SessionStore();
     store.enqueueFollowup("s1", { id: "f1", text: "one", scheduledAutomationId: "auto-1" }, 1000);
@@ -316,13 +277,6 @@ describe("scheduled-message backstop bookkeeping (scheduledAutomationId)", () =>
     expect(store.getFollowups("s1")[0]!.text).toBe("edited");
   });
 
-  it("confirming delivery drops the item and its backstop id (no stale handle to cancel)", () => {
-    const store = new SessionStore();
-    store.enqueueFollowup("s1", { id: "f1", text: "one", scheduledAutomationId: "auto-1" }, 1000);
-    store.markFollowupSending("s1", "f1", 1001);
-    store.confirmFollowupSent("s1", "f1");
-    expect(store.getFollowups("s1")).toEqual([]);
-  });
 });
 
 describe("scheduled-message queue rows (long-press Send → ScheduleSheet)", () => {

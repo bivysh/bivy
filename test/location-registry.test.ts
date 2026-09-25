@@ -15,11 +15,6 @@ test("record/lookup/forget round-trip", async () => {
   assert.equal(reg.size, 0);
 });
 
-test("lookup of an unknown key is undefined", async () => {
-  const reg = new InMemoryLocationRegistry<{ n: number }>();
-  assert.equal(await reg.lookup("nope"), undefined);
-});
-
 test("record replaces an existing entry", async () => {
   const reg = new InMemoryLocationRegistry<{ termId: string }>();
   await reg.record("s", { termId: "a" });

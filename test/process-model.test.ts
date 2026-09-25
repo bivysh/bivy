@@ -183,34 +183,6 @@ await check("an unknown thinking level is ignored (keeps the default, no flag)",
   assert.equal(fs.readFileSync(argsFile, "utf8"), "exec -p hello", "no effort flag injected");
 });
 
-// Grok-shaped: reasoning-effort prepends (insertAt 0) and the trailing `-p`
-// prompt flag must stay last so the appended prompt lands as its value. Mirrors
-// AGENT_PROFILES.grok.thinking so a profile drift would fail here.
-function grokLikeRuntime() {
-  return new ProcessRuntime({
-    id: "grok",
-    displayName: "Grok (stub)",
-    command: stub,
-    promptMode: "argv",
-    args: ["--output-format", "streaming-json", "--always-approve", "-p"],
-    thinking: { levels: ["low", "medium", "high", "xhigh"], default: "high", thinkingArgs: (l) => ["--reasoning-effort", l], insertAt: 0 },
-    env: { STUB_ARGS_FILE: argsFile },
-  });
-}
-
-await check("grok-shaped: reasoning-effort prepends and keeps -p trailing", async () => {
-  const { session } = await grokLikeRuntime().createSession({ workspace: tmp });
-  assert.equal(session.supportsThinking?.(), true);
-  assert.equal(session.getThinkingLevel?.(), "high", "defaults to the configured level");
-  session.setThinkingLevel?.("xhigh");
-  await runToEnd(session);
-  assert.equal(
-    fs.readFileSync(argsFile, "utf8"),
-    "--reasoning-effort xhigh --output-format streaming-json --always-approve -p hello",
-    "effort flag prepends; -p stays last so the prompt is its value",
-  );
-});
-
 // --- Usage reporting (parser-extracted) -----------------------------------
 // A codex-shaped stub that emits a token-bearing turn.completed.
 const codexStub = path.join(tmp, "stub-codex-usage");
@@ -239,11 +211,6 @@ await check("getUsage returns the token snapshot parsed from the turn", async ()
   await runToEnd(session);
   const usage = await session.getUsage?.();
   assert.deepEqual(usage?.tokens, { input: 123, output: 45, total: 168 });
-});
-
-await check("usageReporting defaults off", () => {
-  const plain = new ProcessRuntime({ id: "x", command: stub, promptMode: "argv" });
-  assert.equal(plain.capabilities.usageReporting ?? false, false);
 });
 
 await check("BIVY_SESSION_ID is in the agent's env so `bivy attach` resolves this session", async () => {

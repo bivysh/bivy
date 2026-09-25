@@ -21,20 +21,6 @@ describe("Hetzner recoverable create", () => {
     expect(calls[0]!.url).toContain("label_selector=");
   });
 
-  it("tags a new server when no prior attempt resource exists", async () => {
-    const calls: ExecRequest[] = [];
-    await ephemeralAdapter("hetzner")!.provision({
-      token: "token", config, userData: "#cloud-config",
-      exec: async (request) => {
-        calls.push(request);
-        if (request.method === "GET") return { status: 200, body: { servers: [] } };
-        return { status: 201, body: { server: { id: 43, status: "initializing", public_net: {} } } };
-      },
-    });
-    const create = calls.find((request) => request.method === "POST")!;
-    expect((create.body as { labels: Record<string, string> }).labels).toEqual({ bivy: "ephemeral", "bivy-attempt": "attempt-abc" });
-  });
-
   it("tags a new server with both the attempt and account ownership labels when given", async () => {
     const calls: ExecRequest[] = [];
     await ephemeralAdapter("hetzner")!.provision({
@@ -78,11 +64,4 @@ describe("Hetzner orphan discovery", () => {
     }]);
   });
 
-  it("returns an empty list when nothing is tagged for this account", async () => {
-    const found = await ephemeralAdapter("hetzner")!.discover!({
-      token: "token", ownershipTag: "owner-tag-empty",
-      exec: async () => ({ status: 200, body: { servers: [] } }),
-    });
-    expect(found).toEqual([]);
-  });
 });

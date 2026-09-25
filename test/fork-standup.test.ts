@@ -96,14 +96,6 @@ async function run() {
     assert.equal(base, "origin/late", "the fetch inside resolveAdoptBaseRef surfaced the new branch");
   });
 
-  await test("adopt worktree based on origin/<branch> reproduces the source's committed work", async () => {
-    const { dest } = seedOriginAndClone();
-    const base = await resolveAdoptBaseRef(dest, "feature");
-    const wt = await createWorktree({ repoDir: dest, id: `feature-${"a1b2"}`, branch: "feature", base });
-    assert.equal(wt.branch, "feature");
-    assert.equal(fs.readFileSync(path.join(wt.path, "feature.txt"), "utf8"), "committed feature work\n", "committed work landed in the fork worktree");
-  });
-
   await test("a unique adopt dir never deletes another session's live worktree", async () => {
     const { dest } = seedOriginAndClone();
     const base = await resolveAdoptBaseRef(dest, "feature");

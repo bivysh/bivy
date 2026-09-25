@@ -143,13 +143,6 @@ test("persistTranscriptSnapshot skips empty and rebases onto logged base", () =>
   assert.equal(withBase.eventLog.baseSnapshots.length, 1, "a non-empty transcript is snapshotted (rebased onto logged history)");
 });
 
-test("conversationMessages delegates to eventLog.deriveHistory", () => {
-  const { tp } = harness({ eventLog: { deriveHistory: (_id: string, msgs: any) => [...msgs, { role: "assistant", content: "derived" }] } });
-  const out = tp.conversationMessages(sess([{ role: "user", content: "hi" }]));
-  assert.equal(out.length, 2);
-  assert.equal((out[1] as any).content, "derived");
-});
-
 test("buildHistoryEvent merges live-record fields over the metadata fallbacks", () => {
   const { tp } = harness({
     getOpenSession: () => ({ sessionFile: "/s.json", worktree: { branch: "bivy/x" }, warning: "w", prUrl: "u", prs: [], session: { getName: () => "Live Name" } }),

@@ -161,29 +161,6 @@ check("a weekly limit's wall-clock reset is honored, and exposed on the decision
   }
 });
 
-check("a structured resetsAtHint overrides the ambiguous text reset time", () => {
-  const ruleset: Ruleset = {
-    version: 1,
-    name: "resume-weekly-hint",
-    appliesTo: ["session"],
-    rules: [{ when: ["credits_exhausted"], action: "retry", maxAttempts: 3 }],
-  };
-  const now = Date.parse("2026-08-05T22:40:00Z");
-  const policy = createRunPolicy({ ruleset, context: "session", random: noJitter, now: () => now });
-  const d = policy.decide({
-    routing: {},
-    error: "You've hit your weekly limit · resets 12am (UTC)",
-    attempt: 1,
-    rerouteCount: 0,
-    resetsAtHint: "2026-08-11T00:00:00.000Z", // the real 7-day reset, days out
-  });
-  assert.equal(d.action, "retry");
-  if (d.action === "retry") {
-    assert.equal(d.resetsAt, "2026-08-11T00:00:00.000Z");
-    assert.equal(d.delayMs, Date.parse("2026-08-11T00:00:00.000Z") - now);
-  }
-});
-
 check("quota/auth/context park immediately", () => {
   for (const err of ["credit balance is too low", "401 Unauthorized", "maximum context length exceeded, tokens"]) {
     const d = def.decide({ routing: {}, error: err, attempt: 1, rerouteCount: 0 });

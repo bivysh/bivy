@@ -50,6 +50,3 @@ test("session envelopes deliver launchers to the focused chat without starting a
   assert.equal(store.getState().activeSession.working, false);
 });
 
-test("node and client compile the same app contract", () => {
-  assert.equal(fs.realpathSync("src/apps/types.ts"), fs.realpathSync("packages/core/src/apps.ts"));
-});

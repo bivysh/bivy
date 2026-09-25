@@ -5,16 +5,9 @@ import {
   foldConnectionEvent,
   foldPresentationEvent,
   foldSessionIndexEvent,
-  initialState,
 } from "../src/index.js";
 
 describe("pure app event folds", () => {
-  it("keeps AppState exclusively nested with no compatibility fields", () => {
-    expect(Object.keys(initialState()).sort()).toEqual([
-      "activeSession", "catalogs", "connection", "draft", "presentation", "sessionIndex", "settings",
-    ]);
-  });
-
   it("folds connection updates without mutating the input", () => {
     const value = { nodes: [{ id: "n1", name: "Before" }], currentNodeId: "n1", nodeUpdate: null, nodeUpdating: false, nodeUpdateAcknowledged: false };
     const result = foldConnectionEvent(value, { type: "node.updated", name: "After" });

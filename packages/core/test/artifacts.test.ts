@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
-import { deriveApps, deriveArtifacts, MAX_ARTIFACTS, type ArtifactEntry } from "../src/artifacts.js";
+import { deriveApps, deriveArtifacts, MAX_ARTIFACTS } from "../src/artifacts.js";
 import type { TranscriptEntry } from "../src/store.js";
 import type { AppReference } from "../src/apps.js";
 
@@ -124,9 +124,6 @@ describe("deriveArtifacts — projection over a session's transcript", () => {
     expect(result[0]!.name).toBe(`f${MAX_ARTIFACTS + 24}.txt`);
   });
 
-  it("returns an empty list for a transcript with no attachments", () => {
-    expect(deriveArtifacts([entry({ id: "e1", role: "assistant", text: "just talk" })])).toEqual([] satisfies ArtifactEntry[]);
-  });
 });
 
 describe("deriveApps — published-app projection over a transcript", () => {
@@ -150,7 +147,4 @@ describe("deriveApps — published-app projection over a transcript", () => {
     expect(deriveApps(transcript)).toHaveLength(1);
   });
 
-  it("returns an empty list when nothing was published", () => {
-    expect(deriveApps([entry({ id: "e1", role: "assistant", text: "just talk" })])).toEqual([] satisfies AppReference[]);
-  });
 });

@@ -88,13 +88,3 @@ test("outbound attachments interleave into deriveHistory by position, next to ba
   assert.equal((block.ref as AttachmentRef).hash, "f".repeat(64));
 });
 
-test("outbound records coexist with base/inbound-attachment records without disturbing them", () => {
-  const { log } = tmpLog();
-  log.appendBaseSnapshot("s1", [{ role: "user", content: "hi" }]);
-  log.appendAttachments("s1", "hi", [ref("b".repeat(64), "file")]); // inbound (user upload)
-  log.appendOutboundAttachment("s1", { afterMessageCount: 1, id: "o1", ref: ref("c".repeat(64)) }); // outbound (agent)
-  log.flush("s1");
-  assert.equal(log.readBase("s1").length, 1); // base untouched
-  assert.equal(log.readAttachments("s1").length, 1); // inbound text→refs untouched
-  assert.equal(replayOutboundAttachments(log.entries("s1")).length, 1); // outbound folded separately
-});

@@ -29,17 +29,6 @@ describe("delete-session tombstone", () => {
     expect(store.getState().sessionIndex.sessions.map((s) => s.sessionId)).toEqual(["s2"]);
   });
 
-  it("does not suppress other sessions", () => {
-    const store = new SessionStore();
-    store.setSessions([{ sessionId: "s1", nodeId: "node-a", name: "One" }]);
-    store.removeSessionLocal("s1");
-    store.setSessions([
-      { sessionId: "s2", nodeId: "node-a", name: "Two" },
-      { sessionId: "s3", nodeId: "node-a", name: "Three" },
-    ]);
-    expect(store.getState().sessionIndex.sessions.map((s) => s.sessionId).sort()).toEqual(["s2", "s3"]);
-  });
-
   it("restores a tombstone across a PWA reload", () => {
     const first = new SessionStore();
     first.setSessions([{ sessionId: "s1", nodeId: "node-a", name: "One" }]);

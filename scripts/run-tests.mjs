@@ -25,14 +25,11 @@
 // Pass one or more substrings to run only matching suites during development:
 //   npm run test:unit -- config-cli plugin-cli
 // CI can distribute the suite across machines with TEST_SHARD=1/2, 2/2, etc.
-// Run only suites affected by your branch's changes (committed or not):
-//   TEST_AFFECTED_BASE=origin/main npm run test:unit
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { availableParallelism, cpus } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { changedFilesSince, selectAffected } from "./affected-tests.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const testDir = path.join(repoRoot, "test");
@@ -184,29 +181,8 @@ function assignShards(suites, count) {
   return assignments;
 }
 
-// TEST_AFFECTED_BASE=<git ref> runs only suites whose dependency closure
-// contains a file changed since that ref (see scripts/affected-tests.mjs).
-const affectedBase = process.env.TEST_AFFECTED_BASE;
-let affectedNames = null;
-if (affectedBase) {
-  const suitePath = (suite) => path.relative(repoRoot, suite.args[0]);
-  const changed = changedFilesSince(repoRoot, affectedBase);
-  const result = selectAffected(repoRoot, allSuites.map(suitePath), changed);
-  affectedNames = new Set(result.selected.map((file) => path.basename(file)));
-  process.stdout.write(
-    result.all
-      ? `Affected-test selection: ${result.reason} changed, running every suite.\n`
-      : `Affected-test selection: ${changed.length} changed file(s) since ${affectedBase} select ${affectedNames.size}/${allSuites.length} suites.\n`,
-  );
-  if (!result.all && affectedNames.size === 0) {
-    process.stdout.write("No node suite depends on the changed files.\n");
-    process.exit(0);
-  }
-}
-
 const selectorMatchedSuites = allSuites.filter((suite) =>
-  (selectors.length === 0 || selectors.some((selector) => suite.name.includes(selector))) &&
-  (!affectedNames || affectedNames.has(suite.name)),
+  selectors.length === 0 || selectors.some((selector) => suite.name.includes(selector)),
 );
 const shardAssignments = assignShards(selectorMatchedSuites, shardCount);
 const selectedSuites = selectorMatchedSuites.filter((suite) => shardAssignments.get(suite.name) === shardIndex);
@@ -263,17 +239,12 @@ for (const signal of ["SIGINT", "SIGTERM"]) {
   });
 }
 
-const coverageDir = process.env.TEST_COVERAGE_DIR ? path.resolve(process.env.TEST_COVERAGE_DIR) : null;
-
 function runSuite(suite) {
   return new Promise((resolve) => {
     const suiteStart = Date.now();
     // detached → own process group, so a timeout can kill grandchildren (a
     // suite's spawned servers) too, not just the tsx/bash wrapper.
-    // TEST_COVERAGE_DIR=<dir> records V8 coverage per suite (children included)
-    // under <dir>/<suite>, for scripts/test-redundancy.mjs.
-    const env = coverageDir ? { ...process.env, NODE_V8_COVERAGE: path.join(coverageDir, suite.name) } : process.env;
-    const child = spawn(suite.cmd, suite.args, { cwd: repoRoot, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
+    const child = spawn(suite.cmd, suite.args, { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" });
     activeChildren.add(child);
     const chunks = [];
     child.stdout.on("data", (d) => chunks.push(d));

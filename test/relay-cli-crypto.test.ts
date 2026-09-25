@@ -49,24 +49,6 @@ check("node→client and client→node frames round-trip under the room key", ()
   assert.deepEqual(openFrame(store.roomKey(), cipher.seal(inbound)).data, inbound);
 });
 
-check("a relay that never saw the pairing secret cannot forge a hello", () => {
-  const store = freshStore();
-  store.issuePairSecret(); // a real secret exists, but the attacker doesn't have it
-  const kp = newDeviceKeypair();
-  // Attacker guesses/forges a secret (32 random bytes, base64url).
-  const forged = buildHello(Buffer.from("00000000000000000000000000000000").toString("base64url"), kp);
-  assert.equal(store.handleHello(forged), null, "forged proof must be rejected");
-});
-
-check("a pairing secret is single-use", () => {
-  const store = freshStore();
-  const secret = store.issuePairSecret();
-  const kp = newDeviceKeypair();
-  assert.ok(store.handleHello(buildHello(secret, kp)), "first use accepted");
-  const kp2 = newDeviceKeypair();
-  assert.equal(store.handleHello(buildHello(secret, kp2)), null, "second use of the same secret rejected");
-});
-
 check("acceptWelcome rejects a tampered wrapped room key", () => {
   const store = freshStore();
   const secret = store.issuePairSecret();

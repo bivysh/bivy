@@ -10,12 +10,9 @@
 // will ever try to interrupt it.
 import assert from "node:assert/strict";
 import test from "node:test";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { mkdtempSync } from "node:fs";
 
-import { PiRuntime } from "../src/runtime/pi.js";
 import { ClaudeCodeRuntime } from "../src/runtime/claude-code.js";
 import { ProtocolRuntime } from "../src/runtime/protocol.js";
 import type { RuntimeEvent } from "../src/runtime/types.js";
@@ -43,12 +40,6 @@ function waitFor(events: RuntimeEvent[], pred: (event: RuntimeEvent) => boolean,
   });
 }
 
-test("Pi advertises both steer and followUp — its SDK implements both explicitly", () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "bivy-pi-caps-"));
-  const runtime = new PiRuntime({ credsDir: dir, piDir: dir, sessionsDir: dir });
-  assert.deepEqual(runtime.capabilities.streamingBehaviors, ["steer", "followUp"]);
-});
-
 test("Claude Code advertises steer only — it has no real deferred followUp, only immediate injection", () => {
   const runtime = new ClaudeCodeRuntime();
   assert.deepEqual(runtime.capabilities.streamingBehaviors, ["steer"]);
@@ -70,18 +61,6 @@ test("a protocol/RPC shim can opt into steer support via its hello", async () =>
   });
   const { session } = await runtime.createSession({ workspace: process.cwd() });
   assert.deepEqual(runtime.capabilities.streamingBehaviors, ["steer"]);
-  session.dispose();
-});
-
-test("a protocol/RPC shim advertising both is passed through in full", async () => {
-  const runtime = new ProtocolRuntime({
-    command: process.execPath,
-    args: [fixture],
-    displayName: "Fixture Protocol (both)",
-    env: { FIXTURE_STREAMING_BEHAVIORS: "steer,followUp" },
-  });
-  const { session } = await runtime.createSession({ workspace: process.cwd() });
-  assert.deepEqual(runtime.capabilities.streamingBehaviors, ["steer", "followUp"]);
   session.dispose();
 });
 

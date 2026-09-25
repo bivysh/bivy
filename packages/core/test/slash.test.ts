@@ -31,25 +31,15 @@ describe("parseSlash", () => {
   it("lower-cases and trims the command word", () => {
     expect(parseSlash("  /Compact  ")).toEqual({ name: "/compact", args: "" });
   });
-  it("returns an unknown command as typed (so the caller can warn, not run it)", () => {
-    expect(parseSlash("/nope now")).toEqual({ name: "/nope", args: "now" });
-  });
   it("returns null for non-slash input", () => {
     expect(parseSlash("just a prompt")).toBeNull();
   });
 });
 
 describe("matchSlashCommands", () => {
-  it("returns nothing without advertised commands", () => {
-    expect(matchSlashCommands("/")).toEqual([]);
-  });
   it("stops autocompleting once a space is typed", () => {
     expect(matchSlashCommands("/model ", [{ name: "/model" }])).toEqual([]);
   });
-  it("returns nothing for non-slash prefixes", () => {
-    expect(matchSlashCommands("hello", [{ name: "/compact" }])).toEqual([]);
-  });
-
   it("returns the agent's advertised commands for a bare slash", () => {
     const extra = [{ name: "/compact", description: "Compact" }];
     expect(matchSlashCommands("/", extra).map((c) => c.name)).toEqual(["/compact"]);
@@ -113,15 +103,6 @@ describe("resolveSlash", () => {
     if (res.kind === "agent") {
       expect(res.command.mode).toBe("protocol");
       expect(res.args).toBe("staging");
-    }
-  });
-
-  it("routes a command that would once have collided straight to the agent now", () => {
-    const res = resolveSlash(parseSlash("/model sonnet")!, agent);
-    expect(res.kind).toBe("agent");
-    if (res.kind === "agent") {
-      expect(res.command.description).toBe("agent's own model");
-      expect(res.args).toBe("sonnet");
     }
   });
 

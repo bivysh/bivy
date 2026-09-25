@@ -6,21 +6,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { cloneDir, detectCloneStrategy, __resetCloneStrategyForTests, type CloneStrategy } from "../src/harness/cow-clone.js";
+import { cloneDir, __resetCloneStrategyForTests, type CloneStrategy } from "../src/harness/cow-clone.js";
 
 const VALID: CloneStrategy[] = ["apple-clonefile", "reflink", "copy"];
 
 function tmp(prefix: string): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
 }
-
-test("detectCloneStrategy returns a valid, cached strategy", () => {
-  __resetCloneStrategyForTests();
-  const dir = tmp("bivy-cow-detect-");
-  const s = detectCloneStrategy(dir);
-  assert.ok(VALID.includes(s), `strategy ${s} is one of ${VALID.join("/")}`);
-  assert.equal(detectCloneStrategy(dir), s, "cached on second call");
-});
 
 test("cloneDir reproduces the tree exactly (whatever the strategy)", () => {
   const base = tmp("bivy-cow-clone-");

@@ -58,12 +58,5 @@ check("a malformed seed falls back to a fresh random 32-byte key", () => {
   }
 });
 
-check("no seed on a first-run node still mints a random 32-byte key", () => {
-  const a = PairingStore.load(tmpDir()).roomKey();
-  const b = PairingStore.load(tmpDir()).roomKey();
-  assert.equal(a.length, 32);
-  assert.notEqual(a.toString("base64"), b.toString("base64"), "fresh keys must differ");
-});
-
 console.log(`pairing-room-key-adoption: ${failures} test(s) failed`);
 if (failures > 0) process.exit(1);

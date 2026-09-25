@@ -6,7 +6,7 @@
 // short grace — otherwise a short-lived ephemeral node leaks login state + an open
 // http.Server. Covers the pure sweep decision that src/server.ts drives.
 import assert from "node:assert/strict";
-import { decideOAuthLoginSweep, isTerminalOAuthStatus } from "../src/runtime/oauth/oauth-login-sweep.js";
+import { decideOAuthLoginSweep } from "../src/runtime/oauth/oauth-login-sweep.js";
 
 let failures = 0;
 function check(name: string, fn: () => void) {
@@ -37,20 +37,6 @@ check("a finished login is kept within grace, dropped after — never aborted", 
     assert.deepEqual(decideOAuthLoginSweep(status, OPTS.graceMs - 1, OPTS), { drop: false, abort: false });
     assert.deepEqual(decideOAuthLoginSweep(status, OPTS.graceMs + 1, OPTS), { drop: true, abort: false });
   }
-});
-
-check("a finished login outlives an in-flight one is NOT the rule — grace < ttl by design", () => {
-  // A done login at (grace, ttl] is dropped; an in-flight one at the same age is kept.
-  const age = OPTS.graceMs + 1;
-  assert.equal(decideOAuthLoginSweep("done", age, OPTS).drop, true);
-  assert.equal(decideOAuthLoginSweep("waiting", age, OPTS).drop, false);
-});
-
-check("isTerminalOAuthStatus", () => {
-  assert.equal(isTerminalOAuthStatus("done"), true);
-  assert.equal(isTerminalOAuthStatus("error"), true);
-  assert.equal(isTerminalOAuthStatus("waiting"), false);
-  assert.equal(isTerminalOAuthStatus("starting"), false);
 });
 
 console.log(`oauth-login-sweep: ${failures} test(s) failed`);

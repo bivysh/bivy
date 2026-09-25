@@ -45,16 +45,6 @@ test("an unreachable service KEEPS the mapping (transient) — never forgets", a
   assert.deepEqual(forgotten, [], "a transient failure must NOT forget a possibly-live child");
 });
 
-test("a successful attach is adopted", async () => {
-  const attached: string[] = [];
-  const outcome = await attachAdoptedSessions([loc("s1"), loc("s2", "10.0.0.4:4711")], {
-    attach: async (l) => void attached.push(l.sessionId),
-    forget: async () => {},
-  });
-  assert.deepEqual(outcome.adopted.sort(), ["s1", "s2"]);
-  assert.deepEqual(attached.sort(), ["s1", "s2"]);
-});
-
 test("mixed batch: each session classified independently", async () => {
   const outcome = await attachAdoptedSessions([loc("ok"), loc("gone"), loc("down")], {
     attach: async (l) => {

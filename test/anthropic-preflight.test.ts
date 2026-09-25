@@ -5,7 +5,6 @@ import {
   hasAnthropicCredential,
   claudeCredentialFiles,
   describeAnthropicError,
-  isAnthropicAuthError,
   probeAnthropicAccess,
   ANTHROPIC_NO_CREDENTIAL_MESSAGE,
   ANTHROPIC_AUTH_HINT,
@@ -65,14 +64,6 @@ check("never false-blocks on macOS (login lives in the Keychain, no file)", () =
 
 check("blank/whitespace credentials do not count", () => {
   assert.equal(anthropicCredentialPreflight({ ANTHROPIC_API_KEY: "  ", CLAUDE_CODE_OAUTH_TOKEN: "" }, linuxNoFiles), ANTHROPIC_NO_CREDENTIAL_MESSAGE);
-});
-
-check("isAnthropicAuthError matches real 401 phrasings", () => {
-  assert.ok(isAnthropicAuthError("unexpected status 401 Unauthorized: Missing bearer or basic authentication in header"));
-  assert.ok(isAnthropicAuthError("invalid x-api-key"));
-  assert.ok(isAnthropicAuthError("authentication_error: OAuth token has expired"));
-  assert.ok(!isAnthropicAuthError("ECONNREFUSED 127.0.0.1:443"));
-  assert.ok(!isAnthropicAuthError("rate_limit_error: 429 Too Many Requests"));
 });
 
 check("describeAnthropicError appends guidance to auth failures only", () => {

@@ -15,17 +15,6 @@ During development, pass filename substrings to run only the relevant suites:
 ```bash
 pnpm run test:unit -- config-cli plugin-cli
 pnpm run test:unit -- --list config-cli
-# only suites that depend on what your branch changed (a fast local signal;
-# CI always runs every suite)
-TEST_AFFECTED_BASE=origin/main pnpm run test:unit
-```
-
-To find suites whose coverage other suites already provide (a review list,
-not an automatic deletion; coverage shows code ran, not that it was asserted):
-
-```bash
-TEST_COVERAGE_DIR=.coverage/suites pnpm run test:unit > .coverage/run.log
-node scripts/test-redundancy.mjs .coverage/suites .coverage/run.log
 ```
 
 `TEST_SHARD=1/2` splits the suite across machines. Set `TEST_CONCURRENCY=1`

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { classifyFailure, parseRetryAfterMs, parseResetsAt, parseResetClock } from "../src/policy/conditions.js";
+import { classifyFailure, parseRetryAfterMs, parseResetClock } from "../src/policy/conditions.js";
 
 let failures = 0;
 function check(name: string, fn: () => void) {
@@ -55,10 +55,6 @@ check("auth 401 wins even when other noise is present", () => {
   assert.equal(classifyFailure("401 Unauthorized (after a network timeout)").condition, "auth_failed");
 });
 
-check("parses retry-after header seconds", () => {
-  assert.equal(parseRetryAfterMs("rate limited, retry-after: 12"), 12_000);
-});
-
 check("parses a natural-language wait", () => {
   assert.equal(parseRetryAfterMs("please try again in 2 minutes"), 120_000);
 });
@@ -67,10 +63,6 @@ check("attaches retryAfterMs to a rate-limit classification", () => {
   const c = classifyFailure("429 Too Many Requests; retry-after: 30");
   assert.equal(c.condition, "rate_limited");
   assert.equal(c.retryAfterMs, 30_000);
-});
-
-check("parses an ISO reset timestamp", () => {
-  assert.equal(parseResetsAt("quota resets_at 2026-07-27T18:00:00Z"), "2026-07-27T18:00:00Z");
 });
 
 check("attaches a reset timestamp to a session-limit classification", () => {

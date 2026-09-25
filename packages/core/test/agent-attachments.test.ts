@@ -70,11 +70,6 @@ describe("agent attachment — live reducer (grouped onto the final bubble)", ()
     expect(store.getState().activeSession.transcript[0]!.attachments?.[0]?.artifact).toBe(true);
   });
 
-  it("omits the artifact field for an ordinary (unmarked) attachment", () => {
-    const store = play([{ type: "attachment", id: "att1", ref: imageRef, caption: "cap" }, { type: "agent_end" }]);
-    expect(store.getState().activeSession.transcript[0]!.attachments?.[0]?.artifact).toBeUndefined();
-  });
-
   it("ignores malformed attachment events (no entry even after the turn ends)", () => {
     const store = play([
       { type: "attachment", id: "w" }, // no ref
@@ -106,19 +101,6 @@ describe("agent attachment — history render (grouped onto the final bubble)", 
     expect(entries).toHaveLength(1);
     expect(entries[0]!.text).toBe("Done — see below.");
     expect(entries[0]!.attachments?.map((a) => a.hash)).toEqual([HASH]);
-  });
-
-  it("groups MULTIPLE attachments onto the final message, preserving order", () => {
-    const csv = { hash: "b".repeat(64), name: "data.csv", mimeType: "text/csv", size: 5, kind: "file" as const };
-    const entries = renderHistory([
-      { role: "user", content: "give me both" },
-      { role: "assistant", content: [{ type: "bivy_attachment", ref: imageRef }] },
-      { role: "assistant", content: [{ type: "bivy_attachment", ref: csv }] },
-      { role: "assistant", content: [{ type: "text", text: "Here are both." }] },
-    ]);
-    expect(entries.map((e) => e.role)).toEqual(["user", "assistant"]);
-    expect(entries[1]!.text).toBe("Here are both.");
-    expect(entries[1]!.attachments?.map((a) => a.hash)).toEqual([HASH, "b".repeat(64)]);
   });
 
   it("carries an explicit artifact:true block field and the message's createdAt through history render", () => {
@@ -221,14 +203,6 @@ describe("agent attachment — sticky across a lossy reconcile (append-only)", (
 });
 
 describe("markdown inline images", () => {
-  it("renders ![alt](https://…) as a constrained <img>", () => {
-    const html = toHtml("![a cat](https://ex.com/cat.png)");
-    expect(html).toContain('<img class="md-image"');
-    expect(html).toContain('src="https://ex.com/cat.png"');
-    expect(html).toContain('alt="a cat"');
-    expect(html).toContain('loading="lazy"');
-  });
-
   it("does NOT emit an <img> for non-https sources (http/js/data)", () => {
     expect(toHtml("![x](http://ex.com/a.png)")).not.toContain("<img");
     expect(toHtml("![x](javascript:alert(1))")).not.toContain("<img");

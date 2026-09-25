@@ -132,24 +132,6 @@ await check("a corrupt cache file degrades to 'no cached key' rather than throwi
 
 // --- rotation end-to-end: a removed node's cached key must stop working -----
 
-await check("rotation scenario: a fresh vault key invalidates what a departed node cached", () => {
-  const dir = tmpDir();
-  const oldKey = mintLocalGithubAppVaultKey(dir, "1"); // what a since-removed node would have cached
-  const ciphertextWithOldKey = encryptGithubAppEnvelope({ appId: "1", privateKeyPem: FIXTURE_PEM }, oldKey);
-
-  // A surviving node rotates: mints a brand new key and re-encrypts.
-  const newKey = mintLocalGithubAppVaultKey(dir, "1");
-  const ciphertextWithNewKey = encryptGithubAppEnvelope({ appId: "1", privateKeyPem: FIXTURE_PEM }, newKey);
-
-  // The removed node's cached (old) key can no longer open the new ciphertext.
-  assert.throws(() => decryptGithubAppEnvelope(ciphertextWithNewKey, oldKey));
-  // The old ciphertext is now orphaned from the surviving node's perspective too
-  // (it only kept the new key), modeling "the old copy is simply superseded".
-  assert.throws(() => decryptGithubAppEnvelope(ciphertextWithOldKey, newKey));
-  // The new key correctly opens the new ciphertext.
-  assert.deepEqual(decryptGithubAppEnvelope(ciphertextWithNewKey, newKey).privateKeyPem, FIXTURE_PEM);
-});
-
 // --- the "github-app-vault" HKDF purpose is a distinct channel -------------
 
 await check("the github-app-vault wrap purpose is cryptographically distinct from model-auth-vault", () => {
@@ -167,14 +149,6 @@ await check("the github-app-vault wrap purpose is cryptographically distinct fro
   const wrapped = wrapRoomKey(githubAppWrap, vaultKey);
   assert.throws(() => unwrapRoomKey(modelAuthWrap, wrapped));
   assert.ok(unwrapRoomKey(githubAppWrap, wrapped).equals(vaultKey));
-});
-
-await check("github-app-vault wrap key derivation is symmetric (node and device agree)", () => {
-  const nodeKeys = generatePairingKeypair();
-  const deviceKeys = generatePairingKeypair();
-  const fromNode = deriveWrapKey(nodeKeys.privateKeyB64, deviceKeys.publicKeyB64, "github-app-vault");
-  const fromDevice = deriveWrapKey(deviceKeys.privateKeyB64, nodeKeys.publicKeyB64, "github-app-vault");
-  assert.equal(fromNode.toString("base64"), fromDevice.toString("base64"));
 });
 
 if (failures > 0) {

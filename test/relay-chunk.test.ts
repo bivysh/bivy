@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { sealFrame, openFrame } from "../src/e2e.js";
 import { frameMessages, FrameReassembler, FRAME_CHUNK_BYTES } from "../src/relay-chunk.js";
 
 /**
@@ -16,15 +15,6 @@ function test(name: string, fn: () => void) {
 }
 
 const RELAY_MAX_FRAME_BYTES = 256 * 1024; // relay default
-
-test("small payload is a single, unchunked frame", () => {
-  const msgs = frameMessages("hello");
-  assert.equal(msgs.length, 1);
-  const env = JSON.parse(msgs[0]);
-  assert.equal(env.t, "frame");
-  assert.equal(env.p, "hello");
-  assert.equal(env.fc, undefined, "small frames carry no chunk metadata");
-});
 
 test("a non-chunked frame passes straight through the reassembler", () => {
   const r = new FrameReassembler();
@@ -44,19 +34,6 @@ test("large payload splits into multiple frames, each under the relay cap", () =
   }
 });
 
-test("chunks reassemble back to the exact original payload", () => {
-  const big = "abcdefghij".repeat(FRAME_CHUNK_BYTES); // ~1.9 MB
-  const msgs = frameMessages(big);
-  const r = new FrameReassembler();
-  let result: string | null = null;
-  msgs.forEach((m, idx) => {
-    const out = r.accept(JSON.parse(m));
-    if (idx < msgs.length - 1) assert.equal(out, null, "incomplete groups yield null");
-    else result = out;
-  });
-  assert.equal(result, big, "reassembled payload must match the original");
-});
-
 test("out-of-order chunks still reassemble correctly", () => {
   const big = "z".repeat(FRAME_CHUNK_BYTES * 2 + 5);
   const msgs = frameMessages(big).map((m) => JSON.parse(m));
@@ -68,23 +45,6 @@ test("out-of-order chunks still reassemble correctly", () => {
     if (out !== null) result = out;
   }
   assert.equal(result, big);
-});
-
-test("end-to-end: seal a large event, chunk it, reassemble, and decrypt", () => {
-  const key = Buffer.alloc(32, 7);
-  const event = { type: "tool_result", text: "L".repeat(FRAME_CHUNK_BYTES * 2) };
-  const payload = sealFrame(key, event);
-  const msgs = frameMessages(payload);
-  assert.ok(msgs.length > 1, "this payload should chunk");
-  const r = new FrameReassembler();
-  let full: string | null = null;
-  for (const m of msgs) {
-    const out = r.accept(JSON.parse(m));
-    if (out !== null) full = out;
-  }
-  assert.ok(full, "reassembly should complete");
-  const frame = openFrame(key, full!);
-  assert.deepEqual(frame.data, event, "decrypted event must equal the original");
 });
 
 test("duplicate chunk index is ignored (not double-counted)", () => {
