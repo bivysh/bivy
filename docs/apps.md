@@ -340,6 +340,22 @@ frames are limited to 64 KiB with bidirectional backpressure. Disconnection
 cancels pending requests and active streams. Browser access remains protected
 by the gateway's view-scoped grants, cookies and origin checks below.
 
+Streams are kept alive between requests: a view's `GET`/`HEAD` requests reuse
+an idle stream to that view (closed after 4 seconds idle), so a page with
+hundreds of modules costs a handful of streams, not one each. Requests with a
+body and WebSocket upgrades get their own stream. The relay's `/metrics` counts
+preview requests, streams opened, streams open now, capacity refusals and bytes
+in each direction (`bivy_relay_preview_*`).
+
+App content may be cached by the viewer's browser, never by a shared cache,
+and is always revalidated: the gateway sends `private, no-cache` whatever the
+app's own `Cache-Control` says (an app's `no-store` stays `no-store`), so a
+preview never shows a stale copy. The app's `ETag`/`Last-Modified` pass
+through, so unchanged files come back as small 304s. Static snapshots and the
+desktop viewer's modules carry an `ETag` of their own, and text-like files are
+sent gzipped. Revalidation still passes the grant check, so revoked access
+can't reuse the cache.
+
 ### Optional direct gateway
 
 Advanced/local-only deployments may bypass automatic relay delivery and expose

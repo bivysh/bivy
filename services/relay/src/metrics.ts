@@ -19,6 +19,16 @@ export interface RelayCounters {
   evictedSlow: number;
 }
 
+/** App preview delivery (see preview.ts). Absent when the relay has no preview origin. */
+export interface PreviewCounters {
+  requests: number;
+  streamsOpened: number;
+  openStreams: number;
+  rejectedCapacity: number;
+  bytesToNode: number;
+  bytesFromNode: number;
+}
+
 // Prometheus label-value escaping: backslash, double-quote and newline.
 function escapeLabelValue(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n");
@@ -35,7 +45,7 @@ function renderLabels(labels: Record<string, string>): string {
  * `shardId` (if set) is attached as a `shard` label so a sharded fleet's series
  * stay distinct in one Prometheus.
  */
-export function renderRelayMetrics(m: RelayCounters, rooms: number, shardId: string | null): string {
+export function renderRelayMetrics(m: RelayCounters, rooms: number, shardId: string | null, preview?: PreviewCounters): string {
   const shard: Record<string, string> = shardId ? { shard: shardId } : {};
   const out: string[] = [];
 
@@ -62,6 +72,17 @@ export function renderRelayMetrics(m: RelayCounters, rooms: number, shardId: str
     [{ ...shard, reason: "per_ip" }, m.rejectedPerIp],
   ]);
   metric("bivy_relay_evicted_slow_total", "Sockets evicted by slow-consumer backpressure since start.", "counter", [[shard, m.evictedSlow]]);
+
+  if (preview) {
+    metric("bivy_relay_preview_requests_total", "Preview HTTP requests and upgrades received since start.", "counter", [[shard, preview.requests]]);
+    metric("bivy_relay_preview_streams_opened_total", "Node preview streams opened since start (lower than requests when streams are reused).", "counter", [[shard, preview.streamsOpened]]);
+    metric("bivy_relay_preview_open_streams", "Node preview streams open now, idle pooled ones included.", "gauge", [[shard, preview.openStreams]]);
+    metric("bivy_relay_preview_rejected_capacity_total", "Preview streams refused at the per-node or per-relay limit since start.", "counter", [[shard, preview.rejectedCapacity]]);
+    metric("bivy_relay_preview_bytes_total", "Preview bytes carried since start, by direction.", "counter", [
+      [{ ...shard, direction: "to_node" }, preview.bytesToNode],
+      [{ ...shard, direction: "from_node" }, preview.bytesFromNode],
+    ]);
+  }
 
   const mem = process.memoryUsage();
   metric("bivy_relay_resident_memory_bytes", "Resident set size in bytes.", "gauge", [[shard, mem.rss]]);

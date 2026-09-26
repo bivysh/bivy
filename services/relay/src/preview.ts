@@ -4,10 +4,14 @@ import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer } from "ws";
-import { PreviewStream } from "./preview-stream.js";
+import { PreviewStream, type StreamBytes } from "./preview-stream.js";
+import type { PreviewCounters } from "./metrics.js";
 
-interface Peer { control: WebSocket; streams: Set<Duplex>; pending: Set<string> }
+/** A node's HTTP requests share its kept-alive streams; each upgrade takes one for good. */
+interface Peer { control: WebSocket; streams: Set<Duplex>; pending: Set<string>; agent: http.Agent }
 interface Pending { peer: Peer; resolve: (stream: Duplex) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
+/** Idle pooled streams close before the gateway's 5 s keep-alive timeout would. */
+const IDLE_STREAM_MS = 4_000;
 const HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
 function headers(input: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
   const blocked = new Set([...HOP, ...(input.connection ?? "").toLowerCase().split(",").map((s) => s.trim())]);
@@ -24,6 +28,9 @@ export class PreviewRelay {
   private readonly pending = new Map<string, Pending>();
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
   private active = 0;
+  /** Operational counters for /metrics, never payloads. */
+  readonly bytes: StreamBytes = { toNode: 0, fromNode: 0 };
+  readonly counts = { requests: 0, streamsOpened: 0, rejectedCapacity: 0 };
   constructor(readonly originTemplate: string, private readonly timeoutMs = 10_000) {
     if (!/^https:\/\/\{app\}\.[a-z0-9.-]+$/.test(originTemplate)) throw new Error("RELAY_PREVIEW_ORIGIN must be https://{app}.<dedicated-preview-domain>");
     this.suffix = new URL(originTemplate.replace("{app}", "a")).hostname.slice(1);
@@ -35,7 +42,8 @@ export class PreviewRelay {
     const route = createHash("sha256").update(nodeId).digest("hex").slice(0, 24);
     const old = this.peers.get(route);
     if (old) this.detach(old);
-    const peer: Peer = { control, streams: new Set(), pending: new Set() };
+    const peer = { control, streams: new Set<Duplex>(), pending: new Set<string>() } as Peer;
+    peer.agent = this.agent(peer, true);
     this.peers.set(route, peer);
     control.once("close", () => {
       this.detach(peer);
@@ -47,6 +55,12 @@ export class PreviewRelay {
   private detach(peer: Peer): void {
     for (const token of [...peer.pending]) this.reject(token, new Error("Preview machine disconnected"));
     for (const stream of peer.streams) stream.destroy();
+    peer.agent.destroy();
+  }
+  metrics(): PreviewCounters {
+    let openStreams = 0;
+    for (const peer of this.peers.values()) openStreams += peer.streams.size;
+    return { ...this.counts, openStreams, bytesToNode: this.bytes.toNode, bytesFromNode: this.bytes.fromNode };
   }
   private reject(token: string, error: Error): void {
     const pending = this.pending.get(token);
@@ -59,7 +73,10 @@ export class PreviewRelay {
   }
   private open(peer: Peer, signal: AbortSignal): Promise<Duplex> {
     if (signal.aborted || peer.control.readyState !== WebSocket.OPEN) return Promise.reject(new Error("Preview machine unavailable"));
-    if (this.active >= 1024 || peer.pending.size + peer.streams.size >= 64 || peer.control.bufferedAmount > 1024 * 1024) return Promise.reject(new Error("Preview capacity exceeded"));
+    if (this.active >= 1024 || peer.pending.size + peer.streams.size >= 64 || peer.control.bufferedAmount > 1024 * 1024) {
+      this.counts.rejectedCapacity++;
+      return Promise.reject(new Error("Preview capacity exceeded"));
+    }
     return new Promise((resolve, reject) => {
       const token = randomBytes(32).toString("hex");
       const abort = () => this.reject(token, new Error("Preview request cancelled"));
@@ -90,7 +107,8 @@ export class PreviewRelay {
       this.wss.handleUpgrade(req, socket, head, (ws) => {
         accepted = true;
         ws.on("error", () => ws.terminate());
-        const stream = new PreviewStream(ws);
+        const stream = new PreviewStream(ws, this.bytes);
+        this.counts.streamsOpened++;
         stream.on("error", () => stream.destroy());
         pending.peer.streams.add(stream);
         stream.once("close", () => { pending.peer.streams.delete(stream); this.active--; });
@@ -119,20 +137,32 @@ export class PreviewRelay {
       res.writeHead(503, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" });
       res.end("Preview machine is offline. Reconnect it and reload."); return true;
     }
+    this.counts.requests++;
+    const peer = route.peer;
     const abort = new AbortController();
-    const upstream = this.request(req, route.peer, abort.signal);
-    res.once("close", () => { abort.abort(); upstream.destroy(); });
-    upstream.once("response", (response) => {
-      res.writeHead(response.statusCode ?? 502, headers(response.headers));
-      response.on("error", () => res.destroy());
-      response.pipe(res);
-    });
-    upstream.on("error", () => {
-      if (res.headersSent) { res.destroy(); return; }
-      res.writeHead(502, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" });
-      res.end("Preview connection interrupted. Reload to retry.");
-    });
-    req.pipe(upstream);
+    // Bodiless requests reuse pooled streams. A body can't be replayed, so it
+    // gets a stream of its own rather than risk one the node just closed.
+    const pooled = ["GET", "HEAD"].includes(req.method ?? "") && !req.headers["content-length"] && !req.headers["transfer-encoding"];
+    let upstream: http.ClientRequest;
+    const send = (retry: boolean): void => {
+      upstream = this.request(req, peer, abort.signal, pooled ? "pooled" : "once");
+      upstream.once("response", (response) => {
+        res.writeHead(response.statusCode ?? 502, headers(response.headers));
+        response.on("error", () => res.destroy());
+        response.pipe(res);
+      });
+      upstream.on("error", () => {
+        // A pooled stream the node closed as it was picked up: once more on a fresh one.
+        if (retry && upstream.reusedSocket && !res.headersSent && !abort.signal.aborted) { send(false); return; }
+        if (res.headersSent) { res.destroy(); return; }
+        res.writeHead(502, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" });
+        res.end("Preview connection interrupted. Reload to retry.");
+      });
+      if (pooled) upstream.end(); else req.pipe(upstream);
+    };
+    send(pooled);
+    // Only a browser that left early cancels; a finished exchange keeps its stream pooled.
+    res.once("close", () => { if (!res.writableFinished) { abort.abort(); upstream.destroy(); } });
     return true;
   }
 
@@ -140,8 +170,9 @@ export class PreviewRelay {
     const route = this.route(req);
     if (!route.preview) return false;
     if (!route.peer || req.headers.upgrade?.toLowerCase() !== "websocket") { socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); return true; }
+    this.counts.requests++;
     const abort = new AbortController();
-    const upstream = this.request(req, route.peer, abort.signal, true);
+    const upstream = this.request(req, route.peer, abort.signal, "upgrade");
     socket.once("close", () => { abort.abort(); upstream.destroy(); });
     upstream.once("upgrade", (response, peer, upstreamHead) => {
       const result = { ...headers(response.headers), connection: "Upgrade", upgrade: "websocket" };
@@ -158,17 +189,27 @@ export class PreviewRelay {
     return true;
   }
 
-  private request(req: IncomingMessage, peer: Peer, signal: AbortSignal, upgrade = false): http.ClientRequest {
-    const agent = new http.Agent({ keepAlive: false });
-    agent.createConnection = (_options, callback) => {
+  /** Opens node streams on demand. The request that asked for a stream can
+   * cancel it while pending (`previewSignal` rides along in the options). */
+  private agent(peer: Peer, keepAlive: boolean): http.Agent {
+    const agent = new http.Agent({ keepAlive, maxFreeSockets: 32, timeout: keepAlive ? IDLE_STREAM_MS : undefined });
+    agent.createConnection = (options, callback) => {
+      const signal = (options as { previewSignal?: AbortSignal }).previewSignal ?? new AbortController().signal;
       void this.open(peer, signal).then((stream) => callback?.(null, stream), (error: Error) => callback?.(error, undefined as never));
       return undefined as never;
     };
+    return agent;
+  }
+
+  private request(req: IncomingMessage, peer: Peer, signal: AbortSignal, mode: "pooled" | "once" | "upgrade"): http.ClientRequest {
+    const agent = mode === "pooled" ? peer.agent : this.agent(peer, false);
     const forwarded = headers(req.headers);
-    if (upgrade) { forwarded.connection = "Upgrade"; forwarded.upgrade = "websocket"; }
-    const request = http.request({ host: "preview.invalid", path: req.url, method: req.method, headers: forwarded, agent });
+    if (mode === "upgrade") { forwarded.connection = "Upgrade"; forwarded.upgrade = "websocket"; }
+    // Pooled per preview host, so a stream only ever carries one view's traffic.
+    const host = (req.headers.host ?? "").toLowerCase().replace(/:\d+$/, "");
+    const request = http.request({ host, path: req.url, method: req.method, headers: forwarded, agent, previewSignal: signal } as http.RequestOptions);
     request.setTimeout(60_000, () => request.destroy(new Error("Preview idle timeout")));
-    request.once("close", () => agent.destroy());
+    if (agent !== peer.agent) request.once("close", () => agent.destroy());
     return request;
   }
 
