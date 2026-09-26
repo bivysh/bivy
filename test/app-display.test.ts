@@ -80,7 +80,7 @@ test("a display view's origin serves only its viewer and noVNC, and streams the 
     assert.equal(page.status, 200);
     const csp = String(page.headers["content-security-policy"]);
     assert.match(csp, /script-src 'self' 'nonce-[a-f0-9]{32}'/);
-    assert.match(csp, new RegExp(`connect-src 'self' wss://${host.replace(/\./g, "\\.")}`));
+    assert.ok(csp.includes(`connect-src 'self' wss://${host};`), csp);
     assert.doesNotMatch(page.body, /__bivy\/inspector/, "no inspector in the viewer");
     const rfb = await get(port, host, "/__bivy/novnc/core/rfb.js", cookie);
     assert.equal(rfb.status, 200);
