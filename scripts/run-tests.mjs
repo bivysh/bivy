@@ -161,14 +161,21 @@ function durationHint(suite) {
 }
 
 function compareByDurationDesc(a, b) {
-  return durationHint(b) - durationHint(a) || a.name.localeCompare(b.name);
+  // Most suites have no hint and so tie on weight, which makes the tiebreak
+  // decide almost the whole shard layout. localeCompare is locale-dependent, so
+  // it produced a different split on CI than locally; compare by code point so
+  // every machine assigns the same suites to the same shard.
+  return durationHint(b) - durationHint(a) || (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
 }
 
 const cliArgs = process.argv.slice(2);
 const listOnly = cliArgs.includes("--list");
 const changedSinceIndex = cliArgs.indexOf("--changed-since");
 // --changed-since takes a git ref, which must not be mistaken for a name filter.
-const selectors = cliArgs.filter((arg, i) => !arg.startsWith("--") && i !== changedSinceIndex + 1);
+// Guard on the flag being present: indexOf returns -1 when it is not, and
+// `i !== -1 + 1` would then silently drop the first real selector.
+const refArgIndex = changedSinceIndex === -1 ? -1 : changedSinceIndex + 1;
+const selectors = cliArgs.filter((arg, i) => !arg.startsWith("--") && i !== refArgIndex);
 const shardSpec = process.env.TEST_SHARD;
 let shardIndex = 0;
 let shardCount = 1;
@@ -249,6 +256,19 @@ const serialSuites = suites.filter((suite) => !suite.name.endsWith(".test.ts")).
 
 const parallelism = availableParallelism?.() ?? cpus().length ?? 1;
 const concurrency = Math.max(1, Number(process.env.TEST_CONCURRENCY) || parallelism);
+
+// Put node_modules/.bin on PATH for the suites, exactly as `pnpm run` does.
+//
+// Several agents are detected by probing PATH (Pi's availability runs
+// `command -v pi`, which resolves to node_modules/.bin/pi from its optional
+// dependency). That made the suite's result depend on how the runner itself was
+// launched: `pnpm run test:unit` passed and a direct `node scripts/run-tests.mjs`
+// failed, because only the former exports .bin. Normalise it here so both agree
+// — CI invoking the script directly is otherwise an invisible behaviour change.
+const binDir = path.join(repoRoot, "node_modules", ".bin");
+if (!(process.env.PATH ?? "").split(path.delimiter).includes(binDir)) {
+  process.env.PATH = binDir + path.delimiter + (process.env.PATH ?? "");
+}
 
 const failures = [];
 const start = Date.now();

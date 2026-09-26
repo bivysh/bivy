@@ -302,7 +302,7 @@ jobs:
       # actually got that suite pays the apt install.
       - name: Install TigerVNC if this shard runs the display suite
         run: |
-          if node scripts/run-tests.mjs --list ${{ steps.select.outputs.args }} | grep -qx 'app-display.test.ts'; then
+          if pnpm run test:unit -- --list ${{ steps.select.outputs.args }} | grep -qx 'app-display.test.ts'; then
             sudo apt-get update -qq
             sudo apt-get install -y -qq --no-install-recommends tigervnc-standalone-server
           else
@@ -310,7 +310,7 @@ jobs:
           fi
       # Within the runner, independent suites run across its CPUs while suites
       # with a shared port are serialized (scripts/run-tests.mjs).
-      - run: node scripts/run-tests.mjs ${{ steps.select.outputs.args }}
+      - run: pnpm run test:unit -- ${{ steps.select.outputs.args }}
       # The loader's transform cache is content-addressed, so entries accumulate
       # across runs. Cap it before the warm cache is saved. After the suites, so
       # this run always had a fully warm cache.
