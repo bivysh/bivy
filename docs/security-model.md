@@ -73,6 +73,9 @@ Review cards (`docs/apps.md`) follow the same path: their screenshots are
 attachments fetched over the session channel, never through the preview
 origin. The one control-plane touch is the "finished" push hint, which carries
 the card's app, view and card IDs so a tap opens it, never the image.
+Images shared into Bivy from other apps wait in the device's Cache Storage
+(the service worker never uploads them) until the user places them in a
+session; they then travel as ordinary composer attachments.
 The one exception, as noted below, is a GitHub-queue run's bounded
 `output.artifactUrl` — an external link a run reports as its outcome, not a
 filename or byte.

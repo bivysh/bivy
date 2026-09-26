@@ -3,11 +3,13 @@
 //
 // Share-target landing: `/share?title=…&text=…&url=…`.
 //
-// Two entry points open this URL (see the `share_target` manifest entry in
+// Entry points (see the `share_target` manifest entry in
 // packages/web/vite.config.ts):
 //   1. Android/desktop Chromium — the installed PWA appears in the OS share
-//      sheet and the browser navigates here with the shared payload as GET
-//      params (the Web Share Target API).
+//      sheet and POSTs the payload (text, links and images). The service
+//      worker keeps it on the device (shareInbox.ts) and opens
+//      `/share?shared=<id>`; images reach the chosen session's composer as
+//      attachments once it's open.
 //   2. The iOS "Send to Bivy" Shortcut — iOS never exposes web apps in its
 //      share sheet, so Settings → Share to Bivy walks the user through a
 //      one-time Shortcut that opens this same URL with the shared text.
@@ -32,6 +34,8 @@ export const SHARE_PATH = "/share";
  *  post-mount destination sheet. Survives an in-tab sign-in reload; two tabs
  *  sharing at once never clobber each other. */
 export const PENDING_SHARE_KEY = "bivy.pendingShare";
+/** A share with images: the id of what the service worker kept (shareInbox.ts). */
+export const PENDING_SHARE_FILES_KEY = "bivy.pendingShareFiles";
 
 /** Compose one draft-ready block from the share params. Android fills any
  *  subset of title/text/url (and often repeats the link inside `text`), so
@@ -65,6 +69,12 @@ export function applyShareTarget(pathname: string, search: string, pending: Draf
   if (pathname.replace(/\/+$/, "") !== SHARE_PATH) return null;
   const params = new URLSearchParams(search);
   const shared = sharedDraftText(params);
+  const files = params.get("shared") ?? "";
+  if (/^[a-f0-9]{32}$/.test(files)) {
+    // Images wait in the inbox; the destination sheet reads them after mount.
+    try { pending.setItem(PENDING_SHARE_FILES_KEY, files); } catch { /* denied: the share is dropped */ }
+    return "/sessions/new";
+  }
   const session = params.get("session") ?? "";
   if (/^[A-Za-z0-9_-]{1,128}$/.test(session) && session !== "new") {
     if (shared) seedSessionDraft(drafts, session, shared);
@@ -87,7 +97,19 @@ export function peekPendingShare(storage: DraftStorage): string | null {
 }
 
 export function clearPendingShare(storage: DraftStorage): void {
-  try { storage.removeItem(PENDING_SHARE_KEY); } catch { /* already gone */ }
+  try { storage.removeItem(PENDING_SHARE_KEY); storage.removeItem(PENDING_SHARE_FILES_KEY); } catch { /* already gone */ }
+}
+
+export function peekPendingShareFiles(storage: DraftStorage): string | null {
+  try { return storage.getItem(PENDING_SHARE_FILES_KEY); } catch { return null; }
+}
+
+/** The line a shared screenshot starts with when the destination has an app
+ *  preview: which app and page to compare with. The user edits or replaces it. */
+export function previewShareLine(images: number, app: { name: string; path?: string } | undefined): string {
+  if (!images || !app) return "";
+  const what = images === 1 ? "a screenshot — compare it" : `${images} screenshots — compare them`;
+  return `Shared ${what} with the ${app.name} preview${app.path && app.path !== "/" ? ` (${app.path})` : ""}.`;
 }
 
 /** Fold shared text into a session's stored composer draft (null = the
