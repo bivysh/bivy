@@ -160,6 +160,40 @@ chat attachment the device fetches over the session channel. It waits up to
 encrypted in transit, in the node's attachment store). Each view keeps only
 its latest card's pictures: an older card shows "Screenshot no longer stored".
 
+### Share links (`bivy app share`)
+
+```sh
+bivy app share                          # the web view opened last
+bivy app share Shop --view Storefront   # an app and view, by name or ID
+```
+
+Mints the same reusable link as **Copy link** in the Apps sheet (see
+[Automatic web preview delivery](#automatic-web-preview-delivery)), so an agent
+can hand a preview to people outside Bivy: in a pull request, an issue, or a
+Basecamp or Slack thread an automation came from. `[app-id]` is an app ID or
+name and `--view` a view ID or name within it; with neither, it picks the view
+opened last, like `bivy app present`. Only web views have links. It prints JSON
+with `url`, `expiresAt` (epoch milliseconds), `expires` (ISO 8601) and the app
+and view it picked:
+
+```json
+{ "url": "https://<view>.preview.example.net/__bivy/open#…", "expiresAt": 1790532000000,
+  "appId": "…", "viewId": "…", "app": "Shop", "view": "Storefront",
+  "expires": "2026-09-27T18:00:00.000Z" }
+```
+
+The link works for 24 hours, until **Revoke access** in the Apps sheet, until
+the app is removed, or until the machine restarts. People who open it can leave
+reviewer notes, which come back under the view in **Apps**.
+
+> **Security:** a share link is a bearer capability. **Anyone who has the link
+> can use the app, including its live backend, until it expires or you revoke
+> it.** Posting it in a thread, issue or chat gives it to everyone who can read
+> that place, and to any integration or log that stores it. Only share previews
+> whose data and actions are fine for those people, and revoke access when the
+> review is done. The command prints this reminder on stderr, so the JSON on
+> stdout stays clean for scripts.
+
 ### Servers Bivy runs (`start`)
 
 A service view can say how to start its server:
@@ -393,7 +427,8 @@ It stays valid for 24 hours, until **Revoke access**, until the app is removed,
 or until the machine restarts. Revoke access ends every link, browser session and
 open connection for that view without removing the app. A copied link is a
 bearer capability: anyone holding it can use the app, including a live server's
-backend, until it lapses or is revoked.
+backend, until it lapses or is revoked. Agents mint the same link with
+[`bivy app share`](#share-links-bivy-app-share).
 
 **Reviewer notes.** A copied link opens the app with one extra control,
 **Leave a note**. It sits in a shadow root so the app's styles don't touch it.
@@ -514,6 +549,10 @@ preview gate; PWA/offline behavior must be tested outside this preview mode.
   restored**: after a restart their port could belong to any process. Detection
   offers them again, one tap to preview. Access grants never persist. After a
   restart, open the preview again from Bivy.
+- Share links (**Copy link**, `bivy app share`) are bearer capabilities, not
+  identities: anyone who has one can use the app and its live backend until it
+  expires (24 h), is revoked, the app is removed or the machine restarts. An agent
+  can mint one without asking, so instruct it where it may post links.
 - Removing an app stops terminal processes started through its views, not unrelated
   terminals. It cannot retract bytes already downloaded or undo side effects.
 

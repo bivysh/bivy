@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Pick up on one device where another left off. When you open a session that another of your devices drove in the last half hour, a note above the composer says where ("Last active on Terminal on my-laptop · 2m ago"). If that device left an unsent draft, **Continue draft** moves it into an empty composer, so a half-typed prompt follows you from laptop to phone. It never blocks anything: whoever sends next is driving. The terminal lock screen also says which device last typed into the terminal. Devices name themselves ("iPhone", "Mac", "Terminal on my-laptop"); older nodes simply show nothing.
+- `bivy app share [app-id] [--view <view>]` lets an agent mint the same reusable preview link as **Copy link**, and prints its URL and expiry as JSON. An automation started from an issue, a Basecamp or Slack thread, or a webhook can now post the running app back where the work came from. As with Copy link, anyone who has the link can use the app, including its live backend, for 24 hours or until you revoke access. The command repeats that warning, and `docs/apps.md` explains it.
 - **Move to machine…** in the session menu moves a session to another of your machines in one step: the conversation, its branch and any uncommitted changes. It preselects an online machine and retires the original once the session is running there. The old combined entry is now just **Fork…**.
 
 ### Changed

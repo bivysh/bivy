@@ -236,6 +236,45 @@ test("app commands validate both transport inputs and session/view ownership", a
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("bivy app share picks a web view by app and view ID or name, like present", async () => {
+  const dir = workspace();
+  try {
+    const shared: string[] = [];
+    const gateway = { open: () => "", share: (id: string) => { shared.push(id); return { url: `https://${id}.preview.example.net/__bivy/open#grant`, expiresAt: 42 }; }, revoke: () => {} };
+    const service = new AppService(new AppRegistry(), gateway, { start: async () => "term", has: () => true, close: () => {} });
+    const commands = new CommandRegistry(createAppCommands(service, (id) => id === "s" ? dir : undefined), CLIENT_COMMAND_SCHEMAS);
+    const replies: any[] = [];
+    const ctx = { reply: (event: unknown) => replies.push(event), broadcast: () => {} };
+    const share = async (fields: Record<string, string>) => { await commands.dispatch("apps.share", { kind: "apps.share", sessionId: "s", ...fields }, ctx); return replies.at(-1); };
+
+    assert.match((await share({})).error, /no web views/);
+    const shop = service.publish("s", dir, { version: 1, name: "Shop", views: [{ kind: "web", name: "Storefront", source: { kind: "static", directory: "./dist" } }, { kind: "web", name: "Admin", source: { kind: "static", directory: "./dist" } }, { kind: "terminal", name: "Console", command: "sh" }] });
+    const docs = service.publish("s", dir, { version: 1, name: "Docs", views: [{ kind: "web", name: "Site", source: { kind: "static", directory: "./dist" } }] });
+    const [storefront, admin] = shop.views;
+    await service.open("s", docs.id, docs.views[0].id);
+
+    // Default: the view opened last, with names alongside the link.
+    const newest = await share({});
+    assert.equal(newest.type, "apps.share.ok");
+    assert.deepEqual({ url: newest.url, expiresAt: newest.expiresAt, app: newest.app, view: newest.view, viewId: newest.viewId }, { url: `https://${docs.views[0].id}.preview.example.net/__bivy/open#grant`, expiresAt: 42, app: "Docs", view: "Site", viewId: docs.views[0].id });
+    // App by name or ID; --view by name (any case) or ID, within that app.
+    assert.equal((await share({ appId: "shop" })).viewId, storefront.id);
+    assert.equal((await share({ appId: shop.id, view: "ADMIN" })).viewId, admin.id);
+    assert.equal((await share({ view: admin.id })).viewId, admin.id);
+    assert.match((await share({ appId: "Docs", view: "Admin" })).error, /No web view called "Admin" in "Docs"/);
+    assert.match((await share({ appId: "Nope", view: "Site" })).error, /No app called "Nope"/);
+    // Terminal views have no preview link, whether picked by name or ID.
+    assert.match((await share({ appId: "Shop", view: "Console" })).error, /No web view called "Console"/);
+    assert.match((await share({ appId: shop.id, viewId: shop.views[2].id })).error, /Only web views/);
+    // The app UI's exact-ID form is unchanged.
+    assert.equal((await share({ appId: shop.id, viewId: admin.id })).url, `https://${admin.id}.preview.example.net/__bivy/open#grant`);
+    // Another session's apps are never reachable by name.
+    await commands.dispatch("apps.share", { kind: "apps.share", sessionId: "other", appId: "Shop" }, ctx);
+    assert.equal(replies.at(-1).type, "apps.share.error");
+    assert.deepEqual(shared, [docs.views[0].id, storefront.id, admin.id, admin.id, admin.id]);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("preview origins require dedicated HTTPS per-view hosts", () => {
   assert.equal(previewOriginTemplate("https://{app}.preview.example.net/"), "https://{app}.preview.example.net");
   for (const url of ["http://{app}.example.net", "https://example.net/{app}", "https://{app}.example.net/path", "https://{app}.example.net:443", "https://{app}.example.net?x=1"]) assert.throws(() => previewOriginTemplate(url));

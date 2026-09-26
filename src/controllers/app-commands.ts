@@ -35,7 +35,10 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
     "apps.annotate": (msg) => service.annotate(String(msg.sessionId), msg as never),
     "apps.clearNotes": (msg) => service.clearNotes(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
     "apps.logs": (msg) => service.logs(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
-    "apps.share": (msg) => service.share(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
+    // The app UI passes exact IDs; `bivy app share` passes an app and/or view by ID or name.
+    "apps.share": (msg) => typeof msg.viewId === "string" && typeof msg.appId === "string"
+      ? service.share(String(msg.sessionId), msg.appId, msg.viewId)
+      : service.shareView(String(msg.sessionId), { app: typeof msg.appId === "string" ? msg.appId : undefined, view: typeof msg.view === "string" ? msg.view : undefined }),
     "apps.revoke": (msg) => service.revoke(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
     "apps.remove": (msg) => { service.remove(String(msg.sessionId), String(msg.appId)); return { ok: true }; },
   };

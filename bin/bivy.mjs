@@ -2432,6 +2432,7 @@ async function cmdApp(args = []) {
        bivy app remove <app-id> [--session <id>]
        bivy app shot [app-id] [--widths 390,1280] [--themes light,dark] [--path /page] [--session <id>]
        bivy app present [view] [--path /page] [--note "…"] [--session <id>]
+       bivy app share [app-id] [--view <view>] [--session <id>]
        bivy app run [--name <name>] [--restart-on-change] [--session <id>] -- <command> [args…]
 
 Manifest: {"version":1,"name":"My app","views":[
@@ -2458,10 +2459,16 @@ run: bivy config set sessions.appScreenshots true
 the chat with the app at phone width (and before/after), and it opens the live
 preview. Use it when you finish a visible change, or when the user asks to see
 it. [view] is an app or view name or ID (default: the one opened last).
+"share" mints a reusable link to one web view and prints its URL and expiry
+(24 hours, or until Revoke access in Apps, the app is removed or the machine
+restarts). [app-id] is an app ID or name, --view a view ID or name (default: the
+one opened last). Anyone who has the link can use the app, including a live
+server's backend, until it expires or is revoked: only post it where everyone
+who can read it may use the app.
 Web previews require operator setup; see docs/apps.md.`);
     return;
   }
-  if (!["publish", "list", "remove", "shot", "run", "present"].includes(action)) throw new Error("Unknown app command. Run bivy app --help.");
+  if (!["publish", "list", "remove", "shot", "run", "present", "share"].includes(action)) throw new Error("Unknown app command. Run bivy app --help.");
   // `run -- <command> [args…]`: publish a one-window desktop app without a manifest file.
   let runManifest;
   if (action === "run") {
@@ -2476,6 +2483,15 @@ Web previews require operator setup; see docs/apps.md.`);
     runManifest = { version: 1, name: name.slice(0, 100), views: [{ kind: "display", name: "Window", command, args: commandArgs, ...(restartIndex >= 0 ? { restartOnChange: true } : {}) }] };
   }
   const shot = {};
+  if (action === "share") {
+    const i = rest.indexOf("--view");
+    if (i >= 0) {
+      const value = rest[i + 1];
+      if (!value || value.startsWith("--")) throw new Error("--view requires a view ID or name.");
+      shot.view = value;
+      rest.splice(i, 2);
+    }
+  }
   if (action === "shot" || action === "present") {
     for (const flag of action === "shot" ? ["--widths", "--themes", "--path"] : ["--path", "--note"]) {
       const i = rest.indexOf(flag);
@@ -2494,10 +2510,11 @@ Web previews require operator setup; see docs/apps.md.`);
   const sessionId = resolveAttachSessionId({ sessionFlag: sessionIndex >= 0 ? rest[sessionIndex + 1] : undefined, env: process.env });
   if (!sessionId) throw new Error("Set --session <id> or run inside a Bivy agent session.");
   const positional = rest.filter((_, i) => i !== sessionIndex && (sessionIndex < 0 || i !== sessionIndex + 1));
-  if (positional.some((a) => a.startsWith("-")) || (action === "shot" || action === "present" ? positional.length > 1 : positional.length !== (action === "list" || action === "run" ? 0 : 1))) throw new Error("Invalid arguments. Run bivy app --help.");
+  if (positional.some((a) => a.startsWith("-")) || (action === "shot" || action === "present" || action === "share" ? positional.length > 1 : positional.length !== (action === "list" || action === "run" ? 0 : 1))) throw new Error("Invalid arguments. Run bivy app --help.");
   const body = { sessionId, ...shot };
   if (action === "shot" && positional[0]) body.appId = positional[0];
   if (action === "present" && positional[0]) body.target = positional[0];
+  if (action === "share" && positional[0]) body.appId = positional[0];
   if (action === "publish") {
     const file = path.resolve(positional[0]);
     if (fs.statSync(file).size > 64 * 1024) throw new Error("App manifest exceeds 64 KiB.");
@@ -2519,6 +2536,12 @@ Web previews require operator setup; see docs/apps.md.`);
   });
   const result = await response.json();
   if (!response.ok || result.error) throw new Error(result.error || `App command failed (${response.status}).`);
+  if (action === "share") {
+    const { type: _type, requestId: _requestId, ...link } = result;
+    console.log(JSON.stringify({ ...link, expires: new Date(link.expiresAt).toISOString() }, null, 2));
+    console.error("Anyone with this link can use the app, including its live backend, until it expires or you revoke it (Apps → Revoke access).");
+    return;
+  }
   console.log(JSON.stringify(result, null, 2));
 }
 
