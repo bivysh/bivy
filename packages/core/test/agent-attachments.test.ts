@@ -9,57 +9,25 @@ import { SessionStore, renderHistory, toHtml } from "../src/index.js";
 const HASH = "a".repeat(64);
 const imageRef = { hash: HASH, name: "chart.png", mimeType: "image/png", size: 1234, kind: "image" as const };
 
-describe("agent attachment — live reducer (grouped onto the final bubble)", () => {
+describe("agent attachment — live reducer (placed where it was attached)", () => {
   const play = (events: unknown[]) => {
     const store = new SessionStore();
     for (const e of events) store.apply(e as never);
     return store;
   };
 
-  it("is buffered until the turn ends (no standalone entry mid-turn)", () => {
-    const store = play([{ type: "attachment", id: "att1", ref: imageRef, caption: "cap" }]);
-    expect(store.getState().activeSession.transcript).toHaveLength(0);
-  });
-
-  it("lands under the turn's final assistant bubble, even when attached before the reply", () => {
+  it("lands at the point it was attached and stays there as the turn goes on", () => {
     const store = play([
+      { type: "message_start", message: { role: "assistant", content: "" } },
+      { type: "message_end", message: { role: "assistant", content: "Taking a screenshot." } },
       { type: "attachment", id: "att1", ref: imageRef, caption: "cap" }, // agent attaches mid-turn…
       { type: "message_start", message: { role: "assistant", content: "" } },
-      { type: "message_end", message: { role: "assistant", content: "Here it is." } }, // …then writes the reply
+      { type: "message_end", message: { role: "assistant", content: "Now fixing the layout." } }, // …then keeps working
       { type: "agent_end" },
     ]);
     const t = store.getState().activeSession.transcript;
-    expect(t).toHaveLength(1);
-    expect(t[0]!.role).toBe("assistant");
-    expect(t[0]!.text).toBe("Here it is.");
-    expect(t[0]!.attachments).toEqual([{ kind: "image", name: "chart.png", size: 1234, mimeType: "image/png", hash: HASH, description: "cap", createdAt: expect.any(Number) }]);
-  });
-
-  it("groups MULTIPLE attachments from one turn under the final bubble, in emit order", () => {
-    const csv = { hash: "b".repeat(64), name: "data.csv", mimeType: "text/csv", size: 5, kind: "file" as const };
-    const store = play([
-      { type: "attachment", id: "a1", ref: imageRef }, // before the reply
-      { type: "message_start", message: { role: "assistant", content: "" } },
-      { type: "message_end", message: { role: "assistant", content: "Two files:" } },
-      { type: "attachment", id: "a2", ref: csv }, // after the reply
-      { type: "agent_end" },
-    ]);
-    const t = store.getState().activeSession.transcript;
-    expect(t).toHaveLength(1);
-    expect(t[0]!.text).toBe("Two files:");
-    expect(t[0]!.attachments?.map((a) => a.hash)).toEqual([HASH, "b".repeat(64)]);
-  });
-
-  it("falls back to a standalone entry (keeping the caption) when the turn has no prose", () => {
-    const store = play([
-      { type: "attachment", id: "att1", ref: imageRef, caption: "just a file" },
-      { type: "agent_end" },
-    ]);
-    const t = store.getState().activeSession.transcript;
-    expect(t).toHaveLength(1);
-    expect(t[0]!.role).toBe("assistant");
-    expect(t[0]!.text).toBe("just a file");
-    expect(t[0]!.attachments?.[0]?.hash).toBe(HASH);
+    expect(t.map((e) => [e.text, e.attachments?.length ?? 0])).toEqual([["Taking a screenshot.", 0], ["cap", 1], ["Now fixing the layout.", 0]]);
+    expect(t[1]!.attachments).toEqual([{ kind: "image", name: "chart.png", size: 1234, mimeType: "image/png", hash: HASH, description: "cap", createdAt: expect.any(Number) }]);
   });
 
   it("carries an explicit artifact:true marking through to the rendered chip", () => {
@@ -81,26 +49,16 @@ describe("agent attachment — live reducer (grouped onto the final bubble)", ()
   });
 });
 
-describe("agent attachment — history render (grouped onto the final bubble)", () => {
-  it("groups an attachment emitted before the final message onto that message", () => {
+describe("agent attachment — history render (placed where it was emitted)", () => {
+  it("keeps an attachment where it was emitted, not on the turn's final reply", () => {
     const entries = renderHistory([
       { role: "user", content: "make a chart" },
+      { role: "assistant", content: [{ type: "text", text: "Drawing it." }] },
       { role: "assistant", content: [{ type: "bivy_attachment", ref: imageRef, caption: "cap" }] }, // mid-turn attach
       { role: "assistant", content: [{ type: "text", text: "Here's your chart." }] }, // final reply
     ]);
-    expect(entries.map((e) => e.role)).toEqual(["user", "assistant"]);
-    expect(entries[1]!.text).toBe("Here's your chart.");
-    expect(entries[1]!.attachments?.[0]?.description).toBe("cap");
-    expect(entries[1]!.attachments?.map((a) => a.hash)).toEqual([HASH]);
-  });
-
-  it("groups an attachment mixed into the same message onto that message's prose", () => {
-    const entries = renderHistory([
-      { role: "assistant", content: [{ type: "text", text: "Done — see below." }, { type: "bivy_attachment", ref: imageRef }] },
-    ]);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]!.text).toBe("Done — see below.");
-    expect(entries[0]!.attachments?.map((a) => a.hash)).toEqual([HASH]);
+    expect(entries.map((e) => [e.text, e.attachments?.length ?? 0])).toEqual([["make a chart", 0], ["Drawing it.", 0], ["cap", 1], ["Here's your chart.", 0]]);
+    expect(entries[2]!.attachments?.[0]).toMatchObject({ hash: HASH, description: "cap" });
   });
 
   it("carries an explicit artifact:true block field and the message's createdAt through history render", () => {
@@ -108,30 +66,6 @@ describe("agent attachment — history render (grouped onto the final bubble)", 
       { role: "assistant", createdAt: 1700000000000, content: [{ type: "bivy_attachment", ref: imageRef, caption: "cap", artifact: true }] },
     ]);
     expect(entries[0]!.attachments?.[0]).toMatchObject({ hash: HASH, artifact: true, createdAt: 1700000000000 });
-  });
-
-  it("keeps a lone attachment (no prose in its turn) as a standalone entry", () => {
-    const entries = renderHistory([
-      { role: "assistant", content: [{ type: "bivy_attachment", ref: imageRef, caption: "the chart" }] },
-    ]);
-    expect(entries).toHaveLength(1);
-    expect(entries[0]!.text).toBe("the chart");
-    expect(entries[0]!.attachments?.[0]?.hash).toBe(HASH);
-  });
-
-  it("does not group across turns", () => {
-    const entries = renderHistory([
-      { role: "user", content: "q1" },
-      { role: "assistant", content: [{ type: "text", text: "a1" }] },
-      { role: "user", content: "q2" },
-      { role: "assistant", content: [{ type: "bivy_attachment", ref: imageRef }] }, // turn 2 has no prose
-    ]);
-    expect(entries.map((e) => ({ role: e.role, text: e.text, att: e.attachments?.length ?? 0 }))).toEqual([
-      { role: "user", text: "q1", att: 0 },
-      { role: "assistant", text: "a1", att: 0 }, // untouched — different turn
-      { role: "user", text: "q2", att: 0 },
-      { role: "assistant", text: "", att: 1 }, // standalone (no prose to hang it on)
-    ]);
   });
 });
 
@@ -165,7 +99,7 @@ describe("agent attachment — sticky across a lossy reconcile (append-only)", (
     expect(chip?.hash).toBe(HASH);
   });
 
-  it("re-grouped correctly and never duplicated when the overlay comes back", () => {
+  it("is never duplicated when the overlay comes back", () => {
     const s = new SessionStore();
     s.beginOpen("s1");
     s.apply(historyEvent(withOverlay, 3, "h3", "r1") as never);
@@ -191,15 +125,27 @@ describe("agent attachment — sticky across a lossy reconcile (append-only)", (
     expect(new Set(hashes)).toEqual(new Set([HASH, HASH2]));
   });
 
-  it("restores a dropped chip into its original turn, not the latest reply", () => {
-    const later = [{ role: "user", content: "now something else" }, { role: "assistant", content: [{ type: "text", text: "Sure." }] }];
+  it("restores a dropped chip where it was, not onto a later reply", () => {
+    const shown = [
+      { role: "user", content: "make a logo" },
+      { role: "assistant", content: [{ type: "text", text: "Drawing it." }] },
+      { role: "assistant", content: [{ type: "bivy_attachment", ref: svg, caption: "cap" }] },
+    ];
+    // Lossy, after the turn went on and a new one started.
+    const grown = [
+      { role: "user", content: "make a logo" },
+      { role: "assistant", content: [{ type: "text", text: "Drawing it." }] },
+      { role: "assistant", content: [{ type: "text", text: "Here it is." }] },
+      { role: "user", content: "now something else" },
+      { role: "assistant", content: [{ type: "text", text: "Sure." }] },
+    ];
     const s = new SessionStore();
     s.beginOpen("s1");
-    s.apply(historyEvent(withOverlay, 3, "h3", "r1") as never);
-    s.apply(historyEvent([...withoutOverlay, ...later], 4, "hRaw4") as never); // lossy, one turn later
+    s.apply(historyEvent(shown, 3, "h3", "r1") as never);
+    s.apply(historyEvent(grown, 5, "hRaw5") as never);
     const t = s.getState().activeSession.transcript;
     expect(t.map((e) => [e.text, e.attachments?.length ?? 0])).toEqual([
-      ["make a logo", 0], ["Here it is.", 1], ["now something else", 0], ["Sure.", 0],
+      ["make a logo", 0], ["Drawing it.", 0], ["cap", 1], ["Here it is.", 0], ["now something else", 0], ["Sure.", 0],
     ]);
   });
 

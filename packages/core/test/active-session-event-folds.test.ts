@@ -9,7 +9,7 @@ import {
 } from "../src/index.js";
 
 function transcriptValue(): TranscriptFoldValue {
-  return { transcript: [], draft: freshTranscriptDraft(), pendingAgentAttachments: [], working: false, workingLabel: "" };
+  return { transcript: [], draft: freshTranscriptDraft(), working: false, workingLabel: "" };
 }
 
 describe("active-session pure event folds", () => {
@@ -92,13 +92,15 @@ describe("active-session pure event folds", () => {
     expect(prose.map((e) => e.text)).toEqual(["First reply.", "Second reply."]);
   });
 
-  it("buffers attachments and groups them under final prose", () => {
+  it("appends an attachment where it arrives, once per hash", () => {
     const withProse: TranscriptFoldValue = { ...transcriptValue(), transcript: [{ id: "reply", role: "assistant", text: "Done" }] };
-    const buffered = foldTranscriptEvent(withProse, { type: "attachment", ref: { kind: "file", hash: "abc", name: "report.txt", size: 3 }, caption: "report" }, 50);
-    const ended = foldTranscriptEvent(buffered.value, { type: "turn_end" }, 51);
+    const event = { type: "attachment", ref: { kind: "file", hash: "abc", name: "report.txt", size: 3 }, caption: "report" };
+    const attached = foldTranscriptEvent(withProse, event, 50);
+    const again = foldTranscriptEvent(attached.value, event, 51);
 
-    expect(withProse.transcript[0]?.attachments).toBeUndefined();
-    expect(ended.value.transcript[0]?.attachments?.[0]).toMatchObject({ hash: "abc", createdAt: 50 });
-    expect(ended.commands).toContainEqual({ kind: "remember-agent-attachments" });
+    expect(withProse.transcript).toHaveLength(1);
+    expect(again.value.transcript.map((e) => e.text)).toEqual(["Done", "report"]);
+    expect(again.value.transcript[1]?.attachments?.[0]).toMatchObject({ hash: "abc", createdAt: 50 });
+    expect(attached.commands).toContainEqual({ kind: "remember-agent-attachments" });
   });
 });

@@ -28,11 +28,9 @@ export interface TranscriptDraftValue {
   thinkingText: string; sawThinking: boolean; pendingText: string;
   committedText: string; committedThinking: string;
 }
-export interface BufferedAgentAttachment { attachment: PromptAttachment; caption: string }
 export interface TranscriptFoldValue {
   transcript: TranscriptFoldEntry[];
   draft: TranscriptDraftValue;
-  pendingAgentAttachments: BufferedAgentAttachment[];
   working: boolean;
   workingLabel: string;
 }
@@ -51,7 +49,7 @@ export function freshTranscriptDraft(finalized = true): TranscriptDraftValue {
 }
 
 function cloneValue(value: TranscriptFoldValue): TranscriptFoldValue {
-  return { ...value, transcript: [...value.transcript], draft: { ...value.draft }, pendingAgentAttachments: [...value.pendingAgentAttachments] };
+  return { ...value, transcript: [...value.transcript], draft: { ...value.draft } };
 }
 
 function idFor(entries: readonly TranscriptFoldEntry[]): string {
@@ -159,27 +157,8 @@ function toolLabel(event: ServerEvent, entries: readonly TranscriptFoldEntry[]):
   const detail: any = toolDetail(event as any) ?? (callId ? entries.find((entry) => entry.tool?.callId === callId)?.tool?.detail : undefined);
   return detail?.kind === "delegation" ? (detail.label ? `${detail.label} sub-agent is working…` : "Sub-agent is working…") : `Running ${name}…`;
 }
-function attachmentHashes(entries: readonly TranscriptFoldEntry[]): Set<string> {
-  return new Set(entries.flatMap((entry) => entry.attachments ?? []).map((item) => item.hash).filter((hash): hash is string => Boolean(hash)));
-}
-function flushAttachments(value: TranscriptFoldValue): boolean {
-  if (!value.pendingAgentAttachments.length) return false;
-  const present = attachmentHashes(value.transcript);
-  const fresh = value.pendingAgentAttachments.filter((item) => !item.attachment.hash || !present.has(item.attachment.hash));
-  value.pendingAgentAttachments = [];
-  if (!fresh.length) return true;
-  let turnStart = -1;
-  for (let i = value.transcript.length - 1; i >= 0; i--) if (value.transcript[i]!.role === "user") { turnStart = i; break; }
-  let target = -1;
-  for (let i = value.transcript.length - 1; i > turnStart; i--) {
-    const entry = value.transcript[i]!;
-    if (entry.role === "assistant" && !entry.tool && entry.text && !entry.attachments?.length) { target = i; break; }
-  }
-  if (target >= 0) {
-    const entry = value.transcript[target]!;
-    value.transcript[target] = { ...entry, attachments: [...(entry.attachments ?? []), ...fresh.map((item) => item.attachment)] };
-  } else for (const item of fresh) append(value, { role: "assistant", text: item.caption, attachments: [item.attachment] });
-  return true;
+function hasAttachment(entries: readonly TranscriptFoldEntry[], hash: string): boolean {
+  return entries.some((entry) => entry.attachments?.some((item) => item.hash === hash));
 }
 
 export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEvent, now: number): TranscriptFoldResult {
@@ -224,7 +203,14 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
     case "attachment": {
       const ref = (event as any).ref;
       if (!ref || typeof ref.hash !== "string" || (ref.kind !== "image" && ref.kind !== "file")) return { handled: true, value: input, commands: [] };
-      value.pendingAgentAttachments.push({ attachment: { kind: ref.kind, name: ref.name, size: ref.size, mimeType: ref.mimeType, hash: ref.hash, description: typeof (event as any).caption === "string" ? (event as any).caption : undefined, createdAt: now, ...((event as any).artifact ? { artifact: true } : {}) }, caption: typeof (event as any).caption === "string" ? (event as any).caption : "" }); break;
+      // A reconnect can re-broadcast an attachment history already shows.
+      if (hasAttachment(value.transcript, ref.hash)) break;
+      // Lands right where the agent attached it, like its durable twin on reload
+      // (the event-log outbound-attachment entry is placed by time). Never
+      // regrouped onto a later reply — that dragged chips to the newest message.
+      const caption = typeof (event as any).caption === "string" ? (event as any).caption : "";
+      append(value, { role: "assistant", text: caption, attachments: [{ kind: ref.kind, name: ref.name, size: ref.size, mimeType: ref.mimeType, hash: ref.hash, description: caption || undefined, createdAt: now, ...((event as any).artifact ? { artifact: true } : {}) }] });
+      commands.push({ kind: "remember-agent-attachments" }); break;
     }
     case "inlineImage": {
       const url = (event as any).url; const ref = (event as any).ref;
@@ -245,8 +231,8 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
     case "start": commitThinking(value); commitProse(value); finishDrafts(value); applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: toolInput(event as any), status: "running", detail: toolDetail(event as any), ...(toolParentId(event as any) ? { parentToolUseId: toolParentId(event as any) } : {}) }); setWorking(value, toolLabel(event, value.transcript)); break;
     case "update": applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: toolInput(event as any), status: "running", detail: toolDetail(event as any), ...(toolParentId(event as any) ? { parentToolUseId: toolParentId(event as any) } : {}) }); setWorking(value, toolLabel(event, value.transcript)); break;
     case "result": applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: {}, status: "done", result: typeof (event as any).result === "string" ? (event as any).result : contentToText((event as any).result), detail: toolDetail(event as any) }); break;
-    case "turn_end": if (flushAttachments(value)) commands.push({ kind: "remember-agent-attachments" }); setWorking(value, "Planning next step…"); break;
-    case "agent_end": finishDrafts(value); if (flushAttachments(value)) commands.push({ kind: "remember-agent-attachments" }); closeTools(value); Object.assign(value.draft, { pendingText: "", committedText: "", committedThinking: "" }); value.working = false; value.workingLabel = ""; commands.push({ kind: "turn-settled" }); break;
+    case "turn_end": setWorking(value, "Planning next step…"); break;
+    case "agent_end": finishDrafts(value); closeTools(value); Object.assign(value.draft, { pendingText: "", committedText: "", committedThinking: "" }); value.working = false; value.workingLabel = ""; commands.push({ kind: "turn-settled" }); break;
     default: return { handled: false, value: input, commands: [] };
   }
   return { handled: true, value, commands };

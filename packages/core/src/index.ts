@@ -196,7 +196,6 @@ export {
 export {
   foldTranscriptEvent,
   freshTranscriptDraft,
-  type BufferedAgentAttachment,
   type TranscriptDraftValue,
   type TranscriptFoldCommand,
   type TranscriptFoldEntry,
