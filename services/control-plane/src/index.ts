@@ -572,11 +572,13 @@ app.get("/healthz", (_req, res) => {
   res.json({ ok: true });
 });
 
-// Prometheus exposition for Alloy/Prometheus scrapers. Scraped over the internal
-// docker network only — Caddy blocks /metrics publicly. register.metrics() is
-// async (gauge collect callbacks), so resolve then send. See
-// docs/ops/monitoring.md in bivysh/bivy-cloud.
-app.get("/metrics", (_req, res, next) => {
+// Prometheus exposition, on its own listener (METRICS_PORT/METRICS_HOST, loopback
+// by default) and never the public port: a reverse proxy in front (Caddy,
+// kamal-proxy) forwards every path, and these carry account/node counts and
+// funnel events. register.metrics() is async (gauge collect callbacks), so
+// resolve then send. See docs/configuration.md.
+const metricsApp = express();
+metricsApp.get("/metrics", (_req, res, next) => {
   register
     .metrics()
     .then((body) => {
@@ -586,7 +588,7 @@ app.get("/metrics", (_req, res, next) => {
     .catch(next);
 });
 // Backcompat: the pre-Prometheus JSON counters.
-app.get("/metrics.json", (_req, res) => {
+metricsApp.get("/metrics.json", (_req, res) => {
   res.json({ ok: true, relayTickets: relayTicketMetrics });
 });
 
@@ -5201,8 +5203,17 @@ const server = app.listen({ port, host: process.env.BIND_HOST || undefined }, ()
   console.log(`Control plane (${storeName}) listening on http://localhost:${port}`);
 });
 
+const metricsPort = Number(process.env.METRICS_PORT ?? 9465);
+const metricsHost = process.env.METRICS_HOST || "127.0.0.1";
+const metricsServer = metricsApp.listen({ port: metricsPort, host: metricsHost }, () => {
+  console.log(`Metrics on http://${metricsHost}:${metricsPort}/metrics`);
+});
+// Metrics are never worth taking the service down (e.g. the port is taken).
+metricsServer.on("error", (error) => console.warn(`[metrics] not served: ${error.message}`));
+
 async function shutdown() {
   server.close();
+  metricsServer.close();
   if ("close" in store && typeof store.close === "function") await store.close();
 }
 

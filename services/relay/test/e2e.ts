@@ -36,6 +36,8 @@ async function freePort(): Promise<number> {
 }
 const CP_PORT = await freePort();
 const RELAY_PORT = await freePort();
+const CP_METRICS_PORT = await freePort();
+const RELAY_METRICS_PORT = await freePort();
 const SECRET = "test-relay-secret";
 
 const procs: ChildProcess[] = [];
@@ -110,13 +112,24 @@ function expect(cond: boolean, msg: string) {
 }
 
 async function main() {
-  spawnService(cpDir, { PORT: String(CP_PORT), RELAY_SECRET: SECRET });
+  spawnService(cpDir, { PORT: String(CP_PORT), METRICS_PORT: String(CP_METRICS_PORT), RELAY_SECRET: SECRET });
   spawnService(relayDir, {
     PORT: String(RELAY_PORT),
+    METRICS_PORT: String(RELAY_METRICS_PORT),
     RELAY_SECRET: SECRET,
     CONTROL_PLANE_URL: `http://localhost:${CP_PORT}`,
   });
   await waitForHttp(`http://localhost:${CP_PORT}/healthz`);
+  await waitForHttp(`http://localhost:${RELAY_PORT}/healthz`);
+
+  // A reverse proxy forwards every path of the public port, so metrics live
+  // only on the separate loopback listener.
+  for (const [name, publicPort, metricsPort] of [["control plane", CP_PORT, CP_METRICS_PORT], ["relay", RELAY_PORT, RELAY_METRICS_PORT]] as const) {
+    for (const route of ["/metrics", "/metrics.json"]) {
+      expect((await fetch(`http://localhost:${publicPort}${route}`)).status === 404, `${name} public port refuses ${route}`);
+      expect((await fetch(`http://127.0.0.1:${metricsPort}${route}`)).ok, `${name} metrics port serves ${route}`);
+    }
+  }
 
   // Account A enrolls a node.
   const loginA = await http("/auth/dev-login", { email: "owner@a.com" });
