@@ -49,7 +49,14 @@ async function main() {
     await customCommandCheck();
     await runTerminalMetaCheck();
     await bellAndInputCheck();
+    await closeWhileStartingCheck();
     missingCommandCheck();
+    // Every terminal is closed, so the process should exit now. If a PTY or
+    // timer was leaked, say what's still open instead of hanging the runner.
+    setTimeout(() => {
+      console.error(`terminal: FAILED — still running after all checks: ${JSON.stringify(process.getActiveResourcesInfo())}`);
+      process.exit(1);
+    }, 5000).unref();
   } catch (error) {
     await mgr.disposeAllAndWait();
     // A sandbox without PTY support shouldn't fail the suite hard.
@@ -128,6 +135,24 @@ async function bellAndInputCheck() {
   assert.equal(mgr2.lastInput("term-does-not-exist"), null, "lastInput is null for an unknown id");
   await mgr2.disposeAllAndWait();
   console.log("terminal: ok (bell hook + input tracking)");
+}
+
+/**
+ * A shell closed while it's still starting can miss the hangup and live on,
+ * holding its PTY (on Linux, most shells closed ~10ms after opening did). Closing
+ * must still end it: this is what left the suite hanging after its last check.
+ */
+async function closeWhileStartingCheck() {
+  for (let i = 0; i < 5; i++) {
+    const mgr = new TerminalManager();
+    let exited = false;
+    const id = mgr.open({ workspace: os.tmpdir(), onData: () => {}, onExit: () => { exited = true; } });
+    await new Promise((r) => setTimeout(r, 12));
+    mgr.write(id, "x");
+    await mgr.closeAndWait(id);
+    assert.ok(exited, "a shell closed while starting still exits");
+  }
+  console.log("terminal: ok (a shell closed while starting still exits)");
 }
 
 /**

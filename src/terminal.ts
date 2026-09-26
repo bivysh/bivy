@@ -194,6 +194,15 @@ interface TerminalEntry {
 const OUTPUT_FLUSH_MS = 16;
 
 /**
+ * Closing sends a hangup (node-pty's kill, what closing a terminal window
+ * sends). A shell hung up while it's still starting can miss it and live on,
+ * holding the PTY: a leaked shell on the machine, and a handle that keeps Node
+ * from exiting. Until it exits, these follow (Unix; ms after close): the hangup
+ * again, then a kill of its whole process group.
+ */
+const CLOSE_FOLLOW_UPS: readonly [delayMs: number, signal: NodeJS.Signals][] = [[250, "SIGHUP"], [1000, "SIGKILL"]];
+
+/**
  * How much recent output to retain per terminal for scrollback replay on
  * reconnect. A phone that backgrounds the PWA (or drops its network) reattaches
  * to the still-live shell and gets this tail rewritten so it doesn't come back
@@ -539,6 +548,16 @@ export class TerminalManager {
       entry.proc.kill();
     } catch {
       // already gone
+    }
+    if (process.platform === "win32") return;
+    let exited = false;
+    void entry.exitPromise.then(() => { exited = true; });
+    for (const [delay, signal] of CLOSE_FOLLOW_UPS) {
+      setTimeout(() => {
+        if (exited) return;
+        // The PTY's child leads its own process group: a kill takes its jobs too.
+        try { process.kill(signal === "SIGKILL" ? -entry.proc.pid : entry.proc.pid, signal); } catch { /* already gone */ }
+      }, delay).unref();
     }
   }
 
