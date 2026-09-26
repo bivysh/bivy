@@ -12,7 +12,7 @@ import assert from "node:assert/strict";
 import { foldTranscriptEvent, freshTranscriptDraft, type TranscriptFoldValue } from "../packages/core/src/transcript-event-fold.js";
 
 function fresh(): TranscriptFoldValue {
-  return { transcript: [], draft: freshTranscriptDraft(), pendingAgentAttachments: [], working: false, workingLabel: "" };
+  return { transcript: [], draft: freshTranscriptDraft(), working: false, workingLabel: "" };
 }
 
 function run(events: any[]): TranscriptFoldValue {

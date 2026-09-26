@@ -29,7 +29,7 @@ test("app launchers survive history replay without persisting any access grants"
 });
 
 test("live app publications deduplicate and stay visible in Focus mode", () => {
-  const initial: TranscriptFoldValue = { transcript: [], draft: freshTranscriptDraft(), pendingAgentAttachments: [], working: true, workingLabel: "Working" };
+  const initial: TranscriptFoldValue = { transcript: [], draft: freshTranscriptDraft(), working: true, workingLabel: "Working" };
   const event = { type: "app_published", app };
   const first = foldTranscriptEvent(initial, event, 1).value;
   const second = foldTranscriptEvent(first, event, 2).value;
