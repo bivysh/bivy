@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Which view a session shows in the main pane: its chat, or a shell in its
-// workspace. Remembered per session for this tab (sessionStorage), so a reload
+// Which view a session shows in the main pane: its chat, or the live agent as its
+// interactive terminal (TUI) on the node. Remembered per session for this tab
+// (sessionStorage), so a reload
 // or coming back to a session lands where you left it. It is not in the URL:
 // routePath() carries search/hash across navigations, which would leak one
 // session's view into the next.
