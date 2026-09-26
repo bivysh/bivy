@@ -16,6 +16,7 @@ import { attentionRank, isUnseen, statusClass, statusLabel } from "../packages/w
 import { modelAccountChoice } from "../packages/web/src/modelAccounts.js";
 import { githubInstallationSettings, githubMentionHandles, githubSourceStatus } from "../packages/web/src/components/githubSource.js";
 import { focusEntries } from "../packages/web/src/focusTranscript.js";
+import { standbyCopyOf } from "../packages/web/src/standby.js";
 
 test("account routing follows project, active, default and ambiguity rules", () => {
   const records = [{ label: "default" }, { label: "work" }];
@@ -156,4 +157,12 @@ test("native session links accept only same-origin session/run paths", () => {
   for (const url of ["http://app.example/sessions/a", "https://evil.example/sessions/a", "https://app.example.evil/sessions/a", "https://user:pass@app.example/sessions/a", "javascript:alert(1)", "/sessions/a"]) {
     assert.equal(nativeSessionLink(url, origin), null, url);
   }
+});
+
+test("a standby copy offers Continue here only while its owner is offline", () => {
+  const nodes = [{ id: "mac", name: "Mac", online: false }, { id: "box", name: "Box", online: true }];
+  assert.deepEqual(standbyCopyOf("replica:mac", nodes), { ownerId: "mac", ownerName: "Mac", ownerOnline: false });
+  assert.equal(standbyCopyOf("replica:box", nodes)?.ownerOnline, true, "a live owner is where the session should be opened");
+  assert.equal(standbyCopyOf("promoted:mac", nodes), undefined, "once promoted it is this machine's own session");
+  assert.equal(standbyCopyOf("repo:acme/app", nodes), undefined);
 });

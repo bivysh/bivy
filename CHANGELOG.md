@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Pick up on one device where another left off. When you open a session that another of your devices drove in the last half hour, a note above the composer says where ("Last active on Terminal on my-laptop · 2m ago"). If that device left an unsent draft, **Continue draft** moves it into an empty composer, so a half-typed prompt follows you from laptop to phone. It never blocks anything: whoever sends next is driving. The terminal lock screen also says which device last typed into the terminal. Devices name themselves ("iPhone", "Mac", "Terminal on my-laptop"); older nodes simply show nothing.
+- **Move to machine…** in the session menu moves a session to another of your machines in one step: the conversation, its branch and any uncommitted changes. It preselects an online machine and retires the original once the session is running there. The old combined entry is now just **Fork…**.
 
 ### Changed
 
@@ -18,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `bivy resume` on a session that is also open as a chat no longer lets both write the same conversation. The chat locks while the terminal drives it and reloads what the terminal wrote when it ends. Resuming a saved session from the CLI also keeps the session's own name and source in the sidebar.
+- The standby machine now offers the **Continue here** that Settings has always promised for synced sessions. Opening a session that exists here only as a standby copy shows who owns it. If that machine is offline, **Continue here** takes the session over up to its last finished turn. If it's online, **Open on <machine>** takes you to the live session. A promoted session no longer lists as a standby copy.
 
 ## [0.17.2] - 2026-09-25
 

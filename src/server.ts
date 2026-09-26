@@ -2041,6 +2041,19 @@ const replication = new ReplicationService({
   log: (m) => console.error(`[replication] ${m}`),
 });
 
+/** Take over a replicated session on this node (manual promotion). Once it
+ *  wins the epoch it is this node's session, not a standby copy: retag it so
+ *  every client stops offering "Continue here", and push the new list. */
+async function promoteReplicaHere(sessionId: string): Promise<number | undefined> {
+  const epoch = await replication.promote(sessionId, identity.nodeId);
+  if (epoch === undefined) return undefined;
+  const source = metadata.getSession(sessionId)?.source;
+  if (source?.startsWith("replica")) metadata.upsertSession({ id: sessionId, source: source.replace(/^replica/, "promoted") });
+  broadcastSessionsList();
+  scheduleAdvertise();
+  return epoch;
+}
+
 // Retire the legacy overlay sidecars. The append-only log is the sole overlay
 // store now and every session was migrated into it by the prior release's boot
 // migration (.migrated-overlays-v1), verified complete on-disk before this landed.
@@ -2926,9 +2939,8 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     const requestId = String(msg.requestId ?? "");
     const sessionId = String(msg.sessionId ?? "").trim();
     if (!sessionId) return ctx.reply({ type: "session.promote.result", requestId, ok: false, error: "Missing sessionId" });
-    const epoch = await replication.promote(sessionId, identity.nodeId);
+    const epoch = await promoteReplicaHere(sessionId);
     if (epoch === undefined) return ctx.reply({ type: "session.promote.result", requestId, ok: false, error: "Promotion lost the epoch race" });
-    scheduleAdvertise();
     ctx.reply({ type: "session.promote.result", requestId, ok: true, sessionId, epoch });
   },
   // Ephemeral provisioning transport (node-broker path). A remote device that
@@ -11509,9 +11521,8 @@ app.post("/api/session/promote", async (req, res, next) => {
   try {
     const sessionId = String(req.body?.sessionId ?? "").trim();
     if (!sessionId) return res.status(400).json({ error: "Missing sessionId" });
-    const epoch = await replication.promote(sessionId, identity.nodeId);
+    const epoch = await promoteReplicaHere(sessionId);
     if (epoch === undefined) return res.status(409).json({ error: "Promotion lost the epoch race (another node owns it, or it isn't replicated)" });
-    scheduleAdvertise();
     res.json({ ok: true, epoch });
   } catch (error) {
     next(error);

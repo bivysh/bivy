@@ -115,11 +115,13 @@ export function SessionMenu({
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [forkOpen, setForkOpen] = useState(false);
+  const [forkOpen, setForkOpen] = useState<"fork" | "move" | null>(null);
   const [appsOpen, setAppsOpen] = useState(false);
   const [resumeOpen, setResumeOpen] = useState(false);
   const [prBusy, setPrBusy] = useState(false);
-  const { presentation: { prResult, error } } = useAppState();
+  const { presentation: { prResult, error }, connection: { nodes, currentNodeId } } = useAppState();
+  // Moving needs somewhere to go: another of your machines.
+  const canMove = nodes.some((node) => node.id !== currentNodeId);
   const prBusyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -203,7 +205,7 @@ export function SessionMenu({
         />
       )}
       {appsOpen && <AppsSheet sessionId={sessionId} onClose={() => setAppsOpen(false)} />}
-      {forkOpen && <ForkSheet sessionId={sessionId} onClose={() => setForkOpen(false)} />}
+      {forkOpen && <ForkSheet sessionId={sessionId} intent={forkOpen} onClose={() => setForkOpen(null)} />}
       {resumeOpen && <ResumeCommandDialog sessionId={sessionId} name={name} onCancel={() => setResumeOpen(false)} />}
       {deleting && (
         <ConfirmDialog
@@ -236,8 +238,13 @@ export function SessionMenu({
           <button className="menu-item session-actions-item" role="menuitem" onClick={rename} disabled={prBusy}>
             Rename
           </button>
-          <button className="menu-item session-actions-item" role="menuitem" onClick={() => { close(); setForkOpen(true); }} disabled={prBusy}>
-            Fork / move…
+          {canMove && (
+            <button className="menu-item session-actions-item" role="menuitem" onClick={() => { close(); setForkOpen("move"); }} disabled={prBusy}>
+              Move to machine…
+            </button>
+          )}
+          <button className="menu-item session-actions-item" role="menuitem" onClick={() => { close(); setForkOpen("fork"); }} disabled={prBusy}>
+            Fork…
           </button>
           {onContinueInTerminal && (
             <button
