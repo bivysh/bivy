@@ -296,6 +296,8 @@ export class DirectTransport implements Transport {
         case "apps.offers":
         case "apps.adopt":
         case "apps.open":
+        case "apps.logs":
+        case "apps.clearNotes":
         case "apps.share":
         case "apps.revoke":
         case "apps.remove": {

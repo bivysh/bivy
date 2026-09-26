@@ -38,7 +38,7 @@ for (const theme of themes) {
       window.realOpen = window.open.bind(window);
       window.open = () => null;
       const app = {id:'a', sessionId:'s', name:'Accounting application with a deliberately long project name', createdAt:0, views:[
-        {id:'web',kind:'web',name:'Website and invoice editor',source:'service'},
+        {id:'web',kind:'web',name:'Website and invoice editor',source:'service',notes:[{id:'n1',at:1,note:'The total is cut off on my phone',selector:'td.total',text:'12 480',path:'/invoices',viewport:{width:390,height:844}}]},
         {id:'term',kind:'terminal',name:'Interactive application console',command:'bin/rails',args:['console','--environment=development-with-a-long-name']}
       ]};
       controller.appCommand = async (kind, sessionId, fields) => {
@@ -53,7 +53,7 @@ for (const theme of themes) {
         return {ok:true};
       };
       // The session menu opens the sheet unscoped, which also lists detected servers.
-      window.showSheet = () => createRoot(document.body.appendChild(document.createElement('div'))).render(React.createElement(AppsSheet, {sessionId:'s', onClose(){}}));
+      window.showSheet = () => { const host = document.body.appendChild(document.createElement('div')); const root = createRoot(host); root.render(React.createElement(AppsSheet, {sessionId:'s', onClose(){ root.unmount(); host.remove(); }})); };
       const handlers = new Set();
       controller.onTerminal = fn => {handlers.add(fn); return () => handlers.delete(fn);};
       window.terminalEvent = event => handlers.forEach(fn => fn(event));
@@ -75,6 +75,11 @@ for (const theme of themes) {
     await expect(page.getByRole("button", { name: "Open preview" })).toBeEnabled();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`apps-${theme}.png`), fullPage: true });
+    // Notes from people with a shared link show as text and can be cleared.
+    const notes = page.getByRole("group", { name: "Reviewer notes on Website and invoice editor" });
+    await expect(notes).toContainText("“The total is cut off on my phone” on “12 480” · /invoices");
+    await notes.getByRole("button", { name: "Clear" }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).commands.some((c: any) => c.kind === "apps.clearNotes" && c.viewId === "web"))).toBe(true);
     // A copied link is reusable, so the sheet states who can use it and for how long.
     await page.getByRole("button", { name: "Copy link to Website and invoice editor" }).click();
     await expect(page.getByRole("status").filter({ hasText: "for 24 hours, or until you revoke access" })).toBeVisible();
@@ -84,16 +89,23 @@ for (const theme of themes) {
     await expect(page.getByRole("status").filter({ hasText: "Access revoked" })).toBeVisible();
     expect(await page.evaluate(() => (window as any).commands.filter((c: any) => c.kind === "apps.share" || c.kind === "apps.revoke").map((c: any) => [c.kind, c.viewId]))).toEqual([["apps.share", "web"], ["apps.revoke", "web"]]);
     await expect(page.getByRole("button", { name: /^Copy link to Interactive/ })).toHaveCount(0);
+    // Web views peek in a drawer over the chat by default.
     await page.getByRole("button", { name: "Open preview" }).focus();
     await page.keyboard.press("Enter");
+    const peek = page.getByRole("dialog", { name: /^Preview: Accounting application/ });
+    await expect(peek.locator("iframe.preview-peek")).toHaveAttribute("src", "https://random.preview.example.net/__bivy/open#ticket");
+    await page.screenshot({ path: testInfo.outputPath(`apps-peek-${theme}.png`), fullPage: true });
+    // A tab is one tap away; when the browser blocks the popup, a link is offered.
+    await peek.getByRole("button", { name: "Open in tab ↗" }).click();
     const link = page.getByRole("link", { name: "Open preview" });
     await expect(link).toHaveAttribute("target", "_blank");
     await expect(link).toHaveAttribute("rel", "noopener noreferrer");
     await page.context().route("https://random.preview.example.net/**", (route) => route.fulfill({ contentType: "text/html", body: "<h1>Preview opened</h1>" }));
     await page.evaluate(() => { window.open = (window as any).realOpen; });
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
-    const opened = page.waitForEvent("popup");
     await page.getByRole("button", { name: "Open preview", exact: true }).click();
+    const opened = page.waitForEvent("popup");
+    await page.getByRole("button", { name: "Open in tab ↗" }).click();
     const popup = await opened;
     await expect(popup.getByRole("heading", { name: "Preview opened" })).toBeVisible();
     expect(await popup.evaluate(() => window.opener === null)).toBe(true);
@@ -136,9 +148,22 @@ for (const theme of themes) {
     await expect(page.getByRole("region", { name: "Running in this workspace" })).toContainText("node vite --port 5173");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`apps-detected-${theme}.png`), fullPage: true });
-    const adopted = page.waitForEvent("popup");
+    // A browser that blocks framed preview cookies gets a tab from then on.
+    await page.context().route("https://random.preview.example.net/__bivy/open", (route) => route.fulfill({ contentType: "text/html", body: `<script>parent.postMessage({source:"bivy-preview",type:"blocked"},"*")</script>` }));
     await page.getByRole("button", { name: "Preview port 5173" }).click();
-    await expect((await adopted).getByRole("heading", { name: "Preview opened" })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: "previews will open in a tab on this device" })).toBeVisible();
+    expect(await page.evaluate(() => localStorage.getItem("bivy.previewPeekBlocked"))).toBe("1");
+    await page.context().unroute("https://random.preview.example.net/__bivy/open");
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => { (window as any).mode = "ready"; (window as any).showSheet(); });
+    const tab = page.waitForEvent("popup");
+    await page.getByRole("button", { name: "Open preview", exact: true }).last().click();
+    await expect((await tab).getByRole("heading", { name: "Preview opened" })).toBeVisible();
+    await page.evaluate(() => localStorage.removeItem("bivy.previewPeekBlocked"));
+    await page.keyboard.press("Escape");
+    await page.evaluate(() => { (window as any).showSheet(); });
+    await page.getByRole("button", { name: "Preview port 5173" }).click();
+    await expect(page.getByRole("dialog", { name: "Preview: node vite · :5173" }).frameLocator("iframe").getByRole("heading", { name: "Preview opened" })).toBeVisible();
     expect(await page.evaluate(() => (window as any).commands.filter((c: any) => c.kind === "apps.adopt" || c.kind === "apps.open").slice(-2).map((c: any) => [c.kind, c.port ?? c.viewId]))).toEqual([["apps.adopt", 5173], ["apps.open", "adopted"]]);
     expect(errors).toEqual([]);
   });

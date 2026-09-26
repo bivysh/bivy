@@ -15,6 +15,7 @@ import {
   seedSessionDraft,
   sharedDraftText,
 } from "../packages/web/src/shareTarget.js";
+import { parsePreviewLanding } from "../packages/web/src/previewLanding.js";
 import { shareDestinations } from "../packages/web/src/components/ShareDestinationSheet.js";
 import {
   readComposerDraft,
@@ -116,3 +117,14 @@ assert.deepEqual(picked.map((s) => s.sessionId), ["new", "old", "undated"]);
 assert.equal(shareDestinations(Array.from({ length: 20 }, (_, i) => session(`s${i}`, i))).length, 8, "list stays scannable");
 
 console.log("share-target: all tests passed");
+
+// --- parsePreviewLanding: a stable preview address coming back after sign-in --
+{
+  const app = "a".repeat(32), view = "b".repeat(32);
+  assert.deepEqual(parsePreviewLanding("/sessions/s-1", `#preview=${app}.${view}.${encodeURIComponent("/invoices?q=1")}`), { sessionId: "s-1", appId: app, viewId: view, path: "/invoices?q=1" });
+  // Only same-origin paths survive; anything else resumes at the app's root.
+  assert.equal(parsePreviewLanding("/sessions/s-1", `#preview=${app}.${view}.${encodeURIComponent("//evil.example")}`)?.path, "/");
+  assert.equal(parsePreviewLanding("/sessions/s-1", `#preview=${app}.${view}.${encodeURIComponent("https://evil.example")}`)?.path, "/");
+  assert.equal(parsePreviewLanding("/sessions/new", `#preview=${app}.${view}./`), null);
+  assert.equal(parsePreviewLanding("/sessions/s-1", `#preview=nothex.${view}./`), null);
+}

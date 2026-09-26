@@ -1500,6 +1500,7 @@ function writeSettings(settings: Record<string, unknown>) {
     ...("syncStandbyNodeId" in settings ? { standbyNodeId: typeof settings.syncStandbyNodeId === "string" ? settings.syncStandbyNodeId || undefined : undefined } : {}),
     ...(settings.sessionResumeMode === "auto" || settings.sessionResumeMode === "manual" ? { resume: settings.sessionResumeMode } : {}),
     ...(typeof settings.autoAttachToolImages === "boolean" ? { autoAttachToolImages: settings.autoAttachToolImages } : {}),
+    ...(typeof settings.appScreenshots === "boolean" ? { appScreenshots: settings.appScreenshots } : {}),
     ...(Number.isInteger(settings.forkWorkspaceMaxBytes) ? { forkWorkspaceMaxBytes: Number(settings.forkWorkspaceMaxBytes) } : {}),
   };
   next.github = {
@@ -1606,6 +1607,10 @@ type NodeSettings = {
    *  src/harness/tool-image-attachments.ts) so a chatty tool can't flood the
    *  transcript even once enabled. */
   autoAttachToolImages: boolean;
+  /** Let agents screenshot their app previews (`bivy app shot`) with a local
+   *  headless browser. Off by default: it needs Chrome/Chromium and a few
+   *  hundred MB of memory while it runs. */
+  appScreenshots: boolean;
   forkWorkspaceMaxBytes: number;
 };
 
@@ -1631,6 +1636,14 @@ function nodeConfiguredDefaultAgent(): string {
 
 /** How interactive sessions recover after a restart interrupted them mid-turn.
  *  Defaults to "auto" (re-drive the turn); "manual" waits for a user tap. */
+/** Agents may screenshot app previews: the node setting, or BIVY_APP_SCREENSHOTS. */
+function appScreenshotsEnabled(): boolean {
+  const env = process.env.BIVY_APP_SCREENSHOTS;
+  if (env === "1" || env === "true") return true;
+  if (env === "0" || env === "false") return false;
+  return readSettings().appScreenshots === true;
+}
+
 function nodeSessionResumeMode(): "auto" | "manual" {
   return readSettings().sessionResumeMode === "manual" ? "manual" : "auto";
 }
@@ -1667,6 +1680,7 @@ function nodeSettingsSnapshot(): NodeSettings {
     })(),
     sessionResumeMode: nodeSessionResumeMode(),
     autoAttachToolImages: readSettings().autoAttachToolImages === true,
+    appScreenshots: appScreenshotsEnabled(),
     forkWorkspaceMaxBytes: Number.isInteger(readSettings().forkWorkspaceMaxBytes) ? Number(readSettings().forkWorkspaceMaxBytes) : 50 * 1024 * 1024,
   };
 }
@@ -1721,6 +1735,7 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
   if ("sessionResumeMode" in patch) {
     settings.sessionResumeMode = patch.sessionResumeMode === "manual" ? "manual" : "auto";
   }
+  if ("appScreenshots" in patch) settings.appScreenshots = patch.appScreenshots === true;
   if ("autoAttachToolImages" in patch) {
     settings.autoAttachToolImages = patch.autoAttachToolImages === true;
     setConfiguredAutoAttachToolImages(settings.autoAttachToolImages);
@@ -2112,14 +2127,23 @@ const appPreviewPort = Number(process.env.BIVY_APPS_PORT || 4318);
 if (process.env.BIVY_APPS_ORIGIN && (!Number.isInteger(appPreviewPort) || appPreviewPort < 1024 || appPreviewPort > 65535 || appPreviewPort === port)) {
   throw new Error("BIVY_APPS_PORT must be between 1024 and 65535 and different from the node API port.");
 }
-const appRegistry = new AppRegistry([port, ...(process.env.BIVY_APPS_ORIGIN ? [appPreviewPort] : [])]);
+// Apps persist with their IDs, so chat launchers and preview addresses survive
+// restarts; see AppRegistry for which views are restored.
+const appRegistry = new AppRegistry([port, ...(process.env.BIVY_APPS_ORIGIN ? [appPreviewPort] : [])], path.join(appDir, "apps.json"));
 const appReturnOrigins = () => {
   const config = loadRelayConfig(appDir);
   return [config?.clientBaseUrl, config?.controlPlaneUrl, ...(process.env.BIVY_APPS_RETURN_ORIGINS ?? "").split(",")]
     .filter((value): value is string => Boolean(value?.trim())).map((value) => new URL(value.trim()).origin);
 };
-const appGateway = process.env.BIVY_APPS_ORIGIN ? new AppGateway(appRegistry, process.env.BIVY_APPS_ORIGIN, appReturnOrigins) : undefined;
-const remotePreview = new RemotePreview(appRegistry, appReturnOrigins);
+// A signed-out visit to a preview's stable address goes through the Bivy
+// client: open the session on this node, then the client re-opens the view.
+const appSignIn = (view: { app: { id: string; sessionId: string }; view: { id: string } }, pagePath: string) => {
+  const client = loadRelayConfig(appDir)?.clientBaseUrl;
+  if (!client) return undefined;
+  return `${new URL(client).origin}/sessions/${encodeURIComponent(view.app.sessionId)}?node=${encodeURIComponent(identity.nodeId)}#preview=${view.app.id}.${view.view.id}.${encodeURIComponent(pagePath)}`;
+};
+const appGateway = process.env.BIVY_APPS_ORIGIN ? new AppGateway(appRegistry, process.env.BIVY_APPS_ORIGIN, appReturnOrigins, appSignIn) : undefined;
+const remotePreview = new RemotePreview(appRegistry, appReturnOrigins, appSignIn);
 const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   start: async (spec) => {
     let failure = "Could not start the app terminal.";
@@ -2132,7 +2156,7 @@ const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   },
   has: (id) => terminals.has(id),
   close: (id) => { terminals.close(id); },
-});
+}, { screenshots: { enabled: appScreenshotsEnabled } });
 
 const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   ...createAppCommands(appService, (id) => { const record = resolveSession(id); return record ? harnessDirFor(record) : undefined; }, (app) => {

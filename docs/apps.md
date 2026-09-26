@@ -58,16 +58,23 @@ by `bivy attach`. No per-agent adapter or special model tool is required.
 view IDs. API callers can use the same `apps.publish/list/open/remove` commands.
 
 Publishing adds a durable **Open app** button to the chat. You can also use the
-session menu → **Apps**. Both open the same view selector. **Open preview** opens
-a separate preview tab with a Bivy-owned **Back to chat** / **Reload** header.
-If the browser blocks popups, a normal link is offered instead. **Back to chat**
-closes the preview tab where permitted, otherwise navigates to the originating
+session menu → **Apps**. Both open the same view selector. **Open preview**
+**peeks**: the preview opens in a drawer over the chat, with Bivy's controls in a
+floating pill (see [Preview controls](#preview-controls)) and the composer still
+reachable. **Open in tab ↗** opens the same preview in a separate tab. If the
+browser blocks popups, a normal link is offered instead. In a tab, **Back to
+chat** closes it where permitted, otherwise navigates to the originating
 session. Closing the view does not stop an external app server.
 
-Web apps do not currently open inside the Bivy PWA itself. The preview tab hosts
-a Bivy-owned shell, and the generated app is framed on a separate, same-site
-origin. This keeps app code away from the header and avoids depending on
-cross-site iframe cookies inside the PWA. Terminal views ask for confirmation,
+The drawer and the tab both host a Bivy-owned shell on its own origin, and the
+generated app is framed on a separate, same-site origin, so app code never
+reaches Bivy's controls. Inside the drawer, the app's access cookie is a
+third-party cookie. The embedded launch therefore sets it `SameSite=None;
+Partitioned`, keyed to Bivy's top-level site, so no other site can use it. The
+shell may be framed only by the configured Bivy client origins. Browsers that
+refuse framed cookies are detected on the first try. That device then opens
+previews in a tab from then on. The Bivy client's CSP allows HTTPS frames
+(`frame-src 'self' https:`) for this. Terminal views ask for confirmation,
 then open inside Bivy's existing terminal with input, output, resizing and mobile
 controls. Chat launchers survive reload, but opening a removed app or one cleared
 by a machine restart reports that it needs republishing.
@@ -78,6 +85,45 @@ program exits, opening the view again starts a new instance. Closing the termina
 UI detaches; ending the terminal stops it. An exited app never silently becomes a
 shell. Commands are executables plus argument arrays, not implicitly shell-parsed
 strings. For shell syntax, explicitly choose a shell and `-c` arguments.
+
+### Agent screenshots (`bivy app shot`)
+
+```sh
+bivy app shot                       # every web view: 390 and 1280 px, light
+bivy app shot <app-id> --widths 390 --themes light,dark --path /settings
+```
+
+Any agent can screenshot its session's web views to check its own UI. The
+command prints JSON with one PNG path per view, width and theme. Phone widths
+(< 600 px) render at 2×. Themes are emulated for the page
+(`prefers-color-scheme`). It uses Chrome or Chromium on the machine
+(`BIVY_CHROME` to pick one; a Playwright install also works), one browser at a
+time, and needs a few hundred MB of memory while it runs. Service views load
+straight from loopback; static views from a temporary loopback server. Where
+Chromium's sandbox is unavailable (as root, or where AppArmor blocks user
+namespaces), it runs without it. The pages are the session's own apps, already
+running as the node user.
+
+**Off by default.** Turn it on in Bivy → Settings → this machine, *Let agents
+screenshot their app previews*. From a terminal, run
+`bivy config set sessions.appScreenshots true` (or set
+`BIVY_APP_SCREENSHOTS=1`). While it's off, the command explains how to turn it
+on.
+
+### Servers Bivy runs (`start`)
+
+A service view can say how to start its server:
+
+```json
+{ "kind": "service", "port": 5173, "start": { "command": "pnpm", "args": ["dev", "--port", "5173"] } }
+```
+
+Publishing still starts nothing. The first **Open preview** starts the command
+in the session workspace, in a Bivy terminal, with the node user's permissions,
+the same as a terminal view. The preview shows *Nothing is answering* until the
+server listens, then reloads. If the server exits, Bivy restarts it. After five
+restarts in ten minutes it is left down until someone opens the view again.
+**Logs** in the Apps sheet attaches to its output. Removing the app stops it.
 
 ### Static sites
 
@@ -230,6 +276,15 @@ to one view. Removing an app revokes grants and closes active gateway connection
 Reopen from Bivy after expiry. Launch links are bearer capabilities until redeemed;
 do not share them.
 
+**Copy address** in the Apps sheet gives a web view's stable address, e.g.
+`https://<view>.preview.example.net/`. The address grants nothing by itself, so
+it is safe to put on a home screen. A visit without access is sent to the Bivy
+client (`/sessions/<id>?node=<node>#preview=…`). There you sign in if needed, and
+the client opens that session on its machine. It then asks the node for a
+one-use direct link and returns to the same page of the app. So the address
+works on devices signed in to the account that owns the machine, and nowhere
+else. Addresses stay the same across node restarts, because apps keep their IDs.
+
 **Copy link** in the Apps sheet mints a separate, reusable link for one web view.
 It points at the app's own origin rather than the shell, so it opens unframed in
 any browser (useful for devtools or another device). Every visit exchanges it for
@@ -240,13 +295,49 @@ open connection for that view without removing the app. A copied link is a
 bearer capability: anyone holding it can use the app, including a live server's
 backend, until it lapses or is revoked.
 
+**Reviewer notes.** A copied link opens the app with one extra control,
+**Leave a note**. It sits in a shadow root so the app's styles don't touch it.
+The visitor points at an element and writes a note. The note is stored with the
+element's selector and text, the page and the viewport. The owner sees notes
+under the view in **Apps**, with **Add to message** (drafts them into the
+composer) and **Clear**. Notes are untrusted text: at most 1,000 characters
+each, 50 per view (oldest dropped), same-origin POSTs from a valid link only,
+kept in memory. They never reach the agent unless the owner sends them.
+
 The app iframe is sandboxed: scripts, forms, same-origin app storage, downloads
 and sandboxed popups are allowed; top-level navigation is not. Upstream
 `X-Frame-Options` and CSP `frame-ancestors` are replaced with a policy allowing
 only that view's shell; other CSP directives are preserved. If an app depends on
 escaping its frame or unsandboxed OAuth popups, it needs its normal development
-URL outside this preview mode. The header remains available even when app access
-expires. Reload resets the app frame to its root URL.
+URL outside this preview mode. The controls remain available even when app access
+expires. Reload reloads the page the app is on.
+
+### Preview controls
+
+The preview shell floats one pill over the app, so the app keeps the whole
+screen. **⌄** collapses it to a small **Bivy** button when it covers the app's
+own bottom bar.
+
+- **Point**: tap any element in the app. A draft for the agent opens with the
+  element's selector, text, size and position, the page, the viewport and
+  recent errors. You add what should change, then **Add to chat** puts it in the
+  session's composer. The tap you point with is not passed to the app.
+- **Console**: errors and warnings from the page, with a count on the pill.
+  **Send to agent…** drafts them the same way.
+- **Full / Tablet / Phone** (wide screens): constrains the app to 768 or 390 px.
+- **Compare** (with agent screenshots on): before/after screenshots at phone
+  width around the agent's last change, with a handle to reveal either. Bivy
+  takes a baseline the first time a view is opened, and one after each turn that
+  changes files, of the page last viewed. The last four are kept in memory.
+
+These work through a small inspector script that the gateway adds to the app's
+HTML page loads, served from the app's own origin (`/__bivy/inspector.js`). The
+gateway requests uncompressed HTML for page loads, and adds that exact script URL
+to the app's `script-src` (or `default-src`) CSP directive; other directives are
+unchanged. A CSP delivered in a `<meta>` tag, `'strict-dynamic'`, or HTML over
+5 MiB leaves the inspector out; the preview still works without it. The
+inspector only reports to the framing shell. Everything it reports is untrusted
+app data, and becomes a draft you review — never a message sent for you.
 
 Preview data uses HTTPS to the deployment's preview ingress and, in automatic
 mode, a separate outbound WebSocket tunnel to the node, **not Bivy session E2E
@@ -269,9 +360,13 @@ preview gate; PWA/offline behavior must be tested outside this preview mode.
 - Generated apps do not receive Bivy's device token or preview cookie. Their own
   APIs, credentials and mutations remain their responsibility. No API credential
   broker or transaction-approval layer is implemented by this preview feature.
-- Apps and static snapshots are currently in memory. A node restart clears them,
-  invalidates all access grants and requires republishing. This avoids restoring
-  stale port registrations. Project manifests remain in the workspace.
+- Apps persist across node restarts with the same IDs, so chat launchers and
+  preview addresses keep working. The data is in `apps.json` in the node's data
+  directory, mode 0600. Static views are re-snapshotted, and terminal views and
+  managed services come back. **Service views without `start` are not
+  restored**: after a restart their port could belong to any process. Detection
+  offers them again, one tap to preview. Access grants never persist. After a
+  restart, open the preview again from Bivy.
 - Removing an app stops terminal processes started through its views, not unrelated
   terminals. It cannot retract bytes already downloaded or undo side effects.
 
@@ -288,7 +383,7 @@ preview gate; PWA/offline behavior must be tested outside this preview mode.
   and relay control. The CLI uses these same endpoints.
 - `AppMessage.tsx`: durable, ID-based chat launcher; the event log and live
   transcript reducer carry references, never access grants.
-- `src/apps/preview-shell.ts`: trusted preview header on a separate origin from
+- `src/apps/preview-shell.ts`: trusted preview controls on a separate origin from
   generated content. It uses the canonical styles and design tokens, also copied
   into standalone node releases.
 - `AppsSheet.tsx`: app discovery and view selection; terminal views delegate to

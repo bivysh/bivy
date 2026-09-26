@@ -545,6 +545,10 @@ function securityHeaders(_req: Request, res: Response, next: NextFunction) {
       // github.com is allowed so the GitHub App one-click flow can POST its
       // manifest to GitHub's app-creation page; everything else stays 'self'.
       "form-action 'self' https://github.com",
+      // App previews (Peek) frame the preview shell, served from the relay's
+      // dedicated preview domain; that origin isn't known here, so allow HTTPS.
+      // script-src stays 'self', so this can't be used to inject a frame.
+      "frame-src 'self' https:",
       "frame-ancestors 'none'",
     ].join("; "),
   );

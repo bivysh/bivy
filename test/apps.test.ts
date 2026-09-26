@@ -77,6 +77,60 @@ test("publication validates version, view types, arguments, reserved ports and a
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("apps survive a restart with their IDs, except services Bivy doesn't run", () => {
+  const dir = workspace(); const file = path.join(dir, "apps.json");
+  try {
+    const registry = new AppRegistry([4317], file);
+    const kept = registry.publish("s", dir, { version: 1, name: "Kept", views: [
+      staticManifest.views[0], terminalManifest.views[0],
+      { kind: "web", name: "Managed", source: { kind: "service", port: 3000, start: { command: "npm", args: ["run", "dev"] } } },
+      { kind: "web", name: "External", source: { kind: "service", port: 3001 } },
+    ] });
+    const gone = registry.publish("s", dir, staticManifest);
+    const external = registry.publish("s", dir, { version: 1, name: "Only external", views: [{ kind: "web", name: "External", source: { kind: "service", port: 3002 } }] });
+    registry.remove("s", gone.id);
+    fs.writeFileSync(path.join(dir, "dist/index.html"), "<h1>After restart</h1>");
+
+    const restarted = new AppRegistry([4317], file);
+    const apps = restarted.list("s");
+    assert.deepEqual(apps.map((app) => app.id), [kept.id]);
+    assert.deepEqual(apps[0].views.map((view) => [view.id, view.name]), kept.views.slice(0, 3).map((view) => [view.id, view.name]));
+    assert.equal(apps[0].views[2].kind === "web" && apps[0].views[2].managed, true);
+    const snapshot = restarted.getView(kept.views[0].id)!.target;
+    assert.equal(snapshot.kind === "static" && snapshot.files.get("/index.html")!.toString(), "<h1>After restart</h1>");
+    assert.throws(() => restarted.require("s", external.id), /not found/);
+    assert.equal((fs.statSync(file).mode & 0o777).toString(8), "600");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("managed servers start on first open, restart when they exit, and stop backing off a crash loop", async () => {
+  const dir = workspace();
+  let live = new Set<string>(); const started: string[] = []; const closed: string[] = [];
+  const terminals = { start: async (spec: { command: string; name: string }) => { const id = `t${started.length}`; started.push(spec.command); live.add(id); return id; }, has: (id: string) => live.has(id), close: (id: string) => { closed.push(id); live.delete(id); } };
+  const gateway = { open: () => "https://view-x.preview.example.net/__bivy/open#t", share: () => ({ url: "", expiresAt: 0 }), revoke: () => {} };
+  const service = new AppService(new AppRegistry(), gateway, terminals, { scan: async () => [], serverWatchMs: 5 });
+  const until = async (check: () => boolean) => { for (let i = 0; i < 200 && !check(); i++) await new Promise((r) => setTimeout(r, 5)); assert.ok(check()); };
+  try {
+    const app = service.publish("s", dir, { version: 1, name: "Web", views: [{ kind: "web", name: "Site", source: { kind: "service", port: 3000, start: { command: "npm", args: ["run", "dev"] } } }] });
+    assert.deepEqual(started, [], "publishing starts nothing");
+    const viewId = app.views[0].id;
+    await Promise.all([service.open("s", app.id, viewId), service.open("s", app.id, viewId)]);
+    await until(() => started.length === 1);
+    assert.deepEqual(await service.logs("s", app.id, viewId), { kind: "terminal", termId: "t0" });
+    live.delete("t0"); // the server exits
+    await until(() => started.length === 2);
+    // A crash loop is left down after five restarts in the window…
+    for (let i = 0; i < 10; i++) { live = new Set(); await new Promise((r) => setTimeout(r, 15)); }
+    assert.equal(started.length, 6);
+    // …until someone opens the view again.
+    await service.open("s", app.id, viewId);
+    await until(() => started.length === 7);
+    service.remove("s", app.id);
+    assert.ok(closed.includes("t6"));
+    await assert.rejects(service.logs("s", app.id, viewId), /not found/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("static snapshots reject traversal, symlinks, oversized files and exclude hidden files", () => {
   const dir = workspace();
   try {
@@ -282,7 +336,8 @@ test("static page loads fall back for client-side routes; assets still 404", asy
     const id = registry.publish("s", dir, staticManifest).views[0].id;
     const { url, cookie } = await grant(gateway, port, id);
     const page = { cookie, "sec-fetch-dest": "iframe" };
-    assert.equal((await request(port, url.host, "/invoices/42", { headers: page })).body, "<h1>Preview</h1>");
+    // Page loads also carry the injected inspector, ahead of the app's markup.
+    assert.equal((await request(port, url.host, "/invoices/42", { headers: page })).body, '<script src="/__bivy/inspector.js"></script><h1>Preview</h1>');
     assert.equal((await request(port, url.host, "/invoices/42", { headers: { cookie, accept: "text/html" } })).status, 200);
     assert.equal((await request(port, url.host, "/app.js", { headers: page })).status, 404);
     assert.equal((await request(port, url.host, "/invoices/42", { headers: { cookie, "sec-fetch-dest": "empty" } })).status, 404);
@@ -290,7 +345,59 @@ test("static page loads fall back for client-side routes; assets still 404", asy
     const withNotFound = registry.publish("s", dir, staticManifest).views[0].id;
     const second = await grant(gateway, port, withNotFound);
     const missing = await request(port, second.url.host, "/nope", { headers: { cookie: second.cookie, "sec-fetch-dest": "document" } });
-    assert.equal(missing.status, 404); assert.equal(missing.body, "<h1>Not here</h1>");
+    assert.equal(missing.status, 404); assert.match(missing.body, /<h1>Not here<\/h1>$/);
+  } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a view's stable address sends signed-out visits through Bivy and back to the same page", async () => {
+  const registry = new AppRegistry();
+  const gateway = new AppGateway(registry, "https://{app}.preview.example.net", () => ["https://bivy.example"], (view, page) => `https://bivy.example/sessions/${view.app.sessionId}#preview=${view.app.id}.${view.view.id}.${encodeURIComponent(page)}`);
+  const dir = workspace(); const port = await listen(gateway.server);
+  try {
+    const app = registry.publish("s", dir, staticManifest); const id = app.views[0].id;
+    const host = new URL(gateway.origin(id)).host;
+    assert.equal(gateway.address(id), `${gateway.origin(id)}/`);
+    const visit = await request(port, host, "/invoices?q=1", { headers: { "sec-fetch-dest": "document" } });
+    assert.equal(visit.status, 303);
+    assert.equal(visit.headers.location, `https://bivy.example/sessions/s#preview=${app.id}.${id}.${encodeURIComponent("/invoices?q=1")}`);
+    // Framed and non-page requests still just say access expired.
+    assert.equal((await request(port, host, "/", { headers: { "sec-fetch-dest": "iframe" } })).status, 401);
+    assert.equal((await request(port, host, "/app.js")).status, 401);
+    // The signed-in client's direct link is one-use and lands on the app origin itself.
+    const direct = new URL(gateway.openDirect(id));
+    assert.equal(direct.origin, gateway.origin(id));
+    const redeem = () => request(port, host, "/__bivy/redeem", { method: "POST", headers: { origin: direct.origin }, body: direct.hash.slice(1) });
+    assert.equal((await redeem()).status, 204);
+    assert.equal((await redeem()).status, 401);
+  } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("people with a shared link can leave bounded notes that come back to the session", async () => {
+  const registry = new AppRegistry(); const gateway = new AppGateway(registry, "https://{app}.preview.example.net");
+  const dir = workspace(); const port = await listen(gateway.server);
+  const service = new AppService(registry, gateway, { start: async () => "t", has: () => true, close: () => {} });
+  try {
+    const app = registry.publish("s", dir, staticManifest); const id = app.views[0].id;
+    const shared = new URL(gateway.share(id).url);
+    const host = shared.host;
+    const redeemed = await request(port, host, "/__bivy/redeem", { method: "POST", headers: { origin: shared.origin }, body: shared.hash.slice(1) });
+    const reviewer = redeemed.headers["set-cookie"]![0].split(";")[0];
+    const owner = (await grant(gateway, port, id)).cookie;
+    // Only a shared-link session gets the reviewer tools.
+    assert.match((await request(port, host, "/__bivy/inspector.js", { headers: { cookie: reviewer } })).body, /REVIEWER=true/);
+    assert.match((await request(port, host, "/__bivy/inspector.js", { headers: { cookie: owner } })).body, /REVIEWER=false/);
+    const post = (body: string, headers: Record<string, string> = {}) => request(port, host, "/__bivy/notes", { method: "POST", headers: { cookie: reviewer, origin: shared.origin, ...headers }, body });
+    assert.equal((await post(JSON.stringify({ note: "Make this bigger", selector: "h1", text: "Preview", path: "/", viewport: { width: 390, height: 844 } }))).status, 204);
+    assert.equal((await post(JSON.stringify({ note: "x" }), { origin: "https://evil.example" })).status, 403);
+    assert.equal((await request(port, host, "/__bivy/notes", { method: "POST", headers: { origin: shared.origin }, body: JSON.stringify({ note: "x" }) })).status, 401);
+    assert.equal((await post(JSON.stringify({ note: "  " }))).status, 400);
+    assert.equal((await post(JSON.stringify({ note: "x".repeat(5000) }))).status, 413);
+    for (let i = 0; i < 60; i++) await post(JSON.stringify({ note: `n${i}`, path: "javascript:alert(1)" }));
+    const notes = service.list("s").apps[0].views[0].kind === "web" ? service.list("s").apps[0].views[0].notes! : [];
+    assert.equal(notes.length, 50);
+    assert.equal(notes.at(-1)!.note, "n59"); assert.equal(notes.at(-1)!.path, "/");
+    service.clearNotes("s", app.id, id);
+    assert.equal(service.list("s").apps[0].views[0].kind === "web" && service.list("s").apps[0].views[0].notes, undefined);
   } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -339,7 +446,8 @@ test("the trusted shell only accepts scoped launch grants and configured chat re
     assert.equal(launch.origin, gateway.shellOrigin(id));
     const shell = await request(port, launch.host, "/__bivy/open");
     assert.match(shell.body, /Back to chat/); assert.match(shell.body, /sandbox=/);
-    assert.match(String(shell.headers["content-security-policy"]), /frame-ancestors 'none'/);
+    // Only configured Bivy clients may frame the shell (Peek).
+    assert.match(String(shell.headers["content-security-policy"]), /frame-ancestors https:\/\/bivy\.example http:\/\/localhost:5173;/);
     assert.equal((await request(port, launch.host, "/index.html")).status, 404);
     assert.equal((await request(port, launch.host, "/__bivy/launch", { method: "POST", headers: { origin: gateway.origin(id) }, body: launch.hash.slice(1) })).status, 403);
     const response = await request(port, launch.host, "/__bivy/launch", { method: "POST", headers: { origin: launch.origin }, body: launch.hash.slice(1) });

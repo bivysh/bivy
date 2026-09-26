@@ -29,6 +29,7 @@ import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
 import { SessionChangesSheet, countUniqueEditedFiles } from "./components/SessionChangesSheet.js";
 import { ShareDestinationSheet } from "./components/ShareDestinationSheet.js";
 import { clearPendingShare, peekPendingShare, seedSessionDraft } from "./shareTarget.js";
+import { usePreviewLanding } from "./usePreviewLanding.js";
 import { ForkProgressDialog } from "./components/ForkProgressDialog.js";
 import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
 import { AppsSheet } from "./components/AppsSheet.js";
@@ -79,6 +80,7 @@ function notificationAllowsAttentionBadge(session: SessionStatusInput, prefs: No
 
 export function App() {
   const state = useAppState();
+  const previewLanding = usePreviewLanding();
   const appIconBadgeEnabled = useSyncExternalStore(subscribeNotificationSettings, getAppIconBadgeEnabled);
   const notificationPreferences = useSyncExternalStore(subscribeNotificationSettings, getNotificationPreferencesSnapshot);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -1162,6 +1164,7 @@ export function App() {
         </Suspense>
       )}
 
+      {previewLanding && <div className="banner" data-tone="accent" role="status">{previewLanding}</div>}
       {pendingShare && (
         <ShareDestinationSheet
           text={pendingShare}

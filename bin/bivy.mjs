@@ -2426,6 +2426,7 @@ async function cmdApp(args = []) {
     console.log(`Usage: bivy app publish <manifest.json> [--session <id>]
        bivy app list [--session <id>]
        bivy app remove <app-id> [--session <id>]
+       bivy app shot [app-id] [--widths 390,1280] [--themes light,dark] [--path /page] [--session <id>]
 
 Manifest: {"version":1,"name":"My app","views":[
   {"kind":"web","name":"Website","source":{"kind":"service","port":3000}},
@@ -2433,19 +2434,39 @@ Manifest: {"version":1,"name":"My app","views":[
 ]}
 
 Static web source: {"kind":"static","directory":"./dist"}
-Publishing does not start commands. Open Apps in the session menu to view or run.
+Server Bivy runs: {"kind":"service","port":5173,"start":{"command":"pnpm","args":["dev"]}}
+Publishing does not start commands. Open Apps in the session menu to view or run;
+a server with "start" starts on first open and is restarted if it exits.
 Terminal commands run with the node user's permissions, not in a new sandbox.
+"shot" screenshots the session's web views (or one app) with a local headless
+Chrome/Chromium and prints the PNG paths — look at them before saying the UI is
+done. It is off by default: turn it on in Bivy → Settings → this machine, or
+run: bivy config set sessions.appScreenshots true
 Web previews require operator setup; see docs/apps.md.`);
     return;
   }
-  if (!["publish", "list", "remove"].includes(action)) throw new Error("Unknown app command. Run bivy app --help.");
+  if (!["publish", "list", "remove", "shot"].includes(action)) throw new Error("Unknown app command. Run bivy app --help.");
+  const shot = {};
+  if (action === "shot") {
+    for (const flag of ["--widths", "--themes", "--path"]) {
+      const i = rest.indexOf(flag);
+      if (i < 0) continue;
+      const value = rest[i + 1];
+      if (!value || value.startsWith("--")) throw new Error(`${flag} requires a value.`);
+      if (flag === "--widths") shot.widths = value.split(",").map((w) => Number(w.trim()));
+      else if (flag === "--themes") shot.themes = value.split(",").map((t) => t.trim());
+      else shot.path = value;
+      rest.splice(i, 2);
+    }
+  }
   const sessionIndex = rest.indexOf("--session");
   if (sessionIndex >= 0 && (!rest[sessionIndex + 1] || rest[sessionIndex + 1].startsWith("--"))) throw new Error("--session requires an id.");
   const sessionId = resolveAttachSessionId({ sessionFlag: sessionIndex >= 0 ? rest[sessionIndex + 1] : undefined, env: process.env });
   if (!sessionId) throw new Error("Set --session <id> or run inside a Bivy agent session.");
   const positional = rest.filter((_, i) => i !== sessionIndex && (sessionIndex < 0 || i !== sessionIndex + 1));
-  if (positional.some((a) => a.startsWith("-")) || positional.length !== (action === "list" ? 0 : 1)) throw new Error("Invalid arguments. Run bivy app --help.");
-  const body = { sessionId };
+  if (positional.some((a) => a.startsWith("-")) || (action === "shot" ? positional.length > 1 : positional.length !== (action === "list" ? 0 : 1))) throw new Error("Invalid arguments. Run bivy app --help.");
+  const body = { sessionId, ...shot };
+  if (action === "shot" && positional[0]) body.appId = positional[0];
   if (action === "publish") {
     const file = path.resolve(positional[0]);
     if (fs.statSync(file).size > 64 * 1024) throw new Error("App manifest exceeds 64 KiB.");

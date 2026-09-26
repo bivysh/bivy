@@ -4,19 +4,26 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { AppManifest, AppView, SessionApp } from "./types.js";
+import type { AppManifest, AppView, ReviewerNote, SessionApp } from "./types.js";
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 const MAX_FILES = 2000;
 type StaticTarget = { kind: "static"; files: Map<string, Buffer>; bytes: number };
-export type AppTarget = StaticTarget | { kind: "service"; port: number } | { kind: "terminal"; command: string; args: string[]; workspace: string };
+type Command = { command: string; args: string[]; workspace: string };
+export type AppTarget = StaticTarget | { kind: "service"; port: number; start?: Command } | ({ kind: "terminal" } & Command);
+/** What survives a node restart: the manifest and the IDs chat links point at. */
+interface Persisted { sessionId: string; workspace: string; manifest: AppManifest; id: string; viewIds: string[]; createdAt: number }
 export interface RegisteredView {
   app: SessionApp; view: AppView; target: AppTarget;
   /** Bumped when an agent turn changes files, so open previews reload. */
   revision: number;
   /** Last page the preview shell framed; a reload returns there, not to `/`. */
   lastPath?: string;
+  /** Reviewer notes from shared links, newest last, capped. */
+  notes?: ReviewerNote[];
+  /** Recent screenshots for Compare, newest last (agent screenshots on only). */
+  shots?: { revision: number; at: number; png: Buffer }[];
   /** Where a static snapshot came from, so a turn can re-take it. */
   source?: { workspace: string; directory: string };
 }
@@ -73,32 +80,72 @@ function snapshot(workspace: string, directory: string): StaticTarget {
   return { kind: "static", files, bytes };
 }
 
-/** Deliberately ephemeral: restart invalidates apps rather than trusting reused local ports. */
+function command(spec: unknown, workspace: string, label: string): Command {
+  const value = spec as { command?: unknown; args?: unknown };
+  if (typeof value?.command !== "string" || !value.command.trim() || value.command.length > 1000 || value.command.includes("\u0000")) throw new Error(`${label} requires an executable command.`);
+  if (value.args !== undefined && (!Array.isArray(value.args) || value.args.length > 100 || value.args.some((arg) => typeof arg !== "string" || arg.length > 4000 || arg.includes("\u0000")))) throw new Error(`Invalid ${label.toLowerCase()} arguments.`);
+  return { command: value.command, args: [...(value.args as string[] | undefined ?? [])], workspace: fs.realpathSync(workspace) };
+}
+
+/** Apps persist (with their IDs) when given a file, so chat launchers and
+ * preview addresses survive restarts. Views whose server Bivy doesn't own —
+ * a service without `start` — are not restored: a reused local port could
+ * belong to anything by then. Detection offers them again. */
 export class AppRegistry extends EventEmitter {
   private apps = new Map<string, SessionApp>();
   private views = new Map<string, RegisteredView>();
-  constructor(private readonly reservedPorts: number[] = []) { super(); this.setMaxListeners(0); }
+  private persisted = new Map<string, Persisted>();
+  constructor(private readonly reservedPorts: number[] = [], private readonly file?: string) {
+    super(); this.setMaxListeners(0);
+    this.restore();
+  }
 
-  publish(sessionId: string, workspace: string, input: AppManifest): SessionApp {
+  private restore(): void {
+    if (!this.file) return;
+    let records: Persisted[] = [];
+    try { records = JSON.parse(fs.readFileSync(this.file, "utf8")); } catch { return; }
+    for (const record of Array.isArray(records) ? records : []) {
+      const keep = record.manifest?.views?.map((spec, i) => ({ spec, id: record.viewIds?.[i] }))
+        .filter(({ spec, id }) => typeof id === "string" && !(spec?.kind === "web" && spec.source?.kind === "service" && !spec.source.start)) ?? [];
+      if (!keep.length) continue;
+      // A workspace that moved or a build that vanished drops that app, not the rest.
+      try {
+        this.publish(record.sessionId, record.workspace, { ...record.manifest, views: keep.map((k) => k.spec) }, { id: record.id, viewIds: keep.map((k) => k.id!), createdAt: record.createdAt });
+      } catch { /* skipped */ }
+    }
+    this.save();
+  }
+  private save(): void {
+    if (!this.file) return;
+    const tmp = `${this.file}.${process.pid}.tmp`;
+    try {
+      fs.writeFileSync(tmp, JSON.stringify([...this.persisted.values()]), { mode: 0o600 });
+      fs.renameSync(tmp, this.file);
+    } catch { try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ } }
+  }
+
+  publish(sessionId: string, workspace: string, input: AppManifest, restore?: { id: string; viewIds: string[]; createdAt: number }): SessionApp {
     const name = (value: unknown): string => {
       if (typeof value !== "string" || !value.trim() || value.length > 100) throw new Error("App and view names must contain 1–100 characters.");
       return value.trim();
     };
     if (!input || input.version !== 1 || !Array.isArray(input.views) || !input.views.length || input.views.length > 8) throw new Error("Expected manifest version 1 with 1–8 views.");
     if (this.apps.size >= 50) throw new Error("Remove an app before publishing more (limit: 50).");
-    const app: SessionApp = { id: randomBytes(16).toString("hex"), sessionId, name: name(input.name), views: [], createdAt: Date.now() };
+    const id = (i?: number) => (i === undefined ? restore?.id : restore?.viewIds[i]) ?? randomBytes(16).toString("hex");
+    const app: SessionApp = { id: id(), sessionId, name: name(input.name), views: [], createdAt: restore?.createdAt ?? Date.now() };
     const entries: RegisteredView[] = [];
     let total = [...this.views.values()].reduce((sum, item) => sum + (item.target.kind === "static" ? item.target.bytes : 0), 0);
-    for (const spec of input.views) {
-      const base = { id: randomBytes(16).toString("hex"), name: name(spec?.name) };
+    for (const [index, spec] of input.views.entries()) {
+      const base = { id: id(index), name: name(spec?.name) };
       let target: AppTarget;
       let view: AppView;
       let source: RegisteredView["source"];
       if (spec.kind === "web" && spec.source?.kind === "service") {
         const port = spec.source.port;
         if (!Number.isInteger(port) || port < 1024 || port > 65535 || this.reservedPorts.includes(port)) throw new Error("Choose a non-reserved local service port between 1024 and 65535.");
-        target = { kind: "service", port };
-        view = { ...base, kind: "web", source: "service" };
+        const start = spec.source.start === undefined ? undefined : command(spec.source.start, workspace, "Service start");
+        target = { kind: "service", port, start };
+        view = { ...base, kind: "web", source: "service", ...(start ? { managed: true } : {}) };
       } else if (spec.kind === "web" && spec.source?.kind === "static") {
         if (typeof spec.source.directory !== "string" || !spec.source.directory) throw new Error("Static directory is required.");
         target = snapshot(workspace, spec.source.directory);
@@ -107,11 +154,8 @@ export class AppRegistry extends EventEmitter {
         if (total > MAX_TOTAL_BYTES) throw new Error("Static apps exceed the node's 100 MiB snapshot budget.");
         view = { ...base, kind: "web", source: "static" };
       } else if (spec.kind === "terminal") {
-        if (typeof spec.command !== "string" || !spec.command.trim() || spec.command.length > 1000 || spec.command.includes("\u0000")) throw new Error("Terminal view requires an executable command.");
-        if (spec.args !== undefined && (!Array.isArray(spec.args) || spec.args.length > 100 || spec.args.some((arg) => typeof arg !== "string" || arg.length > 4000 || arg.includes("\u0000")))) throw new Error("Invalid terminal arguments.");
-        const args = [...(spec.args ?? [])];
-        target = { kind: "terminal", command: spec.command, args, workspace: fs.realpathSync(workspace) };
-        view = { ...base, kind: "terminal", command: spec.command, args };
+        target = { kind: "terminal", ...command(spec, workspace, "Terminal view") };
+        view = { ...base, kind: "terminal", command: target.command, args: target.args };
       } else throw new Error("Unsupported app view. This machine supports web and terminal views.");
       app.views.push(view);
       entries.push({ app, view, target, revision: 0, source });
@@ -119,6 +163,8 @@ export class AppRegistry extends EventEmitter {
     // Commit all views together: a bad later view cannot leave a partial app.
     this.apps.set(app.id, app);
     for (const entry of entries) this.views.set(entry.view.id, entry);
+    this.persisted.set(app.id, { sessionId, workspace, manifest: structuredClone(input), id: app.id, viewIds: app.views.map((v) => v.id), createdAt: app.createdAt });
+    if (!restore) this.save();
     return structuredClone(app);
   }
 
@@ -169,5 +215,7 @@ export class AppRegistry extends EventEmitter {
     const app = this.require(sessionId, id);
     for (const view of app.views) this.views.delete(view.id);
     this.apps.delete(id);
+    this.persisted.delete(id);
+    this.save();
   }
 }

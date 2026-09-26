@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { readFileSync } from "node:fs";
 import { previewShell } from "./preview-shell.js";
+import { inspectorScript } from "./inspector.js";
 import type { AppRegistry, RegisteredView } from "./registry.js";
 
 const MIME: Record<string, string> = {
@@ -20,6 +21,35 @@ const COOKIE = "__Host-bivy-preview";
 const OPEN_PATH = "/__bivy/open";
 const REDEEM_PATH = "/__bivy/redeem";
 const REVISION_PATH = "/__bivy/revision";
+const INSPECTOR_PATH = "/__bivy/inspector.js";
+const COMPARE_PATH = "/__bivy/compare";
+const NOTES_PATH = "/__bivy/notes";
+const MAX_NOTES = 50;
+/** Larger HTML documents pass through without the inspector. */
+const MAX_INJECT_BYTES = 5 * 1024 * 1024;
+
+/** Put the inspector first in <head>, so it sees errors from the app's own scripts. */
+function withInspector(html: Buffer): Buffer {
+  const text = html.toString("utf8");
+  const tag = `<script src="${INSPECTOR_PATH}"></script>`;
+  const at = /<head\b[^>]*>/i.exec(text) ?? /<html\b[^>]*>/i.exec(text);
+  return Buffer.from(at ? text.slice(0, at.index + at[0].length) + tag + text.slice(at.index + at[0].length) : tag + text);
+}
+
+/** Let the inspector through an app's CSP by exact URL; other sources are unchanged. */
+function allowInspector(policy: string, url: string): string {
+  const directives = policy.split(";").map((d) => d.trim()).filter(Boolean);
+  const find = (name: string) => directives.findIndex((d) => d.toLowerCase().split(/\s+/)[0] === name);
+  const index = [find("script-src-elem"), find("script-src")].find((i) => i >= 0) ?? -1;
+  const add = (directive: string) => directive.replace(/\s'none'/i, "") + " " + url;
+  if (index >= 0) directives[index] = add(directives[index]);
+  else {
+    const fallback = find("default-src");
+    if (fallback < 0) return policy;
+    directives.push(add(directives[fallback].replace(/^default-src/i, "script-src")));
+  }
+  return directives.join("; ");
+}
 const HOUR = 60 * 60_000;
 /** Marks gateway-generated "server not answering" responses, so recovery
  * polling can tell them apart from an app's own 502s. */
@@ -67,7 +97,7 @@ function upstreamHeaders(req: IncomingMessage, origin: string): OutgoingHttpHead
   headers["x-forwarded-proto"] = "https";
   return headers;
 }
-function responseHeaders(headers: IncomingMessage["headers"], shellOrigin: string): OutgoingHttpHeaders {
+function responseHeaders(headers: IncomingMessage["headers"], ancestors: string, inspector?: string): OutgoingHttpHeaders {
   const result = cleanHeaders(headers);
   if (headers["set-cookie"]) {
     result["set-cookie"] = headers["set-cookie"].filter((cookie) => cookie.split("=", 1)[0].trim() !== COOKIE)
@@ -83,8 +113,10 @@ function responseHeaders(headers: IncomingMessage["headers"], shellOrigin: strin
   // CSP directives, but replace framing restrictions with this narrower host.
   delete result["x-frame-options"];
   const csp = result["content-security-policy"];
-  const policies = (Array.isArray(csp) ? csp : csp ? [String(csp)] : []).map((policy) => policy.replace(/(^|[;,])\s*frame-ancestors[^;,]*/gi, "$1"));
-  result["content-security-policy"] = [...policies, `frame-ancestors ${shellOrigin}; worker-src 'none'`].join(", ");
+  const policies = (Array.isArray(csp) ? csp : csp ? [String(csp)] : []).flatMap((policy) => policy.split(","))
+    .map((policy) => policy.replace(/(^|;)\s*frame-ancestors[^;]*/gi, "$1"))
+    .map((policy) => inspector ? allowInspector(policy, inspector) : policy);
+  result["content-security-policy"] = [...policies, `frame-ancestors ${ancestors}; worker-src 'none'`].join(", ");
   return result;
 }
 
@@ -96,10 +128,13 @@ export class AppGateway {
     ["/__bivy/tokens.css", readFileSync(new URL("./tokens.css", import.meta.url))],
     ["/__bivy/styles.css", readFileSync(new URL("./styles.css", import.meta.url))],
   ]);
-  private readonly sessions = new Map<string, { appId: string; expires: number }>();
+  /** `reviewer`: the browser session came from a copied (shared) link. */
+  private readonly sessions = new Map<string, { appId: string; expires: number; reviewer?: boolean }>();
   private readonly sockets = new Map<string, Set<Duplex>>();
 
-  constructor(private readonly registry: AppRegistry, originTemplate: string, private readonly returnOrigins: () => readonly string[] = () => []) {
+  /** `signIn` sends a signed-out visit to a view's stable address back
+   * through Bivy, which re-opens it for a signed-in device. */
+  constructor(private readonly registry: AppRegistry, originTemplate: string, private readonly returnOrigins: () => readonly string[] = () => [], private readonly signIn?: (view: RegisteredView, path: string) => string | undefined) {
     this.template = previewOriginTemplate(originTemplate);
     this.server = http.createServer((req, res) => { void this.handle(req, res).catch(() => { if (!res.headersSent) res.writeHead(502); res.end("Preview request failed."); }); });
     this.server.maxConnections = 256;
@@ -110,6 +145,8 @@ export class AppGateway {
 
   origin(id: string): string { return this.template.replace("{app}", id); }
   shellOrigin(id: string): string { return this.template.replace("{app}", `view-${id}`); }
+  /** Bivy clients may frame the shell (Peek), so app content allows both. */
+  private ancestors(id: string): string { return [this.shellOrigin(id), ...this.returnOrigins()].join(" "); }
   open(id: string, returnTo?: string): string {
     const entry = this.requireWeb(id);
     if (returnTo) {
@@ -121,6 +158,14 @@ export class AppGateway {
     }
     // Fragment never reaches reverse-proxy access logs or the application.
     return `${this.shellOrigin(id)}${OPEN_PATH}#${this.grant({ appId: id, expires: Date.now() + 60_000, returnTo })}`;
+  }
+  /** The view's stable address: grants nothing by itself. */
+  address(id: string): string { this.requireWeb(id); return `${this.origin(id)}/`; }
+  /** A one-use link straight to the app origin (no shell), for a signed-in
+   * device returning to a stable address. `~path` resumes the page. */
+  openDirect(id: string): string {
+    this.requireWeb(id);
+    return `${this.origin(id)}${OPEN_PATH}#${this.grant({ appId: id, expires: Date.now() + 60_000 })}`;
   }
   /** A reusable link straight to the app origin (no shell frame), so it opens
    * in any browser and can be inspected. Valid until revoked or SHARE_TTL. */
@@ -162,12 +207,13 @@ export class AppGateway {
     const entry = this.registry.getView(id);
     return entry?.view.kind === "web" ? entry : undefined;
   }
-  private authorize(req: IncomingMessage, id: string): number | undefined {
+  private session(req: IncomingMessage, id: string): { expires: number; reviewer?: boolean } | undefined {
     this.sweep();
     const token = (req.headers.cookie ?? "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
-    const session = token && this.sessions.get(token);
-    return session && session.appId === id ? session.expires : undefined;
+    const session = token ? this.sessions.get(token) : undefined;
+    return session?.appId === id ? session : undefined;
   }
+  private authorize(req: IncomingMessage, id: string): number | undefined { return this.session(req, id)?.expires; }
   private track(id: string, socket: Duplex, expires: number): void {
     let sockets = this.sockets.get(id);
     if (!sockets) { sockets = new Set(); this.sockets.set(id, sockets); }
@@ -181,7 +227,7 @@ export class AppGateway {
     const origin = this.shellOrigin(id);
     const nonce = randomBytes(16).toString("hex");
     res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'self' 'nonce-${nonce}'; connect-src 'self' ${this.origin(id)}; frame-src ${this.origin(id)}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`);
+    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'self' 'nonce-${nonce}'; connect-src 'self' ${this.origin(id)}; img-src blob:; frame-src ${this.origin(id)}; frame-ancestors ${this.returnOrigins().join(" ") || "'none'"}; base-uri 'none'; form-action 'none'`);
     if (req.method === "GET" && this.styles.has(req.url ?? "")) {
       res.setHeader("Content-Type", "text/css; charset=utf-8");
       res.end(this.styles.get(req.url!)); return;
@@ -216,8 +262,13 @@ export class AppGateway {
       const nonce = randomBytes(16).toString("hex");
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-      res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; connect-src 'self'; frame-ancestors ${this.shellOrigin(id)}; base-uri 'none'`);
-      res.end(`<!doctype html><html lang="en"><meta name="viewport" content="width=device-width"><title>Open Bivy preview</title><p id="status" role="status">Opening preview…</p><script nonce="${nonce}">const ticket=location.hash.slice(1);history.replaceState(null,'',location.pathname);fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body:ticket}).then(r=>{if(!r.ok)throw Error();location.replace('/');}).catch(()=>{document.getElementById('status').textContent='Preview link expired or cookies are blocked. Open a new link from Bivy.';});</script></html>`);
+      res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; connect-src 'self'; frame-ancestors ${this.ancestors(id)}; base-uri 'none'`);
+      // An embedded launch ("e:" prefix) comes from a shell framed inside Bivy.
+      // After redeeming, check the cookie stuck: browsers that refuse framed
+      // cookies are reported to the shell, which falls back to a tab.
+      res.end(`<!doctype html><html lang="en"><meta name="viewport" content="width=device-width"><title>Open Bivy preview</title><p id="status" role="status">Opening preview…</p><script nonce="${nonce}">const [ticket,after='/']=location.hash.slice(1).split('~');history.replaceState(null,'',location.pathname);let next='/';try{next=decodeURIComponent(after);}catch{}if(!next.startsWith('/')||next.startsWith('//'))next='/';
+const fail=blocked=>{if(blocked&&parent!==window)parent.postMessage({type:'bivy:access',state:'blocked'},${JSON.stringify(this.shellOrigin(id))});document.getElementById('status').textContent=blocked?'This browser blocks preview cookies here. Open the preview in a new tab from Bivy.':'Preview link expired or cookies are blocked. Open a new link from Bivy.';};
+fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body:ticket}).then(async r=>{if(!r.ok)return fail(false);const check=await fetch('${REVISION_PATH}?after=-2',{cache:'no-store'});if(!check.ok)return fail(true);location.replace(next);}).catch(()=>fail(false));</script></html>`);
       return;
     }
     if (req.url === REDEEM_PATH && req.method === "POST") {
@@ -225,17 +276,26 @@ export class AppGateway {
       let body = "";
       for await (const chunk of req) { body += chunk.toString(); if (body.length > 128) { res.writeHead(413); res.end(); return; } }
       this.sweep();
-      const grant = this.tickets.get(body);
+      const embedded = body.startsWith("e:");
+      const ticket = embedded ? body.slice(2) : body;
+      const grant = this.tickets.get(ticket);
       if (!grant || grant.appId !== id || this.sessions.size >= 500) { res.writeHead(401); res.end(); return; }
-      if (!grant.reusable) this.tickets.delete(body);
+      if (!grant.reusable) this.tickets.delete(ticket);
       // A browser session never outlives the link that created it.
       const expires = Math.min(Date.now() + HOUR, grant.expires);
       const token = randomBytes(32).toString("hex");
-      this.sessions.set(token, { appId: id, expires });
-      res.setHeader("Set-Cookie", `${COOKIE}=${token}; Secure; HttpOnly; SameSite=Lax; Path=/; Max-Age=${Math.max(1, Math.floor((expires - Date.now()) / 1000))}`);
+      this.sessions.set(token, { appId: id, expires, reviewer: grant.reusable === true });
+      // Framed inside Bivy, the cookie is third-party: it must be SameSite=None,
+      // and Partitioned keys it to Bivy's top-level site so no other site can use it.
+      const scope = embedded ? "SameSite=None; Partitioned" : "SameSite=Lax";
+      res.setHeader("Set-Cookie", `${COOKIE}=${token}; Secure; HttpOnly; ${scope}; Path=/; Max-Age=${Math.max(1, Math.floor((expires - Date.now()) / 1000))}`);
       res.writeHead(204); res.end(); return;
     }
     const expires = this.authorize(req, id);
+    // A home-screen visit without access goes through Bivy to sign in, then
+    // comes back to the same page. Framed loads keep the plain message.
+    const signIn = !expires && req.method === "GET" && req.headers["sec-fetch-dest"] === "document" && req.url?.startsWith("/") ? this.signIn?.(entry, req.url) : undefined;
+    if (signIn) { res.writeHead(303, { location: signIn }); res.end(); return; }
     if (!expires) { res.writeHead(401); res.end("Preview access expired. Open a new preview link from Bivy."); return; }
     // Block cross-site mutations even if a client sends the preview cookie.
     if (!["GET", "HEAD"].includes(req.method ?? "") && req.headers.origin !== this.origin(id)) { res.writeHead(403); res.end("Forbidden origin."); return; }
@@ -243,6 +303,13 @@ export class AppGateway {
     if (!req.url?.startsWith("/") || req.url.startsWith("//")) { res.writeHead(400); res.end(); return; }
     this.track(id, req.socket, expires);
     if (req.url.startsWith(`${REVISION_PATH}?`) && req.method === "GET") { this.revision(req, res, entry); return; }
+    if ((req.url === COMPARE_PATH || req.url.startsWith(`${COMPARE_PATH}/`)) && req.method === "GET") { this.compare(req, res, entry); return; }
+    if (req.url === INSPECTOR_PATH && req.method === "GET") {
+      res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
+      res.end(inspectorScript(this.shellOrigin(id), this.session(req, id)?.reviewer === true)); return;
+    }
+    if (req.url === NOTES_PATH && req.method === "POST") { await this.note(req, res, entry); return; }
+    const inspect = isPageLoad(req);
     // Remember the framed page so a turn reload lands where the user was.
     if (req.method === "GET" && req.headers["sec-fetch-dest"] === "iframe" && req.url.length <= 2048) entry.lastPath = req.url;
     if (entry.target.kind === "static") {
@@ -261,28 +328,77 @@ export class AppGateway {
         if (notFound) status = 404;
       }
       if (!data) { res.writeHead(404); res.end("File not found."); return; }
-      const headers = responseHeaders({}, this.shellOrigin(id));
+      const headers = responseHeaders({}, this.ancestors(id));
       headers["content-type"] = MIME[path.extname(file).toLowerCase()] || "application/octet-stream";
+      if (inspect && path.extname(file).toLowerCase() === ".html" && data.length <= MAX_INJECT_BYTES) data = withInspector(data);
       res.writeHead(status, { ...headers, "content-length": data.length });
       res.end(req.method === "HEAD" ? undefined : data); return;
     }
     if (entry.target.kind !== "service") { res.writeHead(404); res.end(); return; }
     const port = entry.target.port;
-    const upstream = http.request({ hostname: "127.0.0.1", port, path: req.url, method: req.method, headers: upstreamHeaders(req, this.origin(id)) }, (response) => {
-      res.writeHead(response.statusCode ?? 502, responseHeaders(response.headers, this.shellOrigin(id)));
+    const forward = upstreamHeaders(req, this.origin(id));
+    // Uncompressed HTML so the inspector can be added to page loads.
+    if (inspect) forward["accept-encoding"] = "identity";
+    const upstream = http.request({ hostname: "127.0.0.1", port, path: req.url, method: req.method, headers: forward }, (response) => {
       response.on("error", () => res.destroy());
-      response.pipe(res);
+      const html = inspect && /^text\/html/i.test(response.headers["content-type"] ?? "") && !response.headers["content-encoding"] && Number(response.headers["content-length"] ?? 0) <= MAX_INJECT_BYTES;
+      if (!html) {
+        res.writeHead(response.statusCode ?? 502, responseHeaders(response.headers, this.ancestors(id)));
+        response.pipe(res); return;
+      }
+      const chunks: Buffer[] = []; let size = 0;
+      response.on("data", (chunk: Buffer) => { size += chunk.length; if (size > MAX_INJECT_BYTES) { response.destroy(); res.destroy(); return; } chunks.push(chunk); });
+      response.on("end", () => {
+        const body = withInspector(Buffer.concat(chunks));
+        const headers = responseHeaders(response.headers, this.ancestors(id), `${this.origin(id)}${INSPECTOR_PATH}`);
+        delete headers["content-length"];
+        res.writeHead(response.statusCode ?? 200, { ...headers, "content-length": body.length });
+        res.end(body);
+      });
     });
     upstream.setTimeout(60_000, () => upstream.destroy(new Error("Preview timed out")));
     upstream.on("error", () => {
       if (res.headersSent) { res.destroy(); return; }
       if (!isPageLoad(req)) { res.writeHead(502, { "content-type": "text/plain", [UPSTREAM_DOWN]: "1" }); res.end("App server unavailable. Start it on the registered port, then reload."); return; }
       const nonce = randomBytes(16).toString("hex");
-      res.writeHead(502, { "content-type": "text/html; charset=utf-8", [UPSTREAM_DOWN]: "1", "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; frame-ancestors ${this.shellOrigin(id)}; base-uri 'none'` });
+      res.writeHead(502, { "content-type": "text/html; charset=utf-8", [UPSTREAM_DOWN]: "1", "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; frame-ancestors ${this.ancestors(id)}; base-uri 'none'` });
       res.end(upstreamDownPage(nonce, port, this.shellOrigin(id)));
     });
     res.on("close", () => upstream.destroy());
     req.pipe(upstream);
+  }
+  /** A reviewer's note. Untrusted text: stored bounded, shown as text, and only
+   * ever turned into a draft by the owner. Same-origin POSTs only (checked above). */
+  private async note(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): Promise<void> {
+    let body = "";
+    for await (const chunk of req) { body += chunk.toString(); if (body.length > 4096) { res.writeHead(413); res.end(); return; } }
+    let input: Record<string, unknown>;
+    try { input = JSON.parse(body); } catch { res.writeHead(400); res.end(); return; }
+    const text = (value: unknown, max: number) => typeof value === "string" ? value.trim().slice(0, max) : "";
+    const note = text(input.note, 1000);
+    if (!note) { res.writeHead(400); res.end("A note needs some text."); return; }
+    const viewport = input.viewport as { width?: unknown; height?: unknown } | undefined;
+    const path = text(input.path, 2048);
+    entry.notes = [...(entry.notes ?? []), {
+      id: randomBytes(8).toString("hex"), at: Date.now(), note, selector: text(input.selector, 300), text: text(input.text, 200),
+      path: path.startsWith("/") ? path : "/", viewport: { width: Number(viewport?.width) || 0, height: Number(viewport?.height) || 0 },
+    }].slice(-MAX_NOTES);
+    this.registry.emit("notes", entry.view.id);
+    res.writeHead(204); res.end();
+  }
+  /** Compare shots for the shell: the list, or one PNG by index. */
+  private compare(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): void {
+    const shots = entry.shots ?? [];
+    const cors = { "access-control-allow-origin": this.shellOrigin(entry.view.id), "access-control-allow-credentials": "true", vary: "Origin" };
+    const index = req.url === COMPARE_PATH ? -1 : Number(req.url!.slice(COMPARE_PATH.length + 1));
+    if (index < 0) {
+      res.writeHead(200, { ...cors, "content-type": "application/json" });
+      res.end(JSON.stringify({ shots: shots.map((shot, i) => ({ index: i, revision: shot.revision, at: shot.at })) })); return;
+    }
+    const shot = Number.isInteger(index) ? shots[index] : undefined;
+    if (!shot) { res.writeHead(404, cors); res.end(); return; }
+    res.writeHead(200, { ...cors, "content-type": "image/png", "content-length": shot.png.length });
+    res.end(shot.png);
   }
   /** Long poll from the trusted shell (same-site, credentialed CORS): answers
    * when the view's revision differs from `after`, or after 25 seconds. */
