@@ -3201,3 +3201,8 @@ select.picker-search { appearance: auto; }
   .automation-history-view .autom-section-head { align-items: flex-start; gap: var(--space-3); }
   .automation-history-view .autom-section-head > strong { min-width: 0; line-height: var(--lh-lg); }
 }
+
+/* Device handoff (HandoffBanner): sits above the composer like the composer
+   itself, with one line of the other device's draft. */
+.handoff-banner { border-radius: var(--radius-md); }
+.handoff-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

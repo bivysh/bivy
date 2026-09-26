@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+import { hostname } from "node:os";
 import { StringDecoder } from "node:string_decoder";
 import { WebSocket } from "ws";
 
@@ -54,6 +55,10 @@ const TTY_MODE_RESET =
   "\x1b[?1l\x1b>" + // cursor keys + keypad back to normal mode
   "\x1b[?25h" + // cursor visible
   "\x1b[0m"; // reset colors/attributes
+
+/** How this terminal names itself to the node, so other devices can say where a
+ *  session was last driven ("Terminal on my-laptop"). */
+const DEVICE = { id: `terminal:${hostname()}`, label: `Terminal on ${hostname()}` };
 
 type RunSpec = { agent?: string; label?: string; name?: string; model?: string; command: string; args?: string[]; workspace?: string; sessionId?: string };
 
@@ -257,7 +262,7 @@ function openDetached(args: Args, spec: RunSpec, cols: number, rows: number): Pr
       resolve(code);
     };
     socket.on("open", () =>
-      socket.send(JSON.stringify({ kind: "terminal.open.run", agent: spec.agent, label: spec.label, name: spec.name, model: spec.model, command: spec.command, args: spec.args ?? [], workspace: spec.workspace, sessionId: spec.sessionId, cols, rows })),
+      socket.send(JSON.stringify({ kind: "terminal.open.run", agent: spec.agent, label: spec.label, name: spec.name, model: spec.model, command: spec.command, args: spec.args ?? [], workspace: spec.workspace, sessionId: spec.sessionId, cols, rows, device: DEVICE })),
     );
     socket.on("error", (err) => {
       process.stderr.write(c.red(`Connection error: ${err instanceof Error ? err.message : String(err)}\n`));
@@ -291,7 +296,7 @@ async function main() {
     }
     process.stdout.write(c.dim(`Starting ${c.cyan(spec.name || spec.label || spec.agent || spec.command)} — Ctrl-\\ Ctrl-\\ to detach\r\n`));
     const code = await bridge(args, (ws) =>
-      ws.send(JSON.stringify({ kind: "terminal.open.run", agent: spec.agent, label: spec.label, name: spec.name, model: spec.model, command: spec.command, args: spec.args ?? [], workspace: spec.workspace, sessionId: spec.sessionId, cols, rows })),
+      ws.send(JSON.stringify({ kind: "terminal.open.run", agent: spec.agent, label: spec.label, name: spec.name, model: spec.model, command: spec.command, args: spec.args ?? [], workspace: spec.workspace, sessionId: spec.sessionId, cols, rows, device: DEVICE })),
     );
     process.exit(code);
   }
@@ -309,7 +314,7 @@ async function attachById(args: Args, termId: string) {
   const { cols, rows } = termSize();
   process.stdout.write(c.dim(`Attaching to ${c.cyan(termId)} — Ctrl-\\ Ctrl-\\ to detach\r\n`));
   const code = await bridge({ ...args, termId }, (ws) =>
-    ws.send(JSON.stringify({ kind: "terminal.attach", termId, cols, rows })),
+    ws.send(JSON.stringify({ kind: "terminal.attach", termId, cols, rows, device: DEVICE })),
   );
   process.exit(code);
 }

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Pick up on one device where another left off. When you open a session that another of your devices drove in the last half hour, a note above the composer says where ("Last active on Terminal on my-laptop · 2m ago"). If that device left an unsent draft, **Continue draft** moves it into an empty composer, so a half-typed prompt follows you from laptop to phone. It never blocks anything: whoever sends next is driving. The terminal lock screen also says which device last typed into the terminal. Devices name themselves ("iPhone", "Mac", "Terminal on my-laptop"); older nodes simply show nothing.
+
 ### Changed
 
 - A session moves between terminal and chat in both directions without losing its place or getting a second writer. **Continue in terminal** from the app now opens the session in a terminal owned by the node, not by the device that opened it. It keeps running when that tab closes, any device can join it, and `bivy resume` on a laptop joins the same terminal. When another device takes the session back as a chat, an attached `bivy run`/`bivy resume` terminal says so and offers **Enter** to take it back, instead of printing "session ended". A terminal overlay watching it in the app switches to the chat.

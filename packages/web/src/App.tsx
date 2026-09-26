@@ -855,6 +855,7 @@ export function App() {
             const canTakeover = Boolean(run?.sessionId) || runtimeSupportsTerminalTakeover(run?.agent, state.catalogs.runtimes);
             return (
               <TuiLockedView
+                sessionId={run?.sessionId}
                 sessionName={runName}
                 nodeLabel={runNode?.name}
                 online={state.connection.status !== "offline"}
@@ -865,6 +866,7 @@ export function App() {
           })()
         ) : activeTuiLocked ? (
           <TuiLockedView
+            sessionId={state.activeSession.activeSessionId ?? undefined}
             sessionName={state.activeSession.activeTitle}
             nodeLabel={activeSessionNode?.name}
             online={state.connection.status !== "offline"}

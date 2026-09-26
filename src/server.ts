@@ -152,6 +152,8 @@ import { listInstalledPlugins } from "./plugins/store.js";
 import { createCapabilitiesController } from "./controllers/capabilities.js";
 import { createAccessDeviceController, createLinkedDeviceController } from "./controllers/devices.js";
 import { createSessionControlCommands } from "./controllers/session-control.js";
+import { createPresenceCommands } from "./controllers/presence-commands.js";
+import { PresenceBook, deviceFrom, type DeviceRef, type DriveVia, type SessionPresence } from "./session/presence.js";
 import { createForkCommands } from "./controllers/fork-commands.js";
 import { createGithubCommands } from "./controllers/github-commands.js";
 import { createCredentialCommands } from "./controllers/credential-commands.js";
@@ -1882,6 +1884,18 @@ function broadcastTuiState(sessionId: string, active: boolean) {
   broadcast({ type: "terminal.tui", sessionId, active });
 }
 
+// Device handoff (src/session/presence.ts): which device last drove each
+// session and the draft it left, so the next device can pick up from there.
+const presenceBook = new PresenceBook();
+function publishPresence(presence: SessionPresence) {
+  broadcast({ type: "session.presence", presence });
+}
+function notePresence(sessionId: string | undefined, device: DeviceRef | undefined, via: DriveVia) {
+  if (!sessionId || !device) return;
+  const changed = presenceBook.drove(sessionId, device, via);
+  if (changed) publishPresence(changed);
+}
+
 // Terminals opened by relay clients (phone/web over the relay). Output is emitted
 // via the relay tagged with termId; clients filter by it. (Per-client unicast
 // is a known future hardening step.)
@@ -2203,6 +2217,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     const meta = attachmentStore.readMeta(hash);
     ctx.reply({ type: "attachment.data", requestId, hash, mimeType: meta?.mimeType ?? "application/octet-stream", name: meta?.name, data: bytes.toString("base64") });
   },
+  ...createPresenceCommands(presenceBook, publishPresence),
   ...createSessionControlCommands({
     resolve: (sessionId) => resolveSession(sessionId),
     pause: pauseSession,
@@ -3048,6 +3063,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       broadcast({ type: "session.error", sessionId: record.id, error: record.tuiRefreshing ? "This session is returning from the terminal. Try again in a moment." : "This session is open in the terminal (TUI). Close the TUI to chat here." });
       return;
     }
+    notePresence(record.id, deviceFrom(msg.device), "chat");
     touchSession(record);
     // Now that the session (and its workdir) exists, write file attachments to
     // disk and fold their path notes into the prompt the agent actually sees.
@@ -3199,6 +3215,7 @@ async function handleRelayMessage(msg: ClientMessage) {
     // Fallthrough for kinds not in RELAY_COMMANDS: terminal.* frames go to the
     // PTY manager; anything else is an unknown client message.
     if (typeof msg.kind === "string" && msg.kind.startsWith("terminal.")) {
+      if (msg.kind === "terminal.attach") notePresence(terminals.meta(String(msg.termId ?? ""))?.sessionId, deviceFrom(msg.device), "terminal");
       // The relay is a single tunnel with no per-remote-client identity at this
       // layer, so every relay-tunneled client shares one size slot. That still
       // keeps them distinct from each local socket, so a PTY shared between a
@@ -11381,6 +11398,7 @@ app.post("/api/session/prompt", async (req, res, next) => {
     if (record.tuiTermId || record.tuiRefreshing) {
       return res.status(409).json({ error: record.tuiRefreshing ? "This session is returning from the terminal. Try again in a moment." : "This session is open in the terminal (TUI). Close the TUI to chat here." });
     }
+    notePresence(record.id, deviceFrom(req.body?.device), "chat");
     const session = record.session;
     const { note: fileNote, refs: fileRefs } = materializeAttachments(record, files);
     const promptText =
@@ -11702,6 +11720,7 @@ wss.on("connection", (socket, req) => {
   // Stable id for this socket, keying its per-terminal size so several clients
   // sharing a PTY size it to their min (see TerminalManager.setClientSize).
   const clientTerminalId = `sock-${randomUUID()}`;
+  let socketDevice: DeviceRef | undefined;
   socket.send(JSON.stringify({ type: "hello", activeSessionId: active?.id, activeSession: active ? { id: active.id, isStreaming: sessionBusy(active), sessionState: sessionState(active), lastActivity: active.lastActivity, workingStartedAt: active.workingStartedAt } : null }));
   // Authoritative version status on every connect: `latest` set means this node
   // is behind (banner shows); absent means up to date (banner + any "Updating…"
@@ -11724,6 +11743,12 @@ wss.on("connection", (socket, req) => {
       return;
     }
     if (typeof msg?.kind === "string" && msg.kind.startsWith("terminal.")) {
+      // A terminal client (`bivy run`/`bivy resume`) names its device once; typing
+      // into a session's terminal then makes it that session's driver.
+      socketDevice = deviceFrom((msg as { device?: unknown }).device) ?? socketDevice;
+      if (msg.kind === "terminal.input" || msg.kind === "terminal.attach") {
+        notePresence(terminals.meta(String((msg as { termId?: unknown }).termId ?? ""))?.sessionId, socketDevice, "terminal");
+      }
       runTerms.handleTerminalMessage(msg, (event) => {
         if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event));
       }, ownedTerminals, clientTerminalId, (termId) => runTerms.addRunViewer(termId, socket));

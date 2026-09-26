@@ -30,6 +30,8 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
   }),
   "attachment.fetch": Type.Object({ ...request, hash: Type.String() }),
   "session.pause": Type.Object(session),
+  "session.presence.get": Type.Object({ ...request, ...session }),
+  "session.presence.draft": Type.Object({ ...request, ...session, device: Type.Object({ id: Type.String({ maxLength: 100 }), label: Type.Optional(Type.String({ maxLength: 200 })) }), text: Type.String({ maxLength: 20_000 }) }),
   "session.resume": Type.Object(session),
   "session.question.answer": Type.Object({ ...optionalSession, requestId: Type.String(), answers: Type.Optional(Type.Record(Type.String(), Type.String())) }),
   "session.replay": Type.Object({ ...session, afterSeq: Type.Optional(Type.Number()) }),
