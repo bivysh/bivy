@@ -6,23 +6,27 @@ import { deflateSync } from "node:zlib";
 /** Reads exact byte counts from a stream. */
 class Reader {
   private buffer = Buffer.alloc(0);
+  /** Chunks not yet joined onto `buffer`: joined once enough have arrived, so a large frame isn't copied per chunk. */
+  private chunks: Buffer[] = [];
+  private queued = 0;
   private waiting?: { n: number; resolve: (b: Buffer) => void };
   private failure?: Error;
   private reject?: (e: Error) => void;
   constructor(socket: net.Socket) {
-    socket.on("data", (chunk: Buffer) => { this.buffer = Buffer.concat([this.buffer, chunk]); this.pump(); });
+    socket.on("data", (chunk: Buffer) => { this.chunks.push(chunk); this.queued += chunk.length; this.pump(); });
     const fail = (error: Error) => { this.failure = error; this.reject?.(error); };
     socket.on("error", fail);
     socket.on("close", () => fail(new Error("The display closed the connection.")));
   }
   read(n: number): Promise<Buffer> {
     return new Promise((resolve, reject) => {
-      if (this.failure && this.buffer.length < n) { reject(this.failure); return; }
+      if (this.failure && this.buffer.length + this.queued < n) { reject(this.failure); return; }
       this.waiting = { n, resolve }; this.reject = reject; this.pump();
     });
   }
   private pump(): void {
-    if (!this.waiting || this.buffer.length < this.waiting.n) return;
+    if (!this.waiting || this.buffer.length + this.queued < this.waiting.n) return;
+    if (this.buffer.length < this.waiting.n) { this.buffer = Buffer.concat([this.buffer, ...this.chunks]); this.chunks = []; this.queued = 0; }
     const { n, resolve } = this.waiting;
     this.waiting = undefined;
     const out = this.buffer.subarray(0, n);
@@ -31,24 +35,53 @@ class Reader {
   }
 }
 
-/** One full frame from a VNC server (security type None), as packed RGB. Joins
- * as a shared client, so open viewers stay connected. */
+/** Joins a VNC server (security type None) as a shared client, so open viewers
+ * stay connected: the connection and the display's size. */
+async function join(socket: net.Socket): Promise<{ reader: Reader; width: number; height: number }> {
+  const reader = new Reader(socket);
+  const version = (await reader.read(12)).toString("latin1");
+  if (!/^RFB 003\.\d{3}\n$/.test(version)) throw new Error("Not a VNC display.");
+  socket.write("RFB 003.008\n");
+  const types = await reader.read((await reader.read(1))[0]!);
+  if (!types.includes(1)) throw new Error("The display requires a password.");
+  socket.write(Buffer.from([1]));
+  if ((await reader.read(4)).readUInt32BE(0) !== 0) throw new Error("The display refused the connection.");
+  socket.write(Buffer.from([1]));
+  const init = await reader.read(24);
+  await reader.read(init.readUInt32BE(20)); // desktop name
+  return { reader, width: init.readUInt16BE(0), height: init.readUInt16BE(2) };
+}
+
+/** Pointer and key events, as a viewer sends them; `wait` pauses between them. */
+export type InputEvent = { pointer: { x: number; y: number; buttons: number } } | { key: { keysym: number; down: boolean } } | { wait: number };
+
+/** Sends input to a display the way a viewer would, so it works for any VNC
+ * display. Returns the display's size; points outside it are refused. */
+export async function sendInput(socketPath: string, events: InputEvent[], timeoutMs = 10_000): Promise<{ width: number; height: number }> {
+  const socket = net.connect(socketPath);
+  const timer = setTimeout(() => socket.destroy(new Error("The display didn't answer in time.")), timeoutMs);
+  try {
+    const { width, height } = await join(socket);
+    for (const event of events) if ("pointer" in event && (event.pointer.x >= width || event.pointer.y >= height)) {
+      throw new Error(`${event.pointer.x},${event.pointer.y} is outside the app, which is ${width}×${height} pixels (the size of its screenshot).`);
+    }
+    for (const event of events) {
+      if ("wait" in event) { await new Promise((r) => setTimeout(r, event.wait)); continue; }
+      const message = Buffer.alloc(8);
+      if ("pointer" in event) { message[0] = 5; message[1] = event.pointer.buttons; message.writeUInt16BE(event.pointer.x, 2); message.writeUInt16BE(event.pointer.y, 4); }
+      else { message[0] = 4; message[1] = event.key.down ? 1 : 0; message.writeUInt32BE(event.key.keysym >>> 0, 4); }
+      await new Promise<void>((resolve, reject) => socket.write("pointer" in event ? message.subarray(0, 6) : message, (error) => error ? reject(error) : resolve()));
+    }
+    return { width, height };
+  } finally { clearTimeout(timer); socket.end(); }
+}
+
+/** One full frame from a VNC server, as packed RGB. */
 export async function captureFrame(socketPath: string, timeoutMs = 10_000): Promise<{ width: number; height: number; rgb: Buffer }> {
   const socket = net.connect(socketPath);
   const timer = setTimeout(() => socket.destroy(new Error("The display didn't answer in time.")), timeoutMs);
   try {
-    const reader = new Reader(socket);
-    const version = (await reader.read(12)).toString("latin1");
-    if (!/^RFB 003\.\d{3}\n$/.test(version)) throw new Error("Not a VNC display.");
-    socket.write("RFB 003.008\n");
-    const types = await reader.read((await reader.read(1))[0]!);
-    if (!types.includes(1)) throw new Error("The display requires a password.");
-    socket.write(Buffer.from([1]));
-    if ((await reader.read(4)).readUInt32BE(0) !== 0) throw new Error("The display refused the connection.");
-    socket.write(Buffer.from([1]));
-    const init = await reader.read(24);
-    const width = init.readUInt16BE(0), height = init.readUInt16BE(2);
-    await reader.read(init.readUInt32BE(20)); // desktop name
+    const { reader, width, height } = await join(socket);
     // 32 bpp true colour, little-endian, red at bit 16: bytes arrive B, G, R, X.
     const format = Buffer.from([0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]);
     const encodings = Buffer.from([2, 0, 0, 1, 0, 0, 0, 0]); // Raw only

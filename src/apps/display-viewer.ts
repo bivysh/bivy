@@ -4,13 +4,16 @@
 export const DISPLAY_SOCKET_PATH = "/__bivy/display";
 export const DISPLAY_STATS_PATH = "/__bivy/display-stats";
 export const NOVNC_PATH = "/__bivy/novnc/";
+/** The modifier apps paste with, as a keysym and noVNC key code: ⌘ on a Mac. */
+const PASTE_MODIFIER: Partial<Record<NodeJS.Platform, [number, string]>> = { darwin: [0xffeb, "MetaLeft"] };
 
 /** The page a display view serves on its own origin: noVNC's client streaming
  * the app's display. It asks the display to match its size in device pixels
  * (`scale` is what the display was started at), scales down when the display
  * is larger, reconnects while the app starts, carries the clipboard both ways
  * on a tap, gives phones a keyboard, and reports stream latency to Bivy. */
-export function displayViewer(nonce: string, name: string, scale: number): string {
+export function displayViewer(nonce: string, name: string, scale: number, platform: NodeJS.Platform = process.platform): string {
+  const [modifier, modifierCode] = PASTE_MODIFIER[platform] ?? [0xffe3, "ControlLeft"];
   const title = name.replace(/[<>&"]/g, (c) => `&#${c.charCodeAt(0)};`);
   return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content"><title>${title}</title>
 <style nonce="${nonce}">:root{color-scheme:light dark;font-family:system-ui,sans-serif}html,body{margin:0;height:100%;overflow:hidden;background:Canvas;color:CanvasText}
@@ -64,8 +67,8 @@ function connect(){
 connect();
 
 $("copy").onclick=async()=>{try{await navigator.clipboard.writeText(remote);$("copy").textContent="Copied";setTimeout(()=>{$("copy").hidden=true;},1500);}catch{$("copy").textContent="Couldn’t copy";}};
-// Paste: hand the text to the app's clipboard, then press Ctrl+V in it.
-const paste=text=>{if(!text)return;rfb.clipboardPasteFrom(text);rfb.sendKey(0xffe3,"ControlLeft",true);rfb.sendKey(0x76,"KeyV");rfb.sendKey(0xffe3,"ControlLeft",false);rfb.focus();};
+// Paste: hand the text to the app's clipboard, then press Ctrl+V (⌘V on a Mac) in it.
+const paste=text=>{if(!text)return;rfb.clipboardPasteFrom(text);rfb.sendKey(${modifier},"${modifierCode}",true);rfb.sendKey(0x76,"KeyV");rfb.sendKey(${modifier},"${modifierCode}",false);rfb.focus();};
 $("paste-open").onclick=async()=>{
   try{const text=await navigator.clipboard.readText();if(text){paste(text);return;}}catch{}
   // No clipboard access here: paste into a field instead.

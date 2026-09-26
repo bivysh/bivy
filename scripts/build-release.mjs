@@ -81,6 +81,8 @@ for (const file of ["hosted-endpoints.mjs", "hosted-endpoints.d.mts"]) {
 for (const [source, target] of [["packages/ui/tokens.css", "tokens.css"], ["packages/web/src/styles.css", "styles.css"]]) {
   fs.copyFileSync(path.join(root, source), path.join(root, "dist/apps", target));
 }
+// macOS desktop previews compile their helper from source on the Mac that runs them.
+fs.copyFileSync(path.join(root, "src/apps/macos-display.swift"), path.join(root, "dist/apps/macos-display.swift"));
 
 // The node is a pure data plane and no longer hosts the web UI, so the release
 // artifact ships no PWA bundle. The React/Vite app (@bivy/web) is built and
