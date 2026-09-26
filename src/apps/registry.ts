@@ -31,6 +31,8 @@ export interface RegisteredView {
   source?: { workspace: string; directory: string };
   /** A running display view's private VNC socket; the gateway streams it. */
   display?: string;
+  /** Its control socket, when the display can read and choose the app's menus. */
+  displayControl?: string;
   /** Device pixels per CSS pixel its display runs at (set when it starts). */
   displayScale?: number;
   /** The last viewer's stream measurements. */
