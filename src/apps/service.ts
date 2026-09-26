@@ -110,6 +110,7 @@ export class AppService {
       const entry = this.registry.getView(view.id);
       if (entry?.notes?.length) view.notes = structuredClone(entry.notes);
       if (entry?.stats) view.stats = structuredClone(entry.stats);
+      if (entry?.lastPath) view.lastPath = entry.lastPath;
     }
     return { apps, previewAvailable: available };
   }

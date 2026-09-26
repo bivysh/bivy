@@ -19,7 +19,9 @@ export type AppView =
       /** Notes left by people viewing a shared link. Untrusted text. */
       notes?: ReviewerNote[];
       /** How a desktop app's stream performed in the last viewer's browser. */
-      stats?: DisplayStats }
+      stats?: DisplayStats;
+      /** The page last open in the preview, e.g. "/checkout". */
+      lastPath?: string }
   | { id: string; kind: "terminal"; name: string; command: string; args: string[] };
 export interface SessionApp {
   id: string;

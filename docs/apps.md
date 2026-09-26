@@ -463,6 +463,16 @@ own bottom bar.
   takes a baseline the first time a view is opened, and one after each turn that
   changes files, of the page last viewed. The last four are kept in memory.
 
+**Sharing into a session.** In the installed app (Android and desktop Chrome),
+Bivy is in the system share sheet for text, links and images. A shared
+screenshot waits on the device (the service worker keeps it in Cache Storage;
+nothing is uploaded) while you pick a session. Sessions with an app preview
+show it, and the last page viewed. Picking one opens it with the image as an
+ordinary composer attachment and a draft line naming the preview — "Shared a
+screenshot — compare it with the Storefront preview (/checkout)." — which you
+edit or replace. Nothing is sent until you send it. (iOS: the "Send to Bivy"
+Shortcut shares text; a native share extension is separate work.)
+
 These work through a small inspector script that the gateway adds to the app's
 HTML page loads, served from the app's own origin (`/__bivy/inspector.js`). The
 gateway requests uncompressed HTML for page loads, and adds that exact script URL

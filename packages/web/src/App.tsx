@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { deriveActivation, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type SessionSummary } from "@bivy/core";
+import { deriveActivation, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionSummary } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -30,7 +30,9 @@ import { runtimeSupportsTerminalTakeover } from "./terminalTakeover.js";
 import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
 import { SessionChangesSheet, countUniqueEditedFiles } from "./components/SessionChangesSheet.js";
 import { ShareDestinationSheet } from "./components/ShareDestinationSheet.js";
-import { clearPendingShare, peekPendingShare, seedSessionDraft } from "./shareTarget.js";
+import { clearPendingShare, peekPendingShare, peekPendingShareFiles, previewShareLine, seedSessionDraft } from "./shareTarget.js";
+import { dropShare, readShare, type SharedItems } from "./shareInbox.js";
+import { afterModalHistory } from "./modalHistory.js";
 import { usePreviewLanding } from "./usePreviewLanding.js";
 import { ForkProgressDialog } from "./components/ForkProgressDialog.js";
 import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
@@ -141,6 +143,28 @@ export function App() {
   // / main.tsx); the destination sheet below lets the user pick where it goes.
   // Shares always arrive via a full page load, so a mount-time read is enough.
   const [pendingShare, setPendingShare] = useState<string | null>(() => peekPendingShare(sessionStorage));
+  const listMachineApps = useCallback(() => controller.listMachineApps(), []);
+  // Shared images wait in the device's share inbox (shareInbox.ts) until placed.
+  const [sharedFiles, setSharedFiles] = useState<{ id: string; items: SharedItems } | null>(null);
+  useEffect(() => {
+    const id = peekPendingShareFiles(sessionStorage);
+    if (!id) return;
+    void readShare(id).then((items) => { if (items) setSharedFiles({ id, items }); else clearPendingShare(sessionStorage); }, () => clearPendingShare(sessionStorage));
+  }, []);
+  // Images go to the chosen session's composer once it's showing (text can be
+  // stored ahead of time, attachments can't): retried until a composer takes them.
+  const [shareDelivery, setShareDelivery] = useState<{ sessionId: string | null; text: string; attachments: PromptAttachment[]; inbox: string } | null>(null);
+  useEffect(() => {
+    if (!shareDelivery || (state.activeSession.activeSessionId ?? null) !== shareDelivery.sessionId) return;
+    let tries = 0;
+    let timer: ReturnType<typeof setTimeout>;
+    const attempt = () => {
+      if (controller.prefillComposer(shareDelivery.text, shareDelivery.attachments)) { void dropShare(shareDelivery.inbox); setShareDelivery(null); }
+      else if (++tries < 50) timer = setTimeout(attempt, 100);
+    };
+    timer = setTimeout(attempt, 0);
+    return () => clearTimeout(timer);
+  }, [shareDelivery, state.activeSession.activeSessionId]);
   const artifacts = useMemo(() => deriveArtifacts(state.activeSession.transcript), [state.activeSession.transcript]);
   const apps = useMemo(() => deriveApps(state.activeSession.transcript), [state.activeSession.transcript]);
   // The node's live count also covers adopted servers and detected ones not
@@ -1288,24 +1312,36 @@ export function App() {
       )}
 
       {previewLanding && <div className="banner" data-tone="accent" role="status">{previewLanding}</div>}
-      {pendingShare && (
+      {(pendingShare || sharedFiles) && (
         <ShareDestinationSheet
-          text={pendingShare}
+          text={[sharedFiles?.items.text, pendingShare].filter(Boolean).join("\n\n")}
+          images={sharedFiles?.items.attachments}
           sessions={state.sessionIndex.sessions}
-          onDeliver={(target: SessionSummary | null) => {
-            const text = pendingShare;
+          listApps={listMachineApps}
+          onDeliver={(target: SessionSummary | null, preview) => {
+            const files = sharedFiles;
+            const text = [previewShareLine(files?.items.attachments.length ?? 0, preview), files?.items.text, pendingShare].filter(Boolean).join("\n\n");
             setPendingShare(null);
+            setSharedFiles(null);
             clearPendingShare(sessionStorage);
+            if (files?.items.attachments.length) {
+              // Real attachments, through the composer like any image the user adds.
+              setShareDelivery({ sessionId: target?.sessionId ?? null, text, attachments: files.items.attachments, inbox: files.id });
+              // Once the sheet's history step is done, or it would undo this.
+              if (target) afterModalHistory(() => controller.openSessionOnNode(target.sessionId, target.path, target.nodeId));
+              else if (state.activeSession.activeSessionId) afterModalHistory(() => controller.newSession());
+              return;
+            }
             if (target) {
               // Seed the stored draft BEFORE opening: the Composer reloads the
               // draft on session switch, so the shared text is waiting there.
               seedSessionDraft(localStorage, target.sessionId, text);
-              controller.openSessionOnNode(target.sessionId, target.path, target.nodeId);
+              afterModalHistory(() => controller.openSessionOnNode(target.sessionId, target.path, target.nodeId));
             } else if (state.activeSession.activeSessionId) {
               // "New session" picked while a real session is active (a reload
               // restored the stash mid-session): seed the new draft, then go.
               seedSessionDraft(localStorage, null, text);
-              controller.newSession();
+              afterModalHistory(() => controller.newSession());
             } else if (!controller.prefillComposer(text)) {
               // No composer mounted to receive it — persist to the new draft.
               seedSessionDraft(localStorage, null, text);

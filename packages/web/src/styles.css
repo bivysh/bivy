@@ -3088,6 +3088,16 @@ select.picker-search { appearance: auto; }
 .apps-foot { margin: 0; padding: 0 var(--space-1); color: var(--muted); font-size: var(--text-xs); line-height: var(--lh-xs); }
 /* Peek: an app preview framed in a drawer over the chat (PreviewPeek.tsx). */
 .preview-peek { display: block; inline-size: 100%; block-size: 100%; border: 0; border-radius: var(--radius-md); background: var(--bg); }
+/* Share-sheet landing (ShareDestinationSheet.tsx): what was shared, then one
+   row per destination — AppRow, with the session's app preview when it has one. */
+.share-sheet { display: flex; flex-direction: column; gap: var(--space-3); }
+.share-shared { display: flex; flex-direction: column; gap: var(--space-2); margin: 0; }
+.share-thumbs { display: flex; gap: var(--space-2); overflow-x: auto; }
+.share-thumb { flex: none; block-size: 96px; inline-size: auto; max-inline-size: 160px; object-fit: cover; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-2); }
+.share-dests { display: flex; flex-direction: column; gap: var(--space-1); }
+.share-dest { display: block; inline-size: 100%; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); color: inherit; font: inherit; text-align: start; cursor: pointer; }
+.share-dest:hover { background: var(--surface-2); }
+.share-dest .app-row { min-block-size: 44px; }
 .preview-peek-stage { position: relative; block-size: 100%; }
 /* Point and speak: the recording bar floats over the top of the preview while
    the finger stays on the shell's mic, so nothing under it moves. */

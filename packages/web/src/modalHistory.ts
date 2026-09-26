@@ -15,6 +15,20 @@ export interface ModalHistoryHandle {
 const historyLayers: HistoryLayer[] = [];
 const waitingHistoryLayers: HistoryLayer[] = [];
 let traversing: HistoryLayer | undefined;
+const settled: Array<() => void> = [];
+
+function flushSettled(): void {
+  if (traversing || historyLayers.some((layer) => layer.closing)) return;
+  for (const fn of settled.splice(0)) fn();
+}
+
+/** Runs `fn` once a closing sheet's history step has finished. Navigating
+ *  from a sheet's pick before then is undone when that step goes back. */
+export function afterModalHistory(fn: () => void): void {
+  settled.push(fn);
+  // After React has unmounted the sheet (and its close has begun).
+  setTimeout(flushSettled, 0);
+}
 
 // A Back traversal is asynchronous. Keep ownership of its sentinel until
 // popstate arrives, even if React unmounts the overlay in the meantime. Otherwise
@@ -34,6 +48,7 @@ function drainModalHistory(): void {
     historyLayers.push(layer);
   }
   if (historyLayers.at(-1)?.closing) drainModalHistory();
+  else flushSettled();
 }
 
 // Imported by the router so this runs before any route listeners. Window

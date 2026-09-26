@@ -17,6 +17,7 @@ import {
   precacheAndRoute,
 } from "workbox-precaching";
 import { NavigationRoute, registerRoute } from "workbox-routing";
+import { receiveShare } from "./shareInbox.js";
 
 declare const self: ServiceWorkerGlobalScope & typeof globalThis;
 
@@ -38,6 +39,14 @@ registerRoute(
     denylist: [/^\/api/, /^\/ws/, /^\/auth/, /^\/janitor(?:\/|$)/],
   }),
 );
+
+// Share target (see vite.config.ts): a multipart POST from the OS share sheet.
+// Keep what was shared on this device and open the landing; nothing is uploaded.
+self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
+  if (event.request.method !== "POST" || url.origin !== self.location.origin || url.pathname !== "/share") return;
+  event.respondWith(receiveShare(event.request, caches).then((to) => Response.redirect(to, 303), () => Response.redirect("/share", 303)));
+});
 
 // `registerType: 'prompt'` — never activate a waiting worker mid-session. The
 // page posts SKIP_WAITING when the user opts into the "Update ready" prompt.

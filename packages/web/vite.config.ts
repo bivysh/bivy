@@ -118,10 +118,13 @@ const config: UserConfig = {
         // Settings → Share to Bivy). Shared payloads arrive as a GET navigation
         // to /share, which packages/web/src/shareTarget.ts folds into the
         // new-session composer draft.
+        // POST, so screenshots come too; the service worker keeps them on the
+        // device (shareInbox.ts) and sends the app to the GET landing.
         share_target: {
           action: "/share",
-          method: "GET",
-          params: { title: "title", text: "text", url: "url" },
+          method: "POST",
+          enctype: "multipart/form-data",
+          params: { title: "title", text: "text", url: "url", files: [{ name: "files", accept: ["image/*"] }] },
         },
         icons: [
           { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
