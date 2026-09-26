@@ -185,6 +185,8 @@ test("inspector reports console errors and pointed elements to the pill", async 
     await content.getByRole("button", { name: "Add transaction" }).click();
     const draftBox = page.getByRole("textbox", { name: "What should change?" });
     await expect(draftBox).toBeFocused();
+    // Under 16px, iOS zooms the shell on focus and it stays zoomed.
+    await expect(draftBox).toHaveCSS("font-size", "16px");
     const context = await page.locator("#draft-context").textContent();
     expect(context).toContain('#save ("Add transaction")');
     expect(context).toContain("Ledger failed to load totals");
@@ -192,11 +194,12 @@ test("inspector reports console errors and pointed elements to the pill", async 
     // Pointing swallowed the tap: the app's own handler never ran.
     await page.getByRole("button", { name: "Cancel" }).click();
     await content.getByRole("button", { name: "Add transaction" }).click();
-    // iOS sends no click for a tap on a non-clickable element: pointer events alone pick.
+    // iOS sends no click for a tap on a non-clickable element, and in a zoomed
+    // page its coordinates miss: the pointer events' own target picks.
     await page.getByRole("button", { name: "Point" }).click();
     await content.getByRole("heading", { name: "Ledger" }).evaluate((el) => {
-      const r = el.getBoundingClientRect(), at = { bubbles: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 };
-      el.dispatchEvent(new PointerEvent("pointerdown", at)); el.dispatchEvent(new PointerEvent("pointerup", at));
+      const offscreen = { bubbles: true, clientX: -500, clientY: -500 };
+      el.dispatchEvent(new PointerEvent("pointerdown", offscreen)); el.dispatchEvent(new PointerEvent("pointerup", offscreen));
     });
     await expect(page.locator("#draft-context")).toContainText('main > h1 ("Ledger")');
     await page.getByRole("button", { name: "Cancel" }).click();

@@ -55,10 +55,13 @@ const hover=e=>{
 };
 const pick=e=>{
   swallow(e);
-  const el=document.elementFromPoint(e.clientX,e.clientY)||target;stop();
+  // The event's own target, not a coordinate lookup: iOS gets elementFromPoint
+  // wrong in a frame of a zoomed page. Found nothing? Keep pointing.
+  const el=e.target instanceof Element?e.target:document.elementFromPoint(e.clientX,e.clientY)||target;
+  if(!el)return;stop();
   // Keep eating the click (and iOS's delayed mouse events) this tap still fires.
   listen(true,aftermath);setTimeout(()=>listen(false,aftermath),500);
-  if(!el||el===host){onPicked({type:'picked',cancelled:true});return;}const r=el.getBoundingClientRect();
+  if(el===host){onPicked({type:'picked',cancelled:true});return;}const r=el.getBoundingClientRect();
   onPicked({type:'picked',selector:selector(el),tag:el.localName,text:(el.innerText||el.getAttribute('aria-label')||el.getAttribute('alt')||'').trim().replace(/\\s+/g,' ').slice(0,200),
     rect:{x:Math.round(r.left),y:Math.round(r.top),width:Math.round(r.width),height:Math.round(r.height)},
     viewport:{width:innerWidth,height:innerHeight},path:location.pathname+location.search+location.hash});
