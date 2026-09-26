@@ -236,6 +236,61 @@ test("preview grants and browser sessions expire; unavailable services return an
     const access = await grant(gateway, port, service.views[0].id);
     const response = await request(port, access.url.host, "/", { headers: { cookie: access.cookie } });
     assert.equal(response.status, 502); assert.match(response.body, /Start it on the registered port/);
+    // A page load gets a self-recovering page instead of a blank frame; its
+    // marker is what recovery polling watches, so a restarted server clears it.
+    const page = await request(port, access.url.host, "/", { headers: { cookie: access.cookie, "sec-fetch-dest": "iframe" } });
+    assert.equal(page.status, 502); assert.match(page.body, new RegExp(`Nothing is answering on port ${deadPort}`));
+    assert.ok(page.headers["x-bivy-upstream-down"]);
+    assert.match(String(page.headers["content-security-policy"]), new RegExp(`frame-ancestors ${gateway.shellOrigin(service.views[0].id)};`));
+    const restarted = http.createServer((_req, res) => res.end("back")); restarted.listen(deadPort, "127.0.0.1"); await once(restarted, "listening");
+    try {
+      const probe = await request(port, access.url.host, "/", { method: "HEAD", headers: { cookie: access.cookie } });
+      assert.equal(probe.status, 200); assert.equal(probe.headers["x-bivy-upstream-down"], undefined);
+    } finally { restarted.close(); }
+  } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("a turn that changes files re-takes static snapshots and wakes the shell's revision poll", async () => {
+  const registry = new AppRegistry(); const gateway = new AppGateway(registry, "https://{app}.preview.example.net");
+  const dir = workspace(); const port = await listen(gateway.server);
+  try {
+    const id = registry.publish("s", dir, staticManifest).views[0].id;
+    const { url, cookie } = await grant(gateway, port, id);
+    const shell = gateway.shellOrigin(id);
+    const poll = request(port, url.host, "/__bivy/revision?after=0", { headers: { cookie } });
+    // A turn that leaves the output unchanged doesn't reload anyone.
+    assert.deepEqual(registry.touch("s"), []);
+    fs.writeFileSync(path.join(dir, "dist/index.html"), "<h1>Rebuilt</h1>");
+    assert.deepEqual(registry.touch("other"), []);
+    assert.deepEqual(registry.touch("s"), [id]);
+    const woke = await poll;
+    assert.equal(woke.status, 200); assert.equal(woke.headers["access-control-allow-origin"], shell);
+    assert.deepEqual(JSON.parse(woke.body), { revision: 1, path: "/" });
+    assert.equal((await request(port, url.host, "/", { headers: { cookie } })).body, "<h1>Rebuilt</h1>");
+    // A broken build keeps serving the last good snapshot.
+    fs.rmSync(path.join(dir, "dist/index.html"));
+    assert.deepEqual(registry.touch("s"), []);
+    assert.equal((await request(port, url.host, "/", { headers: { cookie } })).body, "<h1>Rebuilt</h1>");
+    assert.equal((await request(port, url.host, "/__bivy/revision?after=0")).status, 401);
+  } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("static page loads fall back for client-side routes; assets still 404", async () => {
+  const registry = new AppRegistry(); const gateway = new AppGateway(registry, "https://{app}.preview.example.net");
+  const dir = workspace(); const port = await listen(gateway.server);
+  try {
+    const id = registry.publish("s", dir, staticManifest).views[0].id;
+    const { url, cookie } = await grant(gateway, port, id);
+    const page = { cookie, "sec-fetch-dest": "iframe" };
+    assert.equal((await request(port, url.host, "/invoices/42", { headers: page })).body, "<h1>Preview</h1>");
+    assert.equal((await request(port, url.host, "/invoices/42", { headers: { cookie, accept: "text/html" } })).status, 200);
+    assert.equal((await request(port, url.host, "/app.js", { headers: page })).status, 404);
+    assert.equal((await request(port, url.host, "/invoices/42", { headers: { cookie, "sec-fetch-dest": "empty" } })).status, 404);
+    fs.writeFileSync(path.join(dir, "dist/404.html"), "<h1>Not here</h1>");
+    const withNotFound = registry.publish("s", dir, staticManifest).views[0].id;
+    const second = await grant(gateway, port, withNotFound);
+    const missing = await request(port, second.url.host, "/nope", { headers: { cookie: second.cookie, "sec-fetch-dest": "document" } });
+    assert.equal(missing.status, 404); assert.equal(missing.body, "<h1>Not here</h1>");
   } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

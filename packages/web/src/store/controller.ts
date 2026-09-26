@@ -1563,7 +1563,7 @@ export class AppController {
   }
 
   /** Apps use the same authenticated command path over direct HTTP or relay. */
-  async appCommand(command: "apps.list" | "apps.open" | "apps.share" | "apps.revoke" | "apps.remove", sessionId: string, fields: { appId?: string; viewId?: string; returnTo?: string } = {}): Promise<ServerEvent> {
+  async appCommand(command: "apps.list" | "apps.offers" | "apps.adopt" | "apps.open" | "apps.share" | "apps.revoke" | "apps.remove", sessionId: string, fields: { appId?: string; viewId?: string; returnTo?: string; port?: number } = {}): Promise<ServerEvent> {
     const { connection } = this.store.getState();
     if (connection.status !== "online") throw new Error("Connect to the machine to open its apps.");
     const result = await this.awaitAck({ kind: command, sessionId, ...fields }, 30_000);

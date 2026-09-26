@@ -18,6 +18,11 @@
 // link. Once the shell renders, App shows a destination sheet
 // (ShareDestinationSheet) — new session by default, or any recent session —
 // and the choice lands in that session's composer draft.
+//
+// A `session=<id>` param names the destination up front (e.g. the app preview's
+// "Ask agent to fix"): the text goes straight into that session's draft and the
+// landing opens the session. Like every share, it only prefills — nothing is
+// sent until the user sends it.
 
 import { readComposerDraft, writeComposerDraft, type DraftStorage } from "./composerDraft.js";
 
@@ -56,9 +61,15 @@ export function mergeSharedText(existing: string, shared: string): string {
  * destination sheet), or null for every other path. Pure over its inputs so
  * the whole flow is testable without a DOM.
  */
-export function applyShareTarget(pathname: string, search: string, pending: DraftStorage): string | null {
+export function applyShareTarget(pathname: string, search: string, pending: DraftStorage, drafts: DraftStorage): string | null {
   if (pathname.replace(/\/+$/, "") !== SHARE_PATH) return null;
-  const shared = sharedDraftText(new URLSearchParams(search));
+  const params = new URLSearchParams(search);
+  const shared = sharedDraftText(params);
+  const session = params.get("session") ?? "";
+  if (/^[A-Za-z0-9_-]{1,128}$/.test(session) && session !== "new") {
+    if (shared) seedSessionDraft(drafts, session, shared);
+    return `/sessions/${session}`;
+  }
   if (shared) {
     // A share arriving before an earlier one was placed appends to it — both
     // payloads reach whichever destination the user finally picks.
@@ -92,7 +103,7 @@ export function seedSessionDraft(drafts: DraftStorage, sessionId: string | null,
  *  one-shot pending-share read sees the stash and every later parseRoute()
  *  sees `/sessions/new` instead of `/share`. */
 export function consumeShareTarget(): void {
-  const redirect = applyShareTarget(location.pathname, location.search, sessionStorage);
+  const redirect = applyShareTarget(location.pathname, location.search, sessionStorage, localStorage);
   // Drop the share query entirely (routePath() preserves location.search, so it
   // must not survive) but keep the hash — sign-in links land with a #payload.
   if (redirect) history.replaceState(null, "", redirect + location.hash);

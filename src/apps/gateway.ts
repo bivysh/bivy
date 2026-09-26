@@ -19,7 +19,27 @@ const MIME: Record<string, string> = {
 const COOKIE = "__Host-bivy-preview";
 const OPEN_PATH = "/__bivy/open";
 const REDEEM_PATH = "/__bivy/redeem";
+const REVISION_PATH = "/__bivy/revision";
 const HOUR = 60 * 60_000;
+/** Marks gateway-generated "server not answering" responses, so recovery
+ * polling can tell them apart from an app's own 502s. */
+const UPSTREAM_DOWN = "x-bivy-upstream-down";
+
+/** A top-level or framed page load. Browsers without Fetch Metadata still ask for HTML. */
+function isPageLoad(req: IncomingMessage): boolean {
+  const dest = req.headers["sec-fetch-dest"];
+  return req.method === "GET" && (dest ? ["document", "iframe"].includes(dest) : /text\/html/.test(req.headers.accept ?? ""));
+}
+
+/** Served on the app's origin in place of a blank frame. It reloads itself once
+ * the server answers, and tells a framing shell so it can offer next steps. */
+function upstreamDownPage(nonce: string, port: number, shellOrigin: string): string {
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Waiting for the app server</title>
+<style nonce="${nonce}">:root{color-scheme:light dark;font-family:system-ui,sans-serif}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;box-sizing:border-box;text-align:center}main{max-width:32rem}h1{font-size:1.25rem;margin:0 0 8px}p{margin:0;opacity:.75;line-height:1.5}</style>
+<main><h1>Nothing is answering on port ${port}</h1><p role="status">The app server stopped or hasn’t started yet. This page reloads by itself when it’s back.</p></main>
+<script nonce="${nonce}">const tell=state=>{if(parent!==window)parent.postMessage({type:'bivy:upstream',state,port:${port}},${JSON.stringify(shellOrigin)});};tell('down');
+const poll=async()=>{try{const r=await fetch(location.href,{method:'HEAD',cache:'no-store'});if(!r.headers.has('${UPSTREAM_DOWN}')){tell('up');location.reload();return;}}catch{}setTimeout(poll,2000);};setTimeout(poll,2000);</script></html>`;
+}
 /** Copied links are reusable until revoked, capped so a forgotten one lapses. */
 export const SHARE_TTL = 24 * HOUR;
 const HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
@@ -161,7 +181,7 @@ export class AppGateway {
     const origin = this.shellOrigin(id);
     const nonce = randomBytes(16).toString("hex");
     res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'self' 'nonce-${nonce}'; connect-src 'self'; frame-src ${this.origin(id)}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`);
+    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'self' 'nonce-${nonce}'; connect-src 'self' ${this.origin(id)}; frame-src ${this.origin(id)}; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`);
     if (req.method === "GET" && this.styles.has(req.url ?? "")) {
       res.setHeader("Content-Type", "text/css; charset=utf-8");
       res.end(this.styles.get(req.url!)); return;
@@ -222,28 +242,66 @@ export class AppGateway {
     if (req.headers["sec-fetch-dest"] === "serviceworker") { res.writeHead(403); res.end(); return; }
     if (!req.url?.startsWith("/") || req.url.startsWith("//")) { res.writeHead(400); res.end(); return; }
     this.track(id, req.socket, expires);
+    if (req.url.startsWith(`${REVISION_PATH}?`) && req.method === "GET") { this.revision(req, res, entry); return; }
+    // Remember the framed page so a turn reload lands where the user was.
+    if (req.method === "GET" && req.headers["sec-fetch-dest"] === "iframe" && req.url.length <= 2048) entry.lastPath = req.url;
     if (entry.target.kind === "static") {
       if (!["GET", "HEAD"].includes(req.method ?? "")) { res.writeHead(405, { Allow: "GET, HEAD" }); res.end(); return; }
       let file: string;
       try { file = decodeURIComponent(req.url.split("?")[0]); } catch { res.writeHead(400); res.end(); return; }
       if (file.endsWith("/")) file += "index.html";
-      const data = entry.target.files.get(file);
+      let data = entry.target.files.get(file);
+      let status = 200;
+      // Client-side routes: an extensionless page load falls back like common
+      // static hosts do — to 404.html (status 404) when present, else index.html.
+      if (!data && !path.extname(file) && isPageLoad(req)) {
+        const notFound = entry.target.files.get("/404.html");
+        file = notFound ? "/404.html" : "/index.html";
+        data = notFound ?? entry.target.files.get(file);
+        if (notFound) status = 404;
+      }
       if (!data) { res.writeHead(404); res.end("File not found."); return; }
       const headers = responseHeaders({}, this.shellOrigin(id));
       headers["content-type"] = MIME[path.extname(file).toLowerCase()] || "application/octet-stream";
-      res.writeHead(200, { ...headers, "content-length": data.length });
+      res.writeHead(status, { ...headers, "content-length": data.length });
       res.end(req.method === "HEAD" ? undefined : data); return;
     }
     if (entry.target.kind !== "service") { res.writeHead(404); res.end(); return; }
-    const upstream = http.request({ hostname: "127.0.0.1", port: entry.target.port, path: req.url, method: req.method, headers: upstreamHeaders(req, this.origin(id)) }, (response) => {
+    const port = entry.target.port;
+    const upstream = http.request({ hostname: "127.0.0.1", port, path: req.url, method: req.method, headers: upstreamHeaders(req, this.origin(id)) }, (response) => {
       res.writeHead(response.statusCode ?? 502, responseHeaders(response.headers, this.shellOrigin(id)));
       response.on("error", () => res.destroy());
       response.pipe(res);
     });
     upstream.setTimeout(60_000, () => upstream.destroy(new Error("Preview timed out")));
-    upstream.on("error", () => { if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain" }); res.end("App server unavailable. Start it on the registered port, then reload."); });
+    upstream.on("error", () => {
+      if (res.headersSent) { res.destroy(); return; }
+      if (!isPageLoad(req)) { res.writeHead(502, { "content-type": "text/plain", [UPSTREAM_DOWN]: "1" }); res.end("App server unavailable. Start it on the registered port, then reload."); return; }
+      const nonce = randomBytes(16).toString("hex");
+      res.writeHead(502, { "content-type": "text/html; charset=utf-8", [UPSTREAM_DOWN]: "1", "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'nonce-${nonce}'; connect-src 'self'; frame-ancestors ${this.shellOrigin(id)}; base-uri 'none'` });
+      res.end(upstreamDownPage(nonce, port, this.shellOrigin(id)));
+    });
     res.on("close", () => upstream.destroy());
     req.pipe(upstream);
+  }
+  /** Long poll from the trusted shell (same-site, credentialed CORS): answers
+   * when the view's revision differs from `after`, or after 25 seconds. */
+  private revision(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): void {
+    const id = entry.view.id;
+    const after = Number(new URL(req.url!, "http://gateway").searchParams.get("after"));
+    let timer: NodeJS.Timeout | undefined;
+    const onRevision = (viewId: string) => { if (viewId === id) send(); };
+    const cleanup = () => { clearTimeout(timer); this.registry.off("revision", onRevision); };
+    const send = () => {
+      cleanup();
+      if (res.writableEnded || res.destroyed) return;
+      res.writeHead(200, { "content-type": "application/json", "access-control-allow-origin": this.shellOrigin(id), "access-control-allow-credentials": "true", vary: "Origin" });
+      res.end(JSON.stringify({ revision: entry.revision, path: entry.lastPath ?? "/" }));
+    };
+    if (entry.revision !== after) { send(); return; }
+    this.registry.on("revision", onRevision);
+    timer = setTimeout(send, 25_000);
+    res.on("close", cleanup);
   }
   private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const entry = this.entry(req);
@@ -252,7 +310,8 @@ export class AppGateway {
       socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); return;
     }
     this.track(entry.view.id, socket, expires);
-    const upstream = http.request({ hostname: "127.0.0.1", port: entry.target.port, path: req.url, headers: { ...upstreamHeaders(req, this.origin(entry.view.id)), connection: "Upgrade", upgrade: "websocket" } });
+    const port = entry.target.port;
+    const upstream = http.request({ hostname: "127.0.0.1", port, path: req.url, headers: { ...upstreamHeaders(req, this.origin(entry.view.id)), connection: "Upgrade", upgrade: "websocket" } });
     upstream.setTimeout(10_000, () => upstream.destroy());
     upstream.on("upgrade", (response, peer, upstreamHead) => {
       peer.setTimeout(0);

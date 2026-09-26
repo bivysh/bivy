@@ -39,6 +39,19 @@ bivy app list --session <session-id>
 bivy app remove <app-id> --session <session-id>
 ```
 
+### Detected servers (no manifest)
+
+A manifest is optional for a single live server. When a process whose working
+directory is inside the session workspace listens on loopback (`127.0.0.1`,
+`::1`) or all interfaces, session menu → **Apps** lists it under **Running in
+this workspace**. Tapping **Preview** publishes it as a one-view app and opens
+it. Detection grants nothing on its own: access starts only when someone taps,
+and the node re-checks that the port is still a workspace listener before it
+publishes (`apps.offers` / `apps.adopt`). Detection reads `/proc` on Linux and
+uses `lsof` on macOS. It sees only processes owned by the node's user and ports
+from 1024 up. Use a manifest to name views, add terminals or publish static
+snapshots.
+
 Inside an agent session, `--session` defaults to the same session environment used
 by `bivy attach`. No per-agent adapter or special model tool is required.
 `bivy app --help` describes the contract. The CLI prints JSON, including app and
@@ -77,7 +90,10 @@ Replace the web source with:
 The CLI resolves directories relative to the manifest; direct API callers use
 paths relative to the session workspace. The directory must be inside that
 workspace and contain `index.html`. Bivy snapshots its bytes at publication, so
-later edits do not silently change the published view. Publish again to update.
+edits in the middle of a turn never change the published view. When an agent turn
+finishes with file changes, Bivy re-takes the snapshot and open previews reload,
+returning to the page you were on. A build that no longer produces `index.html`
+keeps the last good snapshot. Publish again to update between turns.
 Hidden files and `node_modules` are excluded; symlinks and special files are
 rejected. Limits: 25 MiB / 2,000 files per snapshot, 100 MiB total static data,
 50 apps per node, and 8 views per app. Only publish a dedicated output directory,
@@ -90,8 +106,15 @@ keep the service bound to `127.0.0.1`. HTTP bodies and WebSocket upgrades are
 forwarded without an app-specific adapter. Root-relative routes, forms, cookies,
 and WebSocket connections can use the view's own origin; hardcoded localhost URLs
 and absolute localhost redirects must be fixed in the application's configuration.
-Long-lived HTTP streams time out after 60 seconds of inactivity. This initial
-static server does not provide SPA fallback, range requests or directory listings.
+Long-lived HTTP streams time out after 60 seconds of inactivity. If nothing is
+answering on the port, the preview shows **Nothing is answering on port N**
+instead of a blank frame. It reloads by itself once the server is back, and
+**Ask agent to fix** opens the session with a drafted request (nothing is sent
+until you send it). Service previews also reload after an agent turn that changed
+files, for servers without hot reload. Static views
+serve client-side routes: an extensionless page load that matches no file gets
+`404.html` (with status 404) if the snapshot has one, otherwise `index.html`.
+The static server does not provide range requests or directory listings.
 
 ## Automatic web preview delivery
 

@@ -26,6 +26,7 @@ for (const theme of themes) {
       import React from 'react';
       import { createRoot } from 'react-dom/client';
       import { ChatView } from '/src/components/ChatView.tsx';
+      import { AppsSheet } from '/src/components/AppsSheet.tsx';
       import { controller } from '/src/store/controller.ts';
       import '/@fs/${path.resolve("packages/ui/tokens.css")}';
       import '/src/styles.css';
@@ -44,11 +45,15 @@ for (const theme of themes) {
         window.commands.push({kind, sessionId, ...fields});
         await new Promise(r => setTimeout(r, 150));
         if(window.mode === 'error') throw Error('Machine unavailable. Reconnect and try again.');
+        if(kind === 'apps.offers') return {offers:window.mode === 'ready' ? [{port:5173,pid:42,command:'node vite --port 5173 --host 127.0.0.1'}] : []};
+        if(kind === 'apps.adopt') return {app:{id:'b',sessionId:'s',name:'node vite · :5173',createdAt:1,views:[{id:'adopted',kind:'web',name:'Port 5173',source:'service'}]}};
         if(kind === 'apps.list') return {apps:window.mode === 'empty' ? [] : [app], previewAvailable:window.mode !== 'unconfigured'};
-        if(kind === 'apps.open') return fields.viewId === 'web' ? {kind:'web',url:'https://random.preview.example.net/__bivy/open#ticket'} : {kind:'terminal',termId:'test-terminal'};
+        if(kind === 'apps.open') return fields.viewId === 'term' ? {kind:'terminal',termId:'test-terminal'} : {kind:'web',url:'https://random.preview.example.net/__bivy/open#ticket'};
         if(kind === 'apps.share') return {url:'https://random.preview.example.net/__bivy/open#shared', expiresAt:Date.now() + 24 * 3600000};
         return {ok:true};
       };
+      // The session menu opens the sheet unscoped, which also lists detected servers.
+      window.showSheet = () => createRoot(document.body.appendChild(document.createElement('div'))).render(React.createElement(AppsSheet, {sessionId:'s', onClose(){}}));
       const handlers = new Set();
       controller.onTerminal = fn => {handlers.add(fn); return () => handlers.delete(fn);};
       window.terminalEvent = event => handlers.forEach(fn => fn(event));
@@ -116,7 +121,7 @@ for (const theme of themes) {
     await expect(page.getByRole("alert")).toContainText("Machine unavailable");
     await page.evaluate(() => { (window as any).mode = "empty"; });
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
-    await expect(page.getByText(/No apps published yet/)).toBeVisible();
+    await expect(page.getByText(/No apps yet/)).toBeVisible();
     await page.evaluate(() => { (window as any).mode = "unconfigured"; });
     await page.getByRole("button", { name: "Refresh", exact: true }).click();
     await expect(page.getByRole("button", { name: "Open preview" })).toBeDisabled();
@@ -124,6 +129,17 @@ for (const theme of themes) {
     await expect(page.getByText("Bivy’s preview service is unavailable.", { exact: false })).toBeVisible();
     await expect(page.getByText(/preview domain configured/)).toHaveCount(0);
     await page.screenshot({ path: testInfo.outputPath(`apps-unavailable-${theme}.png`), fullPage: true });
+    // A server the agent started is one tap from a preview: adopt, then open.
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("dialog", { name: "Session apps" })).toHaveCount(0);
+    await page.evaluate(() => { (window as any).mode = "ready"; (window as any).showSheet(); });
+    await expect(page.getByRole("region", { name: "Running in this workspace" })).toContainText("node vite --port 5173");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`apps-detected-${theme}.png`), fullPage: true });
+    const adopted = page.waitForEvent("popup");
+    await page.getByRole("button", { name: "Preview port 5173" }).click();
+    await expect((await adopted).getByRole("heading", { name: "Preview opened" })).toBeVisible();
+    expect(await page.evaluate(() => (window as any).commands.filter((c: any) => c.kind === "apps.adopt" || c.kind === "apps.open").slice(-2).map((c: any) => [c.kind, c.port ?? c.viewId]))).toEqual([["apps.adopt", 5173], ["apps.open", "adopted"]]);
     expect(errors).toEqual([]);
   });
 }
