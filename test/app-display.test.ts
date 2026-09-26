@@ -172,11 +172,17 @@ test("a real 2× display fits windows, centers dialogs, grows for wide ones, and
     const main = client.window(300, 200);
     const dialog = client.window(400, 300, { parent: main });
     await until(() => display.wm.count === 2);
-    assert.deepEqual(await client.geometry(main), [0, 0, 2560, 1600], "a window fills the display");
-    assert.deepEqual(await client.geometry(dialog), [1080, 650, 400, 300], "a dialog keeps its size, centered");
+    // The WM configures over its own connection; the server may answer ours first.
+    const settled = async (id: number, expected: number[]) => {
+      let geometry: number[] = [];
+      for (let i = 0; i < 100 && JSON.stringify(geometry = await client.geometry(id)) !== JSON.stringify(expected); i++) await new Promise((r) => setTimeout(r, 20));
+      return geometry;
+    };
+    assert.deepEqual(await settled(main, [0, 0, 2560, 1600]), [0, 0, 2560, 1600], "a window fills the display");
+    assert.deepEqual(await settled(dialog, [1080, 650, 400, 300]), [1080, 650, 400, 300], "a dialog keeps its size, centered");
     const wide = client.window(100, 100, { min: [3000, 900] });
     await until(() => display.wm.size[0] === 3000);
-    assert.deepEqual(await client.geometry(wide), [0, 0, 3000, 1600], "the screen grows instead of cutting it off");
+    assert.deepEqual(await settled(wide, [0, 0, 3000, 1600]), [0, 0, 3000, 1600], "the screen grows instead of cutting it off");
     const frame = await captureFrame(display.socket);
     assert.deepEqual([frame.width, frame.height, frame.rgb.length], [3000, 1600, 3000 * 1600 * 3]);
     client.close();
