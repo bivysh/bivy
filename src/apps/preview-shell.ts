@@ -44,6 +44,15 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
 #entries li { display:flex; gap:var(--space-2); align-items:baseline; padding:var(--space-1) 0; border-top:thin solid var(--line); overflow-wrap:anywhere; }
 /* Keeps .field's 16px: smaller, and iOS zooms the shell on focus and stays zoomed. */
 #draft-text { width:100%; min-height:5em; box-sizing:border-box; resize:vertical; }
+#draft-row { display:flex; align-items:flex-start; gap:var(--space-2); }
+#draft-row #draft-text { flex:1; min-width:0; }
+/* Hold to talk: a phone-sized target that never selects text or opens a callout. */
+#mic { flex:none; inline-size:44px; block-size:44px; padding:0; border-radius:var(--radius-full); touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+#mic[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
+#voice-status { font-size:var(--text-xs); margin:var(--space-2) 0 0; }
+#voice-status:empty { display:none; }
+/* The panel scrolls on a phone; its actions stay in reach at the bottom. */
+#draft .panel-actions { position:sticky; bottom:calc(-1 * var(--space-3)); margin:var(--space-2) calc(-1 * var(--space-3)) calc(-1 * var(--space-3)); padding:var(--space-2) var(--space-3) var(--space-3); background:var(--surface); border-top:thin solid var(--line); }
 #draft-hint { font-size:var(--text-xs); margin:var(--space-2) 0 var(--space-1); }
 #draft-context { margin:0; padding:var(--space-2); background:var(--surface-2); border-radius:var(--radius-md); font-family:var(--font-mono); font-size:var(--text-xs); white-space:pre-wrap; overflow-wrap:anywhere; color:var(--muted); }
 #show { position:fixed; right:var(--space-3); bottom:calc(var(--space-3) + env(safe-area-inset-bottom)); z-index:var(--z-sticky); border-radius:var(--radius-full); box-shadow:var(--shadow-lg); }
@@ -68,12 +77,14 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
   </section>
   <section class="panel" id="draft" hidden aria-labelledby="draft-title">
     <h2 id="draft-title">Draft for the agent</h2>
-    <textarea class="field" id="draft-text" aria-label="What should change?" placeholder="What should change?"></textarea>
+    <div id="draft-row"><textarea class="field" id="draft-text" aria-label="What should change?" placeholder="What should change?"></textarea>
+    <button class="btn" id="mic" type="button" hidden aria-pressed="false" aria-label="Speak" title="Hold to speak, or tap to start and stop"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15.5a3 3 0 003-3V6a3 3 0 10-6 0v6.5a3 3 0 003 3z"/><path d="M6 11.5v1a6 6 0 0012 0v-1M12 18.5V21M9 21h6"/></svg></button></div>
+    <p class="muted" id="voice-status" role="status"></p>
     <p class="muted" id="draft-hint">Sent with this context from the preview. Nothing is sent until you send it in the chat.</p>
     <pre id="draft-context"></pre>
     <div class="panel-actions"><button class="btn sm ghost" id="draft-cancel">Cancel</button><button class="btn sm primary" id="draft-add">Add to chat</button></div>
   </section>
-  <p class="banner inline" data-tone="accent" id="pointing" role="status" hidden>Tap anything in the app to point at it. Press Escape or Point again to stop.</p>
+  <p class="banner inline" data-tone="accent" id="pointing" role="status" hidden>Tap anything in the app to point at it. <span id="pointing-voice" hidden>Hold to point and speak. </span>Press Escape or Point again to stop.</p>
   <nav aria-label="Bivy preview controls">
     <button class="btn sm ghost" id="back" aria-label="Back to chat">‹ <span class="label-wide">Back to chat</span><span class="label-narrow">Chat</span></button>
     <span id="name"><span id="title">App preview</span><span id="stamp" class="muted" role="status"></span></span>
@@ -116,6 +127,8 @@ function show(data,launch){
   for(const b of [reload,$('point'),$('errors')])b.disabled=false;
   status.textContent='Loading app…';
   frame.onload=()=>{status.hidden=true;void loadCompare();if(revision===null){revision=-1;watch();}else if(wake)wake();};
+  // A Bivy client framing the shell says whether it can take dictation.
+  if(embedded&&data.returnTo)toBivy({type:'hello'});
   // Store navigation metadata only, never tickets or cookies.
   try{sessionStorage.setItem(storageKey,JSON.stringify(data));}catch{}
 }
@@ -144,15 +157,49 @@ function toChat(text){
   const to=new URL(metadata.returnTo),session=to.pathname.split('/').pop();
   location.assign(to.origin+'/share?session='+encodeURIComponent(session)+'&text='+encodeURIComponent(text));
 }
-function draft(context){
+function draft(context,listen){
   panels(null);
   $('draft').hidden=false;
   $('draft-add').textContent=metadata.returnTo?'Add to chat':'Copy';
   $('draft-context').textContent=context;
-  const box=$('draft-text');box.value='';box.focus();
+  const box=$('draft-text');box.value='';
+  // Speaking right away: don't raise the keyboard over the draft.
+  if(listen)startListening();else box.focus();
 }
-$('draft-cancel').onclick=()=>{$('draft').hidden=true;};
+// Point and speak. The Bivy client framing this shell does the listening:
+// audio never reaches this origin, and only the transcript comes back, into
+// the draft box, where it stays editable. Hold to talk, or tap to start and
+// tap again to stop.
+const mic=$('mic'),voiceStatus=$('voice-status');
+let voice=false,listening=false,heldAt=0;
+const sayVoice=text=>{voiceStatus.textContent=text;};
+function setListening(on){listening=on;mic.setAttribute('aria-pressed',String(on));mic.setAttribute('aria-label',on?'Stop and add what you said':'Speak');}
+function startListening(){if(!voice||listening)return;setListening(true);sayVoice('Listening… let go, or tap the mic again, to add what you said.');toBivy({type:'listen',state:'start'});}
+function stopListening(){if(!listening)return;sayVoice('Turning speech into text…');toBivy({type:'listen',state:'stop'});}
+function cancelListening(){if(listening)toBivy({type:'listen',state:'cancel'});setListening(false);sayVoice('');}
+function addSpoken(text){
+  const box=$('draft-text'),said=String(text||'').trim().slice(0,4000);
+  if(!said)return;
+  box.value=box.value.trim()?box.value.trimEnd()+' '+said:said;
+  sayVoice('Added what you said. Edit it, or Add to chat.');
+}
+mic.onpointerdown=e=>{
+  e.preventDefault();
+  if(listening){stopListening();heldAt=0;return;}
+  heldAt=Date.now();try{mic.setPointerCapture(e.pointerId);}catch{}
+  startListening();
+};
+// A short tap keeps listening until the next tap; a hold stops on release.
+mic.onpointerup=mic.onpointercancel=()=>{if(heldAt&&Date.now()-heldAt>400)stopListening();heldAt=0;};
+mic.onclick=e=>{if(e.detail===0){if(listening)stopListening();else startListening();}};
+function fromBivy(d){
+  if(d.type==='voice'){voice=d.available===true;mic.hidden=!voice;$('pointing-voice').hidden=!voice;if(!voice)cancelListening();}
+  else if(d.type==='transcript'){setListening(false);if(typeof d.error==='string')sayVoice(d.error.slice(0,200));else addSpoken(d.text);}
+  else if(d.type==='listening'&&d.on===false&&listening){setListening(false);if(voiceStatus.textContent.startsWith('Listening'))sayVoice('');}
+}
+$('draft-cancel').onclick=()=>{cancelListening();$('draft').hidden=true;};
 $('draft-add').onclick=async()=>{
+  cancelListening();
   const note=$('draft-text').value.trim(),text=(note?note+'\\n\\n':'')+$('draft-context').textContent;
   if(metadata.returnTo)return toChat(text);
   try{await navigator.clipboard.writeText(text);$('draft-add').textContent='Copied';}catch{$('draft-text').select();}
@@ -172,23 +219,26 @@ $('clear').onclick=resetConsole;
 $('send-errors').onclick=()=>draft('Console output in the app preview "'+metadata.name+'" (page '+currentPath+'):\\n'+entries.slice(-20).map(e=>'- '+e.level+': '+e.text).join('\\n'));
 // Point and tell
 const point=$('point');
-function pointing(on){point.setAttribute('aria-pressed',String(on));$('pointing').hidden=!on;frame.contentWindow?.postMessage({type:'bivy:point',on},metadata.origin);}
+// Pointing again starts a new draft: panels over the app step aside.
+function pointing(on){if(on)panels(null);point.setAttribute('aria-pressed',String(on));$('pointing').hidden=!on;frame.contentWindow?.postMessage({type:'bivy:point',on},metadata.origin);}
 point.onclick=()=>pointing(point.getAttribute('aria-pressed')!=='true');
 function picked(d){
   pointing(false);
   if(d.cancelled)return;
+  // A long press: the draft opens listening, and letting go stops.
+  if(d.hold&&voice)heldAt=Date.now();
   const r=d.rect||{},v=d.viewport||{};
   const errors=entries.filter(e=>e.level==='error').slice(-5);
   draft('In the app preview "'+metadata.name+'" (page '+safePath(d.path)+', viewport '+v.width+'×'+v.height+'):\\n'
     +'Element: '+String(d.selector).slice(0,300)+(d.text?' ("'+String(d.text).slice(0,200)+'")':'')+', '+r.width+'×'+r.height+' at '+r.x+','+r.y
-    +(errors.length?'\\nRecent errors:\\n'+errors.map(e=>'- '+e.text).join('\\n'):''));
+    +(errors.length?'\\nRecent errors:\\n'+errors.map(e=>'- '+e.text).join('\\n'):''),d.hold===true&&voice);
 }
 // Compare: screenshots around the agent's last change (agent screenshots on).
 const compareBtn=$('compare-btn');let shots=[],urls=[];
 async function loadCompare(){
   try{const r=await fetch(metadata.origin+'/__bivy/compare',{credentials:'include',cache:'no-store'});if(!r.ok)return;shots=(await r.json()).shots||[];compareBtn.hidden=shots.length<2;}catch{}
 }
-function panels(open){for(const [id,btn] of [['console','errors'],['compare','compare-btn']]){$(id).hidden=id!==open;$(btn).setAttribute('aria-pressed',String(id===open));}$('draft').hidden=true;}
+function panels(open){if(listening)cancelListening();for(const [id,btn] of [['console','errors'],['compare','compare-btn']]){$(id).hidden=id!==open;$(btn).setAttribute('aria-pressed',String(id===open));}$('draft').hidden=true;}
 compareBtn.onclick=async()=>{
   if(!$('compare').hidden)return panels(null);
   panels('compare');
@@ -213,6 +263,8 @@ for(const b of $('lens').querySelectorAll('button'))b.onclick=()=>{
 const down=$('down'),downText=$('down-text'),ask=$('ask');
 let downPort=0;
 addEventListener('message',e=>{
+  // The Bivy client framing this shell (Peek): voice only.
+  if(embedded&&metadata?.returnTo&&e.source===parent&&e.origin===new URL(metadata.returnTo).origin){if(e.data?.source==='bivy')fromBivy(e.data);return;}
   if(!metadata||e.origin!==metadata.origin||e.source!==frame.contentWindow)return;
   const d=e.data||{};
   if(d.type==='bivy:access'&&d.state==='blocked'&&embedded&&metadata.returnTo)toBivy({type:'blocked'});
@@ -225,10 +277,11 @@ addEventListener('message',e=>{
     if(d.type==='route')currentPath=safePath(d.path);
     else if(d.type==='console'&&(d.level==='error'||d.level==='warn')){entries.push({level:d.level,text:String(d.text).slice(0,500)});if(entries.length>50)entries.shift();renderConsole();}
     else if(d.type==='picked')picked(d);
+    else if(d.type==='release'&&heldAt){heldAt=0;stopListening();}
   }
 });
 ask.onclick=()=>toChat('The app preview "'+metadata.name+'" isn’t loading: nothing is answering on port '+downPort+'. Please find out why the server stopped, restart it, and tell me when it’s back.');
-addEventListener('keydown',e=>{if(e.key==='Escape'){if(point.getAttribute('aria-pressed')==='true')pointing(false);else panels(null);}});
+addEventListener('keydown',e=>{if(e.key==='Escape'){if(listening)cancelListening();else if(point.getAttribute('aria-pressed')==='true')pointing(false);else panels(null);}});
 back.onclick=()=>{if(metadata?.returnTo){window.close();setTimeout(()=>location.replace(metadata.returnTo),100);}else{window.close();status.hidden=false;status.textContent='You can close this tab to return to Bivy.';}};
 reload.onclick=()=>{if(metadata)open(currentPath,'Reloading app…');};
 (async()=>{

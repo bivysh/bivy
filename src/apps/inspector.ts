@@ -43,14 +43,27 @@ const hover=e=>{
   const el=under(e);if(!el)return;const r=el.getBoundingClientRect();
   Object.assign(box.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px'});
 };
-const pick=e=>{
-  e.preventDefault();
-  const el=under(e);if(!el)return;stop();
+const report=(el,hold)=>{
   const r=el.getBoundingClientRect();
   onPicked({type:'picked',selector:selector(el),tag:el.localName,text:(el.innerText||el.getAttribute('aria-label')||el.getAttribute('alt')||'').trim().replace(/\\s+/g,' ').slice(0,200),
     rect:{x:Math.round(r.left),y:Math.round(r.top),width:Math.round(r.width),height:Math.round(r.height)},
-    viewport:{width:innerWidth,height:innerHeight},path:location.pathname+location.search+location.hash});
+    viewport:{width:innerWidth,height:innerHeight},path:location.pathname+location.search+location.hash,hold});
 };
+// A long press picks at once and says so (the shell starts listening); the
+// layer stays until the finger lifts, so the release never reaches the app.
+let press=null,held=false;
+const pick=e=>{
+  e.preventDefault();
+  if(held){held=false;stop();return;}
+  const el=under(e);if(!el)return;stop();report(el,false);
+};
+const down=e=>{
+  hover(e);clearTimeout(press?.timer);held=false;
+  const x=e.clientX,y=e.clientY;
+  press={x,y,timer:setTimeout(()=>{const el=under({clientX:x,clientY:y});if(!el)return;held=true;box?.remove();report(el,true);},450)};
+};
+const move=e=>{hover(e);if(press&&Math.hypot(e.clientX-press.x,e.clientY-press.y)>10)clearTimeout(press.timer);};
+const up=()=>{clearTimeout(press?.timer);press=null;if(held){post({type:'release'});setTimeout(()=>{if(held){held=false;stop();}},0);}};
 const key=e=>{if(e.key==='Escape'){stop();onPicked({type:'picked',cancelled:true});}};
 function startPointing(){
   stop();
@@ -61,13 +74,15 @@ function startPointing(){
   layer=document.createElement('div');
   layer.setAttribute('aria-hidden','true');
   Object.assign(layer.style,{position:'fixed',inset:0,zIndex:2147483646,cursor:'crosshair',background:'transparent',touchAction:'manipulation',userSelect:'none',webkitUserSelect:'none',webkitTouchCallout:'none'});
-  layer.addEventListener('pointermove',hover);layer.addEventListener('pointerdown',hover);layer.addEventListener('click',pick);
+  layer.addEventListener('pointermove',move);layer.addEventListener('pointerdown',down);layer.addEventListener('pointerup',up);layer.addEventListener('pointercancel',up);layer.addEventListener('click',pick);
+  layer.addEventListener('contextmenu',e=>e.preventDefault());
   document.documentElement.append(layer,box);
   addEventListener('keydown',key,true);
 }
 addEventListener('message',e=>{
   if(!framed||e.origin!==SHELL||e.source!==parent||e.data?.type!=='bivy:point')return;
-  if(e.data.on)startPointing();else stop();
+  // Held: the layer goes when the finger lifts (see up).
+  if(e.data.on)startPointing();else if(!held)stop();
 });
 if(REVIEWER&&!framed){
   // A shadow root keeps the app's CSS off these controls (and ours off the app).

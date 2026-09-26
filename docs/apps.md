@@ -422,6 +422,16 @@ own bottom bar.
   element's selector, text, size and position, the page, the viewport and
   recent errors. You add what should change, then **Add to chat** puts it in the
   session's composer. The tap you point with is not passed to the app.
+- **Point and speak** (in the preview drawer inside Bivy): the draft box has a
+  mic. Hold it and speak, then let go; or tap to start and tap again to stop.
+  **Long-press** an element while pointing to open its draft already
+  listening; letting go stops. What you said goes first in the draft, and stays
+  editable, followed by the element's context. Bivy does the listening, not
+  the preview: the shell asks the Bivy page that frames it to listen, and only
+  the transcript comes back. Audio goes to the node for transcription over the
+  encrypted session channel (Settings → Voice input), or to the browser's own
+  dictation when no key is set. It never passes through the preview origin. A
+  preview opened in a tab has no mic; use the composer's.
 - **Console**: errors and warnings from the page, with a count on the pill.
   **Send to agent…** drafts them the same way.
 - **Full / Tablet / Phone** (wide screens): constrains the app to 768 or 390 px.

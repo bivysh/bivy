@@ -54,11 +54,14 @@ export function VoiceRecorder({
   onResult,
   onCancel,
   onError,
+  stop = 0,
 }: {
   transcribe: (audioBase64: string, mimeType: string) => Promise<string>;
   onResult: (text: string) => void;
   onCancel: () => void;
   onError: (message: string) => void;
+  /** Bump to finish from outside, like ✓ (a released hold-to-talk). */
+  stop?: number;
 }) {
   const [elapsed, setElapsed] = useState(0);
   const [busy, setBusy] = useState(false);
@@ -198,6 +201,8 @@ export function VoiceRecorder({
       setBusy(false);
     }
   }
+
+  useEffect(() => { if (stop) confirm(); }, [stop]); // eslint-disable-line react-hooks/exhaustive-deps
 
   function confirm() {
     if (busy) return;
