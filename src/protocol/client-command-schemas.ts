@@ -29,6 +29,8 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
     strokes: Type.Array(Type.Object({ tool: Type.Union([Type.Literal("pen"), Type.Literal("box")]), points: Type.Array(Type.Array(Type.Number(), { minItems: 2, maxItems: 2 }), { maxItems: 10000 }) }), { minItems: 1, maxItems: 50 }),
     signals: Type.Optional(Type.Record(Type.String(), Type.Boolean())) }),
   "apps.clearNotes": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),
+  "apps.agentNotes": Type.Object({ ...request, ...session, appId: Type.String(), enabled: Type.Boolean() }),
+  "apps.notes": Type.Object({ ...request, ...session, appId: Type.Optional(Type.String({ maxLength: 200 })), view: Type.Optional(Type.String({ maxLength: 200 })), since: Type.Optional(Type.Number()) }),
   "apps.logs": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),
   "apps.share": Type.Object({ ...request, ...session, appId: Type.Optional(Type.String({ maxLength: 200 })), viewId: Type.Optional(Type.String()), view: Type.Optional(Type.String({ maxLength: 200 })) }),
   "apps.revoke": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),

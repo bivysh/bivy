@@ -18,6 +18,12 @@ for (const url of ["https://evil.example", "//evil.example/path", "/auth/device/
   assert.equal(nativePushPayload({ url }).url, undefined);
 }
 assert.equal(nativePushPayload({ url: "/runs/run_1" }).url, "/runs/run_1");
+// Web-only targets inside the session are dropped; the native app opens the session.
+assert.equal(nativePushPayload({ url: `/sessions/s1?node=node_1&apps=${"a".repeat(32)}` }).url, "/sessions/s1?node=node_1");
+assert.equal(nativePushPayload({ url: `/sessions/s1?node=node_1&attention=q_1&review=review-${"b".repeat(16)}` }).url, "/sessions/s1?node=node_1");
+for (const url of [`/sessions/s1?node=node_1&apps=${"a".repeat(32)}&token=secret`, "/sessions/s1?node=node_1&apps=not-an-id", "/sessions/s1?apps=x&node=node_1"]) {
+  assert.equal(nativePushPayload({ url }).url, undefined);
+}
 const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'prime256v1' });
 const server = createServer();
 let status = 200;

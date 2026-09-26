@@ -117,3 +117,58 @@ test("the finished notification's hint names the card, never its image", () => {
   assert.deepEqual(hint.review, { appId: review.appId, viewId: review.viewId, reviewId: review.id });
   assert.doesNotMatch(JSON.stringify(hint), /c{64}|d{64}|png|base64/i);
 });
+
+test("reviewer notes ride on the run's card, or get a card of their own, once each", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-review-notes-"));
+  try {
+    fs.mkdirSync(path.join(dir, "dist")); fs.writeFileSync(path.join(dir, "dist/index.html"), "<h1>shop</h1>");
+    const published: AppReview[] = [];
+    const sink: ReviewSink = { publish: (review) => { published.push(review); return review; }, expire: () => {} };
+    const registry = new AppRegistry();
+    const service = new AppService(registry, undefined, terminals, { reviews: sink, settleMs: 0 });
+    const app = service.publish("s", dir, { version: 1, name: "Shop", views: [{ kind: "web", name: "Storefront", source: { kind: "static", directory: "dist" } }] });
+    const viewId = app.views[0]!.id;
+    let at = 1_000;
+    const note = (text: string) => registry.addNote(viewId, { id: `n${at}`, at: at++, note: text, selector: "button.pay", text: "Pay now", path: "/checkout", viewport: { width: 375, height: 667 } });
+
+    // No notes, no visible change: no card.
+    service.runStarted("s");
+    assert.equal(await service.runEnded("s"), undefined);
+
+    // Notes arrive (during a run or between runs): the next run end hands them over as a count.
+    note("Pay button hugs the edge"); note("Total is cut off");
+    service.runStarted("s");
+    const card = await service.runEnded("s");
+    assert.equal(card?.trigger, "notes");
+    assert.equal(card?.notes, 2);
+    assert.equal(card?.shot, undefined, "a notes card carries no screenshot");
+    assert.equal(JSON.stringify(card).includes("hugs the edge"), false, "the card never carries note text");
+    assert.match(reviewHint(card!).body, /^2 notes are waiting on Shop/);
+
+    // Already handed over: the next run doesn't repeat them.
+    service.runStarted("s");
+    assert.equal(await service.runEnded("s"), undefined);
+
+    // A card the agent presented this run gets the count instead of a second card.
+    note("Still hugs the edge on my mini");
+    service.runStarted("s");
+    const presented = (await service.present("s", { note: "Moved the button up" })).review!;
+    const ended = await service.runEnded("s");
+    assert.equal(ended?.id, presented.id);
+    assert.equal(ended?.trigger, "present");
+    assert.equal(ended?.note, "Moved the button up");
+    assert.equal(ended?.notes, 3, "the count is every note waiting, not just the new one");
+    assert.equal(reviewHint({ ...card!, notes: 1 }).body, "A reviewer note is waiting on Shop — tap to read it.");
+
+    // Off and mute keep cards away; the notes wait in Apps for the next run that allows cards.
+    note("One more");
+    service.setReviewMode("s", app.id, "off");
+    service.runStarted("s");
+    assert.equal(await service.runEnded("s"), undefined);
+    service.setReviewMode("s", app.id, "ready");
+    service.runStarted("s"); service.mute("s");
+    assert.equal(await service.runEnded("s"), undefined);
+    service.runStarted("s");
+    assert.equal((await service.runEnded("s"))?.notes, 4);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

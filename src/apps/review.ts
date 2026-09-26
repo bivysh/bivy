@@ -43,7 +43,9 @@ export function shouldReview(input: ReviewDecision): boolean {
 export function reviewHint(review: AppReview): { review: { appId: string; viewId: string; reviewId: string }; body: string } {
   return {
     review: { appId: review.appId, viewId: review.viewId, reviewId: review.id },
-    body: `${review.name} ${review.trigger === "present" ? "is ready to review" : "changed"} — tap to see it.`,
+    body: review.trigger === "notes"
+      ? `${review.notes === 1 ? "A reviewer note is" : `${review.notes ?? "Reviewer"} notes are`} waiting on ${review.name} — tap to read ${review.notes === 1 ? "it" : "them"}.`
+      : `${review.name} ${review.trigger === "present" ? "is ready to review" : "changed"} — tap to see it.`,
   };
 }
 

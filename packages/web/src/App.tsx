@@ -136,6 +136,8 @@ export function App() {
   // app stays reachable after its inline launcher card scrolls out of the
   // transcript. Same pure-fold approach as artifacts (see deriveApps).
   const [appsSheetOpen, setAppsSheetOpen] = useState(false);
+  /** The app a "reviewer notes" notification opened the sheet at. */
+  const [appsSheetApp, setAppsSheetApp] = useState<string | undefined>(undefined);
   // Fork sheet opened from an inline notice (e.g. "reached its usage limit —
   // Fork to another agent"), so the way past a limit is one tap from the chat.
   const [forkSheetOpen, setForkSheetOpen] = useState(false);
@@ -620,6 +622,17 @@ export function App() {
     const review = new URLSearchParams(location.search).get("review");
     if (review && state.activeSession.activeSessionId) requestMessageJump(state.activeSession.activeSessionId, { reviewId: review });
   }, [state.activeSession.activeSessionId]);
+  // A "reviewer notes" notification opens the Apps sheet at that app, once.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const appId = params.get("apps");
+    if (!appId || !state.activeSession.activeSessionId) return;
+    params.delete("apps");
+    history.replaceState(history.state, "", `${location.pathname}${params.size ? `?${params}` : ""}${location.hash}`);
+    if (!/^[a-f0-9]{32}$/.test(appId)) return;
+    setAppsSheetApp(appId);
+    setAppsSheetOpen(true);
+  }, [state.activeSession.activeSessionId]);
   // "Show me the app" on a finished notification: capture it now, once.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -1074,7 +1087,7 @@ export function App() {
             )}
 
             {appsSheetOpen && activeSession && (
-              <AppsSheet sessionId={activeSession.sessionId} onClose={() => setAppsSheetOpen(false)} />
+              <AppsSheet sessionId={activeSession.sessionId} appId={appsSheetApp} onClose={() => { setAppsSheetOpen(false); setAppsSheetApp(undefined); }} />
             )}
 
             {forkSheetOpen && activeSession && (

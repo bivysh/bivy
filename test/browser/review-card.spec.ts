@@ -101,3 +101,42 @@ test("without agent screenshots, the card offers to turn them on and never does 
   await expect.poll(() => page.evaluate(() => (window as any).settings)).toEqual([{ appScreenshots: true }]);
   await expect.poll(() => page.evaluate(() => (window as any).commands.some((c: any) => c.kind === "apps.showMe"))).toBe(true);
 });
+
+test("reviewer notes get a card with a count, and only become a draft when you ask", async ({ page }, testInfo) => {
+  await page.evaluate(() => {
+    const w = window as any;
+    const list = w.c.appCommand;
+    const notes = [
+      { id: "n1", at: 1, note: "Pay button still hugs the edge on my iPhone mini", selector: "footer > button.pay", text: "Pay now", path: "/checkout", viewport: { width: 375, height: 667 } },
+      { id: "n2", at: 2, note: "Total is cut off", selector: ".total", text: "", path: "/checkout", viewport: { width: 375, height: 667 } },
+    ];
+    w.c.appCommand = async (kind: string, sessionId: string, fields: Record<string, unknown> = {}) => {
+      if (kind !== "apps.list") return list(kind, sessionId, fields);
+      w.commands.push({ kind, sessionId, ...fields });
+      return { apps: [{ id: "a".repeat(32), sessionId: "s", name: "Storefront", createdAt: 0, views: [{ id: "v".repeat(32), kind: "web", name: "Site", source: "static", notes }] }], previewAvailable: true };
+    };
+  });
+  const send = (fields: Record<string, unknown>) => page.evaluate((r) => (window as any).c.store.apply({ type: "session.event", sessionId: "s", event: { type: "app_review", id: r.id, review: r } }), review(fields));
+
+  await send({ trigger: "notes", notes: 2 });
+  const card = page.getByRole("region", { name: "Storefront: reviewer notes" });
+  await expect(card).toBeVisible();
+  const notes = card.getByRole("group", { name: "Reviewer notes on Storefront · Site" });
+  await expect(notes).toContainText("2 notes from people with a shared link");
+  // A notes card is about the notes: no screenshot stage, no "turn on screenshots".
+  await expect(card.locator(".review-stage")).toHaveCount(0);
+  await expect(card.getByText("Turn on agent screenshots")).toHaveCount(0);
+  // The card holds a count; the composer stays empty until you ask for the draft.
+  await expect(page.locator("textarea").first()).toHaveValue("");
+  await page.screenshot({ path: testInfo.outputPath("review-card-notes.png"), fullPage: true });
+  await notes.getByRole("button", { name: "Add to message" }).click();
+  await expect(card.getByRole("status")).toContainText("Nothing is sent until you send it");
+  await expect(page.locator("textarea").first()).toHaveValue(/Notes from people reviewing "Site":\n- "Pay button still hugs the edge on my iPhone mini" on footer > button\.pay \("Pay now"\)/);
+  expect(await page.evaluate(() => (window as any).commands.some((c: any) => c.kind === "apps.share" || c.kind === "session.send"))).toBe(false);
+
+  // Notes that ride on a run's visual card add the same row under the picture.
+  await send({ id: "review-fedcba9876543210", trigger: "run", shot: shot("a"), notes: 1 });
+  const run = page.getByRole("region", { name: "Storefront: changed in this run" });
+  await expect(run.getByRole("img", { name: /Storefront at \/checkout, now/ })).toBeVisible();
+  await expect(run.getByRole("group", { name: /Reviewer notes/ })).toContainText("1 note from people with a shared link");
+});

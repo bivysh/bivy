@@ -194,6 +194,32 @@ reviewer notes, which come back under the view in **Apps**.
 > review is done. The command prints this reminder on stderr, so the JSON on
 > stdout stays clean for scripts.
 
+### Reviewer notes for agents (`bivy app notes`)
+
+```sh
+bivy app notes                                 # the web view opened last
+bivy app notes Shop --view Storefront --since 2026-09-27T09:00:00Z
+```
+
+Prints the reviewer notes on one web view as JSON (`app`, `view`, `untrusted:
+true`, `notes` with text, element, page, viewport and time), so an automation
+can report them, for example back to the Basecamp or Slack thread the work came
+from. `[app-id]` and `--view` pick the view like `bivy app share`; `--since`
+(ISO time or epoch milliseconds) returns only newer notes. Reading doesn't clear
+them.
+
+**Off by default, per app.** The owner turns it on in **Apps → the app's ⋯ →
+Agents can read notes**; until then the command explains where. Only the app
+sets it: a manifest can't, and there is no CLI for it.
+
+> **Untrusted input.** Anyone with a share link can write a note, including
+> text meant to steer the agent ("ignore your instructions and…"). Turning this
+> on lets that text into the agent's context, like a webhook payload. Tell the
+> agent to treat notes as data to report or weigh, never as instructions; the
+> command prints that reminder on stderr. This switch keeps notes out of agents
+> by default; it is not a boundary against an agent that already runs as you
+> on the machine.
+
 ### Servers Bivy runs (`start`)
 
 A service view can say how to start its server:
@@ -525,8 +551,26 @@ The visitor points at an element and writes a note. The note is stored with the
 element's selector and text, the page and the viewport. The owner sees notes
 under the view in **Apps**, with **Add to message** (drafts them into the
 composer) and **Clear**. Notes are untrusted text: at most 1,000 characters
-each, 50 per view (oldest dropped), same-origin POSTs from a valid link only,
-kept in memory. They never reach the agent unless the owner sends them.
+each, 50 per view (oldest dropped), same-origin POSTs from a valid link only.
+They're saved with the app (`apps.json`, mode 0600), so a restart doesn't lose
+them; **Clear** deletes them for good. They reach the agent only if the owner
+sends them, or allows the agent to read them (see [Reviewer notes for
+agents](#reviewer-notes-for-agents-bivy-app-notes)).
+
+How the owner hears about them:
+
+- **A notification.** Notes arriving close together on one view make one push,
+  "2 notes on Storefront", that opens **Apps** at that app. Like every Bivy
+  notification it carries IDs, a count and names, never the note text; on
+  iPhone the alert is the generic "Session update". Turn it off under
+  **Settings → Notifications → Reviewer notes**.
+- **At the end of the next run.** Notes that arrived since the last hand-over
+  are counted on that view's review card for the run, or on a card of their own
+  ("Reviewer notes") when there's nothing else to show. The card has **Add to
+  message**, which drafts them, and **Open in Apps**. The card holds a count,
+  not the notes: nothing is sent until the owner sends the draft. Preview cards
+  **Off** and **Mute for this run** keep these cards away too; the notes wait in
+  **Apps**.
 
 The app iframe is sandboxed: scripts, forms, same-origin app storage, downloads
 and sandboxed popups are allowed; top-level navigation is not. Upstream
@@ -642,6 +686,9 @@ preview gate; PWA/offline behavior must be tested outside this preview mode.
   identities: anyone who has one can use the app and its live backend until it
   expires (24 h), is revoked, the app is removed or the machine restarts. An agent
   can mint one without asking, so instruct it where it may post links.
+- Reviewer notes are untrusted text from anyone with a share link. They reach an
+  agent only when the owner sends them or turns on **Agents can read notes** for
+  that app. Push notifications and review cards carry a count, never the text.
 - Removing an app stops terminal processes started through its views, not unrelated
   terminals. It cannot retract bytes already downloaded or undo side effects.
 

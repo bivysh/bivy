@@ -60,6 +60,10 @@ export function nativePushPayload(payload: Record<string, unknown>) {
   // An opaque session URL is only a hint; opening it still requires account
   // authorization. Do not put prompts, titles, tool output or tokens on APNs.
   const path = typeof payload.url === "string" ? payload.url : "";
-  const url = path.length <= 1024 && /^\/(?:sessions|runs)\/[A-Za-z0-9_-]+(?:\?node=[A-Za-z0-9_-]+)?$/.test(path) ? path : undefined;
+  // The web link may also target a card, review or app inside the session; the
+  // native app opens the session itself, so those strictly shaped extras are
+  // dropped. Any other parameter still rejects the whole link.
+  const match = path.length <= 1024 ? /^(\/(?:sessions|runs)\/[A-Za-z0-9_-]+(?:\?node=[A-Za-z0-9_-]+)?)(?:[?&](?:attention=[A-Za-z0-9_.~%-]+|review=review-[a-f0-9]{16}|apps=[a-f0-9]{32}))*$/.exec(path) : null;
+  const url = match ? match[1] : undefined;
   return { aps: { alert: { title: "Session update", body: "Open the app to view your session." }, sound: "default" }, ...(url ? { url } : {}) };
 }

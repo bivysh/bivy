@@ -2242,10 +2242,32 @@ const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   has: (id) => terminals.has(id),
   close: (id) => { terminals.close(id); },
 }, { screenshots: { enabled: appScreenshotsEnabled }, displays: appDisplays, reviews: createReviewSink() });
-// A reviewer's note shows up in an open Apps sheet without reopening it.
+// A reviewer's note shows up in an open Apps sheet without reopening it, and
+// the owner gets one push per burst of notes on a view ("2 notes on
+// Storefront"), which opens the Apps sheet at that app. Counts, names and IDs
+// only: the note text never goes through push.
+const NOTES_NOTIFY_MS = 20_000;
+const noteBursts = new Map<string, number>();
 appRegistry.on("notes", (viewId: string) => {
   const entry = appRegistry.getView(viewId);
-  if (entry) broadcast({ type: "apps.changed", sessionId: entry.app.sessionId });
+  if (!entry) return;
+  broadcast({ type: "apps.changed", sessionId: entry.app.sessionId });
+  const pending = noteBursts.get(viewId);
+  noteBursts.set(viewId, (pending ?? 0) + 1);
+  if (pending !== undefined) return;
+  setTimeout(() => {
+    const count = noteBursts.get(viewId) ?? 0;
+    noteBursts.delete(viewId);
+    const current = appRegistry.getView(viewId);
+    if (!current?.notes?.length || !count) return;
+    const notes = count === 1 ? "A note" : `${count} notes`;
+    void sendNotificationHint({
+      kind: "app_notes", sessionId: current.app.sessionId, targetSessionId: current.app.sessionId,
+      title: `${notes} on ${current.view.name}`,
+      body: `Someone reviewing ${current.app.name} left ${count === 1 ? "a note" : `${count} notes`} — tap to read ${count === 1 ? "it" : "them"}.`,
+      apps: { appId: current.app.id },
+    });
+  }, NOTES_NOTIFY_MS).unref?.();
 });
 
 const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
@@ -4203,7 +4225,7 @@ async function doneNotification(record: SessionRecord): Promise<Parameters<typeo
   return { ...base, title: `${label} finished`, body: hint.body, review: hint.review };
 }
 
-async function sendNotificationHint(input: { kind: string; sessionId?: string; title?: string; body?: string; targetSessionId?: string; attentionId?: string; review?: { appId: string; viewId: string; reviewId: string }; showMe?: boolean }) {
+async function sendNotificationHint(input: { kind: string; sessionId?: string; title?: string; body?: string; targetSessionId?: string; attentionId?: string; review?: { appId: string; viewId: string; reviewId: string }; showMe?: boolean; apps?: { appId: string } }) {
   if (!sessionAdvertiseTarget) return;
   try {
     await modelAuthFetch("/internal/notifications/hints", { method: "POST", body: JSON.stringify(input) });
