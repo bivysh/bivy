@@ -493,6 +493,8 @@ unauthenticated dev login enabled.
 | Variable | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `PORT` | integer | `4400` | |
+| `METRICS_PORT` | integer | `9465` | Prometheus `/metrics` and `/metrics.json`, served only here, never on `PORT`: a reverse proxy forwards every path, and these include account and node counts. If the port is taken, metrics are skipped with a warning |
+| `METRICS_HOST` | address | `127.0.0.1` | Bind address for `METRICS_PORT`. In a container, set `0.0.0.0` so a scraper on the same private network can reach it, and don't publish the port |
 | `PUBLIC_CONTROL_PLANE_URL` | URL | derived from `x-forwarded-proto` / `x-forwarded-host` / `Host` | Canonical external base URL, used for OAuth redirect URIs and magic-link URLs. **Set this** — the header-derived fallback trusts unvalidated proxy headers |
 | `TRUST_PROXY` | comma-separated IPs/CIDRs or Express named subnets | unset (trust no proxies); Compose: `uniquelocal` | Trusted ingress addresses for forwarded client IPs and owner-auth rate limits. Configure your actual proxies; never use Internet-wide ranges. Booleans and hop counts are not accepted. See [deployment routing](deploy-images.md#2-configure-the-environment) |
 | `RELAY_PUBLIC_URL` | `ws(s)://` URL | `ws://localhost:4500` | Public relay URL handed to nodes and clients in relay tickets |
@@ -559,6 +561,8 @@ dumb, end-to-end-encrypted pipe — it holds no database.
 | `RELAY_SECRET` | opaque string | **`dev-relay-secret`** | Must match the control plane. Required in production, where a default value makes the relay exit 1 |
 | `CONTROL_PLANE_URL` | URL | `http://localhost:4400` | Where the relay introspects tickets |
 | `PORT` | integer | `4500` | |
+| `METRICS_PORT` | integer | `9464` | Prometheus `/metrics` and `/metrics.json`, served only here, never on `PORT` (a reverse proxy forwards every path). If the port is taken, metrics are skipped with a warning |
+| `METRICS_HOST` | address | `127.0.0.1` | Bind address for `METRICS_PORT`. In a container, set `0.0.0.0` so a scraper on the same private network can reach it, and don't publish the port |
 | `RELAY_SHARD_ID` | string | unset | Observational label only, reported in `/healthz` and `/metrics`. No routing effect |
 | `RELAY_MAX_FRAME_BYTES` | integer bytes | `262144` (256 KiB) | Larger inbound frames are rejected |
 | `RELAY_MAX_CLIENT_MESSAGES_PER_MINUTE` | integer | `600` | Rate cap on phone/browser sockets |

@@ -44,14 +44,15 @@ function metric(text: string, event: string, source: string): number {
   return line ? Number(line.trim().split(/\s+/).at(-1)) : 0;
 }
 async function scrape(port: number): Promise<string> {
-  return (await fetch(`http://localhost:${port}/metrics`)).text();
+  return (await fetch(`http://127.0.0.1:${port}/metrics`)).text();
 }
 
 let proc: ChildProcess | undefined;
 try {
-  const port = await freePort();
+  const [port, metricsPort] = await Promise.all([freePort(), freePort()]);
   proc = spawnTestService(cpDir, {
     PORT: String(port),
+    METRICS_PORT: String(metricsPort),
     RELAY_PUBLIC_URL: "ws://localhost:1",
     RELAY_SECRET: "sign-in-funnel-test",
   });
@@ -63,21 +64,21 @@ try {
 
   // A garbage token is exactly what an expired/already-used magic link
   // produces — the real-world failure this metric exists to catch.
-  const before = await scrape(port);
+  const before = await scrape(metricsPort);
   const failedBefore = metric(before, "sign_in_failed", "email_api");
   const failed = await request(port, "POST", "/auth/magic-link/consume", { token: "not-a-real-token" });
   assert.equal(failed.status, 401);
-  assert.equal(metric(await scrape(port), "sign_in_failed", "email_api"), failedBefore + 1, "an invalid/expired magic-link token records sign_in_failed");
+  assert.equal(metric(await scrape(metricsPort), "sign_in_failed", "email_api"), failedBefore + 1, "an invalid/expired magic-link token records sign_in_failed");
 
   // The dev sign-in path is a real successful sign-in (source "dev") — confirm
   // it still lands on sign_in_completed, not sign_in_failed, so the two
   // counters are genuinely disjoint rather than one masking the other.
-  const completedBefore = metric(await scrape(port), "sign_in_completed", "dev");
+  const completedBefore = metric(await scrape(metricsPort), "sign_in_completed", "dev");
   const login = await request(port, "POST", "/auth/dev-login", { email: "funnel-test@example.com" });
   assert.equal(login.status, 200);
   assert.ok(login.body.token);
-  assert.equal(metric(await scrape(port), "sign_in_completed", "dev"), completedBefore + 1, "a successful dev sign-in records sign_in_completed");
-  assert.equal(metric(await scrape(port), "sign_in_failed", "email_api"), failedBefore + 1, "the successful sign-in did not also bump the failure counter");
+  assert.equal(metric(await scrape(metricsPort), "sign_in_completed", "dev"), completedBefore + 1, "a successful dev sign-in records sign_in_completed");
+  assert.equal(metric(await scrape(metricsPort), "sign_in_failed", "email_api"), failedBefore + 1, "the successful sign-in did not also bump the failure counter");
 
   console.log("✓ sign-in funnel: failed magic-link consume and successful dev sign-in record disjoint, low-cardinality counters");
 } finally {

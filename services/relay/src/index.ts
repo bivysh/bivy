@@ -231,17 +231,11 @@ function authOk(req: { headers: Record<string, string | string[] | undefined> })
 // One domain per deployment/shard, advertised automatically to admitted nodes.
 // No user, agent, app manifest, or node needs DNS/TLS/port configuration.
 const previews = process.env.RELAY_PREVIEW_ORIGIN ? new PreviewRelay(process.env.RELAY_PREVIEW_ORIGIN) : undefined;
-const httpServer = createServer((req, res) => {
-  if (previews?.handle(req, res)) return;
-  if (req.url === "/healthz") {
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ ok: true, shardId, rooms: rooms.size }));
-    return;
-  }
+// Metrics get their own listener (METRICS_PORT/METRICS_HOST, loopback by
+// default), never the public port: a reverse proxy in front (Caddy,
+// kamal-proxy) forwards every path. See docs/configuration.md.
+const metricsServer = createServer((req, res) => {
   if (req.url === "/metrics") {
-    // Prometheus text exposition for Alloy/Prometheus scrapers. Scraped over the
-    // internal docker network only — Caddy blocks /metrics publicly. See
-    // docs/ops/monitoring.md in bivysh/bivy-cloud.
     res.writeHead(200, { "content-type": PROMETHEUS_CONTENT_TYPE });
     res.end(renderRelayMetrics(metrics, rooms.size, shardId, previews?.metrics()));
     return;
@@ -251,6 +245,16 @@ const httpServer = createServer((req, res) => {
     // still reads them.
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({ ok: true, shardId, rooms: rooms.size, ...metrics, preview: previews?.metrics() }));
+    return;
+  }
+  res.writeHead(404);
+  res.end();
+});
+const httpServer = createServer((req, res) => {
+  if (previews?.handle(req, res)) return;
+  if (req.url === "/healthz") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ ok: true, shardId, rooms: rooms.size }));
     return;
   }
   if (req.method === "POST" && req.url === "/internal/run-updated") {
@@ -613,3 +617,8 @@ for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => 
 httpServer.listen({ port, host: process.env.BIND_HOST || undefined }, () => {
   console.log(`Relay listening on http://localhost:${port}  (control plane: ${controlPlaneUrl}, max frame: ${maxFrameBytes} bytes, max buffered: ${maxBufferedBytes} bytes, rate: client ${maxClientMessagesPerMinute}/min, node ${maxNodeMessagesPerMinute}/min)`);
 });
+const metricsPort = Number(process.env.METRICS_PORT ?? 9464);
+const metricsHost = process.env.METRICS_HOST || "127.0.0.1";
+metricsServer.listen({ port: metricsPort, host: metricsHost }, () => console.log(`Metrics on http://${metricsHost}:${metricsPort}/metrics`));
+// Metrics are never worth taking the relay down (e.g. the port is taken).
+metricsServer.on("error", (error) => console.warn(`[relay] metrics not served: ${error.message}`));

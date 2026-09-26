@@ -34,7 +34,7 @@ async function request(port: number, method: string, pathname: string, token?: s
 let proc: ChildProcess | undefined;
 let relay: Server | undefined;
 try {
-  const [port, relayPort] = await Promise.all([freePort(), freePort()]);
+  const [port, relayPort, metricsPort] = await Promise.all([freePort(), freePort(), freePort()]);
   const relayNotifications: any[] = [];
   relay = createServer(async (req, res) => {
     const chunks: Buffer[] = [];
@@ -47,6 +47,7 @@ try {
 
   proc = spawnTestService(cpDir, {
     PORT: String(port),
+    METRICS_PORT: String(metricsPort),
     RELAY_PUBLIC_URL: `ws://localhost:${relayPort}`,
     RELAY_SECRET: "cancel-test",
     AUTOMATION_SCHEDULER_INTERVAL_MS: "60000",
@@ -138,7 +139,7 @@ try {
   assert.equal(noRetry.status, 409);
   assert.equal(noRetry.body.reason, "not_retryable");
 
-  const metrics = await (await fetch(`http://localhost:${port}/metrics`)).text();
+  const metrics = await (await fetch(`http://127.0.0.1:${metricsPort}/metrics`)).text();
   assert.match(metrics, /bivy_run_lifecycle_results_total\{outcome="cancelled"\} 1(?:\n|$)/, "only the durable cancellation transition is counted");
   const modern = await request(port, 'POST', '/account/automation-runs', token, {title:'Fenced delivery',maxAttempts:2});
   const claimToken = 'new-worker-generation';
@@ -155,9 +156,9 @@ try {
   assert.equal((await request(port,'POST',`${work}/attempt`,nodeToken,{attempt:1},claimToken)).body.item.attempt,2);
   assert.equal((await request(port,'POST',`${work}/attempt`,nodeToken,{attempt:2},claimToken)).status,409);
   assert.equal((await request(port,'POST',`${work}/complete`,nodeToken,undefined,claimToken)).status,200);
-  const beforeAck = await (await fetch(`http://localhost:${port}/metrics`)).text();
+  const beforeAck = await (await fetch(`http://127.0.0.1:${metricsPort}/metrics`)).text();
   assert.equal((await request(port,'POST',`${work}/complete`,nodeToken,undefined,claimToken)).status,200,'lost completion response can be retried');
-  const afterAck = await (await fetch(`http://localhost:${port}/metrics`)).text();
+  const afterAck = await (await fetch(`http://127.0.0.1:${metricsPort}/metrics`)).text();
   assert.equal(afterAck.match(/bivy_run_lifecycle_results_total\{outcome="succeeded"\} \d+/)?.[0],beforeAck.match(/bivy_run_lifecycle_results_total\{outcome="succeeded"\} \d+/)?.[0]);
 
   const definition = await request(port,'POST','/account/automations',token,{name:'Manual dispatch',trigger:'manual',templateCiphertext:'bivy-room-v1:cancel-node:opaque',nodeLabel:'bivy/cancel-runner'});

@@ -46,15 +46,16 @@ function stageMetric(text: string, stage: string): number {
   return line ? Number(line.trim().split(/\s+/).at(-1)) : 0;
 }
 async function scrape(port: number): Promise<string> {
-  return (await fetch(`http://localhost:${port}/metrics`)).text();
+  return (await fetch(`http://127.0.0.1:${port}/metrics`)).text();
 }
 
 const LEASE_MS = 700;
 let proc: ChildProcess | undefined;
 try {
-  const port = await freePort();
+  const [port, metricsPort] = await Promise.all([freePort(), freePort()]);
   proc = spawnTestService(cpDir, {
     PORT: String(port),
+    METRICS_PORT: String(metricsPort),
     RELAY_PUBLIC_URL: "ws://localhost:1",
     RELAY_SECRET: "idem-test",
     AUTOMATION_SCHEDULER_INTERVAL_MS: "60000",
@@ -114,7 +115,7 @@ try {
 
   // 3) Cancellation beats a completion racing behind it, and the losing
   //    completion emits NO succeeded metric (no double-counted outcome).
-  const before = await scrape(port);
+  const before = await scrape(metricsPort);
   const succeededBefore = metric(before, "bivy_run_lifecycle_results_total", "succeeded");
   const cancelledBefore = metric(before, "bivy_run_lifecycle_results_total", "cancelled");
 
@@ -127,18 +128,18 @@ try {
   assert.equal(lateComplete.status, 409, "completing a cancelled Run is a conflict");
   assert.equal((await request(port, "GET", `/account/automation-runs/${rid}`, token)).body.status, "cancelled", "cancellation wins the race");
 
-  const after = await scrape(port);
+  const after = await scrape(metricsPort);
   assert.equal(metric(after, "bivy_run_lifecycle_results_total", "succeeded"), succeededBefore, "a blocked completion must not record a succeeded outcome");
   assert.equal(metric(after, "bivy_run_lifecycle_results_total", "cancelled"), cancelledBefore + 1, "exactly one cancellation is counted");
 
   // 4) A durable failure records a fixed, low-cardinality failure-stage metric.
-  const stageBefore = stageMetric(await scrape(port), "agent");
+  const stageBefore = stageMetric(await scrape(metricsPort), "agent");
   const failing = await request(port, "POST", "/account/automation-runs", token, { title: "Will fail" });
   const fid = failing.body.id as string;
   assert.equal((await request(port, "POST", `/node/work/${fid}/claim`, nodeA)).status, 200);
   assert.equal((await request(port, "POST", `/node/work/${fid}/running`, nodeA)).status, 200);
   assert.equal((await request(port, "POST", `/node/work/${fid}/fail`, nodeA)).status, 200);
-  assert.equal(stageMetric(await scrape(port), "agent"), stageBefore + 1, "a plain agent failure records the agent stage");
+  assert.equal(stageMetric(await scrape(metricsPort), "agent"), stageBefore + 1, "a plain agent failure records the agent stage");
 
   console.log("✓ duplicate-delivery dedupe, reclaim attempt numbering, stale-Machine blocking, cancel/complete race integrity, and failure-stage metric");
 } finally {
