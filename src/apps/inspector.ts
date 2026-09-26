@@ -34,15 +34,30 @@ const selector=el=>{
   return parts.join(' > ')||el.localName;
 };
 let box=null,target=null,onPicked=post,host=null;
-const stop=()=>{box?.remove();box=null;target=null;removeEventListener('pointermove',hover,true);removeEventListener('click',pick,true);removeEventListener('keydown',key,true);};
+// Picks on pointerup: iOS never fires click for a tap on a non-clickable
+// element when only window listens, so click would miss most of the page.
+// While pointing, the app sees none of the gesture, including the click after.
+const SWALLOW=['pointerdown','mousedown','mouseup','touchend','click','dblclick','contextmenu'];
+const swallow=e=>{e.preventDefault();e.stopPropagation();};
+// A second listener, so stopping (which the shell does right after a pick)
+// doesn't also drop the guard on the rest of the tap. The tap's click ends it.
+const aftermath=e=>{swallow(e);if(e.type==='click')listen(false,aftermath);};
+const listen=(on,handler=swallow)=>{
+  const method=on?addEventListener:removeEventListener;
+  if(handler===swallow){method('pointermove',hover,true);method('pointerup',pick,true);method('keydown',key,true);}
+  for(const type of SWALLOW)method(type,handler,true);
+};
+const stop=()=>{box?.remove();box=null;target=null;listen(false);};
 const hover=e=>{
   const el=document.elementFromPoint(e.clientX,e.clientY);
   if(!el||el===box||el===host)return;target=el;const r=el.getBoundingClientRect();
   Object.assign(box.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px'});
 };
 const pick=e=>{
-  e.preventDefault();e.stopPropagation();
+  swallow(e);
   const el=document.elementFromPoint(e.clientX,e.clientY)||target;stop();
+  // Keep eating the click (and iOS's delayed mouse events) this tap still fires.
+  listen(true,aftermath);setTimeout(()=>listen(false,aftermath),500);
   if(!el||el===host){onPicked({type:'picked',cancelled:true});return;}const r=el.getBoundingClientRect();
   onPicked({type:'picked',selector:selector(el),tag:el.localName,text:(el.innerText||el.getAttribute('aria-label')||el.getAttribute('alt')||'').trim().replace(/\\s+/g,' ').slice(0,200),
     rect:{x:Math.round(r.left),y:Math.round(r.top),width:Math.round(r.width),height:Math.round(r.height)},
@@ -55,7 +70,7 @@ function startPointing(){
   box.setAttribute('aria-hidden','true');
   Object.assign(box.style,{position:'fixed',zIndex:2147483647,pointerEvents:'none',outline:'2px solid Highlight',outlineOffset:'2px',borderRadius:'4px',transition:'all 60ms ease-out'});
   document.documentElement.append(box);
-  addEventListener('pointermove',hover,true);addEventListener('click',pick,true);addEventListener('keydown',key,true);
+  listen(true);
 }
 addEventListener('message',e=>{
   if(!framed||e.origin!==SHELL||e.source!==parent||e.data?.type!=='bivy:point')return;
