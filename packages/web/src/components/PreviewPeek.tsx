@@ -14,11 +14,20 @@ type Annotated = { image?: { data: string; mimeType: string; name: string }; app
 const APPROXIMATE = "Picture: retaken on the machine, so it may not show this page’s state (a cart, a sign-in, an open menu). The marks and elements are exact.";
 
 const BLOCKED_KEY = "bivy.previewPeekBlocked";
+const BLOCKED_FOR = 7 * 24 * 60 * 60_000;
 
 /** True once this browser refused preview cookies inside Bivy; previews then
- *  open straight in a tab instead of failing in the drawer first. */
+ *  open straight in a tab instead of failing in the drawer first. Kept for a
+ *  week and only for this browser version: an update (Safari re-enabled
+ *  partitioned cookies in 26.2) or a one-off failure gets the drawer back. */
 export function peekBlocked(): boolean {
-  try { return localStorage.getItem(BLOCKED_KEY) === "1"; } catch { return false; }
+  try {
+    const blocked = JSON.parse(localStorage.getItem(BLOCKED_KEY) ?? "null") as { agent?: unknown; at?: unknown } | null;
+    return blocked?.agent === navigator.userAgent && typeof blocked.at === "number" && Date.now() - blocked.at < BLOCKED_FOR;
+  } catch { return false; }
+}
+function rememberBlocked(): void {
+  try { localStorage.setItem(BLOCKED_KEY, JSON.stringify({ agent: navigator.userAgent, at: Date.now() })); } catch { /* storage unavailable */ }
 }
 
 /** An app preview in a drawer over the chat. The framed shell is a separate,
@@ -87,7 +96,7 @@ export function PreviewPeek({ url, name, sessionId, appId, viewId, onClose, onOp
         if (!controller.prefillComposer(text)) seedSessionDraft(localStorage, sessionId, text);
         onClose();
       } else if (data.type === "blocked") {
-        try { localStorage.setItem(BLOCKED_KEY, "1"); } catch { /* storage unavailable */ }
+        rememberBlocked();
         setBlocked(true);
       } else if (data.type === "hello") {
         capabilities();

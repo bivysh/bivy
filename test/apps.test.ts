@@ -519,8 +519,8 @@ test("the trusted shell only accepts scoped launch grants and configured chat re
     assert.equal(launch.origin, gateway.shellOrigin(id));
     const shell = await request(port, launch.host, "/__bivy/open");
     assert.match(shell.body, /Back to chat/); assert.match(shell.body, /sandbox=/);
-    // Only configured Bivy clients may frame the shell (Peek).
-    assert.match(String(shell.headers["content-security-policy"]), /frame-ancestors https:\/\/bivy\.example http:\/\/localhost:5173;/);
+    // Only configured Bivy clients, and the packaged apps, may frame the shell (Peek).
+    assert.match(String(shell.headers["content-security-policy"]), /frame-ancestors https:\/\/bivy\.example http:\/\/localhost:5173 capacitor:\/\/localhost;/);
     assert.equal((await request(port, launch.host, "/index.html")).status, 404);
     assert.equal((await request(port, launch.host, "/__bivy/launch", { method: "POST", headers: { origin: gateway.origin(id) }, body: launch.hash.slice(1) })).status, 403);
     const response = await request(port, launch.host, "/__bivy/launch", { method: "POST", headers: { origin: launch.origin }, body: launch.hash.slice(1) });
@@ -561,6 +561,11 @@ test("gateway proxies HTTP bodies, cookies, external host and WebSockets without
     assert.equal(headers.host, url.host); assert.equal(headers["x-forwarded-host"], url.host);
     assert.equal(headers.cookie?.trim(), "user=ok");
     assert.deepEqual(response.headers["set-cookie"], ["session=abc; Path=/"]);
+    // Framed inside Bivy (an "e:" launch) the app's cookies are third-party:
+    // partitioned, or Safari drops them.
+    const embedded = await request(port, url.host, "/__bivy/redeem", { method: "POST", headers: { origin: url.origin }, body: `e:${new URL(gateway.open(id)).hash.slice(1)}` });
+    const framed = await request(port, url.host, "/page", { headers: { cookie: embedded.headers["set-cookie"]![0].split(";")[0] } });
+    assert.deepEqual(framed.headers["set-cookie"], ["session=abc; Path=/; Secure; SameSite=None; Partitioned"]);
     assert.equal(response.headers["x-frame-options"], undefined);
     assert.match(String(response.headers["content-security-policy"]), /default-src 'self'/);
     assert.ok(String(response.headers["content-security-policy"]).includes(`frame-ancestors ${gateway.shellOrigin(id)}`));

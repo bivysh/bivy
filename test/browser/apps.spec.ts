@@ -160,14 +160,15 @@ for (const theme of themes) {
     await page.context().route("https://random.preview.example.net/__bivy/open", (route) => route.fulfill({ contentType: "text/html", body: `<script>parent.postMessage({source:"bivy-preview",type:"blocked"},"*")</script>` }));
     await page.getByRole("button", { name: "Preview port 5173" }).click();
     await expect(page.getByRole("status").filter({ hasText: "previews will open in a tab on this device" })).toBeVisible();
-    expect(await page.evaluate(() => localStorage.getItem("bivy.previewPeekBlocked"))).toBe("1");
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem("bivy.previewPeekBlocked")!).agent === navigator.userAgent)).toBe(true);
     await page.context().unroute("https://random.preview.example.net/__bivy/open");
     await page.keyboard.press("Escape");
     await page.evaluate(() => { (window as any).mode = "ready"; (window as any).showSheet(); });
     const tab = page.waitForEvent("popup");
     await page.getByRole("button", { name: "Open preview", exact: true }).last().click();
     await expect((await tab).getByRole("heading", { name: "Preview opened" })).toBeVisible();
-    await page.evaluate(() => localStorage.removeItem("bivy.previewPeekBlocked"));
+    // Only for this browser version: after an update the drawer gets a new try.
+    await page.evaluate(() => localStorage.setItem("bivy.previewPeekBlocked", JSON.stringify({ agent: "an older version", at: Date.now() })));
     await page.keyboard.press("Escape");
     await page.evaluate(() => { (window as any).showSheet(); });
     await page.getByRole("button", { name: "Preview port 5173" }).click();

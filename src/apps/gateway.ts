@@ -121,6 +121,10 @@ const poll=async()=>{try{const r=await fetch(location.href,{method:'HEAD',cache:
 }
 /** Copied links are reusable until revoked, capped so a forgotten one lapses. */
 export const SHARE_TTL = 24 * HOUR;
+/** Bivy's packaged apps load the client from their own scheme, so a preview
+ * framed there has this ancestor instead of a web origin. (Node's URL gives
+ * these "null" origins, so they cannot be configured as return origins.) */
+const PACKAGED_CLIENT_ORIGINS = ["capacitor://localhost"];
 const HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
 
 /** Separate per-app origins are mandatory. TLS terminates at the deployment's
@@ -146,11 +150,20 @@ function upstreamHeaders(req: IncomingMessage, origin: string): OutgoingHttpHead
   headers["x-forwarded-proto"] = "https";
   return headers;
 }
-function responseHeaders(headers: IncomingMessage["headers"], ancestors: string, inspector?: string): OutgoingHttpHeaders {
+/** Framed inside Bivy, an app's own cookies are third-party too, and browsers
+ * that block those (Safari) keep only Partitioned ones: key them to Bivy's
+ * top-level site like the preview cookie, so sign-ins and carts work there. */
+function partitionCookie(cookie: string): string {
+  const [pair, ...attributes] = cookie.split(";");
+  const kept = attributes.filter((attribute) => !["samesite", "secure", "partitioned"].includes(attribute.split("=", 1)[0].trim().toLowerCase()));
+  return [pair, ...kept, " Secure", " SameSite=None", " Partitioned"].join(";");
+}
+function responseHeaders(headers: IncomingMessage["headers"], ancestors: string, inspector?: string, partition = false): OutgoingHttpHeaders {
   const result = cleanHeaders(headers);
   if (headers["set-cookie"]) {
     result["set-cookie"] = headers["set-cookie"].filter((cookie) => cookie.split("=", 1)[0].trim() !== COOKIE)
-      .map((cookie) => cookie.replace(/;\s*domain=[^;]*/ig, ""));
+      .map((cookie) => cookie.replace(/;\s*domain=[^;]*/ig, ""))
+      .map((cookie) => partition ? partitionCookie(cookie) : cookie);
   }
   // Preview data must not become a shared proxy cache entry. Apps cannot frame
   // Bivy or retain an opener; service workers are refused (see handle).
@@ -177,8 +190,9 @@ export class AppGateway {
     ["/__bivy/tokens.css", readFileSync(new URL("./tokens.css", import.meta.url))],
     ["/__bivy/styles.css", readFileSync(new URL("./styles.css", import.meta.url))],
   ]);
-  /** `reviewer`: the browser session came from a copied (shared) link. */
-  private readonly sessions = new Map<string, { appId: string; expires: number; reviewer?: boolean }>();
+  /** `reviewer`: the browser session came from a copied (shared) link.
+   *  `embedded`: it runs framed inside a Bivy client (a third-party frame). */
+  private readonly sessions = new Map<string, { appId: string; expires: number; reviewer?: boolean; embedded?: boolean }>();
   private readonly sockets = new Map<string, Set<Duplex>>();
   private readonly displays = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024, perMessageDeflate: false });
 
@@ -196,7 +210,9 @@ export class AppGateway {
   origin(id: string): string { return this.template.replace("{app}", id); }
   shellOrigin(id: string): string { return this.template.replace("{app}", `view-${id}`); }
   /** Bivy clients may frame the shell (Peek), so app content allows both. */
-  private ancestors(id: string): string { return [this.shellOrigin(id), ...this.returnOrigins()].join(" "); }
+  private ancestors(id: string): string { return [this.shellOrigin(id), ...this.clientOrigins()].join(" "); }
+  /** Where a Bivy client runs: configured web origins, and the packaged apps. */
+  private clientOrigins(): string[] { const web = this.returnOrigins(); return web.length ? [...web, ...PACKAGED_CLIENT_ORIGINS] : []; }
   open(id: string, returnTo?: string): string {
     const entry = this.requireWeb(id);
     if (returnTo) {
@@ -258,7 +274,7 @@ export class AppGateway {
     const entry = this.registry.getView(id);
     return entry?.view.kind === "web" ? entry : undefined;
   }
-  private session(req: IncomingMessage, id: string): { expires: number; reviewer?: boolean } | undefined {
+  private session(req: IncomingMessage, id: string): { expires: number; reviewer?: boolean; embedded?: boolean } | undefined {
     this.sweep();
     const token = (req.headers.cookie ?? "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
     const session = token ? this.sessions.get(token) : undefined;
@@ -278,7 +294,7 @@ export class AppGateway {
     const origin = this.shellOrigin(id);
     const nonce = randomBytes(16).toString("hex");
     res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'self' 'nonce-${nonce}'; connect-src 'self' ${this.origin(id)}; img-src blob:; frame-src ${this.origin(id)}; frame-ancestors ${this.returnOrigins().join(" ") || "'none'"}; base-uri 'none'; form-action 'none'`);
+    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'self' 'nonce-${nonce}'; connect-src 'self' ${this.origin(id)}; img-src blob:; frame-src ${this.origin(id)}; frame-ancestors ${this.clientOrigins().join(" ") || "'none'"}; base-uri 'none'; form-action 'none'`);
     if (req.method === "GET" && this.styles.has(req.url ?? "")) {
       res.setHeader("Content-Type", "text/css; charset=utf-8");
       res.end(this.styles.get(req.url!)); return;
@@ -335,14 +351,14 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
       // A browser session never outlives the link that created it.
       const expires = Math.min(Date.now() + HOUR, grant.expires);
       const token = randomBytes(32).toString("hex");
-      this.sessions.set(token, { appId: id, expires, reviewer: grant.reusable === true });
+      this.sessions.set(token, { appId: id, expires, reviewer: grant.reusable === true, ...(embedded ? { embedded } : {}) });
       // Framed inside Bivy, the cookie is third-party: it must be SameSite=None,
       // and Partitioned keys it to Bivy's top-level site so no other site can use it.
       const scope = embedded ? "SameSite=None; Partitioned" : "SameSite=Lax";
       res.setHeader("Set-Cookie", `${COOKIE}=${token}; Secure; HttpOnly; ${scope}; Path=/; Max-Age=${Math.max(1, Math.floor((expires - Date.now()) / 1000))}`);
       res.writeHead(204); res.end(); return;
     }
-    const expires = this.authorize(req, id);
+    const session = this.session(req, id), expires = session?.expires;
     // A home-screen visit without access goes through Bivy to sign in, then
     // comes back to the same page. Framed loads keep the plain message.
     const signIn = !expires && req.method === "GET" && req.headers["sec-fetch-dest"] === "document" && req.url?.startsWith("/") ? this.signIn?.(entry, req.url) : undefined;
@@ -357,7 +373,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     if ((req.url === COMPARE_PATH || req.url.startsWith(`${COMPARE_PATH}/`)) && req.method === "GET") { this.compare(req, res, entry); return; }
     if (req.url === INSPECTOR_PATH && req.method === "GET") {
       res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
-      res.end(inspectorScript(this.shellOrigin(id), this.session(req, id)?.reviewer === true)); return;
+      res.end(inspectorScript(this.shellOrigin(id), session?.reviewer === true, session?.embedded === true)); return;
     }
     if (req.url === NOTES_PATH && req.method === "POST") { await this.note(req, res, entry); return; }
     if (entry.target.kind === "display") { await this.display(req, res, entry); return; }
@@ -394,14 +410,14 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
       response.on("error", () => res.destroy());
       const html = inspect && /^text\/html/i.test(response.headers["content-type"] ?? "") && !response.headers["content-encoding"] && Number(response.headers["content-length"] ?? 0) <= MAX_INJECT_BYTES;
       if (!html) {
-        res.writeHead(response.statusCode ?? 502, responseHeaders(response.headers, this.ancestors(id)));
+        res.writeHead(response.statusCode ?? 502, responseHeaders(response.headers, this.ancestors(id), undefined, session?.embedded));
         response.pipe(res); return;
       }
       const chunks: Buffer[] = []; let size = 0;
       response.on("data", (chunk: Buffer) => { size += chunk.length; if (size > MAX_INJECT_BYTES) { response.destroy(); res.destroy(); return; } chunks.push(chunk); });
       response.on("end", () => {
         const body = withInspector(Buffer.concat(chunks));
-        const headers = responseHeaders(response.headers, this.ancestors(id), `${this.origin(id)}${INSPECTOR_PATH}`);
+        const headers = responseHeaders(response.headers, this.ancestors(id), `${this.origin(id)}${INSPECTOR_PATH}`, session?.embedded);
         delete headers["content-length"];
         res.writeHead(response.statusCode ?? 200, { ...headers, "content-length": body.length });
         res.end(body);

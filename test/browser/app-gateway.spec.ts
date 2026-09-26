@@ -262,7 +262,7 @@ test("the preview works framed inside Bivy and hands drafts to it", async ({ pag
   const fixture = await delivery(registry, false);
   const { gateway, port } = fixture;
   try {
-    await fs.writeFile(path.join(dir, "index.html"), '<!doctype html><html lang="en"><title>Ledger</title><h1>Ledger</h1><button id="save">Add transaction</button></html>');
+    await fs.writeFile(path.join(dir, "index.html"), '<!doctype html><html lang="en"><title>Ledger</title><h1>Ledger</h1><button id="save">Add transaction</button><script>document.cookie="theme=dark; Path=/; SameSite=Lax"</script></html>');
     const id = registry.publish("s", dir, { version: 1, name: "Ledger", views: [{ kind: "web", name: "Ledger", source: { kind: "static", directory: "." } }] }).views[0].id;
     await page.route("https://*.preview.example.net/**", async (route) => {
       const request = route.request(); const url = new URL(request.url());
@@ -276,6 +276,8 @@ test("the preview works framed inside Bivy and hands drafts to it", async ({ pag
     const app = shell.frameLocator('iframe[title="Ledger"]');
     await expect(app.getByRole("heading", { name: "Ledger" })).toBeVisible();
     await expect(shell.getByRole("button", { name: "Back to chat" })).toBeHidden();
+    // Cookies the app sets itself are partitioned too, so Safari keeps them.
+    await expect.poll(async () => (await page.context().cookies()).find((c) => c.name === "theme")?.partitionKey).toBe("https://bivy.example");
     await page.screenshot({ path: testInfo.outputPath("peek-embedded.png") });
     await shell.getByRole("button", { name: "Point" }).click();
     await pointAt(app, app.getByRole("button", { name: "Add transaction" }));

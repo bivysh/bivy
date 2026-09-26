@@ -71,9 +71,14 @@ generated app is framed on a separate, same-site origin, so app code never
 reaches Bivy's controls. Inside the drawer, the app's access cookie is a
 third-party cookie. The embedded launch therefore sets it `SameSite=None;
 Partitioned`, keyed to Bivy's top-level site, so no other site can use it. The
-shell may be framed only by the configured Bivy client origins. Browsers that
-refuse framed cookies are detected on the first try. That device then opens
-previews in a tab from then on. The Bivy client's CSP allows HTTPS frames
+app's own cookies are third-party there too, so in the drawer the gateway
+partitions them the same way (`Secure; SameSite=None; Partitioned`), whether
+its server or its scripts set them: sign-ins and carts work in Safari, which
+keeps only partitioned third-party cookies (iOS/Safari 26.2 and later). The
+shell may be framed only by the configured Bivy client origins and Bivy's
+packaged apps (`capacitor://localhost`). Browsers that refuse framed cookies
+are detected on the first try. That browser version then opens previews in a
+tab for a week; an update gets the drawer back. The Bivy client's CSP allows HTTPS frames
 (`frame-src 'self' https:`) for this. Terminal views ask for confirmation,
 then open inside Bivy's existing terminal with input, output, resizing and mobile
 controls. Chat launchers survive reload, but opening a removed app or one cleared
