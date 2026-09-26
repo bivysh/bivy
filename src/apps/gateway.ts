@@ -3,7 +3,8 @@
 import http, { type IncomingMessage, type ServerResponse, type OutgoingHttpHeaders } from "node:http";
 import net from "node:net";
 import type { Duplex } from "node:stream";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import path from "node:path";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -53,6 +54,38 @@ function allowInspector(policy: string, url: string): string {
     directives.push(add(directives[fallback].replace(/^default-src/i, "script-src")));
   }
   return directives.join("; ");
+}
+/** Text-like types that shrink well; images and fonts are compressed already. */
+const COMPRESSIBLE = /^(?:text\/|application\/(?:json|javascript|xml|wasm)|image\/svg\+xml)/i;
+/** Snapshot and noVNC buffers never change, so validators and gzip copies are made once. */
+const encodings = new WeakMap<Buffer, { etag: string; gzip?: Buffer }>();
+function encoded(data: Buffer, type: string): { etag: string; gzip?: Buffer } {
+  let entry = encodings.get(data);
+  if (!entry) {
+    // Weak: the identity and gzip bodies share it.
+    entry = { etag: `W/"${createHash("sha256").update(data).digest("base64url").slice(0, 27)}"` };
+    if (data.length >= 1024 && COMPRESSIBLE.test(type)) { const gzip = gzipSync(data); if (gzip.length < data.length) entry.gzip = gzip; }
+    encodings.set(data, entry);
+  }
+  return entry;
+}
+/** Serves fixed bytes with a validator (304 on a match) and gzip when the browser takes it. */
+function sendBytes(req: IncomingMessage, res: ServerResponse, status: number, headers: OutgoingHttpHeaders, data: Buffer): void {
+  const file = encoded(data, String(headers["content-type"] ?? ""));
+  headers.etag = file.etag;
+  headers.vary = "Accept-Encoding";
+  if (status === 200 && (req.headers["if-none-match"] ?? "").split(",").some((tag) => tag.trim() === file.etag)) { res.writeHead(304, headers); res.end(); return; }
+  const gzip = file.gzip && /\bgzip\b/i.test(req.headers["accept-encoding"] ?? "") ? file.gzip : undefined;
+  if (gzip) headers["content-encoding"] = "gzip";
+  const body = gzip ?? data;
+  res.writeHead(status, { ...headers, "content-length": body.length });
+  res.end(req.method === "HEAD" ? undefined : body);
+}
+/** App content may sit in the browser's own cache, never a shared one, and is
+ * revalidated on every use whatever the app says: a preview must show what the
+ * agent just built. The app's validators still turn unchanged files into 304s. */
+function privateCache(policy: string | undefined): string {
+  return /\bno-store\b/i.test(policy ?? "") ? "no-store" : "private, no-cache";
 }
 const HOUR = 60 * 60_000;
 /** A viewer that stops reading doesn't make the node buffer the display. */
@@ -120,8 +153,8 @@ function responseHeaders(headers: IncomingMessage["headers"], ancestors: string,
       .map((cookie) => cookie.replace(/;\s*domain=[^;]*/ig, ""));
   }
   // Preview data must not become a shared proxy cache entry. Apps cannot frame
-  // Bivy, retain an opener, or cache an offline service-worker copy of the gate.
-  result["cache-control"] = "no-store";
+  // Bivy or retain an opener; service workers are refused (see handle).
+  result["cache-control"] = privateCache(headers["cache-control"]);
   result["referrer-policy"] = "no-referrer";
   result["cross-origin-opener-policy"] = "same-origin";
   result["x-content-type-options"] = "nosniff";
@@ -350,8 +383,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
       const headers = responseHeaders({}, this.ancestors(id));
       headers["content-type"] = MIME[path.extname(file).toLowerCase()] || "application/octet-stream";
       if (inspect && path.extname(file).toLowerCase() === ".html" && data.length <= MAX_INJECT_BYTES) data = withInspector(data);
-      res.writeHead(status, { ...headers, "content-length": data.length });
-      res.end(req.method === "HEAD" ? undefined : data); return;
+      sendBytes(req, res, status, headers, data); return;
     }
     if (entry.target.kind !== "service") { res.writeHead(404); res.end(); return; }
     const port = entry.target.port;
@@ -406,8 +438,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     if (url.startsWith(NOVNC_PATH)) {
       const data = novncFile(url.slice(NOVNC_PATH.length));
       if (!data) { res.writeHead(404); res.end(); return; }
-      res.writeHead(200, { ...responseHeaders({}, this.ancestors(id)), "content-type": "text/javascript; charset=utf-8", "content-length": data.length });
-      res.end(req.method === "HEAD" ? undefined : data); return;
+      sendBytes(req, res, 200, { ...responseHeaders({}, this.ancestors(id)), "content-type": "text/javascript; charset=utf-8" }, data); return;
     }
     if (!isPageLoad(req)) { res.writeHead(404); res.end(); return; }
     const nonce = randomBytes(16).toString("hex");
