@@ -240,6 +240,13 @@ const selectorMatchedSuites = allSuites.filter((suite) =>
 );
 const shardAssignments = assignShards(selectorMatchedSuites, shardCount);
 const selectedSuites = selectorMatchedSuites.filter((suite) => shardAssignments.get(suite.name) === shardIndex);
+// A small change can select fewer suites than there are shards. The shards
+// left over have nothing to run, which is success; only a selection that
+// matched nothing at all (a mistyped suite name) is an error.
+if (selectedSuites.length === 0 && selectorMatchedSuites.length > 0) {
+  if (!listOnly) process.stdout.write(`Nothing to run in shard ${shardIndex + 1}/${shardCount}.\n`);
+  process.exit(0);
+}
 if (selectedSuites.length === 0) {
   process.stderr.write(`No test suites matched${selectors.length ? `: ${selectors.join(", ")}` : ""}.\n`);
   process.exit(2);
