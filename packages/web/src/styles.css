@@ -588,6 +588,12 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    discoverability pattern as .row-menu-btn — and a touch-friendly baseline
    opacity on devices with no hover. */
 .assistant-row { align-self: stretch; width: 100%; max-width: 680px; }
+/* The message "Show in chat" landed on (Artifacts / Apps pages). */
+.is-jump-target { border-radius: var(--radius-md); animation: jump-target 2.4s var(--ease-standard); }
+@keyframes jump-target {
+  0%, 50% { background: color-mix(in srgb, var(--accent) 10%, transparent); box-shadow: 0 0 0 var(--space-2) color-mix(in srgb, var(--accent) 10%, transparent); }
+  100% { background: transparent; box-shadow: 0 0 0 var(--space-2) transparent; }
+}
 .msg-actions { display: flex; align-items: center; gap: 2px; margin-top: var(--space-1); margin-left: -6px; }
 .msg-copy-btn, .msg-speak-btn {
   border: 0; background: transparent; color: var(--muted);
@@ -1412,6 +1418,62 @@ button.sheet-action:last-child { border-bottom: 0; }
   .automations-view-head-actions > .btn.primary { padding: 9px 18px; }
   .automations-view-body { padding: 8px 24px max(48px, env(safe-area-inset-bottom)); }
 }
+/* Artifacts / Apps pages (LibraryView.tsx) share the Automations page shell:
+   a quiet image grid for files, a plain list for apps. */
+.library-view:focus { outline: none; }
+.library-view .automations-view-head { width: 100%; max-width: 1080px; margin: 0 auto; box-sizing: border-box; }
+.library-body { max-width: 1080px; }
+.library-toolbar { display: flex; margin: var(--space-2) 0 var(--space-4); }
+.library-loading { display: flex; justify-content: center; padding: var(--space-8) 0; }
+.library-body > .banner { margin: var(--space-2) 0; }
+.library-note { margin: var(--space-2) 0; font-size: var(--text-sm); color: var(--muted); }
+.library-grid {
+  list-style: none; margin: var(--space-2) 0 0; padding: 0;
+  display: grid; gap: var(--space-5) var(--space-3);
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+}
+.library-tile { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+.library-tile-preview {
+  width: 100%; aspect-ratio: 4 / 3; padding: 0; overflow: hidden;
+  display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: var(--radius-lg);
+  background: var(--surface-2); color: var(--muted); font: inherit; cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-standard);
+}
+.library-tile-preview:hover:not(:disabled) { border-color: var(--line-strong); }
+.library-tile-preview:disabled { cursor: progress; }
+.library-tile-preview img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.library-tile-file { display: flex; flex-direction: column; align-items: center; gap: var(--space-1); }
+.library-tile-ext { font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: 0.04em; }
+.library-tile-caption { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 0 2px; }
+.library-tile-name, .library-row-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--ink);
+}
+.library-tile-note { font-size: var(--text-xs); color: var(--danger); }
+.library-source {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: var(--space-1);
+  max-width: 100%; min-width: 0; min-height: 28px; padding: 0; border: 0; background: transparent;
+  color: var(--muted); font: inherit; font-size: var(--text-xs); text-align: left; cursor: pointer;
+}
+.library-source:hover { color: var(--ink); }
+.library-source svg, .library-source-when { flex: none; }
+.library-source-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library-list { list-style: none; margin: 0; padding: 0; }
+.library-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--line); }
+.library-row:last-child { border-bottom: 0; }
+.library-row-icon {
+  flex: none; width: 40px; height: 40px; display: grid; place-items: center;
+  border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-2);
+  color: var(--ink); font-weight: var(--weight-semibold);
+}
+.library-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.library-row-name { font-size: var(--text-base); }
+.library-row-kind { color: var(--muted); font-weight: var(--weight-normal); }
+@media (min-width: 640px) {
+  .library-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--space-6) var(--space-4); }
+}
+
 .autom-section { margin-top: 26px; }
 .autom-section-head {
   display: flex; align-items: center; justify-content: space-between; gap: 10px;

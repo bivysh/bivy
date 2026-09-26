@@ -10,6 +10,7 @@ import { requestNodeUpdate } from "./node-update.js";
 
 import { AttachmentDiskCache, AttachmentLoader } from "./attachment-loader.js";
 import { SessionTitleKeys } from "./session-title-keys.js";
+import { MachineRequests } from "./machine-requests.js";
 
 import {
   DirectTransport,
@@ -43,6 +44,10 @@ import {
   recordProductMetric,
   activationFromState,
   type NativeCredentialPreview,
+  type MachineArtifact,
+  type ArtifactsListResult,
+  type SessionAppsResult,
+  type SessionApp,
   type NativeCredentialImportResult,
   type NativeCredentialAgent,
   type ProductMetricEvent,
@@ -183,6 +188,11 @@ import { thisDevice } from "../device.js";
  * (see src/runtime/types.ts's DiscoveredNativeSession, issue #156). Never
  * carries transcript content — safe to render in a list straight off the wire.
  */
+/** An item from a machine-wide listing, with the machine it lives on (null
+ *  in direct mode, where there is only the one). */
+export type OnMachine<T> = T & { nodeId: string | null };
+export interface MachineListing<T> { items: T[]; unreachable: string[] }
+
 export interface DiscoveredNativeSessionDto {
   runtimeId: string;
   agentName: string;
@@ -1255,11 +1265,11 @@ export class AppController {
    */
   private applyRoute(route: Route, opts: { navigate?: boolean } = {}): void {
     if (route.kind === "session") this.openSession(route.id, undefined, opts);
-    // Settings, Automations, and a Run detail (/runs/:runId) are overlays layered
+    // Settings, Automations, Artifacts/Apps, and a Run detail (/runs/:runId) are overlays layered
     // on top of whichever session is open behind them — none should reset the
     // active session to a draft, so a deep link / reload / Back onto them keeps
     // the underlying session intact.
-    else if (route.kind !== "settings" && route.kind !== "automations" && route.kind !== "run") this.newSession(opts);
+    else if (route.kind !== "settings" && route.kind !== "automations" && route.kind !== "library" && route.kind !== "run") this.newSession(opts);
   }
 
   /** Replay the boot route once we're first online (session.open et al. need a
@@ -1471,6 +1481,7 @@ export class AppController {
     this.nativeSubscriptionSyncToken = "";
     this.nativeSubscriptionSyncAt = 0;
     this.sessionTitleKeys?.close();
+    this.machineRequests?.close();
     try {
       this.transport.close();
     } catch {
@@ -1590,13 +1601,17 @@ export class AppController {
    */
   fetchAttachment(hash: string, createdAt = 0): Promise<{ mimeType: string; data: string } | null> {
     if (!hash) return Promise.resolve(null);
-    const scope = this.sessionCacheKey();
+    // Files a machine-wide listing found on another machine are fetched there.
+    const home = this.attachmentHomes.get(hash);
+    const remote = home && home !== this.local.cur ? home : null;
+    const scope = remote ? `bivy.sessions.${remote}` : this.sessionCacheKey();
     return this.attachmentLoader.fetch(JSON.stringify([scope, hash]), createdAt, async () => {
       const cached = await this.attachmentDiskCache.get(scope, hash);
       if (cached) return cached;
       // A queued request must not be sent to a different machine after switching.
-      if (scope !== this.sessionCacheKey()) return null;
-      const ev = (await this.awaitAck({ kind: "attachment.fetch", hash }, 30000)) as { data?: unknown; mimeType?: unknown };
+      if (!remote && scope !== this.sessionCacheKey()) return null;
+      const command = { kind: "attachment.fetch", hash };
+      const ev = (await (remote ? this.machineRequest(remote, command) : this.awaitAck(command, 30000))) as { data?: unknown; mimeType?: unknown };
       if (!ev || typeof ev.data !== "string") return null;
       const value = { mimeType: String(ev.mimeType || "application/octet-stream"), data: ev.data };
       this.attachmentDiskCache.put(scope, hash, value);
@@ -1604,15 +1619,65 @@ export class AppController {
     });
   }
 
-  /** Apps use the same authenticated command path over direct HTTP or relay. */
-  async appCommand(command: "apps.list" | "apps.offers" | "apps.adopt" | "apps.open" | "apps.logs" | "apps.clearNotes" | "apps.share" | "apps.revoke" | "apps.remove", sessionId: string, fields: { appId?: string; viewId?: string; returnTo?: string; port?: number; direct?: boolean } = {}): Promise<ServerEvent> {
+  /** Apps use the same authenticated command path over direct HTTP or relay.
+   *  `nodeId` targets another machine without switching to it. */
+  async appCommand(command: "apps.list" | "apps.offers" | "apps.adopt" | "apps.open" | "apps.logs" | "apps.clearNotes" | "apps.share" | "apps.revoke" | "apps.remove", sessionId: string, fields: { appId?: string; viewId?: string; returnTo?: string; port?: number; direct?: boolean } = {}, nodeId?: string | null): Promise<ServerEvent> {
     const { connection } = this.store.getState();
     // A desktop app's display starts at this device's pixel density (1× or 2×).
     if (command === "apps.open") Object.assign(fields, { scale: typeof devicePixelRatio === "number" && devicePixelRatio >= 1.5 ? 2 : 1 });
+    if (this.isOtherMachine(nodeId)) return this.machineRequest(nodeId, { kind: command, sessionId, ...fields });
     if (connection.status !== "online") throw new Error("Connect to the machine to open its apps.");
     const result = await this.awaitAck({ kind: command, sessionId, ...fields }, 30_000);
     if (this.store.getState().connection.currentNodeId !== connection.currentNodeId) throw new Error("Machine changed. Reopen Apps on the selected machine.");
     return result;
+  }
+
+  /** Everything the account's machines can open right now, across all their
+   *  sessions: agent-sent files still stored, and published apps (the sidebar's
+   *  Artifacts/Apps pages). Offline machines are skipped; `unreachable` names
+   *  online ones that didn't answer. */
+  async listMachineArtifacts(): Promise<MachineListing<OnMachine<MachineArtifact>>> {
+    const listing = await this.acrossMachines("artifacts.list", (event) => (event as unknown as ArtifactsListResult).artifacts ?? []);
+    for (const item of listing.items) if (item.nodeId) this.attachmentHomes.set(item.hash, item.nodeId);
+    listing.items.sort((a, b) => b.createdAt - a.createdAt);
+    return listing;
+  }
+
+  async listMachineApps(): Promise<MachineListing<OnMachine<SessionApp>>> {
+    const listing = await this.acrossMachines("apps.list", (event) => (event as unknown as SessionAppsResult).apps ?? []);
+    listing.items.sort((a, b) => b.createdAt - a.createdAt);
+    return listing;
+  }
+
+  /** Which machine holds a listed file's bytes, by content hash. */
+  private readonly attachmentHomes = new Map<string, string>();
+  private machineRequests?: MachineRequests;
+
+  private isOtherMachine(nodeId: string | null | undefined): nodeId is string {
+    return !this.direct && Boolean(nodeId) && nodeId !== this.local.cur;
+  }
+
+  /** One command to one machine: the connected one over the main link, any
+   *  other over a quiet side link that leaves the selection alone. */
+  private machineRequest(nodeId: string | null, command: Command, timeoutMs = 30_000): Promise<ServerEvent> {
+    if (!this.isOtherMachine(nodeId)) {
+      if (this.store.getState().connection.status !== "online") return Promise.reject(new Error("Connect to the machine first."));
+      return this.awaitAck(command, timeoutMs);
+    }
+    this.machineRequests ??= new MachineRequests(this.local, (store, handlers) => new RelayTransport({ store, pairingOnly: true, handlers }));
+    return this.machineRequests.request(nodeId, command, timeoutMs);
+  }
+
+  private async acrossMachines<T>(kind: string, pick: (event: ServerEvent) => T[]): Promise<MachineListing<OnMachine<T>>> {
+    const { nodes, status } = this.store.getState().connection;
+    const current = status === "online" ? [this.direct ? null : this.local.cur || null] : [];
+    const machines = this.direct ? current : [...current, ...nodes.filter((n) => n.online && n.id !== this.local.cur).map((n) => n.id)];
+    const results = await Promise.allSettled(machines.map(async (nodeId) =>
+      pick(await this.machineRequest(nodeId, { kind })).map((item) => ({ ...item, nodeId }))));
+    return {
+      items: results.flatMap((result) => result.status === "fulfilled" ? result.value : []),
+      unreachable: machines.filter((_, i) => results[i]!.status === "rejected").map((id) => nodes.find((n) => n.id === id)?.name || "A machine"),
+    };
   }
 
   /** Resolve/reject an in-flight awaitAck() call from its matching reply. */

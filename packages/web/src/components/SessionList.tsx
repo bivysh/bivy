@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { LibraryView } from "../router.js";
 import { githubIssueRefFromSource, primaryPr, repoFromSource, type GithubQueueItem, type PrRef, type RunTerminalSummary } from "@bivy/core";
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
@@ -154,7 +155,13 @@ function queueSourceMeta(source: string | undefined): string {
 // what's mounted and let the user page through the tail.
 const PAGE = 10;
 
-export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSources, onOpenAutomations, automationsActive, onOpenTerminal, terminalDisabled }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem>; sessionSources?: Map<string, SourceInfo>; onOpenAutomations?: () => void; automationsActive?: boolean; onOpenTerminal?: () => void; terminalDisabled?: boolean }) {
+/** The sidebar's machine-wide pages, below Automations. */
+const LIBRARY_NAV: { view: LibraryView; label: string; icon: ReactNode }[] = [
+  { view: "artifacts", label: "Artifacts", icon: <><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /><path d="M9 13h6M9 17h4" /></> },
+  { view: "apps", label: "Apps", icon: <><rect x="4" y="4" width="6.5" height="6.5" rx="1.5" /><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5" /><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5" /><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5" /></> },
+];
+
+export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSources, onOpenAutomations, automationsActive, onOpenLibrary, libraryActive, onOpenTerminal, terminalDisabled }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem>; sessionSources?: Map<string, SourceInfo>; onOpenAutomations?: () => void; automationsActive?: boolean; onOpenLibrary?: (view: LibraryView) => void; libraryActive?: LibraryView | null; onOpenTerminal?: () => void; terminalDisabled?: boolean }) {
   const { sessionIndex: { sessions, runTerminals }, activeSession: { activeSessionId }, connection: { nodes, currentNodeId } } = useAppState();
   const [query, setQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<{ sessionId: string; name: string } | null>(null);
@@ -304,7 +311,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
           void controller.deleteSession(id).catch(() => controller.store.setError("Couldn't delete the session.")).finally(() => setDeletingId(null));
         }}
       />}
-      {(onOpenAutomations || onOpenTerminal) && (
+      {(onOpenAutomations || onOpenLibrary || onOpenTerminal) && (
         <nav className="sidebar-nav" aria-label="Workspace">
           {onOpenAutomations && (
             <button className={`sidebar-nav-item${automationsActive ? " active" : ""}`} onClick={onOpenAutomations} aria-current={automationsActive ? "page" : undefined}>
@@ -314,6 +321,12 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
               <span>Automations</span>
             </button>
           )}
+          {onOpenLibrary && LIBRARY_NAV.map(({ view, label, icon }) => (
+            <button key={view} className={`sidebar-nav-item${libraryActive === view ? " active" : ""}`} onClick={() => onOpenLibrary(view)} aria-current={libraryActive === view ? "page" : undefined}>
+              <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{icon}</svg>
+              <span>{label}</span>
+            </button>
+          ))}
           {/* Standalone terminal: independent of any session, opened at the
               picked node's workspace folder (#460). */}
           {onOpenTerminal && (

@@ -15,6 +15,8 @@ import { SetupNotice } from "./components/SetupNotice.js";
 import { NodeSwitcher } from "./components/NodeSwitcher.js";
 import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscribeSettingsRoute } from "./settingsRoute.js";
 import { closeAutomations, getAutomationsRoute, openAutomations, setAutomationsSection, subscribeAutomationsRoute } from "./automationsRoute.js";
+import { closeLibrary, getLibraryRoute, openLibrary, subscribeLibraryRoute } from "./libraryRoute.js";
+import { requestMessageJump } from "./messageJump.js";
 // openAutomations({ setup }) is the sole entry for source connection lifecycle.
 import { closeRun, getRunRoute, openRun, subscribeRunRoute } from "./runRoute.js";
 import { dismissSignInRequest, getSignInRequest, subscribeSignInRequest } from "./signInRequest.js";
@@ -62,6 +64,7 @@ const Settings = lazy(() => import("./components/Settings.js").then((m) => ({ de
 const AutomationsView = lazy(() =>
   import("./components/AutomationsView.js").then((m) => ({ default: m.AutomationsView })),
 );
+const LibraryView = lazy(() => import("./components/LibraryView.js").then((m) => ({ default: m.LibraryView })));
 import { onAppVisible } from "./onAppVisible.js";
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { useModalEscape } from "./modalStack.js";
@@ -102,6 +105,8 @@ export function App() {
   // Automations is a first-class destination reached from the sidebar foot,
   // URL-backed the same overlay way Settings is (see automationsRoute.ts).
   const automationsOpen = useSyncExternalStore(subscribeAutomationsRoute, getAutomationsRoute);
+  // The Artifacts / Apps pages, the same overlay way (see libraryRoute.ts).
+  const libraryOpen = useSyncExternalStore(subscribeLibraryRoute, getLibraryRoute);
   // The routable Run detail screen (/runs/:runId), URL-backed the same overlay
   // way Settings and Automations are (see runRoute.ts). Null whenever the URL is
   // on anything else. A copied Run URL restores this directly on cold load.
@@ -651,6 +656,11 @@ export function App() {
             openAutomations();
             closeDrawer();
           }}
+          libraryActive={libraryOpen}
+          onOpenLibrary={(view) => {
+            openLibrary(view);
+            closeDrawer();
+          }}
           onPick={(id, path, nodeId) => {
             // Set the prompt destination synchronously. Live-run detection below
             // is asynchronous (and may switch machines), so waiting to call
@@ -1083,6 +1093,26 @@ export function App() {
             closeDrawer();
           }}
         />
+        </Suspense>
+      )}
+
+      {libraryOpen && (
+        <Suspense fallback={null}>
+          <LibraryView
+            view={libraryOpen}
+            onClose={() => closeLibrary(state.activeSession.activeSessionId ? { kind: "session", id: state.activeSession.activeSessionId } : { kind: "new" })}
+            onShowInChat={(sessionId, target, nodeId) => {
+              // Open the session on the machine the item lives on (switching if
+              // needed) and let ChatView land on the message once history arrives.
+              // Replace the page's history entry first, so Back skips it.
+              requestMessageJump(sessionId, target);
+              closeLibrary({ kind: "session", id: sessionId });
+              const rows = state.sessionIndex.sessions.filter((x) => x.sessionId === sessionId);
+              const s = rows.find((x) => x.nodeId === nodeId) ?? rows[0];
+              controller.openSessionOnNode(sessionId, s?.path, nodeId ?? s?.nodeId);
+              closeDrawer();
+            }}
+          />
         </Suspense>
       )}
 

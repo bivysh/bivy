@@ -16,7 +16,7 @@ import { ImageGallery } from "./ImageGallery.js";
 // null result (offline node, pruned blob) is shown honestly rather than
 // silently retried or hidden.
 
-function fmtBytes(n: number): string {
+export function fmtBytes(n: number): string {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
   return `${(n / 1024 / 1024).toFixed(1)} MB`;
@@ -45,24 +45,45 @@ function toAttachment(artifact: ArtifactEntry): PromptAttachment {
   };
 }
 
-/** Lazily resolves the thumbnail through the same authenticated attachment
- * path as chat, while retaining an honest unavailable state. */
-function ArtifactThumb({ artifact, onOpen }: { artifact: ArtifactEntry; onOpen: () => void }) {
+type StoredFile = Pick<ArtifactEntry, "hash" | "name" | "mimeType" | "createdAt">;
+
+/** Lazily resolves a stored file to an object URL through the same
+ * authenticated attachment path as chat, while retaining an honest
+ * unavailable state. */
+export function useAttachmentUrl(file: StoredFile): { status: "loading" | "ready" | "unavailable"; url?: string } {
   const [state, setState] = useState<{ status: "loading" | "ready" | "unavailable"; url?: string }>({ status: "loading" });
   useEffect(() => {
     let cancelled = false;
     let objectUrl: string | null = null;
     setState({ status: "loading" });
-    void controller.fetchAttachment(artifact.hash, artifact.createdAt).then((res) => {
+    void controller.fetchAttachment(file.hash, file.createdAt).then((res) => {
       if (cancelled) return;
-      const url = res && base64ToBlobUrl(res.data, res.mimeType || artifact.mimeType);
+      const url = res && base64ToBlobUrl(res.data, res.mimeType || file.mimeType);
       if (url) { objectUrl = url; setState({ status: "ready", url }); } else setState({ status: "unavailable" });
     });
     return () => {
       cancelled = true;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [artifact.hash, artifact.mimeType, artifact.createdAt]);
+  }, [file.hash, file.mimeType, file.createdAt]);
+  return state;
+}
+
+/** Save a stored file; false when the machine can't serve it right now. */
+export async function downloadAttachment(file: StoredFile): Promise<boolean> {
+  const res = await controller.fetchAttachment(file.hash, Number.MAX_SAFE_INTEGER);
+  const url = res && base64ToBlobUrl(res.data, res.mimeType || file.mimeType);
+  if (!url) return false;
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = file.name;
+  link.click();
+  URL.revokeObjectURL(url);
+  return true;
+}
+
+function ArtifactThumb({ artifact, onOpen }: { artifact: ArtifactEntry; onOpen: () => void }) {
+  const state = useAttachmentUrl(artifact);
 
   if (state.status === "ready") {
     return (
@@ -85,15 +106,9 @@ function ArtifactRow({ artifact, onJump, onOpenImage }: { artifact: ArtifactEntr
   const download = async () => {
     setDownloading(true);
     setUnavailable(false);
-    const res = await controller.fetchAttachment(artifact.hash, Number.MAX_SAFE_INTEGER);
+    const ok = await downloadAttachment(artifact);
     setDownloading(false);
-    const url = res && base64ToBlobUrl(res.data, res.mimeType || artifact.mimeType);
-    if (!url) { setUnavailable(true); return; }
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = artifact.name;
-    link.click();
-    URL.revokeObjectURL(url);
+    if (!ok) setUnavailable(true);
   };
 
   const meta = [

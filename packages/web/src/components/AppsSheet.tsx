@@ -19,8 +19,13 @@ const VIEW_LABELS = {
   display: "Desktop app · on its own display",
 } as const;
 
-export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; appId?: string; onClose: () => void }) {
+/** `nodeId` opens a session's apps on another machine without switching to it.
+ *  Terminal views stream over the connected machine's link, so for another
+ *  machine they hand off to the chat (`onOpenInChat`), which switches there. */
+export function AppsSheet({ sessionId, appId, nodeId, onOpenInChat, onClose }: { sessionId: string; appId?: string; nodeId?: string | null; onOpenInChat?: () => void; onClose: () => void }) {
   const { connection } = useAppState();
+  const remote = Boolean(nodeId) && !controller.direct && nodeId !== connection.currentNodeId;
+  const machine = remote ? nodeId : connection.currentNodeId;
   const [result, setResult] = useState<SessionAppsResult | null>(null);
   // Servers running in the workspace that aren't previewed yet. Older nodes
   // don't detect them; that is an empty list, not an error.
@@ -36,7 +41,8 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
   const [notice, setNotice] = useState<{ viewId: string; text: string; url?: string } | null>(null);
   const [confirm, setConfirm] = useState<{ app: SessionApp; view?: AppView } | null>(null);
   const generation = useRef(0);
-  const online = connection.status === "online";
+  // Another machine's reachability shows up as a request error instead.
+  const online = remote || connection.status === "online";
 
   // A network blip must not unmount the PTY renderer: it owns reconnect and
   // scrollback replay. Only changing the session/machine leaves that view.
@@ -45,8 +51,8 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
   useEffect(() => {
     const current = ++generation.current;
     setBusy(true); setError(""); setResult(null); setLink(null); setNotice(null); setConfirm(null);
-    const offered = controller.appCommand("apps.offers", sessionId).then((event) => (event as unknown as SessionAppOffersResult).offers ?? [], () => []);
-    void Promise.all([controller.appCommand("apps.list", sessionId), offered]).then(([event, found]) => {
+    const offered = controller.appCommand("apps.offers", sessionId, {}, nodeId).then((event) => (event as unknown as SessionAppOffersResult).offers ?? [], () => []);
+    void Promise.all([controller.appCommand("apps.list", sessionId, {}, nodeId), offered]).then(([event, found]) => {
       if (generation.current !== current) return;
       setResult(event as unknown as SessionAppsResult);
       setOffers(found);
@@ -54,7 +60,7 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
       if (generation.current === current) setError(e instanceof Error ? e.message : "Could not load apps.");
     }).finally(() => { if (generation.current === current) setBusy(false); });
     return () => { generation.current = current + 1; };
-  }, [sessionId, connection.currentNodeId, online, refresh]);
+  }, [sessionId, machine, online, refresh, nodeId]);
 
   // Reviewer notes and publishes land while the sheet is open: refresh the
   // list only, keeping any link or confirmation on screen.
@@ -96,7 +102,7 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
       }
       let app: SessionApp, view: AppView;
       if ("offer" in target) {
-        app = (await controller.appCommand("apps.adopt", sessionId, { port: target.offer.port }) as unknown as { app: SessionApp }).app;
+        app = (await controller.appCommand("apps.adopt", sessionId, { port: target.offer.port }, nodeId) as unknown as { app: SessionApp }).app;
         view = app.views[0]!;
         // Show it as published without a reload, which would cancel this open.
         if (generation.current === current) {
@@ -105,7 +111,7 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
           setOffers((prev) => prev.filter((item) => item.port !== target.offer.port));
         }
       } else ({ app, view } = target);
-      const response = await controller.appCommand("apps.open", sessionId, { appId: app.id, viewId: view.id, returnTo: `${accountOrigin()}/sessions/${encodeURIComponent(sessionId)}` }) as unknown as OpenAppViewResult;
+      const response = await controller.appCommand("apps.open", sessionId, { appId: app.id, viewId: view.id, returnTo: `${accountOrigin()}/sessions/${encodeURIComponent(sessionId)}` }, nodeId) as unknown as OpenAppViewResult;
       if (generation.current !== current) { popup?.close(); return; }
       if (response.kind === "terminal") setTerminal(response.termId);
       else if (response.kind === "web") {
@@ -127,7 +133,7 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
     const current = generation.current;
     setBusy(true); setError("");
     try {
-      const response = await controller.appCommand("apps.logs", sessionId, { appId: app.id, viewId: view.id }) as unknown as OpenAppViewResult;
+      const response = await controller.appCommand("apps.logs", sessionId, { appId: app.id, viewId: view.id }, nodeId) as unknown as OpenAppViewResult;
       if (generation.current === current && response.kind === "terminal") setTerminal(response.termId);
     } catch (e) { if (generation.current === current) setError(e instanceof Error ? e.message : "Could not open the server logs."); }
     finally { if (generation.current === current) setBusy(false); }
@@ -136,7 +142,7 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
     const current = generation.current;
     setBusy(true); setError(""); setNotice(null);
     try {
-      const response = await controller.appCommand("apps.share", sessionId, { appId: app.id, viewId: view.id }) as unknown as ShareAppViewResult;
+      const response = await controller.appCommand("apps.share", sessionId, { appId: app.id, viewId: view.id }, nodeId) as unknown as ShareAppViewResult;
       if (generation.current !== current) return;
       const url = previewUrl(response.url);
       const hours = Math.round((response.expiresAt - Date.now()) / 3_600_000);
@@ -155,7 +161,7 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
   const clearNotes = async (app: SessionApp, view: AppView) => {
     const current = generation.current;
     setBusy(true); setError("");
-    try { await controller.appCommand("apps.clearNotes", sessionId, { appId: app.id, viewId: view.id }); if (generation.current === current) setRefresh((n) => n + 1); }
+    try { await controller.appCommand("apps.clearNotes", sessionId, { appId: app.id, viewId: view.id }, nodeId); if (generation.current === current) setRefresh((n) => n + 1); }
     catch (e) { if (generation.current === current) setError(e instanceof Error ? e.message : "Could not clear notes."); }
     finally { if (generation.current === current) setBusy(false); }
   };
@@ -169,7 +175,7 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
     const current = generation.current;
     setBusy(true); setError(""); setNotice(null); setLink(null);
     try {
-      await controller.appCommand("apps.revoke", sessionId, { appId: app.id, viewId: view.id });
+      await controller.appCommand("apps.revoke", sessionId, { appId: app.id, viewId: view.id }, nodeId);
       if (generation.current === current) setNotice({ viewId: view.id, text: `Access revoked. Copied links and open previews of ${view.name} stopped working.` });
     } catch (e) { if (generation.current === current) setError(e instanceof Error ? e.message : "Could not revoke access."); }
     finally { if (generation.current === current) setBusy(false); }
@@ -178,7 +184,7 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
     const current = generation.current;
     setBusy(true); setError(""); setConfirm(null);
     try {
-      await controller.appCommand("apps.remove", sessionId, { appId: app.id });
+      await controller.appCommand("apps.remove", sessionId, { appId: app.id }, nodeId);
       if (generation.current === current) setRefresh((n) => n + 1);
     } catch (e) { if (generation.current === current) setError(e instanceof Error ? e.message : "Could not remove app."); }
     finally { if (generation.current === current) setBusy(false); }
@@ -222,16 +228,18 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
         </div>
         <div className="app-view-actions">
           {view.kind === "web" && view.address && <button className="btn sm ghost" disabled={busy} onClick={() => void copyAddress(view)} aria-label={`Copy address of ${view.name}`}>Copy address</button>}
-          {view.kind === "web" && view.managed && <button className="btn sm ghost" disabled={busy || !online} onClick={() => void logs(app, view)} aria-label={`${view.source === "display" ? "App" : "Server"} logs for ${view.name}`}>Logs</button>}
+          {view.kind === "web" && view.managed && !remote && <button className="btn sm ghost" disabled={busy || !online} onClick={() => void logs(app, view)} aria-label={`${view.source === "display" ? "App" : "Server"} logs for ${view.name}`}>Logs</button>}
           {view.kind === "web" && <>
             <button className="btn sm ghost" disabled={busy || !online || !result.previewAvailable} onClick={() => void revoke(app, view)} aria-label={`Revoke access to ${view.name}`}>Revoke access</button>
             <button className="btn sm ghost" disabled={busy || !online || !result.previewAvailable} onClick={() => void share(app, view)} aria-label={`Copy link to ${view.name}`}>Copy link</button>
           </>}
           {link?.viewId === view.id
             ? <a className="btn sm" href={link.url} target="_blank" rel="noopener noreferrer" onClick={() => setTimeout(onClose, 0)}>Open preview ↗</a>
-            : <button className="btn sm" disabled={busy || !online || (view.kind === "web" && !result.previewAvailable)} onClick={() => view.kind === "terminal" ? setConfirm({ app, view }) : void open({ app, view })}>
-              {view.kind === "terminal" ? "Open terminal" : "Open preview"}
-            </button>}
+            : view.kind === "terminal" && remote
+              ? <button className="btn sm" onClick={() => { onClose(); onOpenInChat?.(); }}>Open in chat</button>
+              : <button className="btn sm" disabled={busy || !online || (view.kind === "web" && !result.previewAvailable)} onClick={() => view.kind === "terminal" ? setConfirm({ app, view }) : void open({ app, view })}>
+                {view.kind === "terminal" ? "Open terminal" : "Open preview"}
+              </button>}
         </div>
         {view.kind === "web" && view.notes?.length ? <div className="app-view-notice" role="group" aria-label={`Reviewer notes on ${view.name}`}>
           <span className="artifact-meta">{view.notes.length === 1 ? "1 note" : `${view.notes.length} notes`} from people with a shared link</span>

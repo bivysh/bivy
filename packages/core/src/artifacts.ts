@@ -147,3 +147,20 @@ export function deriveApps(transcript: readonly TranscriptEntry[]): AppReference
   }
   return [...byId.values()];
 }
+
+/** One entry of a machine's Artifacts index (`artifacts.list`): a file an agent
+ * sent into any of the machine's sessions whose bytes are still stored. The
+ * sidebar's Artifacts page lists these; the per-session sheet uses
+ * deriveArtifacts. Mirrors MachineArtifact in src/controllers/artifact-commands.ts. */
+export interface MachineArtifact {
+  sessionId: string;
+  hash: string;
+  name: string;
+  mimeType: string;
+  kind: "image" | "file";
+  size: number;
+  caption?: string;
+  createdAt: number;
+  artifact: boolean;
+}
+export interface ArtifactsListResult { artifacts: MachineArtifact[] }

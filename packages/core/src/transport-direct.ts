@@ -300,10 +300,11 @@ export class DirectTransport implements Transport {
         case "apps.clearNotes":
         case "apps.share":
         case "apps.revoke":
-        case "apps.remove": {
+        case "apps.remove":
+        case "artifacts.list": {
           const requestId = String(obj.requestId ?? "");
           try {
-            const result = await this.directApi(`/api/apps/${obj.kind.slice(5)}`, { method: "POST", body: JSON.stringify(obj) });
+            const result = await this.directApi(`/api/${obj.kind.replace(".", "/")}`, { method: "POST", body: JSON.stringify(obj) });
             if (typeof result.error === "string") throw new Error(result.error);
             this.emit({ ...result, type: `${obj.kind}.ok`, requestId });
           } catch (error) {

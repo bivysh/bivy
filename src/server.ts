@@ -153,6 +153,7 @@ import { createCapabilitiesController } from "./controllers/capabilities.js";
 import { createAccessDeviceController, createLinkedDeviceController } from "./controllers/devices.js";
 import { createSessionControlCommands } from "./controllers/session-control.js";
 import { createPresenceCommands } from "./controllers/presence-commands.js";
+import { createArtifactCommands } from "./controllers/artifact-commands.js";
 import { PresenceBook, deviceFrom, type DeviceRef, type DriveVia, type SessionPresence } from "./session/presence.js";
 import { createForkCommands } from "./controllers/fork-commands.js";
 import { createGithubCommands } from "./controllers/github-commands.js";
@@ -2235,6 +2236,11 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     const meta = attachmentStore.readMeta(hash);
     ctx.reply({ type: "attachment.data", requestId, hash, mimeType: meta?.mimeType ?? "application/octet-stream", name: meta?.name, data: bytes.toString("base64") });
   },
+  ...createArtifactCommands({
+    sessionIds: () => new Set([...metadata.listSessions().map((session) => session.id), ...[...openSessions.values()].map((record) => record.id)]),
+    scan: (id) => eventLog.scan(id, ["outbound-attachment"]),
+    stored: (hash) => attachmentStore.getPath(hash) !== null,
+  }),
   ...createPresenceCommands(presenceBook, publishPresence),
   ...createSessionControlCommands({
     resolve: (sessionId) => resolveSession(sessionId),
