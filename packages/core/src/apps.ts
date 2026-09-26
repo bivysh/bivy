@@ -5,12 +5,14 @@
  * renderer/provider, not a new app category. Unknown kinds fail closed. */
 export type AppViewSpec =
   | { kind: "web"; name: string; source: { kind: "static"; directory: string } | { kind: "service"; port: number; start?: AppCommandSpec } }
-  | { kind: "terminal"; name: string; command: string; args?: string[] };
+  | { kind: "terminal"; name: string; command: string; args?: string[] }
+  /** A desktop GUI program, run on a private display streamed into the preview. */
+  | { kind: "display"; name: string; command: string; args?: string[] };
 /** A managed server: Bivy runs it on first open and restarts it if it exits. */
 export interface AppCommandSpec { command: string; args?: string[] }
 export interface AppManifest { version: 1; name: string; views: AppViewSpec[] }
 export type AppView =
-  | { id: string; kind: "web"; name: string; source: "static" | "service"; managed?: boolean;
+  | { id: string; kind: "web"; name: string; source: "static" | "service" | "display"; managed?: boolean;
       /** Stable address for a home screen; opens only on signed-in devices. */
       address?: string;
       /** Notes left by people viewing a shared link. Untrusted text. */

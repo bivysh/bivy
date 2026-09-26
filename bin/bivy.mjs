@@ -2435,11 +2435,15 @@ Manifest: {"version":1,"name":"My app","views":[
 
 Static web source: {"kind":"static","directory":"./dist"}
 Server Bivy runs: {"kind":"service","port":5173,"start":{"command":"pnpm","args":["dev"]}}
+Desktop GUI app (Linux, needs TigerVNC's Xvnc):
+  {"kind":"display","name":"Editor","command":"cargo","args":["run"]}
+  It runs on a private display streamed into the preview, sized to the viewer.
 Publishing does not start commands. Open Apps in the session menu to view or run;
-a server with "start" starts on first open and is restarted if it exits.
+a server with "start" or a desktop app starts on first open and is restarted if
+it exits.
 Terminal commands run with the node user's permissions, not in a new sandbox.
 "shot" screenshots the session's web views (or one app) with a local headless
-Chrome/Chromium and prints the PNG paths — look at them before saying the UI is
+Chrome/Chromium (desktop apps: straight from their display) and prints the PNG paths — look at them before saying the UI is
 done. It is off by default: turn it on in Bivy → Settings → this machine, or
 run: bivy config set sessions.appScreenshots true
 Web previews require operator setup; see docs/apps.md.`);

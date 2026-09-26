@@ -11,7 +11,7 @@ const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 const MAX_FILES = 2000;
 type StaticTarget = { kind: "static"; files: Map<string, Buffer>; bytes: number };
 type Command = { command: string; args: string[]; workspace: string };
-export type AppTarget = StaticTarget | { kind: "service"; port: number; start?: Command } | ({ kind: "terminal" } & Command);
+export type AppTarget = StaticTarget | { kind: "service"; port: number; start?: Command } | ({ kind: "terminal" } & Command) | ({ kind: "display" } & Command);
 /** What survives a node restart: the manifest and the IDs chat links point at. */
 interface Persisted { sessionId: string; workspace: string; manifest: AppManifest; id: string; viewIds: string[]; createdAt: number }
 export interface RegisteredView {
@@ -26,6 +26,8 @@ export interface RegisteredView {
   shots?: { revision: number; at: number; png: Buffer }[];
   /** Where a static snapshot came from, so a turn can re-take it. */
   source?: { workspace: string; directory: string };
+  /** A running display view's private VNC socket; the gateway streams it. */
+  display?: string;
 }
 
 const sameFiles = (a: Map<string, Buffer>, b: Map<string, Buffer>) => a.size === b.size && [...a].every(([key, data]) => b.get(key)?.equals(data));
@@ -156,7 +158,11 @@ export class AppRegistry extends EventEmitter {
       } else if (spec.kind === "terminal") {
         target = { kind: "terminal", ...command(spec, workspace, "Terminal view") };
         view = { ...base, kind: "terminal", command: target.command, args: target.args };
-      } else throw new Error("Unsupported app view. This machine supports web and terminal views.");
+      } else if (spec.kind === "display") {
+        // Shown through the web preview: Bivy's viewer streams the display.
+        target = { kind: "display", ...command(spec, workspace, "Display view") };
+        view = { ...base, kind: "web", source: "display", managed: true };
+      } else throw new Error("Unsupported app view. Supported views: web, terminal and display.");
       app.views.push(view);
       entries.push({ app, view, target, revision: 0, source });
     }
@@ -178,7 +184,8 @@ export class AppRegistry extends EventEmitter {
     const bumped: string[] = [];
     let total = [...this.views.values()].reduce((sum, item) => sum + (item.target.kind === "static" ? item.target.bytes : 0), 0);
     for (const entry of this.views.values()) {
-      if (entry.app.sessionId !== sessionId || entry.view.kind !== "web") continue;
+      // A display streams live pixels; reloading its viewer would change nothing.
+      if (entry.app.sessionId !== sessionId || entry.view.kind !== "web" || entry.target.kind === "display") continue;
       if (entry.target.kind === "static") {
         if (!entry.source) continue;
         let next: StaticTarget;

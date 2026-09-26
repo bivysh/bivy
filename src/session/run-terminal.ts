@@ -54,6 +54,8 @@ export interface RunTerminalSpec {
   rows?: number;
   clientId?: string;
   sessionId?: string;
+  /** Extra environment, e.g. the display a desktop app view runs on. */
+  env?: Record<string, string>;
 }
 
 /** What a run leaves behind when its agent exposed no session of its own:
@@ -330,7 +332,7 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
         workspace,
         command: spec.command,
         args: spec.args,
-        env: credentialEnv,
+        env: { ...credentialEnv, ...spec.env },
         cols: spec.cols,
         rows: spec.rows,
         clientId: spec.clientId,

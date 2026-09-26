@@ -2,8 +2,8 @@
 
 Bivy apps group interfaces to what an agent is building. An app is **not** an
 HTML document or a particular framework: it has named, typed views. Version 1
-supports web and interactive terminal views. A future graphical-display provider
-can add another view kind without introducing another app category.
+supports web, interactive terminal and desktop (display) views. A desktop view
+is shown through the same web preview, so it adds no new app category.
 
 ## Publish from any agent
 
@@ -93,7 +93,8 @@ bivy app shot                       # every web view: 390 and 1280 px, light
 bivy app shot <app-id> --widths 390 --themes light,dark --path /settings
 ```
 
-Any agent can screenshot its session's web views to check its own UI. The
+Any agent can screenshot its session's web views to check its own UI (desktop
+apps: see [Desktop apps](#desktop-apps-display)). The
 command prints JSON with one PNG path per view, width and theme. Phone widths
 (< 600 px) render at 2×. Themes are emulated for the page
 (`prefers-color-scheme`). It uses Chrome or Chromium on the machine
@@ -124,6 +125,40 @@ the same as a terminal view. The preview shows *Nothing is answering* until the
 server listens, then reloads. If the server exits, Bivy restarts it. After five
 restarts in ten minutes it is left down until someone opens the view again.
 **Logs** in the Apps sheet attaches to its output. Removing the app stops it.
+
+### Desktop apps (`display`)
+
+A desktop GUI program (GTK, Qt, Electron, Tauri, Flutter desktop, Java, SDL…)
+is a view too:
+
+```json
+{ "kind": "display", "name": "Editor", "command": "cargo", "args": ["run"] }
+```
+
+The first **Open preview** starts a private display for the view, then runs the
+command on it in a Bivy terminal, like a server with `start`: **Logs** shows its
+output, it restarts if it exits, and removing the app stops both. The preview
+streams the display into the usual shell, so Peek, **Open in tab**, the stable
+address and **Copy link** work as for web views. **Point**, **Console** and
+reviewer notes need a page to inspect, so they're not offered; neither is
+Compare yet (an agent turn doesn't restart the app).
+
+The display follows the viewer: it takes the preview's size (a phone gets a
+phone-sized screen), each app window fills it, and dialogs stay their own size,
+centered. A window that can't shrink that far is cut off at the right or bottom;
+the **Tablet** and **Full** sizes help there. On touch screens, **⌨** opens the
+keyboard. `bivy app shot` captures the display as it is, without a browser: one
+PNG at its current size (`"theme": "native"`); `--widths` and `--themes` don't
+apply. It waits up to 15 seconds for the app's first window.
+
+Requirements: **Linux**, with TigerVNC's X server on the machine (Debian/Ubuntu:
+`sudo apt install tigervnc-standalone-server`, or set `BIVY_XVNC` to an `Xvnc`
+binary). Publishing says so when it's missing. Programs get `DISPLAY`,
+`XAUTHORITY` and toolkit hints (`GDK_BACKEND=x11`, `QT_QPA_PLATFORM=xcb`,
+`SDL_VIDEODRIVER=x11`, `ELECTRON_OZONE_PLATFORM_HINT=x11`), so they use the
+preview display rather than the machine's own. Each display costs about 30 MB
+plus the app. Not yet: sound, clipboard, sharp rendering on high-density
+screens, Wayland-only apps, and macOS apps.
 
 ### Static sites
 
@@ -353,6 +388,10 @@ preview gate; PWA/offline behavior must be tested outside this preview mode.
   you trust; use a dedicated runner for untrusted projects. Bivy doesn't project
   model-vault credentials into app terminals, but the user's inherited environment
   and filesystem can still contain credentials.
+- A desktop view's display is an Xvnc server with no network port: its VNC
+  socket is a private file (mode 0600) only the node reads, and X clients need
+  a per-display cookie that only the view's program is given. It is still not
+  a sandbox: the program runs as the node user, like a terminal view.
 - A web service is a program you or the agent already started. Registering it
   grants preview access, not ownership of the process. Removing its app does not
   kill that external server. Check port ownership: a service that later reuses
@@ -383,6 +422,11 @@ preview gate; PWA/offline behavior must be tested outside this preview mode.
   and relay control. The CLI uses these same endpoints.
 - `AppMessage.tsx`: durable, ID-based chat launcher; the event log and live
   transcript reducer carry references, never access grants.
+- `src/apps/display.ts`, `x11.ts`, `rfb.ts`, `display-viewer.ts`: desktop
+  views — a private Xvnc display per view, a minimal window manager that fits
+  windows to the viewer, VNC capture for screenshots, and the noVNC viewer the
+  gateway serves. The gateway only relays the viewer's WebSocket to the
+  display's socket; it knows nothing about X.
 - `src/apps/preview-shell.ts`: trusted preview controls on a separate origin from
   generated content. It uses the canonical styles and design tokens, also copied
   into standalone node releases.
@@ -390,8 +434,9 @@ preview gate; PWA/offline behavior must be tested outside this preview mode.
   the existing `TerminalOverlay` instead of duplicating a terminal renderer.
 
 A new view kind needs a validated descriptor, an execution/transport provider,
-and a client renderer. Unsupported kinds fail closed. Future remote-display
-providers will need explicit viewing/control permissions, isolated graphical
-sessions and appropriate platform runners. Automatic HTTP tunneling, persistent
+and a client renderer. Unsupported kinds fail closed. Another display provider
+(e.g. macOS window capture for native Mac and iOS Simulator apps) would supply
+the same thing the Linux one does: a VNC-speaking socket per view, plus the
+program's environment. Automatic HTTP tunneling, persistent
 app deployments, embedded web panels, managed service launch/restart/logs and API
 broker capabilities are separate additions, not implied by the current contract.
