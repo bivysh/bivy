@@ -2188,6 +2188,11 @@ const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   has: (id) => terminals.has(id),
   close: (id) => { terminals.close(id); },
 }, { screenshots: { enabled: appScreenshotsEnabled }, displays: appDisplays });
+// A reviewer's note shows up in an open Apps sheet without reopening it.
+appRegistry.on("notes", (viewId: string) => {
+  const entry = appRegistry.getView(viewId);
+  if (entry) broadcast({ type: "apps.changed", sessionId: entry.app.sessionId });
+});
 
 const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   ...createAppCommands(appService, (id) => { const record = resolveSession(id); return record ? harnessDirFor(record) : undefined; }, (app) => {

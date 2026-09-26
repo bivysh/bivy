@@ -33,35 +33,20 @@ const selector=el=>{
   }
   return parts.join(' > ')||el.localName;
 };
-let box=null,target=null,onPicked=post,host=null;
-// Picks on pointerup: iOS never fires click for a tap on a non-clickable
-// element when only window listens, so click would miss most of the page.
-// While pointing, the app sees none of the gesture, including the click after.
-const SWALLOW=['pointerdown','mousedown','mouseup','touchend','click','dblclick','contextmenu'];
-const swallow=e=>{e.preventDefault();e.stopPropagation();};
-// A second listener, so stopping (which the shell does right after a pick)
-// doesn't also drop the guard on the rest of the tap. The tap's click ends it.
-const aftermath=e=>{swallow(e);if(e.type==='click')listen(false,aftermath);};
-const listen=(on,handler=swallow)=>{
-  const method=on?addEventListener:removeEventListener;
-  if(handler===swallow){method('pointermove',hover,true);method('pointerup',pick,true);method('keydown',key,true);}
-  for(const type of SWALLOW)method(type,handler,true);
-};
-const stop=()=>{box?.remove();box=null;target=null;listen(false);};
+let box=null,layer=null,onPicked=post,host=null;
+// While pointing, a clear layer over the page takes every tap itself, so the
+// app never sees one and no browser's event order matters (iOS sends no click
+// to a window listener for most taps). The element is looked up beneath it.
+const stop=()=>{box?.remove();layer?.remove();box=layer=null;removeEventListener('keydown',key,true);};
+const under=e=>document.elementsFromPoint(e.clientX,e.clientY).find(el=>el!==layer&&el!==box&&el!==host);
 const hover=e=>{
-  const el=document.elementFromPoint(e.clientX,e.clientY);
-  if(!el||el===box||el===host)return;target=el;const r=el.getBoundingClientRect();
+  const el=under(e);if(!el)return;const r=el.getBoundingClientRect();
   Object.assign(box.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px'});
 };
 const pick=e=>{
-  swallow(e);
-  // The event's own target, not a coordinate lookup: iOS gets elementFromPoint
-  // wrong in a frame of a zoomed page. Found nothing? Keep pointing.
-  const el=e.target instanceof Element?e.target:document.elementFromPoint(e.clientX,e.clientY)||target;
-  if(!el)return;stop();
-  // Keep eating the click (and iOS's delayed mouse events) this tap still fires.
-  listen(true,aftermath);setTimeout(()=>listen(false,aftermath),500);
-  if(el===host){onPicked({type:'picked',cancelled:true});return;}const r=el.getBoundingClientRect();
+  e.preventDefault();
+  const el=under(e);if(!el)return;stop();
+  const r=el.getBoundingClientRect();
   onPicked({type:'picked',selector:selector(el),tag:el.localName,text:(el.innerText||el.getAttribute('aria-label')||el.getAttribute('alt')||'').trim().replace(/\\s+/g,' ').slice(0,200),
     rect:{x:Math.round(r.left),y:Math.round(r.top),width:Math.round(r.width),height:Math.round(r.height)},
     viewport:{width:innerWidth,height:innerHeight},path:location.pathname+location.search+location.hash});
@@ -72,8 +57,13 @@ function startPointing(){
   box=document.createElement('div');
   box.setAttribute('aria-hidden','true');
   Object.assign(box.style,{position:'fixed',zIndex:2147483647,pointerEvents:'none',outline:'2px solid Highlight',outlineOffset:'2px',borderRadius:'4px',transition:'all 60ms ease-out'});
-  document.documentElement.append(box);
-  listen(true);
+  // One below the reviewer dock, so its controls stay usable while pointing.
+  layer=document.createElement('div');
+  layer.setAttribute('aria-hidden','true');
+  Object.assign(layer.style,{position:'fixed',inset:0,zIndex:2147483646,cursor:'crosshair',background:'transparent',touchAction:'manipulation',userSelect:'none',webkitUserSelect:'none',webkitTouchCallout:'none'});
+  layer.addEventListener('pointermove',hover);layer.addEventListener('pointerdown',hover);layer.addEventListener('click',pick);
+  document.documentElement.append(layer,box);
+  addEventListener('keydown',key,true);
 }
 addEventListener('message',e=>{
   if(!framed||e.origin!==SHELL||e.source!==parent||e.data?.type!=='bivy:point')return;
@@ -88,7 +78,8 @@ if(REVIEWER&&!framed){
     +'button{border:1px solid ButtonBorder;background:ButtonFace;color:ButtonText;border-radius:999px;padding:10px 14px;font-weight:600;cursor:pointer;min-height:44px}'
     +'.primary{background:CanvasText;color:Canvas;border-color:CanvasText}'
     +'form{width:min(340px,calc(100vw - 24px));background:Canvas;color:CanvasText;border:1px solid GrayText;border-radius:14px;padding:12px;box-shadow:0 8px 30px rgb(0 0 0/.25)}'
-    +'textarea{width:100%;min-height:5em;margin:8px 0;border:1px solid GrayText;border-radius:8px;padding:8px;background:Canvas;color:CanvasText;resize:vertical}'
+    // 16px: smaller, and iOS zooms the page in when the note box is focused.
+    +'textarea{width:100%;min-height:5em;margin:8px 0;border:1px solid GrayText;border-radius:8px;padding:8px;background:Canvas;color:CanvasText;resize:vertical;font-size:16px}'
     +'.row{display:flex;justify-content:flex-end;gap:8px}.muted{color:GrayText;font-size:12px;overflow-wrap:anywhere}[hidden]{display:none!important}</style>'
     +'<div class="dock"><p class="muted" role="status" id="status" hidden></p>'
     +'<form id="form" hidden><label for="note">Your note</label><div class="muted" id="about"></div><textarea id="note" required maxlength="1000"></textarea>'
