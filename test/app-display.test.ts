@@ -15,6 +15,7 @@ import { AppGateway } from "../src/apps/gateway.js";
 import { DisplayHost, findXvnc } from "../src/apps/display.js";
 import { captureFrame } from "../src/apps/rfb.js";
 import { MacDisplayHost } from "../src/apps/macos-display.js";
+import { readMenus } from "../src/apps/menu.js";
 import { inflateSync, constants as zlibConstants } from "node:zlib";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -115,6 +116,23 @@ test("a display view's origin serves only its viewer and noVNC, and streams the 
     assert.equal(stats, 204);
     assert.deepEqual({ ...registry.getView(id)!.stats, at: 0 }, { at: 0, latencyMs: { p50: 12.3, p95: 0 }, kBps: 1e6, viewport: { width: 390, height: 844, scale: 2 } }, "numbers only, bounded");
 
+    const menu = (method: string, body?: string) => new Promise<{ status: number; body: string }>((resolve) => {
+      const req = http.request({ agent: false, hostname: "127.0.0.1", port, path: "/__bivy/display-menu", method, headers: { host, origin, "content-type": "application/json", ...cookie } }, (res) => {
+        let text = ""; res.on("data", (c) => { text += c; }); res.on("end", () => resolve({ status: res.statusCode!, body: text }));
+      });
+      req.end(body);
+    });
+    assert.equal((await menu("HEAD")).status, 404, "no Menu button where the display can't read menus (Linux)");
+    const control = await fakeControl(path.join(dir, "control.sock"));
+    registry.getView(id)!.displayControl = path.join(dir, "control.sock");
+    assert.equal((await menu("HEAD")).status, 204);
+    assert.deepEqual(JSON.parse((await menu("GET")).body).menus[0].items, [{ title: "Save", enabled: true, shortcut: "⌘S" }, { separator: true }, { title: "Recent", enabled: true, items: [{ title: "a.txt", enabled: false }] }], "known fields only: the app's menu is data");
+    assert.equal((await menu("POST", JSON.stringify({ path: ["File", "Save"] }))).status, 204);
+    assert.deepEqual(control.requests.at(-1), { press: ["File", "Save"] });
+    assert.deepEqual(await menu("POST", JSON.stringify({ path: ["File", "Nope"] })), { status: 409, body: JSON.stringify({ error: "No menu item \"File > Nope\"." }) }, "the app's answer reaches the viewer");
+    assert.equal((await menu("POST", JSON.stringify({ path: [] }))).status, 400);
+    control.server.close();
+
     const elsewhere = new WebSocket(`ws://127.0.0.1:${port}/other`, { headers: { host, origin, ...cookie } });
     await assert.rejects(once(elsewhere, "open"), /403/);
   } finally { gateway.close(); vnc.close(); fs.rmSync(dir, { recursive: true, force: true }); }
@@ -192,6 +210,24 @@ test("a real 2× display fits windows, centers dialogs, grows for wide ones, and
   } finally { host.stopAll(); }
 });
 
+/** A display's control socket with a File menu; records what it's asked. */
+async function fakeControl(socketPath: string) {
+  const requests: Record<string, unknown>[] = [];
+  const server = net.createServer((socket) => {
+    let line = "";
+    socket.on("data", (chunk) => {
+      line += chunk;
+      if (!line.includes("\n")) return;
+      const request = JSON.parse(line); requests.push(request);
+      const answer = request.menu ? { menus: [{ title: "File", items: [{ title: "Save", enabled: true, shortcut: "⌘S", extra: "<b>" }, { separator: true }, { title: "Recent", enabled: true, items: [{ title: "a.txt", enabled: false }] }] }] }
+        : request.press?.[1] === "Save" ? { ok: true } : { error: "No menu item \"File > Nope\"." };
+      socket.end(`${JSON.stringify(answer)}\n`);
+    });
+  });
+  server.listen(socketPath); await once(server, "listening");
+  return { server, requests };
+}
+
 /** A VNC server that completes the handshake as an 800×600 display and records what viewers send. */
 async function fakeDisplay(socketPath: string) {
   const received: Buffer[] = [];
@@ -212,12 +248,13 @@ async function fakeDisplay(socketPath: string) {
   return { server, events: () => Buffer.concat(received) };
 }
 
-test("agents use a desktop app like a viewer does: clicks and key combos in screenshot pixels, then a picture of the result", async () => {
+test("agents use a desktop app like a viewer does: clicks and key combos in screenshot pixels, menu items by path, then a picture of the result", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-display-"));
   const vnc = await fakeDisplay(path.join(dir, "vnc.sock"));
   const live = new Set<string>();
   const terminals = { start: async () => { live.add("t"); return "t"; }, has: (id: string) => live.has(id), close: (id: string) => { live.delete(id); } };
-  const displays: AppDisplayProvider = { unavailable: () => undefined, ensure: async () => ({ socket: path.join(dir, "vnc.sock"), env: {}, wm: { count: 1 } }), stop: () => {} };
+  const control = await fakeControl(path.join(dir, "control.sock"));
+  const displays: AppDisplayProvider = { unavailable: () => undefined, ensure: async () => ({ socket: path.join(dir, "vnc.sock"), control: path.join(dir, "control.sock"), env: {}, wm: { count: 1 } }), stop: () => {} };
   const shot = { viewId: "v", view: "Window", width: 800, theme: "native" as const, file: "/tmp/after.png" };
   const gateway = { open: () => "", share: () => ({ url: "", expiresAt: 0 }), revoke: () => {} };
   try {
@@ -237,14 +274,20 @@ test("agents use a desktop app like a viewer does: clicks and key combos in scre
 
     await assert.rejects(service.act("s", undefined, { kind: "click", x: 900, y: 10 }), /outside the app, which is 800×600/);
     await assert.rejects(service.act("s", undefined, { kind: "key", keys: "hyper+s" }), /Unknown modifier/);
-  } finally { vnc.server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+
+    assert.equal((await service.menu("s", undefined)).menus?.[0]?.title, "File", "agents read the menu bar");
+    assert.deepEqual((await service.menu("s", undefined, "File > Save")).shot, shot, "and choose an item by its path, then see the result");
+    assert.deepEqual(control.requests.at(-1), { press: ["File", "Save"] });
+    await assert.rejects(service.menu("s", undefined, "File > Nope"), /No menu item "File > Nope"/);
+  } finally { vnc.server.close(); control.server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("the macOS helper serves a display the way noVNC reads it: resize handshake, zlib frames, and raw frames for screenshots", { skip: process.platform !== "darwin" && "needs macOS", timeout: 600_000 }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-display-"));
   const host = new MacDisplayHost({ cacheDir: path.join(dir, "bin") });
   const socket = path.join(dir, "vnc.sock");
-  const helper = spawn(await host.helper(), ["serve", socket, "token", "1"], { stdio: ["ignore", "pipe", "ignore"] });
+  const control = path.join(dir, "control.sock");
+  const helper = spawn(await host.helper(), ["serve", socket, control, "token", "1"], { stdio: ["ignore", "pipe", "ignore"] });
   try {
     const lines = createInterface({ input: helper.stdout! });
     await new Promise<void>((resolve) => lines.on("line", (line) => { if (line === "ready") resolve(); }));
@@ -296,5 +339,6 @@ test("the macOS helper serves a display the way noVNC reads it: resize handshake
 
     const frame = await captureFrame(socket);
     assert.deepEqual([frame.width, frame.height], [width, height], "screenshots read the same display, raw");
+    await assert.rejects(readMenus(control), /no window yet/, "the control socket answers, with no app running");
   } finally { helper.kill(); fs.rmSync(dir, { recursive: true, force: true }); }
 });

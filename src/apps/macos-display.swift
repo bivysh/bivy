@@ -7,7 +7,7 @@
 // screenshots work unchanged.
 //
 //   macos-display check [--prompt]              permissions, as JSON
-//   macos-display serve <socket> <token> <scale>
+//   macos-display serve <socket> <control> <token> <scale>
 //   macos-display run -- <command> [args…]      starts the app (see below)
 //
 // The app is found by its environment: Bivy starts it through `run` with
@@ -18,6 +18,11 @@
 // ScreenCaptureKit (Screen Recording permission); clicks, keys and window
 // sizing go through Accessibility. Keys are sent to the app only; clicks land
 // only when the app's window is the one under the pointer.
+//
+// The control socket answers one JSON line per connection: {"menu":true}
+// returns the app's menu bar, read through Accessibility; {"press":["File",
+// "Save"]} presses the item at that path. The app's own full screen is
+// switched off: the preview already sizes it to the viewer.
 import AppKit
 import ApplicationServices
 import CoreMedia
@@ -140,6 +145,103 @@ func axWindow(_ win: Win) -> AXUIElement? {
     guard let p = axPoint(w, kAXPositionAttribute, .cgPoint)?.origin, let s = axPoint(w, kAXSizeAttribute, .cgSize)?.size else { return false }
     return abs(p.x - win.bounds.minX) < 2 && abs(p.y - win.bounds.minY) < 2 && abs(s.width - win.bounds.width) < 2 && abs(s.height - win.bounds.height) < 2
   } ?? axValue(app, kAXMainWindowAttribute)
+}
+
+/// A listening Unix socket only this user can connect to.
+func listening(_ path: String) -> Int32 {
+  unlink(path)
+  let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+  var addr = sockaddr_un()
+  addr.sun_family = sa_family_t(AF_UNIX)
+  withUnsafeMutableBytes(of: &addr.sun_path) { buf in _ = path.withCString { strncpy(buf.baseAddress!.assumingMemoryBound(to: CChar.self), $0, buf.count - 1) } }
+  let old = umask(0o177)
+  let bound = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
+  umask(old)
+  guard bound == 0, chmod(path, 0o600) == 0, Darwin.listen(fd, 16) == 0 else { warn("Couldn't listen on \(path)"); exit(1) }
+  return fd
+}
+
+// MARK: - Menus
+
+/// Menus deeper than this, or past this many items, are left out.
+let MENU_DEPTH = 4, MENU_ITEMS = 3000
+/// How a menu item's shortcut modifiers are written (AXMenuItemCmdModifiers
+/// bits: 1 Shift, 2 Option, 4 Control, 8 no Command).
+let SHORTCUT_MODIFIERS: [(bit: Int, symbol: String)] = [(4, "⌃"), (2, "⌥"), (1, "⇧")]
+
+func shortcut(_ char: String?, _ modifiers: Int?) -> String? {
+  guard let char, !char.isEmpty, let modifiers else { return nil }
+  let symbols = SHORTCUT_MODIFIERS.filter { modifiers & $0.bit != 0 }.map(\.symbol).joined()
+  return symbols + (modifiers & 8 == 0 ? "⌘" : "") + char.uppercased()
+}
+
+/// The app's menu bar as data: titles, enabled, checked, shortcut, submenus.
+/// The Apple menu is left out; the app menu (Settings, Quit) stays.
+func readMenus(_ pid: pid_t) -> [[String: Any]] {
+  let app = AXUIElementCreateApplication(pid)
+  AXUIElementSetMessagingTimeout(app, 1)
+  guard let bar: AXUIElement = axValue(app, kAXMenuBarAttribute) else { return [] }
+  var budget = MENU_ITEMS
+  let keys = [kAXTitleAttribute, kAXEnabledAttribute, "AXMenuItemCmdChar", "AXMenuItemCmdModifiers", "AXMenuItemMarkChar", kAXChildrenAttribute] as CFArray
+  func items(_ menu: AXUIElement, depth: Int) -> [[String: Any]] {
+    var out: [[String: Any]] = []
+    for item in (axValue(menu, kAXChildrenAttribute) as [AXUIElement]?) ?? [] {
+      guard budget > 0 else { break }
+      budget -= 1
+      var values: CFArray?
+      guard AXUIElementCopyMultipleAttributeValues(item, keys, AXCopyMultipleAttributeOptions(), &values) == .success, let v = values as? [Any] else { continue }
+      let title = (v[0] as? String) ?? ""
+      if title.isEmpty {
+        if let last = out.last, last["separator"] == nil { out.append(["separator": true]) }
+        continue
+      }
+      var entry: [String: Any] = ["title": title, "enabled": (v[1] as? Bool) ?? false]
+      if let keys = shortcut(v[2] as? String, v[3] as? Int) { entry["shortcut"] = keys }
+      if let mark = v[4] as? String, !mark.isEmpty { entry["checked"] = true }
+      if depth < MENU_DEPTH, let submenu = (v[5] as? [AXUIElement])?.first {
+        let children = items(submenu, depth: depth + 1)
+        if !children.isEmpty { entry["items"] = children }
+      }
+      out.append(entry)
+    }
+    if out.last?["separator"] != nil { out.removeLast() }
+    return out
+  }
+  let tops: [AXUIElement] = axValue(bar, kAXChildrenAttribute) ?? []
+  return tops.dropFirst().compactMap { top in
+    guard let title: String = axValue(top, kAXTitleAttribute), !title.isEmpty, let menu = (axValue(top, kAXChildrenAttribute) as [AXUIElement]?)?.first else { return nil }
+    return ["title": title, "items": items(menu, depth: 1)]
+  }
+}
+
+/// Presses the menu item at a path of titles, like choosing it from the menu bar.
+func pressMenu(_ pid: pid_t, _ path: [String]) -> String? {
+  let app = AXUIElementCreateApplication(pid)
+  AXUIElementSetMessagingTimeout(app, 1)
+  guard var node: AXUIElement = axValue(app, kAXMenuBarAttribute) else { return "The app has no menu bar." }
+  for (depth, title) in path.enumerated() {
+    // Below the bar, each level's items sit in a menu element.
+    let parent = depth == 0 ? node : ((axValue(node, kAXChildrenAttribute) as [AXUIElement]?)?.first ?? node)
+    let children: [AXUIElement] = axValue(parent, kAXChildrenAttribute) ?? []
+    guard let next = children.dropFirst(depth == 0 ? 1 : 0).first(where: { (axValue($0, kAXTitleAttribute) as String?) == title }) else {
+      return "No menu item \"\(path[0...depth].joined(separator: " > "))\"."
+    }
+    node = next
+  }
+  if (axValue(node, kAXEnabledAttribute) as Bool?) == false { return "\"\(path.joined(separator: " > "))\" is disabled right now." }
+  AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+  return AXUIElementPerformAction(node, kAXPressAction as CFString) == .success ? nil : "The app didn't accept the menu item."
+}
+
+/// Switches the app's own full screen off, window by window. True if any was.
+func leaveFullScreen(_ pid: pid_t) -> Bool {
+  let app = AXUIElementCreateApplication(pid)
+  AXUIElementSetMessagingTimeout(app, 1)
+  var left = false
+  for window in (axValue(app, kAXWindowsAttribute) as [AXUIElement]?) ?? [] where (axValue(window, "AXFullScreen") as Bool?) == true {
+    left = AXUIElementSetAttributeValue(window, "AXFullScreen" as CFString, kCFBooleanFalse) == .success || left
+  }
+  return left
 }
 
 // MARK: - Keys
@@ -275,6 +377,13 @@ final class Host: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendabl
   var wanted: (ids: [CGWindowID], region: CGRect)?
   var captured: (ids: [CGWindowID], region: CGRect)?
   var acceptor: DispatchSourceRead?
+  /// Menus and full screen are Accessibility round trips to the app: off the
+  /// frame queue, one at a time.
+  let ax = DispatchQueue(label: "sh.bivy.macos-display.ax")
+  var control: DispatchSourceRead?
+  /// The app's processes, including ones whose windows aren't on screen now
+  /// (a full-screen window in another Space).
+  var apps = Set<pid_t>()
   /// The last capture error, and when: retried after a pause, reported once.
   var failure = (message: "", at: 0.0)
 
@@ -300,6 +409,7 @@ final class Host: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendabl
     let all = onScreenWindows()
     known = known.filter { entry in all.contains { $0.pid == entry.key } }
     ours = all.filter { !SYSTEM_LAYERS.contains($0.layer) && owns($0.pid) }
+    apps.formUnion(ours.map(\.pid))
     let normal = ours.filter { $0.layer == 0 }
     if normal.count != count { count = normal.count; say("windows \(count)") }
     main = normal.max { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }
@@ -400,15 +510,7 @@ final class Host: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendabl
   // MARK: Serving viewers
 
   func listen(path: String) {
-    unlink(path)
-    let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
-    var addr = sockaddr_un()
-    addr.sun_family = sa_family_t(AF_UNIX)
-    withUnsafeMutableBytes(of: &addr.sun_path) { buf in _ = path.withCString { strncpy(buf.baseAddress!.assumingMemoryBound(to: CChar.self), $0, buf.count - 1) } }
-    let old = umask(0o177)
-    let bound = withUnsafePointer(to: &addr) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) } }
-    umask(old)
-    guard bound == 0, chmod(path, 0o600) == 0, Darwin.listen(fd, 16) == 0 else { warn("Couldn't listen on \(path)"); exit(1) }
+    let fd = listening(path)
     let accept = DispatchSource.makeReadSource(fileDescriptor: fd, queue: q)
     accept.setEventHandler { [self] in
       let peer = Darwin.accept(fd, nil, nil)
@@ -427,6 +529,50 @@ final class Host: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendabl
     }
     accept.resume()
     acceptor = accept
+  }
+
+  /// The control socket: one request line, one JSON answer, then closed.
+  func serveControl(path: String) {
+    let fd = listening(path)
+    let accept = DispatchSource.makeReadSource(fileDescriptor: fd, queue: ax)
+    accept.setEventHandler { [self] in
+      let peer = Darwin.accept(fd, nil, nil)
+      guard peer >= 0 else { return }
+      defer { Darwin.close(peer) }
+      var wait = timeval(tv_sec: 5, tv_usec: 0), on: Int32 = 1
+      setsockopt(peer, SOL_SOCKET, SO_RCVTIMEO, &wait, socklen_t(MemoryLayout<timeval>.size))
+      setsockopt(peer, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+      var line: [UInt8] = []
+      var byte: UInt8 = 0
+      while line.count < 16384, Darwin.read(peer, &byte, 1) == 1, byte != 10 { line.append(byte) }
+      let answer = respond(to: (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any] ?? [:])
+      let data = ((try? JSONSerialization.data(withJSONObject: answer)) ?? Data()) + Data([10])
+      _ = data.withUnsafeBytes { Darwin.write(peer, $0.baseAddress, $0.count) }
+    }
+    accept.resume()
+    control = accept
+    // Full screen is checked here too, so it never holds up frames.
+    let timer = DispatchSource.makeTimerSource(queue: ax)
+    timer.schedule(deadline: .now() + 1, repeating: .seconds(1))
+    timer.setEventHandler { [self] in
+      let pids = q.sync { apps = apps.filter { kill($0, 0) == 0 }; return apps }
+      guard pids.contains(where: leaveFullScreen) else { return }
+      // Once it has animated back, fit it to the viewer again.
+      q.asyncAfter(deadline: .now() + 1) { self.fitted = nil }
+    }
+    timer.resume()
+    fullScreenTimer = timer
+  }
+  var fullScreenTimer: DispatchSourceTimer?
+
+  func respond(to request: [String: Any]) -> [String: Any] {
+    guard let pid = q.sync(execute: { main?.pid }) else { return ["error": "The app has no window yet."] }
+    if request["menu"] as? Bool == true { return ["menus": readMenus(pid)] }
+    if let path = request["press"] as? [String], (1...8).contains(path.count) {
+      if let error = pressMenu(pid, path) { return ["error": error] }
+      return ["ok": true]
+    }
+    return ["error": "Unknown request."]
   }
 
   func drop(_ client: Client) {
@@ -711,9 +857,10 @@ case "run" where args.count > 3 && args[2] == "--":
   run(Array(args[3...]))
 case "check":
   say(permissions(prompt: args.contains("--prompt")))
-case "serve" where args.count == 5:
-  let host = Host(token: args[3], scale: CGFloat(Double(args[4]) == 2 ? 2 : 1))
+case "serve" where args.count == 6:
+  let host = Host(token: args[4], scale: CGFloat(Double(args[5]) == 2 ? 2 : 1))
   host.q.sync { host.listen(path: args[2]) }
+  host.serveControl(path: args[3])
   let timer = DispatchSource.makeTimerSource(queue: host.q)
   timer.schedule(deadline: .now(), repeating: .milliseconds(200))
   timer.setEventHandler { host.tick() }
@@ -721,6 +868,6 @@ case "serve" where args.count == 5:
   say("ready")
   RunLoop.main.run()
 default:
-  warn("Usage: macos-display check [--prompt] | serve <socket> <token> <scale> | run -- <command> [args…]")
+  warn("Usage: macos-display check [--prompt] | serve <socket> <control> <token> <scale> | run -- <command> [args…]")
   exit(2)
 }

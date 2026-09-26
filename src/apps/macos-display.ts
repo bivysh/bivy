@@ -20,6 +20,8 @@ type Permissions = Record<keyof typeof PERMISSIONS, boolean>;
 
 export interface MacDisplay {
   socket: string;
+  /** Answers menu requests (see menu.ts). */
+  control: string;
   /** Marks the app's processes, so the helper knows which windows are its. */
   env: Record<string, string>;
   /** The app starts through the helper, which stays its parent: signed apps
@@ -119,8 +121,9 @@ export class MacDisplayHost {
       throw new Error(missing);
     }
     const socket = path.join(state.dir, "vnc.sock");
+    const control = path.join(state.dir, "control.sock");
     const token = randomBytes(16).toString("hex");
-    const child = spawn(binary, ["serve", socket, token, String(scale)], { stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(binary, ["serve", socket, control, token, String(scale)], { stdio: ["ignore", "pipe", "pipe"] });
     state.child = child;
     const wm = { count: 0 };
     let errors = "";
@@ -136,7 +139,7 @@ export class MacDisplayHost {
       });
     });
     if (!up) throw new Error(`Couldn't start a display for this app.${errors ? ` ${errors.trim().split("\n").at(-1)}` : ""}`);
-    return { socket, wm, scale, env: { BIVY_MAC_DISPLAY: token }, launch: [binary, "run", "--"] };
+    return { socket, control, wm, scale, env: { BIVY_MAC_DISPLAY: token }, launch: [binary, "run", "--"] };
   }
 
   stop(id: string): void {
