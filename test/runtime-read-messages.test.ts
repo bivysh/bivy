@@ -98,6 +98,25 @@ try {
   assert.ok(!claudeText.includes("system-reminder"), "the isMeta <system-reminder> turn is filtered out");
   assert.equal((claudeMsgs![1] as { content: string }).content, "Stopped by user.", "an unflagged interrupt is always kept, labeled a user Stop");
   assert.equal((claudeMsgs![3] as { content: string }).content, "Interrupted — the session was restarted.", "a trailing shutdown interrupt is labeled a restart, not a user Stop");
+  // A turn re-driven after an auth error (the runtime refreshes the credential
+  // and re-sends the same prompt) reads as one turn: the recovered 401 and the
+  // repeated prompt are dropped, rather than the prompt reappearing at the end.
+  const redriveId = "11111111-2222-3333-4444-666666666666";
+  const redrive = [
+    { type: "user", message: { role: "user", content: "plan it" }, timestamp: "2026-01-01T00:00:00Z" },
+    { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Bash", input: {} }] }, timestamp: "2026-01-01T00:00:01Z" },
+    { type: "assistant", isApiErrorMessage: true, message: { role: "assistant", model: "<synthetic>", content: [{ type: "text", text: "Failed to authenticate. API Error: 401" }] }, timestamp: "2026-01-01T00:00:02Z" },
+    { type: "user", interruptedByShutdown: true, message: { role: "user", content: "[Request interrupted by user]" }, timestamp: "2026-01-01T00:00:03Z" },
+    { type: "user", message: { role: "user", content: "plan it" }, timestamp: "2026-01-01T00:00:04Z" },
+    { type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "here's the plan" }] }, timestamp: "2026-01-01T00:00:05Z" },
+  ].map((e) => JSON.stringify(e)).join("\n");
+  fs.writeFileSync(path.join(projectDir, `${redriveId}.jsonl`), `${redrive}\n`);
+  assert.deepEqual(
+    claude.readMessages(redriveId)!.map((m) => (m as { role: string }).role),
+    ["user", "assistant", "assistant"],
+    "a recovered auth error and its re-sent prompt are dropped",
+  );
+
   // An unknown session id reads empty (no throw) — the uniform fall-back signal.
   assert.deepEqual(
     claude.readMessages("00000000-0000-0000-0000-000000000000"),

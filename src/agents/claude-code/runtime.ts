@@ -607,6 +607,9 @@ function loadClaudeTranscript(sessionId: string): RuntimeMessage[] {
   // re-drive, or a session the user resumed), so it's noise — we keep only a
   // trailing one, where the session actually ended interrupted. See below.
   const restartNoticeIdx: number[] = [];
+  // The latest user prompt, and the index of an API-error reply just kept.
+  let lastPrompt: unknown;
+  let lastErrorIdx = -1;
   try {
     for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
       if (!line.trim()) continue;
@@ -634,7 +637,19 @@ function loadClaudeTranscript(sessionId: string): RuntimeMessage[] {
       if (role === "user" && !(Array.isArray(content) && content.some((block: any) => block?.type === "tool_result")) && isDropMetaText(content)) continue;
       if (role === "assistant" && Array.isArray(content) && !content.some((block: any) => block?.type === "text" || block?.type === "tool_use" || block?.type === "thinking")) continue;
       if (typeof content !== "string" && !Array.isArray(content)) continue;
+      // A re-driven prompt: an API-error reply (e.g. a 401 before a credential
+      // refresh) followed — past any restart notice — by the same prompt again.
+      // The turn was recovered, so drop both; otherwise history shows the error and
+      // repeats the prompt at the bottom of the chat.
+      if (role === "user" && lastErrorIdx >= 0 && JSON.stringify(content) === JSON.stringify(lastPrompt)) {
+        messages.splice(lastErrorIdx, 1);
+        restartNoticeIdx.forEach((idx, i) => { if (idx > lastErrorIdx) restartNoticeIdx[i] = idx - 1; });
+        lastErrorIdx = -1;
+        continue;
+      }
+      if (role === "user" && !(Array.isArray(content) && content.some((block: any) => block?.type === "tool_result"))) lastPrompt = content;
       messages.push({ role, content, timestamp: new Date(entry?.timestamp ?? entry?.createdAt ?? Date.now()).getTime() });
+      lastErrorIdx = entry?.isApiErrorMessage === true ? messages.length - 1 : -1;
     }
   } catch {
     return dropRecoveredRestartNotices(messages, restartNoticeIdx);
