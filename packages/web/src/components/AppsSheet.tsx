@@ -9,14 +9,19 @@ import { accountOrigin } from "../packaged-client.js";
 import { writeClipboard } from "../clipboard.js";
 import { PreviewPeek, peekBlocked } from "./PreviewPeek.js";
 import { seedSessionDraft } from "../shareTarget.js";
+import { useModalEscape } from "../modalStack.js";
+import { relTime } from "./SessionList.js";
+import { Spinner } from "./Spinner.js";
+import { AppRow, appInitial } from "./AppRow.js";
+import { CheckIcon, DisplayIcon, GlobeIcon, HomeIcon, LinkIcon, LogsIcon, MoreIcon, RefreshIcon, TerminalIcon } from "./UiIcons.js";
 const TerminalOverlay = lazy(() => import("./Terminal.js").then((module) => ({ default: module.TerminalOverlay })));
 /** What each kind of view is, in the list. */
 const VIEW_LABELS = {
-  terminal: "Interactive terminal · starts on request",
-  static: "Web · published snapshot",
-  service: "Web · live server",
-  managed: "Web · server run by Bivy",
-  display: "Desktop app · on its own display",
+  terminal: "Terminal · starts when opened",
+  static: "Snapshot · refreshed after each turn",
+  service: "Live server",
+  managed: "Live server · run by Bivy",
+  display: "Desktop app · own display",
 } as const;
 
 /** `nodeId` opens a session's apps on another machine without switching to it.
@@ -195,74 +200,116 @@ export function AppsSheet({ sessionId, appId, nodeId, onOpenInChat, onClose }: {
   if (terminal) return <Suspense fallback={<Sheet title="App terminal" onClose={() => setTerminal(null)}><p role="status">Loading terminal…</p></Sheet>}>
     <TerminalOverlay sessionId={sessionId} attachTermId={terminal} attachOnly onClose={() => setTerminal(null)} />
   </Suspense>;
+  const previewOk = Boolean(result?.previewAvailable);
+  const shown = result?.apps.filter((app) => !appId || app.id === appId) ?? [];
   return <Sheet title="Apps" ariaLabel="Session apps" onClose={onClose} autoFocusSearch={false} size="large"
-    headExtra={<button className="btn sm ghost" onClick={() => setRefresh((n) => n + 1)} disabled={busy || !online}>Refresh</button>}>
-    <p className="muted">Web views open over the chat; use Open in tab for a full browser tab. Terminal views run here.</p>
-    {busy && <p role="status">{result ? "Preparing…" : "Loading apps…"}</p>}
-    {error && <p role="alert" className="artifact-unavailable">{error}</p>}
-    {result && !result.previewAvailable && <p className="muted">Bivy’s preview service is unavailable. Try Refresh shortly. Terminal views still work.</p>}
-    {result?.apps.length === 0 && offers.length === 0 && <div className="changes-binary">No apps yet. When the agent starts a web server in this session’s workspace, it appears here. Agents can also publish views with <code>bivy app publish</code>.</div>}
-    {!appId && offers.length > 0 && <section className="artifacts-group" aria-label="Running in this workspace">
-      <div className="app-views-heading"><strong className="artifact-name">Running in this workspace</strong></div>
-      {offers.map((offer) => <div className="artifact-row app-view-row" key={offer.port}>
-        <div className="artifact-main">
-          <strong className="artifact-name">Port {offer.port}</strong>
-          <span className="artifact-meta">Web · live server · not previewed yet</span>
-          <code className="app-view-command">{offer.command}</code>
-        </div>
-        <div className="app-view-actions">
-          <button className="btn sm" disabled={busy || !online || !result?.previewAvailable} onClick={() => void open({ offer })} aria-label={`Preview port ${offer.port}`}>Preview</button>
-        </div>
-      </div>)}
-    </section>}
-    {result && appId && !result.apps.some((app) => app.id === appId) && <p role="status">This app is no longer available. Ask the agent to republish it; previews expire when the machine restarts.</p>}
-    {result?.apps.filter((app) => !appId || app.id === appId).map((app) => <section className="artifacts-group" key={app.id} aria-label={app.name}>
-      <div className="app-views-heading"><strong className="artifact-name">{app.name}</strong>
-        <button className="btn sm ghost" disabled={busy || !online} onClick={() => setConfirm({ app })} aria-label={`Remove ${app.name}`}>Remove</button>
-      </div>
-      {app.views.map((view) => <div className="artifact-row app-view-row" key={view.id}>
-        <div className="artifact-main">
-          <strong className="artifact-name">{view.name}</strong>
-          <span className="artifact-meta">{VIEW_LABELS[view.kind === "terminal" ? "terminal" : view.source === "service" && view.managed ? "managed" : view.source]}</span>
-          {view.kind === "terminal" && <code className="app-view-command">{[view.command, ...view.args.map((arg) => JSON.stringify(arg))].join(" ")}</code>}
-        </div>
-        <div className="app-view-actions">
-          {view.kind === "web" && view.address && <button className="btn sm ghost" disabled={busy} onClick={() => void copyAddress(view)} aria-label={`Copy address of ${view.name}`}>Copy address</button>}
-          {view.kind === "web" && view.managed && !remote && <button className="btn sm ghost" disabled={busy || !online} onClick={() => void logs(app, view)} aria-label={`${view.source === "display" ? "App" : "Server"} logs for ${view.name}`}>Logs</button>}
-          {view.kind === "web" && <>
-            <button className="btn sm ghost" disabled={busy || !online || !result.previewAvailable} onClick={() => void revoke(app, view)} aria-label={`Revoke access to ${view.name}`}>Revoke access</button>
-            <button className="btn sm ghost" disabled={busy || !online || !result.previewAvailable} onClick={() => void share(app, view)} aria-label={`Copy link to ${view.name}`}>Copy link</button>
-          </>}
-          {link?.viewId === view.id
-            ? <a className="btn sm" href={link.url} target="_blank" rel="noopener noreferrer" onClick={() => setTimeout(onClose, 0)}>Open preview ↗</a>
-            : view.kind === "terminal" && remote
-              ? <button className="btn sm" onClick={() => { onClose(); onOpenInChat?.(); }}>Open in chat</button>
-              : <button className="btn sm" disabled={busy || !online || (view.kind === "web" && !result.previewAvailable)} onClick={() => view.kind === "terminal" ? setConfirm({ app, view }) : void open({ app, view })}>
-                {view.kind === "terminal" ? "Open terminal" : "Open preview"}
-              </button>}
-        </div>
-        {view.kind === "web" && view.notes?.length ? <div className="app-view-notice" role="group" aria-label={`Reviewer notes on ${view.name}`}>
-          <span className="artifact-meta">{view.notes.length === 1 ? "1 note" : `${view.notes.length} notes`} from people with a shared link</span>
-          <ul className="app-view-notes">{view.notes.map((note) => <li key={note.id}>“{note.note}” <span className="artifact-meta">{note.text ? `on “${note.text}”` : note.selector} · {note.path}</span></li>)}</ul>
-          <div className="app-view-actions">
-            <button className="btn sm ghost" disabled={busy || !online} onClick={() => void clearNotes(app, view)}>Clear</button>
-            <button className="btn sm" onClick={() => notesToMessage(view)}>Add to message</button>
-          </div>
-        </div> : null}
-        {notice?.viewId === view.id && <div className="app-view-notice" role="status">
-          <span className="artifact-meta">{notice.text}</span>
-          {notice.url && <input className="field" readOnly value={notice.url} aria-label={`Link to ${view.name}`} autoFocus onFocus={(e) => e.currentTarget.select()} />}
-        </div>}
-      </div>)}
-    </section>)}
-    <p className="muted">Apps are available while this machine is running. Removing an app closes its terminals and revokes preview access; externally started web servers keep running.</p>
+    headExtra={<button className="btn ghost icon" onClick={() => setRefresh((n) => n + 1)} disabled={busy || !online} aria-label="Refresh" title="Refresh">
+      {busy && result ? <Spinner size="xs" /> : <RefreshIcon size={18} />}
+    </button>}>
+    <div className="apps-sheet">
+      {busy && !result && <div className="apps-state" role="status"><Spinner size="sm" /><span>Loading apps…</span></div>}
+      {busy && result && <span className="sr-only" role="status">Preparing…</span>}
+      {error && <div className="banner inline" data-tone="danger" role="alert">{error}</div>}
+      {result && !previewOk && <div className="banner inline" data-tone="warn" role="status">Bivy’s preview service is unavailable. Try Refresh shortly. Terminal views still work.</div>}
+      {result && appId && !result.apps.some((app) => app.id === appId) && <div className="banner inline" data-tone="neutral" role="status">This app is no longer available. Ask the agent to republish it; previews expire when the machine restarts.</div>}
+      {result?.apps.length === 0 && offers.length === 0 && <div className="apps-empty">
+        <span className="app-tile" aria-hidden><GlobeIcon size={20} /></span>
+        <strong>No apps yet</strong>
+        <p>When the agent starts a web server in this session’s workspace, it shows up here. Agents can also publish views with <code>bivy app publish</code>.</p>
+      </div>}
+
+      {!appId && offers.length > 0 && <section className="apps-group" aria-label="Running in this workspace">
+        <h3 className="apps-group-title">Running in this workspace</h3>
+        {offers.map((offer) => <div className="apps-card" key={offer.port}>
+          <AppRow tile={<span className="app-tile-port">{offer.port}</span>} name={`Port ${offer.port}`} meta="Live server · not previewed yet"
+            action={<button className="btn sm primary" disabled={busy || !online || !previewOk} onClick={() => void open({ offer })} aria-label={`Preview port ${offer.port}`}>Preview</button>} />
+          <code className="apps-cmd">{offer.command}</code>
+        </div>)}
+      </section>}
+
+      {shown.map((app) => <section className="apps-card" key={app.id} aria-label={app.name}>
+        <AppRow tile={appInitial(app.name)} name={app.name}
+          meta={`${app.views.length === 1 ? "1 view" : `${app.views.length} views`}${app.createdAt ? ` · published ${relTime(app.createdAt)} ago` : ""}`}
+          action={<MoreMenu label={`More actions for ${app.name}`} items={[{ label: "Remove app…", danger: true, disabled: busy || !online, onSelect: () => setConfirm({ app }) }]} />} />
+        {app.views.map((view) => {
+          const kind = view.kind === "terminal" ? "terminal" : view.source === "service" && view.managed ? "managed" : view.source;
+          const Icon = view.kind === "terminal" ? TerminalIcon : view.source === "display" ? DisplayIcon : GlobeIcon;
+          return <article className="apps-view" key={view.id} aria-label={view.name}>
+            <AppRow small tile={<Icon size={18} />} name={view.name} meta={VIEW_LABELS[kind]} action={link?.viewId === view.id
+                ? <a className="btn sm primary" href={link.url} target="_blank" rel="noopener noreferrer" onClick={() => setTimeout(onClose, 0)}>Open preview ↗</a>
+                : view.kind === "terminal" && remote
+                  ? <button className="btn sm" onClick={() => { onClose(); onOpenInChat?.(); }}>Open in chat</button>
+                  : <button className={`btn sm${view.kind === "web" ? " primary" : ""}`} disabled={busy || !online || (view.kind === "web" && !previewOk)} onClick={() => view.kind === "terminal" ? setConfirm({ app, view }) : void open({ app, view })}>
+                    {view.kind === "terminal" ? "Open terminal" : "Open preview"}
+                  </button>} />
+            {view.kind === "terminal" && <code className="apps-cmd">{formatCommand(view.command, view.args)}</code>}
+            {view.kind === "web" && <div className="apps-view-tools">
+              <button className="btn sm ghost" disabled={busy || !online || !previewOk} onClick={() => void share(app, view)} aria-label={`Copy link to ${view.name}`}><LinkIcon size={15} />Copy link</button>
+              {view.address && <button className="btn sm ghost" disabled={busy} onClick={() => void copyAddress(view)} aria-label={`Copy address of ${view.name}`}><HomeIcon size={15} />Address</button>}
+              {view.managed && !remote && <button className="btn sm ghost" disabled={busy || !online} onClick={() => void logs(app, view)} aria-label={`${view.source === "display" ? "App" : "Server"} logs for ${view.name}`}><LogsIcon size={15} />Logs</button>}
+              <MoreMenu label={`More actions for ${view.name}`} items={[{ label: "Revoke access", danger: true, disabled: busy || !online || !previewOk, onSelect: () => void revoke(app, view) }]} />
+            </div>}
+            {notice?.viewId === view.id && <div className="apps-notice" role="status">
+              <CheckIcon size={16} aria-hidden />
+              <div className="app-row-text">
+                <span>{notice.text}</span>
+                {notice.url && <input className="field" readOnly value={notice.url} aria-label={`Link to ${view.name}`} autoFocus onFocus={(e) => e.currentTarget.select()} />}
+              </div>
+            </div>}
+            {view.kind === "web" && view.notes?.length ? <div className="apps-notes" role="group" aria-label={`Reviewer notes on ${view.name}`}>
+              <div className="apps-notes-head">
+                <span>Reviewer notes</span><span className="apps-count" aria-label={`${view.notes.length} from people with a shared link`}>{view.notes.length}</span>
+              </div>
+              <ul>{view.notes.map((note) => <li className="apps-note" key={note.id}>
+                <span className="apps-note-text">“{note.note}”</span>{" "}
+                <span className="app-row-meta">{note.text ? `on “${note.text}”` : note.selector} · {note.path} · {note.viewport.width}×{note.viewport.height}</span>
+              </li>)}</ul>
+              <div className="apps-notes-actions">
+                <button className="btn sm" onClick={() => notesToMessage(view)}>Add to message</button>
+                <button className="btn sm ghost" disabled={busy || !online} onClick={() => void clearNotes(app, view)}>Clear</button>
+              </div>
+            </div> : null}
+          </article>;
+        })}
+      </section>)}
+
+      {(shown.length > 0 || offers.length > 0) && <p className="apps-foot">Web views open over the chat. Apps stay available while this machine runs; removing one closes its terminals and revokes preview access, but leaves project files and servers you started yourself.</p>}
+    </div>
     {confirm && <ConfirmDialog
       title={confirm.view ? `Open ${confirm.view.name}?` : `Remove ${confirm.app.name}?`}
       message={confirm.view?.kind === "terminal"
-        ? `This starts or reconnects to ${JSON.stringify([confirm.view.command, ...confirm.view.args])}. It runs with the machine user’s permissions, not in a new sandbox. Only run code you trust.`
+        ? `This starts or reconnects to “${formatCommand(confirm.view.command, confirm.view.args)}”. It runs with the machine user’s permissions, not in a new sandbox. Only run code you trust.`
         : "Preview access will be revoked and this app’s terminals stopped. Project files and externally started servers are not removed."}
       confirmLabel={confirm.view ? "Open terminal" : "Remove app"} danger={!confirm.view}
       onCancel={() => setConfirm(null)} onConfirm={() => { if (confirm.view) void open({ app: confirm.app, view: confirm.view }); else void remove(confirm.app); }}
     />}
   </Sheet>;
+}
+
+/** Commands read like a shell line: plain words as-is, anything else quoted. */
+export function formatCommand(command: string, args: readonly string[] = []): string {
+  return [command, ...args].map((word) => /^[\w@%+=:,./-]+$/.test(word) ? word : JSON.stringify(word)).join(" ");
+}
+
+type MoreItem = { label: string; danger?: boolean; disabled?: boolean; onSelect: () => void };
+/** Rare or destructive actions, behind a ⋯ button (the canonical .menu). */
+function MoreMenu({ label, items }: { label: string; items: MoreItem[] }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useModalEscape(() => setOpen(false), open);
+  useEffect(() => {
+    if (!open) return;
+    ref.current?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)")?.focus();
+    const onDoc = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("click", onDoc);
+    return () => document.removeEventListener("click", onDoc);
+  }, [open]);
+  return <div className="apps-more" ref={ref}>
+    <button type="button" className="btn ghost icon" aria-label={label} title="More" aria-haspopup="menu" aria-expanded={open}
+      onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}><MoreIcon size={18} /></button>
+    {open && <div className="menu apps-more-menu" role="menu" aria-label={label}>
+      {items.map((item) => <button key={item.label} type="button" role="menuitem" className={`menu-item${item.danger ? " danger" : ""}`} disabled={item.disabled}
+        onClick={() => { setOpen(false); item.onSelect(); }}>{item.label}</button>)}
+    </div>}
+  </div>;
 }
