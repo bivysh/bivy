@@ -1,16 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test, themes } from "./fixtures.js";
-import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
-import path from "node:path";
+import { expect, test, themes, type WebApp } from "./fixtures.js";
 
-let server: ViteDevServer;
+let server: WebApp;
 let origin: string;
-test.beforeAll(async () => {
-  server = await createServer({ root: path.resolve("packages/web"), logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
-  await server.listen();
-  origin = new URL(server.resolvedUrls!.local[0]).origin;
+test.beforeAll(async ({ webApp }) => {
+  server = webApp;
+  origin = webApp.origin;
 });
-test.afterAll(async () => { await server?.close(); });
 
 for (const theme of themes) {
   test(`first machine advances automatically and starter task remains explicit (${theme})`, async ({ page }, testInfo) => {

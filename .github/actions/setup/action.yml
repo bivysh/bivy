@@ -1,0 +1,38 @@
+name: Set up Node and dependencies
+description: >-
+  pnpm, Node and a frozen install, plus the shared node_modules/.cache that the
+  incremental typechecker, the ESLint cache and the test loader's transform cache
+  all live in. CI now runs many small lanes instead of one long job, so this is
+  repeated per lane and is the floor on how fast any lane can be.
+
+inputs:
+  cache-name:
+    description: >-
+      Names the warm-cache entry for this lane. Lanes keep separate entries so
+      two jobs in the same run never race to save the same key. Leave empty to
+      skip the warm cache entirely (for lanes that would not benefit).
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+    - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: '22.19.0'
+        cache: pnpm
+    - run: pnpm install --frozen-lockfile
+      shell: bash
+
+    # Warm caches are a speed-up only: every consumer is keyed by content
+    # (tsbuildinfo, ESLint's own metadata, content-addressed transform output),
+    # so a stale or missing entry costs time, never correctness. The rolling key
+    # means each run restores the newest entry and saves its own.
+    - if: inputs.cache-name != ''
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: node_modules/.cache
+        key: warm-${{ inputs.cache-name }}-${{ runner.os }}-${{ github.sha }}
+        restore-keys: |
+          warm-${{ inputs.cache-name }}-${{ runner.os }}-

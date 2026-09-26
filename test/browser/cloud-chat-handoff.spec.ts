@@ -1,14 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "./fixtures.js";
-import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
+import { expect, test, type WebApp } from "./fixtures.js";
 import path from "node:path";
-let server: ViteDevServer;
+let server: WebApp;
 let origin: string;
-test.beforeAll(async () => {
-  server = await createServer({ root: path.resolve("packages/web"), logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
-  await server.listen(); origin = new URL(server.resolvedUrls!.local[0]).origin;
+test.beforeAll(async ({ webApp }) => {
+  server = webApp;
+  origin = webApp.origin;
 });
-test.afterAll(async () => { await server?.close(); });
 // Theme previously also selected the fixture's current model. Keep both model
 // states where saved-model adoption depends on them, not a theme cross-product
 // for every outcome. Model-picker appearance is covered in cloud-model-preview.

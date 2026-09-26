@@ -1,23 +1,15 @@
-import { expect, test } from "./fixtures.js";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { expect, test, type WebApp } from "./fixtures.js";
 // Vite is a @bivy/web devDependency, not a root dependency.
-import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
 
-let server: ViteDevServer;
+let server: WebApp;
 let origin: string;
 
-const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../packages/web");
 
-test.beforeAll(async () => {
-  server = await createServer({ root: webRoot, logLevel: "silent", server: { host: "127.0.0.1", port: 0 } });
-  await server.listen();
-  const address = server.httpServer?.address();
-  if (!address || typeof address === "string") throw new Error("Vite test server did not bind a TCP port");
-  origin = `http://127.0.0.1:${address.port}`;
+test.beforeAll(async ({ webApp }) => {
+  server = webApp;
+  origin = webApp.origin;
 });
 
-test.afterAll(async () => { await server.close(); });
 
 async function openModuleFixture(page: import("@playwright/test").Page, body: string): Promise<void> {
   await page.route(`${origin}/pwa-test`, (route) => route.fulfill({

@@ -1,23 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { expect, test, themes } from "./fixtures.js";
-import { createRequire } from "node:module";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { expect, test, themes, type WebApp } from "./fixtures.js";
 
 // Render the real PWA, not a duplicated HTML fixture. Only remote account data
 // and clipboard I/O are mocked; these tests do not claim live server enrollment.
-const webRoot = fileURLToPath(new URL("../../packages/web/", import.meta.url));
-const require = createRequire(new URL("../../packages/web/package.json", import.meta.url));
-let server: { listen(): Promise<unknown>; close(): Promise<void>; resolvedUrls: { local: string[] } | null };
+let server: WebApp;
 let origin: string;
 test.describe.configure({ mode: "serial" });
-test.beforeAll(async () => {
-  const { createServer } = await import(pathToFileURL(require.resolve("vite")).href);
-  server = await createServer({ root: webRoot, server: { host: "127.0.0.1", port: 0 }, logLevel: "error" });
-  await server.listen();
-  origin = new URL(server.resolvedUrls!.local[0]).origin;
+test.beforeAll(async ({ webApp }) => {
+  server = webApp;
+  origin = webApp.origin;
 });
-test.afterAll(async () => { await server?.close(); });
 
 for (const theme of themes) {
   test(`portable browser owner setup and recovery (${theme})`, async ({ page }, testInfo) => {

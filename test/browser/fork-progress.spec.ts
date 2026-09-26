@@ -1,18 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test, themes } from "./fixtures.js";
-import { createRequire } from "node:module";
-import path from "node:path";
+import { expect, test, themes, type WebApp } from "./fixtures.js";
 
-const require = createRequire(new URL("../../packages/web/package.json", import.meta.url));
-let server: any;
+let server: WebApp;
 let url: string;
-test.beforeAll(async () => {
-  const { createServer } = await import(require.resolve("vite"));
-  server = await createServer({ root: path.resolve("packages/web"), server: { host: "127.0.0.1", port: 0 } });
-  await server.listen();
-  url = server.resolvedUrls.local[0];
+test.beforeAll(async ({ webApp }) => {
+  server = webApp;
+  url = webApp.origin;
 });
-test.afterAll(async () => { await server?.close(); });
 
 test.beforeEach(async ({ page }) => {
   await page.routeWebSocket(/.*/, () => {});

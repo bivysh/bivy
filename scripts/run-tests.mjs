@@ -25,6 +25,9 @@
 // Pass one or more substrings to run only matching suites during development:
 //   npm run test:unit -- config-cli plugin-cli
 // CI can distribute the suite across machines with TEST_SHARD=1/2, 2/2, etc.
+// `--changed-since <ref>` runs only the suites a change can reach through the
+// import graph; see scripts/select-tests.mjs for why that is safe and where CI
+// applies it.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { availableParallelism, cpus } from "node:os";
@@ -34,6 +37,14 @@ import { fileURLToPath } from "node:url";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const testDir = path.join(repoRoot, "test");
 const tsxBin = path.join(repoRoot, "node_modules", ".bin", "tsx");
+
+// Suites run under our own loader (scripts/ts-loader.mjs) rather than tsx. With
+// ~300 short-lived processes the loader's fixed startup cost is paid 300 times
+// and dominated the run; see that file for the measurements. Set
+// BIVY_TEST_LOADER=tsx to fall back if a suite ever disagrees with the two.
+const useTsx = process.env.BIVY_TEST_LOADER === "tsx";
+const tsLoader = path.join(repoRoot, "scripts", "ts-loader.mjs");
+const nodeRunner = { cmd: process.execPath, prefix: ["--import", tsLoader] };
 
 // Preflight: without tsx every .test.ts suite fails instantly with an opaque
 // spawn error, so the summary reads "N/N failed" and hides the real cause. Fail
@@ -77,7 +88,12 @@ function portsForFile(file) {
 const tsSuites = readdirSync(testDir)
   .filter((f) => f.endsWith(".test.ts"))
   .sort()
-  .map((f) => ({ name: f, cmd: tsxBin, args: [path.join(testDir, f)], ports: portsForFile(path.join(testDir, f)) }));
+  .map((f) => ({
+    name: f,
+    cmd: useTsx ? tsxBin : nodeRunner.cmd,
+    args: useTsx ? [path.join(testDir, f)] : [...nodeRunner.prefix, path.join(testDir, f)],
+    ports: portsForFile(path.join(testDir, f)),
+  }));
 
 // Shell installer tests. Each runs the real install.sh, which mutates global,
 // un-sandboxable state a port key can't model — it writes shell rc files, reads
@@ -94,53 +110,50 @@ const shSuites = ["installer-bootstrap.sh", "installer-migration.sh", "installer
 
 const allSuites = [...tsSuites, ...shSuites];
 
-// Approximate wall-clock costs from recent CI/local runs. They are not a
-// correctness input; they only keep shards balanced and start expensive suites
+// Measured wall-clock costs, taken from a real CI run's per-suite log. They are
+// not a correctness input; they keep shards balanced and start expensive suites
 // first so a long test does not become the final straggler. Unknown suites get a
 // small default weight and still run normally.
+//
+// Now that CI splits the suite across four runners these also decide how even
+// that split is, so refresh them from a CI log rather than guessing when they
+// drift. Suites under two seconds are omitted: they are all within noise of the
+// default weight. Regenerate with:
+//   grep -oE '── . [^ ]+ \([0-9]+/[0-9]+, [0-9.]+s\)' <job-log>
 const SUITE_DURATION_HINTS = new Map(Object.entries({
-  "opencode-sessions.test.ts": 54,
-  "plugin-cli.test.ts": 32,
-  "model-oauth.test.ts": 2,
-  "pi-models-auth-refresh.test.ts": 25,
-  "fork-transport.test.ts": 25,
-  "pi-session-discovery.test.ts": 23,
-  "config-cli.test.ts": 22,
-  "pi-integration-credentials.test.ts": 20,
-  "acp-adapter.test.ts": 29,
-  "agent-cli.test.ts": 18,
-  "cli-capability-probe.test.ts": 17,
-  "cli-version.test.ts": 15,
-  "setup-isolated-smoke.test.ts": 5,
-  "pi-models-all.test.ts": 15,
-  "self-host-bundle.test.ts": 14,
-  "self-host-setup.test.ts": 14,
-  "pi-commands.test.ts": 13,
-  "golden-workflow-agents.test.ts": 13,
-  "background-shell.test.ts": 13,
-  "agent-registry.test.ts": 12,
-  "runtime-streaming-behaviors.test.ts": 11,
-  "runtime-delete-session.test.ts": 10,
-  "remote-session-fault-matrix.test.ts": 10,
-  "exec-exit-code.test.ts": 10,
-  "plugin-runtime.test.ts": 9,
-  "python-agent-install.test.ts": 8,
-  "codex-shim-tool-items.test.ts": 8,
-  "cli-resume-templates.test.ts": 8,
-  "remote-runtime-integration.test.ts": 7,
-  "github-tasks-integration.test.ts": 7,
-  "policy-run-policy.test.ts": 6,
-  "protocol-runtime.test.ts": 6,
-  "opencode-fork-transport.test.ts": 6,
-  "local-model-discovery.test.ts": 6,
-  "command-registry.test.ts": 4,
-  "node-config.test.ts": 4,
-  "process-group-kill.test.ts": 4,
-  "remote-runtime-session.test.ts": 4,
-  "rpc-protocol.test.ts": 4,
-  "installer-path.sh": 12,
-  "installer-bootstrap.sh": 3,
-  "installer-migration.sh": 2,
+  "config-cli.test.ts": 20,
+  "app-screenshot.test.ts": 16,
+  "plugin-cli.test.ts": 9,
+  "acp-adapter.test.ts": 8,
+  "automation-filter.test.ts": 6,
+  "codex-shim-tool-items.test.ts": 6,
+  "self-host-setup.test.ts": 6,
+  "setup-isolated-smoke.test.ts": 6,
+  "agent-cli.test.ts": 5,
+  "background-shell.test.ts": 5,
+  "credential-import-command.test.ts": 5,
+  "pi-models-all.test.ts": 5,
+  "remote-runtime-integration.test.ts": 5,
+  "app-preview-tunnel.test.ts": 4,
+  "cli-version.test.ts": 4,
+  "exec-exit-code.test.ts": 4,
+  "fork-standup.test.ts": 4,
+  "fork-transport.test.ts": 4,
+  "golden-workflow-agents.test.ts": 4,
+  "installer-smoke-guest.test.ts": 4,
+  "pi-integration-credentials.test.ts": 4,
+  "pi-session-discovery.test.ts": 4,
+  "relay-reconnect.test.ts": 4,
+  "runtime-delete-session.test.ts": 4,
+  "runtime-read-messages.test.ts": 4,
+  "github-tasks-integration.test.ts": 3,
+  "process-group-kill.test.ts": 3,
+  "self-host-bundle.test.ts": 3,
+  "account-cli.test.ts": 2,
+  "app-listeners.test.ts": 2,
+  "codex-shim-turn-failed.test.ts": 2,
+  "plugin-runtime.test.ts": 2,
+  "session-reroute.test.ts": 2,
 }));
 
 function durationHint(suite) {
@@ -153,7 +166,9 @@ function compareByDurationDesc(a, b) {
 
 const cliArgs = process.argv.slice(2);
 const listOnly = cliArgs.includes("--list");
-const selectors = cliArgs.filter((arg) => !arg.startsWith("--"));
+const changedSinceIndex = cliArgs.indexOf("--changed-since");
+// --changed-since takes a git ref, which must not be mistaken for a name filter.
+const selectors = cliArgs.filter((arg, i) => !arg.startsWith("--") && i !== changedSinceIndex + 1);
 const shardSpec = process.env.TEST_SHARD;
 let shardIndex = 0;
 let shardCount = 1;
@@ -181,8 +196,40 @@ function assignShards(suites, count) {
   return assignments;
 }
 
+// --changed-since <ref> narrows the run to the suites a change can reach, via
+// the import graph (scripts/select-tests.mjs). Only PR pushes use it; the merge
+// queue and nightly always run everything, so a suite it misses still gates the
+// merge. The shell suites are not in the graph, so they only run in a full run.
+let changedSinceSuites = null;
+if (changedSinceIndex !== -1) {
+  const baseRef = cliArgs[changedSinceIndex + 1];
+  if (!baseRef || baseRef.startsWith("--")) {
+    process.stderr.write("--changed-since needs a git ref, e.g. --changed-since origin/main\n");
+    process.exit(2);
+  }
+  const { selectSuites } = await import("./select-tests.mjs");
+  const { execFileSync } = await import("node:child_process");
+  const base = execFileSync("git", ["merge-base", "HEAD", baseRef], { cwd: repoRoot, encoding: "utf8" }).trim();
+  const changed = execFileSync("git", ["diff", "--name-only", base, "HEAD"], { cwd: repoRoot, encoding: "utf8" })
+    .split("\n").map((l) => l.trim()).filter(Boolean);
+  const result = selectSuites(changed);
+  if (result.all) {
+    process.stdout.write(`Change selection: running every suite (${result.reason}).\n`);
+  } else {
+    changedSinceSuites = new Set(result.suites);
+    process.stdout.write(
+      `Change selection: ${result.suites.length} of ${tsSuites.length} suites reachable from ${result.reason}.\n`,
+    );
+    if (result.suites.length === 0) {
+      process.stdout.write("Nothing to run.\n");
+      process.exit(0);
+    }
+  }
+}
+
 const selectorMatchedSuites = allSuites.filter((suite) =>
-  selectors.length === 0 || selectors.some((selector) => suite.name.includes(selector)),
+  (selectors.length === 0 || selectors.some((selector) => suite.name.includes(selector))) &&
+  (changedSinceSuites === null || changedSinceSuites.has(suite.name)),
 );
 const shardAssignments = assignShards(selectorMatchedSuites, shardCount);
 const selectedSuites = selectorMatchedSuites.filter((suite) => shardAssignments.get(suite.name) === shardIndex);

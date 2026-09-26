@@ -7,7 +7,12 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "outDir": "dist"
+    "outDir": "dist",
+    // Cache type information between runs so an unchanged file is not
+    // re-checked. CI restores node_modules/.cache, so a warm run only
+    // typechecks what actually changed.
+    "incremental": true,
+    "tsBuildInfoFile": "node_modules/.cache/tsc/root.tsbuildinfo"
   },
   "include": [
     "src/**/*.ts"

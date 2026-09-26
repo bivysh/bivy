@@ -34,6 +34,9 @@ const mobileOnlySpecs = [
 
 export default defineConfig({
   testDir: "./test/browser",
+  // Pre-bundle the app's dependencies once so workers share a warm Vite cache
+  // instead of racing to build one. See test/browser/global-setup.ts.
+  globalSetup: "./test/browser/global-setup.ts",
   // Reuse each file's Vite server instead of duplicating cold transforms across
   // workers. Independent files still execute in parallel.
   // Public-repository Linux runners have four vCPUs; Playwright's default

@@ -179,24 +179,28 @@ jobs:
           echo "consumer_os=$consumer_os" >> "$GITHUB_OUTPUT"
           echo "CI tier: $tier" >> "$GITHUB_STEP_SUMMARY"
 
-  # One runner for every cheap, high-signal root check. Separate jobs each paid
-  # ~30s of checkout/install for 10-40s of work; about half of all runner time
-  # was setup. Every unit and core suite runs: the whole set takes about a
-  # minute, which is cheaper than a regression found later in the queue.
-  checks:
+  # The root checks used to share one runner: nine independent commands ran
+  # back-to-back while three of the box's four cores sat idle, and the unit
+  # suite ran unsharded at the end. Setup was merged into one job to avoid
+  # paying checkout+install repeatedly, but that traded ~23s of setup for ~170s
+  # of serialisation.
+  #
+  # They are separate lanes again, because for a public repository extra runners
+  # are free and run at the same time. Setup is now the floor on each lane, so it
+  # is a shared composite action that also restores a warm cache (see
+  # .github/actions/setup). Every lane below is a leaf: nothing depends on it
+  # except ci-ok, so they all start at once.
+
+  # Policy and metadata checks. Seconds of work each, no build needed.
+  policy:
     needs: changes
     if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
-    name: Root checks + unit tests
+    name: Policy checks
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22.19.0'
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
       # Verify the transitive security pins actually took effect on disk, and
       # that package.json (which resolves the published npm artifact) and
       # pnpm-workspace.yaml (which resolves what CI tests) declare the same ones.
@@ -208,24 +212,129 @@ jobs:
       - run: pnpm run audit:prod
       - run: pnpm run check:licenses
       - run: pnpm run check:secrets -- --current-only
-      - run: pnpm run lint
       - run: pnpm run check:boundaries
       - run: pnpm run check:routes
       - run: pnpm run check:design
       - run: pnpm run certification:check
-      - run: pnpm run typecheck
-      - run: pnpm run typecheck:web
-      - run: pnpm run test:core
+
+  # ESLint, with its cache restored. A warm run only lints changed files, which
+  # takes it from ~24s to ~2s; a cold one is no slower than before.
+  lint:
+    needs: changes
+    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+        with:
+          cache-name: lint
+      - run: pnpm run lint
+
+  # Both typecheckers, incrementally and at the same time as each other. They
+  # are independent tsc invocations, so running them in sequence just added the
+  # smaller one's time to the lane.
+  types:
+    needs: changes
+    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
+    name: Types
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+        with:
+          cache-name: types
+      - name: typecheck + typecheck:web
+        run: |
+          pnpm run typecheck & root=$!
+          pnpm run typecheck:web & web=$!
+          # Wait for both and fail if either did, rather than letting the last
+          # one's status decide the step.
+          failed=0
+          wait $root || failed=1
+          wait $web || failed=1
+          exit $failed
+
+  # The node unit suites, split across runners. The whole set is ~300 suites and
+  # parallelises almost perfectly (it measured 98% efficient on one 4-core box),
+  # so it scales with cores, and four free runners give four times as many as
+  # one. On a pull request each shard first narrows to the suites the change can
+  # actually reach; the merge queue and nightly always run everything, so a
+  # suite the selection misses still gates the merge.
+  unit:
+    needs: changes
+    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
+    name: Unit tests (${{ matrix.shard }}/4)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      TEST_SHARD: ${{ matrix.shard }}/4
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Change selection diffs against the merge base, which needs history.
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+        with:
+          cache-name: unit-${{ matrix.shard }}
+      - name: Select suites for this shard
+        id: select
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          # Only a pull-request push narrows; every other event runs the lot.
+          if [ "${{ github.event_name }}" = pull_request ] && [ "${{ needs.changes.outputs.tier }}" != full ]; then
+            git fetch --no-tags --depth=0 origin "$BASE_REF"
+            echo "args=--changed-since origin/$BASE_REF" >> "$GITHUB_OUTPUT"
+          else
+            echo "args=" >> "$GITHUB_OUTPUT"
+          fi
       # Desktop app views run on TigerVNC's X server; with it installed the
-      # display test drives a real one instead of skipping.
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends tigervnc-standalone-server
+      # display test drives a real one instead of skipping. Only the shard that
+      # actually got that suite pays the apt install.
+      - name: Install TigerVNC if this shard runs the display suite
+        run: |
+          if node scripts/run-tests.mjs --list ${{ steps.select.outputs.args }} | grep -qx 'app-display.test.ts'; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq --no-install-recommends tigervnc-standalone-server
+          else
+            echo "display suite not in this shard; skipping TigerVNC"
+          fi
       # Within the runner, independent suites run across its CPUs while suites
       # with a shared port are serialized (scripts/run-tests.mjs).
-      - run: pnpm run test:unit
-      # Initial-bundle budget (B4b): fail if the PWA entry chunk grows past its
-      # raw/gzip ceiling. The long-transcript budget runs in test:unit.
-      - name: Web build + bundle budget
-        run: pnpm run build:web && node scripts/check-bundle-size.mjs
+      - run: node scripts/run-tests.mjs ${{ steps.select.outputs.args }}
+
+  core:
+    needs: changes
+    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
+    name: Core suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - run: pnpm run test:core
+
+  # Initial-bundle budget (B4b): fail if the PWA entry chunk grows past its
+  # raw/gzip ceiling. The long-transcript budget runs in the unit suite.
+  web-build:
+    needs: changes
+    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
+    name: Web build + bundle budget
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+        with:
+          cache-name: web-build
+      - run: pnpm run build:web && node scripts/check-bundle-size.mjs
 
   # Build the platform-independent release package. Emitting JavaScript and
   # curating the package catches cross-boundary imports that tsc --noEmit can
@@ -363,38 +472,44 @@ jobs:
         if: always()
         run: bash scripts/installer-smoke-guest.sh cleanup
 
-  # The whole browser suite runs whenever the app changes: it is small enough
-  # (see test/browser/README.md) that a PR sees exactly what the queue will.
+  # The browser suite runs whenever the app changes. It is ~120 tests and ~310
+  # test-seconds; a single 4-worker runner spent 90s on it, so it is split the
+  # same way as the unit suite. Playwright's own --shard balances by file.
   browser:
     needs: changes
     if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.web == 'true'
-    name: Browser
+    name: Browser (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22.19.0'
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
       - name: Cache Chromium
+        id: chromium
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: chromium-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
       # Install fonts as well as shared libraries: a successful browser launch
       # alone does not guarantee the screenshot environment matches baselines.
+      # --with-deps shells out to apt every time, so on a cache hit (the browser
+      # and its system libraries are already present) install the shell alone.
       - run: pnpm exec playwright install --with-deps --only-shell chromium
-      - run: pnpm run test:browser --project=behavior --project=desktop --project=mobile --reporter=line,json
+        if: steps.chromium.outputs.cache-hit != 'true'
+      - run: pnpm exec playwright install --only-shell chromium
+        if: steps.chromium.outputs.cache-hit == 'true'
+      - run: pnpm run test:browser --project=behavior --project=desktop --project=mobile --shard=${{ matrix.shard }}/3 --reporter=line,json
         env:
           PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/timings.json
       - name: Upload PWA screenshot review artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: pwa-screenshots
+          name: pwa-screenshots-${{ matrix.shard }}
           path: |
             test/browser/screenshots.spec.ts-snapshots/*.png
             test-results/**
@@ -522,7 +637,12 @@ jobs:
     if: ${{ always() }}
     needs:
       - changes
-      - checks
+      - policy
+      - lint
+      - types
+      - unit
+      - core
+      - web-build
       - root-release
       - agent-certification
       - release-consumer

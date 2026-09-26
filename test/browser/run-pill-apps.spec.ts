@@ -1,8 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test, themes } from "./fixtures.js";
+import { expect, test, themes, type WebApp } from "./fixtures.js";
 import path from "node:path";
-import { mkdtemp, rm } from "node:fs/promises";
-import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
 
 // The published-app launcher card anchors chronologically in the transcript, so
 // after a long turn it scrolls out of view. The run pill's action sheet — the
@@ -11,19 +9,12 @@ import { createServer, type ViteDevServer } from "../../packages/web/node_module
 // started but nobody previewed yet also shows on the pill itself, so it doesn't
 // wait for someone to open the sheet. This renders the real RunPill and proves
 // both appear, the row is keyboard-reachable, and it fires.
-let server: ViteDevServer;
+let server: WebApp;
 let origin: string;
-let cacheDir: string;
-test.beforeAll(async () => {
-  const root = path.resolve("packages/web");
-  cacheDir = await mkdtemp(path.join(root, "node_modules/.vite-run-pill-apps-"));
-  server = await createServer({ root, cacheDir, logLevel: "silent", server: { host: "127.0.0.1", port: 0 } });
-  await server.listen();
-  const address = server.httpServer!.address();
-  if (!address || typeof address === "string") throw new Error("No test port");
-  origin = `http://127.0.0.1:${address.port}`;
+test.beforeAll(async ({ webApp }) => {
+  server = webApp;
+  origin = webApp.origin;
 });
-test.afterAll(async () => { await server?.close(); if (cacheDir) await rm(cacheDir, { recursive: true, force: true }); });
 
 for (const theme of themes) {
   test(`run pill surfaces apps and detected servers and opens the apps sheet (${theme})`, async ({ page }, testInfo) => {

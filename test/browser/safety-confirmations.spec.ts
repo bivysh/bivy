@@ -2,24 +2,17 @@
 // Actions with real consequences (unsandboxed access, billable machines, a
 // stopped agent) need an informed, explicit step in the real components. Each
 // test renders the component with a stubbed controller and records its calls.
-import { expect, test } from "./fixtures.js";
+import { expect, test, type WebApp } from "./fixtures.js";
 import { fileURLToPath } from "node:url";
 import type { Page } from "@playwright/test";
-import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
 
-let server: ViteDevServer;
+let server: WebApp;
 let origin: string;
 
-test.beforeAll(async () => {
-  server = await createServer({
-    root: fileURLToPath(new URL("../../packages/web", import.meta.url)),
-    logLevel: "silent",
-    server: { host: "127.0.0.1", port: 0 },
-  });
-  await server.listen();
-  origin = new URL(server.resolvedUrls!.local[0]).origin;
+test.beforeAll(async ({ webApp }) => {
+  server = webApp;
+  origin = webApp.origin;
 });
-test.afterAll(async () => { await server?.close(); });
 
 /** Render `script` (a module body that sets up `h`, `root` and `calls`) as a page. */
 async function render(page: Page, name: string, script: string) {
