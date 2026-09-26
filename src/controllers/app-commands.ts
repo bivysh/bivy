@@ -12,7 +12,7 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
     return workspace;
   };
   const operations: Record<string, (msg: AppCommand) => unknown | Promise<unknown>> = {
-    "apps.list": (msg) => service.list(String(msg.sessionId)),
+    "apps.list": (msg) => service.list(typeof msg.sessionId === "string" ? msg.sessionId : undefined),
     "apps.publish": (msg) => {
       const sessionId = String(msg.sessionId);
       const app = service.publish(sessionId, workspaceOf(sessionId), msg.manifest as AppManifest);

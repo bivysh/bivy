@@ -9,6 +9,7 @@ const singleViewport = [
   "**/runtime-config.spec.ts",
   "**/chat-attachments.spec.ts",
   "**/pwa-lifecycle.spec.ts",
+  "**/library.spec.ts",
 ];
 
 // Specs whose layout, touch targets or visual baselines differ on a phone.

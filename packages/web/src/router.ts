@@ -9,6 +9,7 @@
 //   /settings/:view       — the Settings overlay, on a specific section
 //   /automations          — the Automations overlay, Overview tab
 //   /automations/:section — the Automations overlay, on a specific tab
+//   /artifacts, /apps     — the machine-wide Artifacts / Apps pages (overlays)
 // Anything else (notably `/`) is treated as the "root" home, which renders the
 // same empty/first-run shell a fresh draft does. Keeping this in one small
 // module means the controller owns *when* to navigate while the URL parsing and
@@ -80,12 +81,18 @@ function parseAutomationsSection(v: string): AutomationsSection | null {
   return (AUTOMATIONS_SECTIONS as readonly string[]).includes(v) ? v as AutomationsSection : null;
 }
 
+/** The sidebar's machine-wide pages. Each is a path of its own (`/artifacts`,
+ *  `/apps`); both are overlays like Automations (see libraryRoute.ts). */
+export type LibraryView = "artifacts" | "apps";
+const LIBRARY_PATH = /^\/(artifacts|apps)\/?$/;
+
 export type Route =
   | { kind: "session"; id: string }
   | { kind: "run"; id: string }
   | { kind: "new" }
   | { kind: "settings"; view: SettingsView | null }
   | { kind: "automations"; section: AutomationsSection | null }
+  | { kind: "library"; view: LibraryView }
   | { kind: "root" };
 
 const SESSION_PATH = /^\/sessions\/([^/]+)\/?$/;
@@ -115,6 +122,8 @@ export function parseRoute(pathname: string = location.pathname): Route {
     const raw = automationsMatch[1] ? decodeURIComponent(automationsMatch[1]) : "";
     return { kind: "automations", section: parseAutomationsSection(raw) };
   }
+  const libraryMatch = LIBRARY_PATH.exec(pathname);
+  if (libraryMatch) return { kind: "library", view: libraryMatch[1] as LibraryView };
   return { kind: "root" };
 }
 
@@ -140,7 +149,9 @@ export function routePath(route: Route): string {
             ? route.section
               ? `/automations/${route.section}`
               : "/automations"
-            : "/";
+            : route.kind === "library"
+              ? `/${route.view}`
+              : "/";
   return base + location.search + location.hash;
 }
 

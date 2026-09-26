@@ -178,8 +178,8 @@ export class AppRegistry extends EventEmitter {
     return structuredClone(app);
   }
 
-  list(sessionId: string): SessionApp[] {
-    return structuredClone([...this.apps.values()].filter((app) => app.sessionId === sessionId));
+  list(sessionId?: string): SessionApp[] {
+    return structuredClone([...this.apps.values()].filter((app) => sessionId === undefined || app.sessionId === sessionId));
   }
   getView(id: string): RegisteredView | undefined { return this.views.get(id); }
   /** An agent turn changed files: re-take changed static snapshots and bump

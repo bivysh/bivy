@@ -63,7 +63,8 @@ export class AppService {
     this.displays = options.displays ?? NO_DISPLAYS;
   }
 
-  list(sessionId: string): SessionAppsResult {
+  /** A session's apps, or every app on this machine when no session is given. */
+  list(sessionId?: string): SessionAppsResult {
     const available = Boolean(this.gateway) && this.gateway?.available !== false;
     const apps = this.registry.list(sessionId);
     for (const app of apps) for (const view of app.views) {

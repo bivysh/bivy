@@ -7,6 +7,7 @@ import { AppMessage } from "./AppMessage.js";
 import { ToolGroup } from "./ToolGroup.js";
 import { ImageGallery } from "./ImageGallery.js";
 import { focusEntries } from "../focusTranscript.js";
+import { clearMessageJump, pendingJumpIndex } from "../messageJump.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
 import { renderMermaidDiagrams } from "../mermaid.js";
 import { writeClipboard } from "../clipboard.js";
@@ -637,6 +638,12 @@ export function ChatView({
   } else if (start !== historyWindow.start || (historyWindow.initialized && total === 0)) {
     setHistoryWindow({ ...historyWindow, initialized: total > 0, start });
   }
+  // A message asked for from the Artifacts/Apps pages may sit above the window.
+  const jumpIndex = pendingJumpIndex(sessionKey, source);
+  if (jumpIndex !== null && jumpIndex < start) {
+    start = jumpIndex;
+    setHistoryWindow({ sessionKey, focusView, initialized: true, start });
+  }
   const limitRef = useRef(total - start);
   useLayoutEffect(() => { limitRef.current = total - start; }, [total, start]);
   // Mirror `pinned` into a ref so the layout-effect and ResizeObserver below —
@@ -685,6 +692,23 @@ export function ChatView({
     });
     return () => cancelAnimationFrame(frame);
   }, [sessionKey, setPinnedState]);
+
+  // Land on that message once it is mounted. Scheduled after the scroll
+  // restore above, so it wins when the history was already cached.
+  useLayoutEffect(() => {
+    const index = pendingJumpIndex(sessionKey, source);
+    if (index === null || index < start) return;
+    const id = `msg-${source[index]!.id}`;
+    clearMessageJump();
+    setPinnedState(false);
+    requestAnimationFrame(() => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.scrollIntoView({ block: "center" });
+      el.classList.add("is-jump-target");
+      setTimeout(() => el.classList.remove("is-jump-target"), 2400);
+    });
+  }, [sessionKey, source, start, setPinnedState]);
 
   const rememberScroll = useCallback(() => {
     const el = scrollRef.current;
