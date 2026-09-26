@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- A session moves between terminal and chat in both directions without losing its place or getting a second writer. **Continue in terminal** from the app now opens the session in a terminal owned by the node, not by the device that opened it. It keeps running when that tab closes, any device can join it, and `bivy resume` on a laptop joins the same terminal. When another device takes the session back as a chat, an attached `bivy run`/`bivy resume` terminal says so and offers **Enter** to take it back, instead of printing "session ended". A terminal overlay watching it in the app switches to the chat.
+
+### Fixed
+
+- `bivy resume` on a session that is also open as a chat no longer lets both write the same conversation. The chat locks while the terminal drives it and reloads what the terminal wrote when it ends. Resuming a saved session from the CLI also keeps the session's own name and source in the sidebar.
+
 ## [0.17.2] - 2026-09-25
 
 ### Added

@@ -1006,6 +1006,16 @@ export function TerminalOverlay({
           setStatus("exited");
           setStatusText("Exited");
           break;
+        case "terminal.closed":
+          // The session this terminal showed continues as a chat (from this or
+          // any other device): follow it there instead of showing a dead PTY.
+          if (p.reason === "chat" && p.sessionId && p.termId === termIdRef.current) {
+            sessionStorage.removeItem(`bivy.next.term.${key}`);
+            termIdRef.current = null;
+            controller.openSession(String(p.sessionId));
+            onClose();
+          }
+          break;
         case "terminal.error":
           term.write(`\r\n\x1b[31m${p.error || "terminal error"}\x1b[0m\r\n`);
           setStatus("error");

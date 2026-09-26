@@ -31,6 +31,8 @@ type TuiSpec = { command: string; args: string[]; env?: Record<string, string> }
 /** The session fields the run-terminal subsystem reads/writes (TUI lifecycle). */
 export interface RunSession {
   id: string;
+  runtimeId?: string;
+  sessionFile?: string;
   workspace: string;
   worktree?: { path?: string };
   tuiTermId?: string;
@@ -54,7 +56,8 @@ export interface RunTerminalSpec {
   rows?: number;
   clientId?: string;
   sessionId?: string;
-  /** Extra environment, e.g. the display a desktop app view runs on. */
+  /** Extra environment: the display a desktop app view runs on, or a chat
+   *  session's own TUI launch spec. */
   env?: Record<string, string>;
 }
 
@@ -73,6 +76,9 @@ export interface RunTerminalDeps {
   sendNotificationHint(hint: { kind: string; title: string; body: string }): void;
   createSession(workspace: string, sessionFile: string | undefined, opts: { runtimeId: string; makeActive?: boolean; source?: string }): Promise<{ id: string }>;
   resolveSession(sessionId?: unknown): RunSession | undefined;
+  /** The open chat session a run's pinned id belongs to (by Bivy id or the
+   *  runtime's own session ref), if any. Never falls back to the active session. */
+  findOpenSession(ref: string): RunSession | undefined;
   sessionBusy(record: RunSession): boolean;
   sessionTerminalsRecord(sessionId: string, val: { termId: string }): Promise<void>;
   sessionTerminalsForget(sessionId: string): Promise<void>;
@@ -120,6 +126,9 @@ export interface RunTerminals {
   hasRunTerminal(id: string): boolean;
   /** True while a live `bivy run` PTY is pinned to this session id. */
   hasLiveRunForSession(sessionId: string): boolean;
+  /** A chat session just opened while a live run is pinned to it: lock the chat
+   *  to that terminal, so the two never write the same conversation at once. */
+  adoptLiveRun(record: RunSession): void;
 }
 
 type TerminalClientMessage = { kind?: string; termId?: unknown; data?: unknown; cols?: unknown; rows?: unknown; workspace?: unknown; sessionId?: unknown; agent?: unknown; label?: unknown; name?: unknown; model?: unknown; command?: unknown; args?: unknown; mux?: unknown; standalone?: unknown };
@@ -203,6 +212,43 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
       if (terminals.meta(id)?.sessionId === sessionId) return true;
     }
     return false;
+  }
+
+  // One conversation, one writer. A run pinned to a session that is also open as
+  // a chat owns it while the PTY lives: the chat locks (and says so on every
+  // device), and when the PTY ends the chat reloads what the terminal wrote.
+  function bindRun(record: RunSession, termId: string): void {
+    record.tuiTermId = termId;
+    void deps.sessionTerminalsRecord(record.id, { termId }).catch(() => {});
+    deps.broadcastTuiState(record.id, true);
+  }
+
+  function releaseRun(record: RunSession, termId: string): void {
+    if (record.tuiTermId !== termId) return;
+    record.tuiTermId = undefined;
+    void deps.sessionTerminalsForget(record.id).catch(() => {});
+    record.tuiRefreshing = true;
+    deps.broadcastTuiState(record.id, false);
+    void deps.refreshRecordAfterTui(record);
+  }
+
+  function adoptLiveRun(record: RunSession): void {
+    if (record.tuiTermId) return;
+    for (const id of runTerminals) {
+      const pinned = terminals.meta(id)?.sessionId;
+      if (pinned && (pinned === record.id || pinned === record.sessionFile)) { bindRun(record, id); return; }
+    }
+  }
+
+  /** Stop a run because its session is continuing as a chat. Tells every viewer
+   *  where the session went first, so a terminal attached elsewhere (a laptop's
+   *  `bivy run`) can offer to take it back instead of just printing "ended". */
+  function handRunToChat(termId: string, sessionId: string): void {
+    deps.broadcast({ type: "terminal.closed", termId, reason: "chat", sessionId });
+    terminals.close(termId);
+    runTerminals.delete(termId);
+    runViewers.delete(termId);
+    deps.broadcast({ type: "terminal.closed", termId });
   }
 
   async function runTerminalList(): Promise<unknown[]> {
@@ -312,6 +358,17 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
       emit({ type: "terminal.error", error: `Too many run terminals open (${runTerminals.size}/${deps.maxRunTerminals}). Close one (e.g. 'bivy kill') or raise BIVY_MAX_RUN_TERMINALS.` });
       return undefined;
     }
+    const owner = spec.sessionId && !spec.mux ? deps.findOpenSession(spec.sessionId) : undefined;
+    if (owner?.tuiTermId && runTerminals.has(owner.tuiTermId)) {
+      // Already open in a terminal: join it rather than start a second writer.
+      if (spec.clientId && (spec.cols !== undefined || spec.rows !== undefined)) terminals.setClientSize(owner.tuiTermId, spec.clientId, spec.cols || 80, spec.rows || 24);
+      emit({ type: "terminal.attached", termId: owner.tuiTermId, data: terminals.snapshot(owner.tuiTermId) ?? "" });
+      return owner.tuiTermId;
+    }
+    if (owner && deps.sessionBusy(owner)) {
+      emit({ type: "terminal.error", sessionId: owner.id, error: "This session is mid-turn in chat. Stop or finish the turn, then open it in the terminal." });
+      return undefined;
+    }
     const active = deps.getActiveSession();
     const workspace = spec.workspace || active?.session?.cwd || active?.worktree?.path || active?.workspace || deps.defaultWorkspace;
     // Agent-owned integrations keep their native login untouched. Only an
@@ -353,6 +410,14 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
           clearRunIdleNotify(id);
           deps.broadcast({ type: "terminal.exit", termId: id, code });
           deps.broadcast({ type: "terminal.closed", termId: id });
+          // A run that owned an open chat hands the conversation back to it; the
+          // chat keeps its own record, so none of the run bookkeeping below applies.
+          const bound = spec.sessionId ? deps.findOpenSession(spec.sessionId) : undefined;
+          if (bound?.tuiTermId === id) {
+            releaseRun(bound, id);
+            try { deps.sessionListChanged(); } catch { /* best-effort */ }
+            return;
+          }
           if (!spec.mux) {
             // The durable record of this run, in order of fidelity: the agent's
             // own session (pinned at launch), the session discovered in the
@@ -398,7 +463,8 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
         },
       });
       runTerminals.add(id);
-      if (spec.sessionId && spec.agent && !spec.mux) {
+      if (owner) bindRun(owner, id);
+      if (spec.sessionId && spec.agent && !spec.mux && !owner) {
         const runtimeId = TAKEOVER_RUNTIME_BY_AGENT[spec.agent] ?? spec.agent;
         try { deps.upsertSessionMetadata({ id: spec.sessionId, runtimeId, agentName: spec.agent, workspace, name: name || undefined, source: "cli", status: "working" }); }
         catch { /* best-effort: a metadata write must never block the run launch */ }
@@ -442,6 +508,13 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
         ? runs.find((t) => t.meta.sessionId === opts.sessionId)
         : undefined;
     if (!entry) return { ok: false, status: 404, error: "No matching live run-terminal." };
+    // The chat already exists (the terminal was opened from it, or joined it):
+    // stopping the PTY is the whole handoff — its exit reloads the chat.
+    const owner = entry.meta.sessionId ? deps.findOpenSession(entry.meta.sessionId) : undefined;
+    if (owner?.tuiTermId === entry.id) {
+      handRunToChat(entry.id, owner.id);
+      return { ok: true, sessionId: owner.id, runtimeId: owner.runtimeId ?? "" };
+    }
     const agent = entry.meta.agent ?? "";
     const runtimeId = TAKEOVER_RUNTIME_BY_AGENT[agent];
     if (!runtimeId) return { ok: false, status: 409, error: `"Continue as chat" isn't supported for "${agent || "this agent"}" yet.` };
@@ -460,10 +533,7 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
     // second agent process until the next prompt. If preparation fails, the
     // terminal remains live and the user loses nothing.
     const record = await deps.createSession(workspace, pinned, { runtimeId, makeActive: true, source: "takeover" });
-    terminals.close(entry.id);
-    runTerminals.delete(entry.id);
-    runViewers.delete(entry.id);
-    deps.broadcast({ type: "terminal.closed", termId: entry.id });
+    handRunToChat(entry.id, record.id);
     const resumeCommand = RESUME_CLI_BY_AGENT[agent]?.(pinned);
     return { ok: true, sessionId: record.id, runtimeId, resumeCommand };
   }
@@ -540,67 +610,44 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
         return true;
       }
       case "terminal.open.tui": {
+        // "Open in terminal" for a chat session: its runtime's own interactive
+        // TUI, resuming the same conversation, as a daemon-owned run pinned to the
+        // session — so it outlives the device that opened it, every device can
+        // watch it, and the chat stays locked until it ends (single writer).
         void (async () => {
-          const record = deps.resolveSession(msg.sessionId);
+          const record = typeof msg.sessionId === "string" && msg.sessionId ? deps.findOpenSession(msg.sessionId) : undefined;
           if (!record) { emit({ type: "terminal.error", error: "Session not found for TUI." }); return; }
-          if (record.tuiTermId) {
-            const snapshot = terminals.snapshot(record.tuiTermId);
-            if (snapshot != null) {
-              owned.add(record.tuiTermId);
-              if (typeof msg.cols !== "undefined" || typeof msg.rows !== "undefined") terminals.setClientSize(record.tuiTermId, clientId, Number(msg.cols) || 80, Number(msg.rows) || 24);
-              emit({ type: "terminal.attached", termId: record.tuiTermId, data: snapshot });
-              return;
-            }
+          const cols = Number(msg.cols) || undefined;
+          const rows = Number(msg.rows) || undefined;
+          const live = record.tuiTermId && runTerminals.has(record.tuiTermId) ? record.tuiTermId : undefined;
+          if (!live && deps.sessionBusy(record)) { emit({ type: "terminal.error", sessionId: record.id, error: "Finish or stop the current turn before opening the TUI." }); return; }
+          let spec: TuiSpec | null = null;
+          if (!live) {
+            try { spec = record.session.interactiveTuiCommand ? await record.session.interactiveTuiCommand() : null; }
+            catch (error) { emit({ type: "terminal.error", sessionId: record.id, error: error instanceof Error ? error.message : String(error) }); return; }
+            if (!spec) { emit({ type: "terminal.error", sessionId: record.id, error: "This runtime has no interactive TUI available on this node." }); return; }
           }
-          if (deps.sessionBusy(record)) { emit({ type: "terminal.error", sessionId: record.id, error: "Finish or stop the current turn before opening the TUI." }); return; }
-          let spec;
-          try { spec = record.session.interactiveTuiCommand ? await record.session.interactiveTuiCommand() : null; }
-          catch (error) { emit({ type: "terminal.error", sessionId: record.id, error: error instanceof Error ? error.message : String(error) }); return; }
-          if (!spec) { emit({ type: "terminal.error", sessionId: record.id, error: "This runtime has no interactive TUI available on this node." }); return; }
-          const workspace = record.session.cwd || record.worktree?.path || record.workspace;
-          try {
-            const id = terminals.open({
-              workspace,
-              command: spec.command,
-              args: spec.args,
-              env: spec.env,
-              cols: Number(msg.cols) || undefined,
-              rows: Number(msg.rows) || undefined,
-              clientId,
-              onData: (data) => emit({ type: "terminal.output", termId: id, data }),
-              onExit: (code) => {
-                owned.delete(id);
-                if (record.tuiTermId === id) {
-                  record.tuiTermId = undefined;
-                  void deps.sessionTerminalsForget(record.id).catch(() => {});
-                  record.tuiRefreshing = true;
-                  deps.broadcastTuiState(record.id, false);
-                  void deps.refreshRecordAfterTui(record);
-                }
-                emit({ type: "terminal.exit", termId: id, code });
-              },
-            });
-            owned.add(id);
-            record.tuiTermId = id;
-            void deps.sessionTerminalsRecord(record.id, { termId: id }).catch(() => {});
-            emit({ type: "terminal.opened", termId: id, workspace, sessionId: record.id, mode: "tui" });
-            deps.broadcastTuiState(record.id, true);
-          } catch (error) {
-            emit({ type: "terminal.error", sessionId: record.id, error: error instanceof Error ? error.message : String(error) });
-          }
+          const id = await openRunTerminal({
+            command: spec?.command ?? "",
+            args: spec?.args ?? [],
+            env: spec?.env,
+            name: record.session.getName() || undefined,
+            workspace: record.session.cwd || record.worktree?.path || record.workspace,
+            sessionId: record.id,
+            cols,
+            rows,
+            clientId,
+          }, emit);
+          if (id) viewRun?.(id);
         })();
         return true;
       }
       case "terminal.close.tui": {
-        const record = deps.resolveSession(msg.sessionId);
+        // "Use chat": hand the session's terminal back to its chat.
+        const record = typeof msg.sessionId === "string" && msg.sessionId ? deps.findOpenSession(msg.sessionId) : undefined;
         const termId = record?.tuiTermId;
-        if (termId) {
-          terminals.close(termId);
-          owned.delete(termId);
-          clearBellNotify(termId);
-        } else if (record) {
-          deps.broadcastTuiState(record.id, false);
-        }
+        if (record && termId && runTerminals.has(termId)) handRunToChat(termId, record.id);
+        else if (record) deps.broadcastTuiState(record.id, false);
         return true;
       }
       case "terminal.attach": {
@@ -644,5 +691,5 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
     }
   }
 
-  return { runTerminalList, openRunTerminal, takeoverRunTerminal, handleTerminalMessage, addRunViewer, dropRunViewer, hasRunTerminal, hasLiveRunForSession };
+  return { runTerminalList, openRunTerminal, takeoverRunTerminal, handleTerminalMessage, addRunViewer, dropRunViewer, hasRunTerminal, hasLiveRunForSession, adoptLiveRun };
 }

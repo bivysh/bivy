@@ -140,6 +140,25 @@ runtime: **Claude** (SDK) and **Pi** (native). Each run-terminal now carries its
 `sessionId` and PTY `pid` (`GET /api/terminals`, `terminal.created`) so a client
 can offer the action.
 
+## Back and forth: one session, one writer
+
+Terminal and chat are two views of the same session, and only one drives it at
+a time:
+
+- **Chat → terminal.** "Continue in terminal" in the app opens the chat's own
+  TUI (resuming the same conversation) as a node-owned terminal pinned to the
+  session. It outlives the device that opened it, any device can join it, and
+  `bivy resume <session>` on a laptop joins the same terminal instead of
+  starting a second one.
+- **While the terminal drives,** the chat is locked on every device and the
+  node refuses chat sends. That includes a run pinned with `bivy resume` whose
+  chat is opened later.
+- **Terminal → chat.** "Use chat" or a takeover stops the terminal and reloads
+  the chat from what the terminal wrote. Every attached viewer is told where the
+  session went (`terminal.closed` with `reason: "chat"`). A `bivy run`/`bivy
+  resume` terminal offers **Enter** to take it straight back, and an app
+  terminal overlay switches to the chat.
+
 ## Codex (and other CLI agents)
 
 Codex now supports **structured resume** (not just read-only). Codex has no

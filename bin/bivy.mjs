@@ -974,7 +974,7 @@ function looksLikeRemote(value) {
 
 function extractRunFlags(args) {
   const rest = [];
-  let name, model, node, workspace;
+  let name, model, node, workspace, bivySession;
   let chat = false;
   let noOpen = false;
   let noFollow = false;
@@ -993,11 +993,14 @@ function extractRunFlags(args) {
     if (a.startsWith("--node=")) { node = a.slice("--node=".length); continue; }
     if (a === "--workspace" && args[i + 1] !== undefined) { workspace = args[++i]; continue; }
     if (a.startsWith("--workspace=")) { workspace = a.slice("--workspace=".length); continue; }
+    // Internal (set by `bivy resume`): the Bivy session this run continues, so
+    // the node can lock that session's chat while the terminal drives it.
+    if (a === "--bivy-session" && args[i + 1] !== undefined) { bivySession = args[++i]; continue; }
     if (a.startsWith("--clone=")) { clone = a.slice("--clone=".length); continue; }
     if (a === "--clone") { clone = looksLikeRemote(args[i + 1]) ? args[++i] : true; continue; }
     rest.push(a);
   }
-  return { name: name?.trim() || undefined, model: model?.trim() || undefined, node: node?.trim() || undefined, workspace: workspace?.trim() || undefined, chat, noOpen, noFollow, clone, rest };
+  return { name: name?.trim() || undefined, model: model?.trim() || undefined, node: node?.trim() || undefined, workspace: workspace?.trim() || undefined, bivySession: bivySession?.trim() || undefined, chat, noOpen, noFollow, clone, rest };
 }
 
 // A safe-ish workspace dir name from a remote or path (basename minus .git).
@@ -1899,7 +1902,7 @@ function governedChatAgentId(id) {
 
 async function cmdRun(args = []) {
   if (!(await ensureDeps())) process.exit(1);
-  const { name, model, node, workspace, chat, noOpen, noFollow, clone, rest } = extractRunFlags(args);
+  const { name, model, node, workspace, bivySession, chat, noOpen, noFollow, clone, rest } = extractRunFlags(args);
   // Bare `bivy` (empty rest) resolves to the configured default agent; an
   // explicit `bivy run <agent>` keeps that agent verbatim.
   const [agentIdArg, ...extraArgs] = rest;
@@ -1999,7 +2002,8 @@ async function cmdRun(args = []) {
   // Pin a session id at launch when the agent's CLI supports it (and the caller
   // didn't already choose one), so the on-disk session is a known, deterministic
   // resume target — the anchor for later "continue as chat" adoption.
-  const pinnedSessionId = pinRunSessionId(agentId, resolved.spec);
+  const pinnedSessionId = bivySession ? undefined : pinRunSessionId(agentId, resolved.spec);
+  if (bivySession) resolved.spec.sessionId = bivySession;
   if (pinnedSessionId) {
     console.log(c.dim(`session id ${pinnedSessionId} — resume in a terminal with '${agentId} --resume ${pinnedSessionId}'`));
   }
@@ -2549,6 +2553,7 @@ async function resumeSessionItem(item, config, token) {
   const resumeArgs = agentResumeArgs(agentId, resumeRef);
   const runArgs = [agentId, ...resumeArgs];
   if (item.workspace) runArgs.push("--workspace", item.workspace); // native resume finds the session by its original cwd
+  if (item.id) runArgs.push("--bivy-session", item.id);
   console.log(c.dim(`Resuming ${c.cyan(item.name)} with ${agentId} ${resumeArgs.join(" ")}…`));
   await cmdRun(runArgs);
 }
