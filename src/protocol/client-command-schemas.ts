@@ -44,6 +44,7 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
   "session.rename": Type.Object({ ...session, name: Type.String() }),
   abort: Type.Object(optionalSession),
   "session.turn_attention.resolve": Type.Object({ ...session, action: Type.Union([Type.Literal("stop"), Type.Literal("continue")]) }),
+  "session.limit_retry": Type.Object({ ...session, enabled: Type.Boolean() }),
   "session.command.invoke": Type.Object({ ...session, name: Type.String(), args: Type.Optional(Type.String()) }),
   "branches.list": Type.Object({ repo: Type.String() }),
   "history": Type.Object({ ...request, ...optionalSession, have: Type.Optional(Type.Number()), haveToken: Type.Optional(Type.String()) }),

@@ -385,6 +385,12 @@ export class DirectTransport implements Transport {
             body: JSON.stringify({ sessionId: obj.sessionId, action: obj.action }),
           });
           break;
+        case "session.limit_retry":
+          await this.directApi("/api/session/limit-retry", {
+            method: "POST",
+            body: JSON.stringify({ sessionId: obj.sessionId, enabled: obj.enabled }),
+          });
+          break;
         case "session.command.invoke":
           // Protocol-mode agent command. Any output rides back over the live WS
           // (session.status / message / session.done), so no synthetic event here.

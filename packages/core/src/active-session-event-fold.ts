@@ -23,7 +23,7 @@ export interface ActiveLifecycleInput {
 }
 export type ActiveLifecycleCommand =
   | { kind: "row"; sessionId: string; patch: Record<string, unknown> }
-  | { kind: "entry"; role: "system" | "error"; text: string; action?: string }
+  | { kind: "entry"; role: "system" | "error"; text: string; actions?: string[] }
   | { kind: "model-auth"; provider: string; reason: string }
   | { kind: "rename"; sessionId: string; name: string }
   | { kind: "global-error"; message: string }
@@ -31,6 +31,11 @@ export type ActiveLifecycleCommand =
 export interface ActiveLifecycleResult { handled: boolean; patch?: Partial<ActiveLifecycleInput>; commands: ActiveLifecycleCommand[] }
 
 function foreign(activeSessionId: string | null, sessionId: unknown): boolean { return Boolean(sessionId) && sessionId !== activeSessionId; }
+/** A notice's action buttons: the `actions` list, or an older node's single `action`. */
+function noticeActions(e: { action?: unknown; actions?: unknown }): string[] {
+  const list = Array.isArray(e.actions) ? e.actions : [e.action];
+  return list.filter((a): a is string => typeof a === "string" && a.length > 0);
+}
 
 export function foldActiveSessionEvent(input: ActiveLifecycleInput, event: ServerEvent, now: number): ActiveLifecycleResult {
   const e = event as any; const sid = String(e.sessionId || "");
@@ -55,12 +60,16 @@ export function foldActiveSessionEvent(input: ActiveLifecycleInput, event: Serve
       const message = modelAuth
         ? `No credentials for ${structured.provider}`
         : humanizeError(String(e.error || e.errorMessage || "error"));
-      const entry = { kind: "entry" as const, role: "error" as const, text: message, ...(modelAuth ? { action: `connect-provider:${structured.provider}` } : {}) };
+      const entry = { kind: "entry" as const, role: "error" as const, text: message, ...(modelAuth ? { actions: [`connect-provider:${structured.provider}`] } : {}) };
       return { handled: true, patch: { working: false, opening: false }, commands: e.sessionId ? [entry] : [{ kind: "global-error", message }] };
     }
     case "session.closed": return { handled: true, patch: sid === input.activeSessionId ? { working: false, workingLabel: "", opening: false } : undefined, commands: sid ? [{ kind: "row", sessionId: sid, patch: { status: "saved", needsAction: false } }] : [] };
     case "session.failed": return { handled: true, commands: sid ? [{ kind: "row", sessionId: sid, patch: { status: "failed", needsAction: false, failedAt: Number(e.failedAt) || now, updatedAt: now } }] : [] };
-    case "session.notice": return { handled: true, commands: (!sid || sid === input.activeSessionId) && e.message ? [{ kind: "entry", role: "system", text: String(e.message), ...(typeof e.action === "string" ? { action: e.action } : {}) }] : [] };
+    case "session.notice": {
+      if (!e.message || (sid && sid !== input.activeSessionId)) return { handled: true, commands: [] };
+      const actions = noticeActions(e);
+      return { handled: true, commands: [{ kind: "entry", role: "system", text: String(e.message), ...(actions.length ? { actions } : {}) }] };
+    }
     case "session.cloning": return { handled: true, patch: !sid || sid === input.activeSessionId ? { working: true, workingLabel: `Cloning ${e.repo || "repo"}…` } : undefined, commands: [] };
     case "session.auth_required": return { handled: true, commands: !foreign(input.activeSessionId, e.sessionId) && e.provider ? [{ kind: "model-auth", provider: String(e.provider), reason: String(e.reason || "") }] : [] };
     case "session.usage": return { handled: true, patch: foreign(input.activeSessionId, e.sessionId) ? undefined : { usage: normalizeUsage(e.usage) }, commands: [] };

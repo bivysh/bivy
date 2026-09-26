@@ -33,6 +33,7 @@ import { usePreviewLanding } from "./usePreviewLanding.js";
 import { ForkProgressDialog } from "./components/ForkProgressDialog.js";
 import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
 import { AppsSheet } from "./components/AppsSheet.js";
+import { ForkSheet } from "./components/ForkSheet.js";
 import { useSessionApps } from "./useSessionApps.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
@@ -126,6 +127,9 @@ export function App() {
   // app stays reachable after its inline launcher card scrolls out of the
   // transcript. Same pure-fold approach as artifacts (see deriveApps).
   const [appsSheetOpen, setAppsSheetOpen] = useState(false);
+  // Fork sheet opened from an inline notice (e.g. "reached its usage limit —
+  // Fork to another agent"), so the way past a limit is one tap from the chat.
+  const [forkSheetOpen, setForkSheetOpen] = useState(false);
   // A share-sheet landing stashed its payload before mount (see shareTarget.ts
   // / main.tsx); the destination sheet below lets the user pick where it goes.
   // Shares always arrive via a full page load, so a mount-time read is enough.
@@ -373,8 +377,11 @@ export function App() {
       if (provider && nodeId) controller.store.setNeedsModelAuth({ nodeId, provider });
       return;
     }
+    if (name.startsWith("retry-at-reset:")) { controller.setLimitRetry(true); return; }
     switch (name) {
       case "/new": controller.newSession(); break;
+      case "fork": setForkSheetOpen(true); break;
+      case "cancel-resume": controller.setLimitRetry(false); break;
       case "/resume":
         // Manual resume: continue the turn a restart interrupted. Sent as a normal
         // prompt to the active session so it streams and re-arms the turn state.
@@ -958,6 +965,10 @@ export function App() {
 
             {appsSheetOpen && activeSession && (
               <AppsSheet sessionId={activeSession.sessionId} onClose={() => setAppsSheetOpen(false)} />
+            )}
+
+            {forkSheetOpen && activeSession && (
+              <ForkSheet sessionId={activeSession.sessionId} onClose={() => setForkSheetOpen(false)} />
             )}
 
             <div className="composer-gh">
