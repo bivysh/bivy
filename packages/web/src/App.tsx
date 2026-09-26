@@ -68,6 +68,8 @@ const LibraryView = lazy(() => import("./components/LibraryView.js").then((m) =>
 import { onAppVisible } from "./onAppVisible.js";
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { useModalEscape } from "./modalStack.js";
+import { SessionViewToggle } from "./components/SessionViewToggle.js";
+import { readSessionView, writeSessionView, type SessionView } from "./sessionView.js";
 import { CloseIcon } from "./components/UiIcons.js";
 import { controller } from "./store/useStore.js";
 import { attentionRank, isUnseen, runStatusLabel, statusClass, type SessionStatusInput } from "./sessionStatus.js";
@@ -321,6 +323,19 @@ export function App() {
   // send fail with an error, lock the composer and show a banner offering to
   // jump to the terminal or take the session back into chat.
   const activeTuiLocked = Boolean(state.activeSession.activeSessionId && state.sessionIndex.tuiSessions.includes(state.activeSession.activeSessionId));
+  // Chat | Terminal for the open session (topbar toggle). The terminal is a
+  // shell in the session's workspace; leaving it only unmounts the view — the
+  // PTY keeps running and switching back reattaches with its scrollback.
+  const activeSessionId = state.activeSession.activeSessionId;
+  const [sessionView, setSessionViewState] = useState<SessionView>(() => readSessionView(sessionStorage, activeSessionId));
+  useEffect(() => { setSessionViewState(readSessionView(sessionStorage, activeSessionId)); }, [activeSessionId]);
+  const setSessionView = useCallback((view: SessionView) => {
+    if (activeSessionId) writeSessionView(sessionStorage, activeSessionId, view);
+    setSessionViewState(view);
+  }, [activeSessionId]);
+  const canToggleSessionView = Boolean(activeSessionId) && !activeTuiLocked && !pendingRunTerm;
+  const showSessionTerminal = canToggleSessionView && sessionView === "terminal";
+  const showNodeSwitcher = !controller.direct && !controller.solo;
   // When the node is an offline-but-resumable ephemeral machine (a suspended
   // Sprite we hold the key for), keep the composer usable: sending IS the resume
   // gesture — controller.sendPrompt wakes the machine and replays the message.
@@ -757,11 +772,18 @@ export function App() {
             </div>
             {/* Node stays below the title as a plain subtitle line — but it's
                 still the real switcher button underneath, so it's selectable
-                on a brand-new/draft session exactly as it is on a live one. */}
-            {!controller.direct && !controller.solo && <NodeSwitcher />}
+                on a brand-new/draft session exactly as it is on a live one.
+                The Chat | Terminal switch shares that line, so the title keeps
+                the full first line on a phone. */}
+            {(showNodeSwitcher || canToggleSessionView) && (
+              <div className="topbar-subline">
+                {showNodeSwitcher && <NodeSwitcher />}
+                {canToggleSessionView && <SessionViewToggle value={sessionView} onChange={setSessionView} />}
+              </div>
+            )}
           </div>
           <div className="topbar-actions">
-            {state.activeSession.activeSessionId && (
+            {state.activeSession.activeSessionId && !showSessionTerminal && (
               <button
                 className="btn ghost focus-view-btn"
                 onClick={toggleFocusView}
@@ -883,6 +905,15 @@ export function App() {
             onOpenTerminal={continueInTerminal}
             onUseChat={takeoverInChat}
           />
+        ) : showSessionTerminal ? (
+          <Suspense fallback={null}>
+            <TerminalOverlay
+              key={activeSessionId}
+              embedded
+              sessionId={activeSessionId}
+              onClose={() => setSessionView("chat")}
+            />
+          </Suspense>
         ) : (
           <>
             <ChatView
