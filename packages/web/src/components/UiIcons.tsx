@@ -72,3 +72,33 @@ export function PlusIcon({ size = 20, ...props }: IconProps) {
 export function CheckIcon({ size = 18, ...props }: IconProps) {
   return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><path d="m5 12 4 4L19 6" /></svg>;
 }
+
+/** Globe — a web view. */
+export function GlobeIcon({ size = 20, ...props }: IconProps) {
+  return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18" /></svg>;
+}
+
+/** Monitor — a desktop app on its own display. */
+export function DisplayIcon({ size = 20, ...props }: IconProps) {
+  return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><rect x="3" y="4" width="18" height="12" rx="2" /><path d="M8 20h8M12 16v4" /></svg>;
+}
+
+/** Chain link — a shareable link. */
+export function LinkIcon({ size = 20, ...props }: IconProps) {
+  return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1" /><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1" /></svg>;
+}
+
+/** House — a stable address for a home screen. */
+export function HomeIcon({ size = 20, ...props }: IconProps) {
+  return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><path d="M4 11 12 4l8 7" /><path d="M6 10v10h12V10" /></svg>;
+}
+
+/** Stacked lines — output / logs. */
+export function LogsIcon({ size = 20, ...props }: IconProps) {
+  return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><path d="M5 6h14M5 10h14M5 14h9M5 18h6" /></svg>;
+}
+
+/** Circular arrow — refresh. */
+export function RefreshIcon({ size = 20, ...props }: IconProps) {
+  return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><path d="M20 12a8 8 0 1 1-2.34-5.66L20 8.5" /><path d="M20 4v4.5h-4.5" /></svg>;
+}

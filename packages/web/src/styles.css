@@ -1451,7 +1451,7 @@ button.sheet-action:last-child { border-bottom: 0; }
 .library-tile-file { display: flex; flex-direction: column; align-items: center; gap: var(--space-1); }
 .library-tile-ext { font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: 0.04em; }
 .library-tile-caption { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 0 2px; }
-.library-tile-name, .library-row-name {
+.library-tile-name {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: var(--text-sm); font-weight: var(--weight-medium); color: var(--ink);
 }
@@ -1464,17 +1464,6 @@ button.sheet-action:last-child { border-bottom: 0; }
 .library-source:hover { color: var(--ink); }
 .library-source svg, .library-source-when { flex: none; }
 .library-source-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.library-list { list-style: none; margin: 0; padding: 0; }
-.library-row { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--line); }
-.library-row:last-child { border-bottom: 0; }
-.library-row-icon {
-  flex: none; width: 40px; height: 40px; display: grid; place-items: center;
-  border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-2);
-  color: var(--ink); font-weight: var(--weight-semibold);
-}
-.library-row-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.library-row-name { font-size: var(--text-base); }
-.library-row-kind { color: var(--muted); font-weight: var(--weight-normal); }
 @media (min-width: 640px) {
   .library-grid { grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: var(--space-6) var(--space-4); }
 }
@@ -3034,18 +3023,53 @@ select.picker-search { appearance: auto; }
 
 /* Artifacts sheet (components/ArtifactsSheet.tsx) — agent-sent attachments,
    user uploads, and resolved inline images grouped by kind. */
-.app-views-heading { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
-.app-views-heading .artifact-name, .app-message .artifact-name { white-space: normal; overflow-wrap: anywhere; }
-.app-view-row { flex-wrap: wrap; }
-.app-views-heading > .btn, .app-view-actions .btn { min-block-size: var(--space-7); flex-shrink: 0; }
-.app-view-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-2); margin-inline-start: auto; }
-.app-view-notice { display: flex; flex-direction: column; gap: var(--space-2); flex-basis: 100%; min-width: 0; }
-.app-view-notes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-1); font-size: var(--text-sm); overflow-wrap: anywhere; }
+/* An app, a view of it, or a server that could become one (AppRow.tsx): the
+   same tile, type and trailing action in the chat card, the Apps page and the
+   Apps sheet. Views nest inside their app's card as small rows. */
+.apps-card { border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); overflow-wrap: anywhere; }
+.apps-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.app-row { display: flex; align-items: center; gap: var(--space-3); min-width: 0; padding: var(--space-3); }
+.app-tile { flex: none; display: grid; place-items: center; inline-size: 40px; block-size: 40px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-2); color: var(--ink); font-weight: var(--weight-semibold); }
+.app-row.small .app-tile { inline-size: 36px; block-size: 36px; border-radius: var(--radius-sm); color: var(--muted); }
+.app-tile-port { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--ok); }
+.app-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.app-row-name { font-size: var(--text-base); font-weight: var(--weight-semibold); }
+.app-row.small .app-row-name { font-size: var(--text-sm); }
+.app-row-meta { color: var(--muted); font-size: var(--text-xs); line-height: var(--lh-xs); }
+.app-row-action { flex: none; display: flex; align-items: center; gap: var(--space-1); }
+.app-message { margin-block: var(--space-2); }
+
+/* Apps sheet (AppsSheet.tsx): one card per app, its views nested, one primary
+   action per view; secondary tools as quiet icon buttons; rare or destructive
+   actions behind ⋯ (MoreMenu, the canonical .menu). Status uses .banner. */
+.apps-sheet { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-2) var(--space-2) var(--space-4); }
+.apps-state { display: flex; align-items: center; justify-content: center; gap: var(--space-2); padding: var(--space-6) 0; color: var(--muted); font-size: var(--text-sm); }
+.apps-group { display: flex; flex-direction: column; gap: var(--space-2); }
+.apps-group-title { margin: 0; padding: 0 var(--space-1); color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: 0.04em; text-transform: uppercase; }
+.apps-view { display: flex; flex-direction: column; border-top: 1px solid var(--line); }
+.apps-cmd { display: block; margin: 0 var(--space-3) var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--ink); font-family: var(--font-mono); font-size: var(--text-xs); white-space: pre-wrap; overflow-wrap: anywhere; }
+.apps-view-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 0; padding: 0 var(--space-1) var(--space-1); }
+.apps-view-tools .btn { gap: 6px; padding-inline: var(--space-2); color: var(--muted); }
+.apps-view-tools .btn:hover:not(:disabled) { color: var(--ink); }
+.apps-more { position: relative; }
+.apps-view-tools .apps-more { margin-inline-start: auto; }
+.apps-more-menu { position: absolute; right: 0; top: calc(100% + var(--space-1)); z-index: var(--z-dropdown); }
+.apps-notice { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0 var(--space-3) var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--ok) 12%, transparent); font-size: var(--text-sm); }
+.apps-notice > svg { flex: none; margin-top: 1px; color: var(--ok); }
+.apps-notes { display: flex; flex-direction: column; gap: var(--space-2); margin: 0 var(--space-3) var(--space-3); padding-top: var(--space-3); border-top: 1px dashed var(--line); }
+.apps-notes-head { display: flex; align-items: center; gap: var(--space-2); color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: 0.04em; text-transform: uppercase; }
+.apps-count { min-inline-size: 18px; padding: 0 6px; border-radius: var(--radius-full); background: var(--surface-3); color: var(--ink); text-align: center; letter-spacing: 0; }
+.apps-notes ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+.apps-note { display: flex; flex-direction: column; gap: 2px; padding-inline-start: var(--space-3); border-inline-start: 2px solid var(--line-strong); }
+.apps-note-text { color: var(--ink); font-size: var(--text-sm); }
+.apps-notes-actions { display: flex; gap: var(--space-2); }
+.apps-empty { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: var(--space-6) var(--space-4); color: var(--muted); font-size: var(--text-sm); text-align: center; }
+.apps-empty strong { color: var(--ink); font-size: var(--text-base); }
+.apps-empty p { margin: 0; max-inline-size: 34ch; }
+.apps-foot { margin: 0; padding: 0 var(--space-1); color: var(--muted); font-size: var(--text-xs); line-height: var(--lh-xs); }
 /* Peek: an app preview framed in a drawer over the chat (PreviewPeek.tsx). */
 .preview-peek { display: block; inline-size: 100%; block-size: 100%; border: 0; border-radius: var(--radius-md); background: var(--bg); }
 .app-terminal-status { padding: var(--space-2) var(--space-4); margin: 0; color: var(--muted); font-size: var(--text-sm); }
-.app-view-command { overflow-wrap: anywhere; white-space: pre-wrap; font-size: var(--text-xs); color: var(--muted); }
-.app-view-row .artifact-main { flex-basis: 60%; }
 .artifacts-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
 .artifacts-group:last-child { margin-bottom: 0; }
 .artifacts-group-title { font-size: 12px; font-weight: 600; opacity: 0.6; text-transform: uppercase; letter-spacing: 0.04em; }

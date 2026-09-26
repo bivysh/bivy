@@ -80,7 +80,9 @@ for (const theme of themes) {
     await expect(page.getByRole("status").filter({ hasText: "for 24 hours, or until you revoke access" })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`apps-copied-${theme}.png`), fullPage: true });
-    await page.getByRole("button", { name: "Revoke access to Website and invoice editor" }).click();
+    // Revoking is rare and destructive, so it sits behind the view's ⋯ menu.
+    await page.getByRole("button", { name: "More actions for Website and invoice editor" }).click();
+    await page.getByRole("menuitem", { name: "Revoke access" }).click();
     await expect(page.getByRole("status").filter({ hasText: "Access revoked" })).toBeVisible();
     expect(await page.evaluate(() => (window as any).commands.filter((c: any) => c.kind === "apps.share" || c.kind === "apps.revoke").map((c: any) => [c.kind, c.viewId]))).toEqual([["apps.share", "web"], ["apps.revoke", "web"]]);
     await expect(page.getByRole("button", { name: /^Copy link to Interactive/ })).toHaveCount(0);

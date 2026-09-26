@@ -55,6 +55,10 @@ const RETIRED_CLASSES = [
   // → <Badge>
   "approval-badge", "question-chip", "artifact-badge", "tool-fail", "chk", "chip", "ruleset-chip",
   "runtime-cap", "runtime-tier", "runtime-protection", "autom-status", "run-status", "import-session-badge",
+  // → AppsSheet apps-* layout (one card per view, ⋯ menu)
+  "app-views-heading", "app-view-actions", "app-view-notice", "app-view-notes", "app-view-command", "app-view-row",
+  // → <AppRow> (one design for an app in chat, the Apps page and the Apps sheet)
+  "library-row", "library-row-icon", "library-row-main", "library-row-name", "library-row-kind", "library-list",
   // → .btn variants
   "link-btn", "ghost-btn", "icon-btn", "notice-action",
   // → <Toast> / <Spinner> / .field / <Sheet> / <SourceMark> / <StatusDot>

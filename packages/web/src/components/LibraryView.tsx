@@ -16,6 +16,7 @@ import { controller, useAppState } from "../store/useStore.js";
 import { useModalEscape } from "../modalStack.js";
 import { useModalFocus } from "../useModalFocus.js";
 import { AppsSheet } from "./AppsSheet.js";
+import { AppRow, appInitial } from "./AppRow.js";
 import { downloadAttachment, fmtBytes, useAttachmentUrl } from "./ArtifactsSheet.js";
 import { ImageGallery } from "./ImageGallery.js";
 import { relTime } from "./SessionList.js";
@@ -250,17 +251,14 @@ function AppsPage({ where, onShowInChat }: { where: Where; onShowInChat: ShowInC
   return (
     <ListState state={state} empty={PAGES.apps.empty}>
       {(apps) => <>
-        <ul className="library-list" aria-label="Apps">
+        <ul className="apps-list" aria-label="Apps">
           {apps.map((app) => {
             const from = where(app);
             return (
-              <li key={`${app.nodeId}:${app.id}`} className="library-row">
-                <span className="library-row-icon" aria-hidden>{app.name.trim().charAt(0).toUpperCase() || "A"}</span>
-                <div className="library-row-main">
-                  <span className="library-row-name">{app.name}<span className="library-row-kind"> · {[appSummary(app), from.machine].filter(Boolean).join(" · ")}</span></span>
-                  <SourceLink name={from.session} at={app.createdAt} onClick={() => showInChat(app)} />
-                </div>
-                <button type="button" className="btn sm" onClick={() => setOpen(app)} aria-label={`Open ${app.name}`}>Open</button>
+              <li key={`${app.nodeId}:${app.id}`} className="apps-card">
+                <AppRow tile={appInitial(app.name)} name={app.name} meta={[appSummary(app), from.machine].filter(Boolean).join(" · ")}
+                  detail={<SourceLink name={from.session} at={app.createdAt} onClick={() => showInChat(app)} />}
+                  action={<button type="button" className="btn sm primary" onClick={() => setOpen(app)} aria-label={`Open ${app.name}`}>Open</button>} />
               </li>
             );
           })}

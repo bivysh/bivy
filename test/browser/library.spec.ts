@@ -84,7 +84,7 @@ for (const theme of themes) {
     await page.evaluate(() => (window as unknown as { showLibrary: (v: string) => void }).showLibrary("apps"));
     const apps = page.getByRole("list", { name: "Apps" });
     await expect(apps.getByRole("listitem")).toHaveCount(2);
-    await expect(apps.getByRole("listitem").filter({ hasText: "Landing page ·" })).toContainText("Build server");
+    await expect(apps.getByRole("listitem").filter({ has: page.getByRole("button", { name: "Open Landing page", exact: true }) })).toContainText("Build server");
     await shot("apps");
     await apps.getByRole("button", { name: /Show in chat: Landing page redesign/ }).click();
     await expect.poll(() => page.evaluate(() => (window as unknown as { shown: unknown[] }).shown.at(-1))).toEqual({ sessionId: "s2", nodeId: "n2", appId: "a1" });
