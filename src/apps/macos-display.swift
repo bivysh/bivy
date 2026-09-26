@@ -8,9 +8,12 @@
 //
 //   macos-display check [--prompt]              permissions, as JSON
 //   macos-display serve <socket> <token> <scale>
+//   macos-display run -- <command> [args…]      starts the app (see below)
 //
-// The app is found by its environment: every process Bivy starts for the view
-// carries BIVY_MAC_DISPLAY=<token>. Its largest window is the screen; other
+// The app is found by its environment: Bivy starts it through `run` with
+// BIVY_MAC_DISPLAY=<token>, and any process descending from a process that
+// carries it is the app's. The launcher matters because signed apps with the
+// hardened runtime hide their environment. Its largest window is the screen; other
 // windows of the app (dialogs, menus) are drawn over it. Pictures come from
 // ScreenCaptureKit (Screen Recording permission); clicks, keys and window
 // sizing go through Accessibility. Keys are sent to the app only; clicks land
@@ -61,6 +64,35 @@ func environment(_ pid: pid_t) -> [[UInt8]] {
   }
   return Array(strings.dropFirst(argc))
 }
+
+func parentOf(_ pid: pid_t) -> pid_t {
+  var info = proc_bsdinfo()
+  let size = Int32(MemoryLayout<proc_bsdinfo>.size)
+  return proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size ? pid_t(info.pbi_ppid) : 0
+}
+
+/// `run`: starts the app as a child and stays its parent, passing signals on
+/// and exiting as it does, so the app's processes can be traced back to it.
+func run(_ command: [String]) -> Never {
+  var child: pid_t = 0
+  let argv = command.map { strdup($0) } + [nil]
+  let status = posix_spawnp(&child, command[0], nil, nil, argv, environ)
+  guard status == 0 else { warn("\(command[0]): \(String(cString: strerror(status)))"); exit(127) }
+  for sig in [SIGTERM, SIGINT, SIGHUP, SIGQUIT] {
+    signal(sig, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+    source.setEventHandler { kill(child, sig) }
+    source.resume()
+    forwarded.append(source)
+  }
+  DispatchQueue.global().async {
+    var result: Int32 = 0
+    while waitpid(child, &result, 0) < 0 && errno == EINTR {}
+    exit(result & 0x7f == 0 ? (result >> 8) & 0xff : 128 + (result & 0x7f))
+  }
+  dispatchMain()
+}
+nonisolated(unsafe) var forwarded: [DispatchSourceSignal] = []
 
 struct Win { let id: CGWindowID; let pid: pid_t; let layer: Int; let bounds: CGRect }
 /// Dock, main menu and status items: never part of an app's picture.
@@ -255,7 +287,9 @@ final class Host: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendabl
 
   func owns(_ pid: pid_t) -> Bool {
     if let hit = known[pid] { return hit }
-    let hit = environment(pid).contains(marker)
+    // It carries the token, or its parent is the app's (the launcher at the top).
+    let parent = parentOf(pid)
+    let hit = environment(pid).contains(marker) || (parent > 1 && parent != pid && owns(parent))
     known[pid] = hit
     return hit
   }
@@ -673,6 +707,8 @@ final class Host: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendabl
 
 let args = CommandLine.arguments
 switch args.count > 1 ? args[1] : "" {
+case "run" where args.count > 3 && args[2] == "--":
+  run(Array(args[3...]))
 case "check":
   say(permissions(prompt: args.contains("--prompt")))
 case "serve" where args.count == 5:
@@ -685,6 +721,6 @@ case "serve" where args.count == 5:
   say("ready")
   RunLoop.main.run()
 default:
-  warn("Usage: macos-display check [--prompt] | serve <socket> <token> <scale>")
+  warn("Usage: macos-display check [--prompt] | serve <socket> <token> <scale> | run -- <command> [args…]")
   exit(2)
 }

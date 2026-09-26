@@ -25,10 +25,10 @@ const until = async (check: () => boolean) => { for (let i = 0; i < 400 && !chec
 
 test("desktop views start their display at the viewer's density, then the app; restart it on exit and after changes; stop both on remove", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-display-"));
-  const live = new Set<string>(); const started: { command: string; env?: Record<string, string> }[] = []; const stopped: string[] = [];
-  const terminals = { start: async (spec: { command: string; env?: Record<string, string> }) => { const id = `t${started.length}`; started.push(spec); live.add(id); return id; }, has: (id: string) => live.has(id), close: (id: string) => { live.delete(id); } };
+  const live = new Set<string>(); const started: { command: string; args?: string[]; env?: Record<string, string> }[] = []; const stopped: string[] = [];
+  const terminals = { start: async (spec: { command: string; args?: string[]; env?: Record<string, string> }) => { const id = `t${started.length}`; started.push(spec); live.add(id); return id; }, has: (id: string) => live.has(id), close: (id: string) => { live.delete(id); } };
   const scales: (number | undefined)[] = [];
-  const displays: AppDisplayProvider = { unavailable: () => undefined, ensure: async (_id, _name, scale) => { scales.push(scale); return { socket: "/run/vnc.sock", env: { DISPLAY: ":100" }, wm: { count: 1 } }; }, stop: (id) => { stopped.push(id); } };
+  const displays: AppDisplayProvider = { unavailable: () => undefined, ensure: async (_id, _name, scale) => { scales.push(scale); return { socket: "/run/vnc.sock", env: { DISPLAY: ":100" }, wm: { count: 1 }, launch: ["/bin/launcher", "run", "--"] }; }, stop: (id) => { stopped.push(id); } };
   const gateway = { open: () => "https://view-x.preview.example.net/__bivy/open#t", share: () => ({ url: "", expiresAt: 0 }), revoke: () => {} };
   try {
     const refused = new AppService(new AppRegistry(), gateway, terminals, { displays: { ...displays, unavailable: () => "Needs Linux." } });
@@ -43,7 +43,7 @@ test("desktop views start their display at the viewer's density, then the app; r
     await service.open("s", app.id, viewId, undefined, false, 2);
     await until(() => started.length === 1);
     assert.equal(scales[0], 2, "a 2× phone gets a 2× display");
-    assert.equal(started[0].command, "my-editor");
+    assert.deepEqual([started[0].command, started[0].args], ["/bin/launcher", ["run", "--", "my-editor", "--new"]], "started through the display's launcher, when it has one");
     assert.equal(started[0].env?.DISPLAY, ":100");
     assert.equal(registry.getView(viewId)!.display, "/run/vnc.sock", "the gateway can find the display");
     live.delete("t0"); // the app exits

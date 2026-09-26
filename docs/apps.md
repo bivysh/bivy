@@ -292,12 +292,14 @@ screen is captured. Everything above works the same: sizing to the viewer,
 2× on high-density devices, clipboard (Paste presses ⌘V), screenshots,
 Compare, restart on change, and agent input.
 
-- **Which windows:** Bivy starts the command with `BIVY_MAC_DISPLAY` in its
-  environment and shows windows of processes that carry it: the program and
-  anything it starts (`swift run`, `npm start` → Electron, `cargo run`,
-  `flutter run -d macos`, `./MyApp.app/Contents/MacOS/MyApp`). An app launched
-  through `open` or Launch Services doesn't inherit it, so run the binary
-  directly.
+- **Which windows:** Bivy starts the command through its helper, which stays
+  its parent, with `BIVY_MAC_DISPLAY` in its environment. Windows of the
+  program and anything it starts are shown (`swift run`, `npm start` →
+  Electron, `cargo run`, `flutter run -d macos`,
+  `./MyApp.app/Contents/MacOS/MyApp`), including signed apps that hide their
+  environment. An app launched through `open` or Launch Services isn't a
+  descendant, so run the binary directly (sandboxed App Store apps can't be
+  run that way).
 - **Sizing:** the app's main window moves to the top-left of the screen and
   takes the viewer's size, up to the visible screen. A window with a larger
   minimum size stays larger and the preview scales it down.

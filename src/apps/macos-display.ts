@@ -22,6 +22,9 @@ export interface MacDisplay {
   socket: string;
   /** Marks the app's processes, so the helper knows which windows are its. */
   env: Record<string, string>;
+  /** The app starts through the helper, which stays its parent: signed apps
+   * hide their environment, so their windows are traced to it instead. */
+  launch: string[];
   /** The app's windows on screen, as the helper last reported. */
   wm: { count: number };
   scale: number;
@@ -133,7 +136,7 @@ export class MacDisplayHost {
       });
     });
     if (!up) throw new Error(`Couldn't start a display for this app.${errors ? ` ${errors.trim().split("\n").at(-1)}` : ""}`);
-    return { socket, wm, scale, env: { BIVY_MAC_DISPLAY: token } };
+    return { socket, wm, scale, env: { BIVY_MAC_DISPLAY: token }, launch: [binary, "run", "--"] };
   }
 
   stop(id: string): void {

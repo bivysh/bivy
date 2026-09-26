@@ -32,7 +32,8 @@ export interface AppTerminalProvider {
 /** Private displays for desktop views (see display.ts). */
 export interface AppDisplayProvider {
   unavailable(): string | undefined;
-  ensure(id: string, name: string, scale?: number): Promise<{ socket: string; env: Record<string, string>; wm: { count: number } }>;
+  /** `launch`: a command the program is started through, if the display needs one. */
+  ensure(id: string, name: string, scale?: number): Promise<{ socket: string; env: Record<string, string>; wm: { count: number }; launch?: string[] }>;
   stop(id: string): void;
 }
 /** Where review cards go: the server stores screenshots as encrypted
@@ -450,7 +451,8 @@ export class AppService {
     if (target.kind !== "display") throw new Error("This view has no program.");
     return this.displays.ensure(entry.view.id, entry.app.name, entry.displayScale).then((display) => {
       entry.display = display.socket;
-      return { command: target.command, args: target.args, workspace: target.workspace, env: display.env, name: `${entry.app.name} · ${entry.view.name}` };
+      const [command, ...args] = [...display.launch ?? [], target.command, ...target.args];
+      return { command: command!, args, workspace: target.workspace, env: display.env, name: `${entry.app.name} · ${entry.view.name}` };
     });
   }
   /** Services start synchronously; a desktop app waits for its display. */
