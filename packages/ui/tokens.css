@@ -62,6 +62,12 @@
   --s-github: #24292f; --s-slack: #7c2d92; --s-linear: #5e6ad2; --s-schedule: #0e7490;
   --s-webhook: #6d28d9; --s-manual: #b45309; --s-cli: #3f6212; --s-app: #64748b;
 
+  /* ---- Annotation: marks drawn over an app preview. The same in both themes
+     (the app underneath has its own), vivid and rare in real UIs, with a white
+     halo so it reads on light and dark pages. The node composites it too. ---- */
+  --annotate: #ff2d78;
+  --annotate-halo: #ffffff;
+
   /* ---- Terminal text selection ---- */
   --term-selection: rgba(63, 99, 119, 0.30);
   --term-selection-inactive: rgba(63, 99, 119, 0.20);

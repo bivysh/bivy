@@ -216,7 +216,7 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
     finally { if (generation.current === current) setBusy(false); }
   };
 
-  if (peek) return <PreviewPeek url={peek.url} name={peek.app.name} sessionId={sessionId} onClose={onClose}
+  if (peek) return <PreviewPeek url={peek.url} name={peek.app.name} sessionId={sessionId} appId={peek.app.id} viewId={peek.view.id} onClose={onClose}
     onOpenInTab={() => { const { app, view } = peek; setPeek(null); void open({ app, view }, "tab"); }} />;
   if (terminal) return <Suspense fallback={<Sheet title="App terminal" onClose={() => setTerminal(null)}><p role="status">Loading terminal…</p></Sheet>}>
     <TerminalOverlay sessionId={sessionId} attachTermId={terminal} attachOnly onClose={() => setTerminal(null)} />

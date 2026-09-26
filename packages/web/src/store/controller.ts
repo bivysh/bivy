@@ -344,7 +344,7 @@ export class AppController {
   /** Subscribers that want the composer input focused (e.g. after "New"). */
   private composerFocusListeners = new Set<() => void>();
   /** Subscribers that accept editable text drafted by contextual UI actions. */
-  private composerPrefillListeners = new Set<(text: string) => void>();
+  private composerPrefillListeners = new Set<(text: string, attachments: PromptAttachment[]) => void>();
   /** Subscribers that want the composer's slash-command menu opened (the "/" pill). */
   private slashOpenListeners = new Set<() => void>();
   /** Product milestones are aggregate and content-free. Once-only activation
@@ -1198,7 +1198,7 @@ export class AppController {
   }
 
   /** Subscribe to contextual prompt drafts (for example, review a changed file). */
-  onComposerPrefill(fn: (text: string) => void): () => void {
+  onComposerPrefill(fn: (text: string, attachments: PromptAttachment[]) => void): () => void {
     this.composerPrefillListeners.add(fn);
     return () => this.composerPrefillListeners.delete(fn);
   }
@@ -1206,9 +1206,10 @@ export class AppController {
   /** Put a contextual prompt in the composer without sending an agent turn.
    *  Returns whether a composer was mounted to receive it, so callers with a
    *  must-not-drop payload (a share landing) can fall back to seeding the
-   *  stored draft instead. */
-  prefillComposer(text: string): boolean {
-    for (const fn of this.composerPrefillListeners) fn(text);
+   *  stored draft instead. `attachments` join the composer's (a marked-up
+   *  preview, a shared screenshot) and travel like any the user adds. */
+  prefillComposer(text: string, attachments: PromptAttachment[] = []): boolean {
+    for (const fn of this.composerPrefillListeners) fn(text, attachments);
     this.focusComposer();
     return this.composerPrefillListeners.size > 0;
   }
@@ -1621,7 +1622,7 @@ export class AppController {
 
   /** Apps use the same authenticated command path over direct HTTP or relay.
    *  `nodeId` targets another machine without switching to it. */
-  async appCommand(command: "apps.list" | "apps.offers" | "apps.adopt" | "apps.open" | "apps.logs" | "apps.clearNotes" | "apps.share" | "apps.revoke" | "apps.remove" | "apps.showMe" | "apps.mute" | "apps.reviewMode", sessionId: string, fields: { appId?: string; viewId?: string; returnTo?: string; port?: number; direct?: boolean; path?: string; mode?: ReviewCardMode } = {}, nodeId?: string | null): Promise<ServerEvent> {
+  async appCommand(command: "apps.list" | "apps.offers" | "apps.adopt" | "apps.open" | "apps.logs" | "apps.clearNotes" | "apps.share" | "apps.revoke" | "apps.remove" | "apps.showMe" | "apps.mute" | "apps.reviewMode" | "apps.annotate", sessionId: string, fields: { appId?: string; viewId?: string; returnTo?: string; port?: number; direct?: boolean; path?: string; mode?: ReviewCardMode; [key: string]: unknown } = {}, nodeId?: string | null): Promise<ServerEvent> {
     const { connection } = this.store.getState();
     // A desktop app's display starts at this device's pixel density (1× or 2×).
     if (command === "apps.open") Object.assign(fields, { scale: typeof devicePixelRatio === "number" && devicePixelRatio >= 1.5 ? 2 : 1 });
