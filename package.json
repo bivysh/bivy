@@ -43,7 +43,7 @@
     "dev": "tsx src/server.ts",
     "start": "tsx src/server.ts",
     "agent-service": "tsx src/runtime/agent-service-bin.ts",
-    "typecheck": "tsc --noEmit && pnpm --filter @bivy/plugin-sdk run typecheck && pnpm --filter @bivy/automation-core run typecheck",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json && pnpm --filter @bivy/plugin-sdk run typecheck && pnpm --filter @bivy/automation-core run typecheck",
     "lint": "eslint . --quiet --cache --cache-location node_modules/.cache/eslint/",
     "lint:all": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "build:web": "pnpm --filter @bivy/web run build",

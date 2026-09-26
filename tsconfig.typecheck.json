@@ -1,0 +1,9 @@
+{
+  "//": "Typecheck-only variant of tsconfig.json, adding incremental caching so a warm run only re-checks what changed (~22s -> ~9s). This is deliberately NOT in tsconfig.json: scripts/build-release.mjs deletes dist/ and then emits with that config, and tsc trusts its .tsbuildinfo over the missing output — a second release build from the same checkout would emit nothing and ship an empty dist/. Keeping the build config free of incremental state avoids that entirely.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": true,
+    "tsBuildInfoFile": "node_modules/.cache/tsc/root.tsbuildinfo"
+  }
+}
