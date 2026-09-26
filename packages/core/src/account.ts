@@ -39,6 +39,7 @@ export const NOTIFICATION_KINDS = [
   "session_error",
   "terminal_bell",
   "automation_blocked",
+  "app_notes",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 export type NotificationPreferences = Record<NotificationKind, boolean>;
@@ -51,6 +52,7 @@ export const NOTIFICATION_KIND_META: Array<{ id: NotificationKind; label: string
   { id: "session_error", label: "Session error", description: "The last turn failed and needs attention." },
   { id: "terminal_bell", label: "Terminal bell", description: "A terminal rang the bell while you were away." },
   { id: "automation_blocked", label: "Automation blocked", description: "An automation run could not start because of plan limits or policy." },
+  { id: "app_notes", label: "Reviewer notes", description: "Someone with a shared preview link left notes on your app." },
 ];
 
 /** Fill in any missing kinds as enabled so the UI always has a full map. */

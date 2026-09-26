@@ -13,6 +13,7 @@ import { associatedApps } from "./associated-apps.js";
 import { resolveWebhookAuth, verifyWebhookAuth, DEFAULT_WEBHOOK_HEADER, type WebhookAuth } from "./webhook-auth.js";
 import { matchGithubItemTrigger } from "./github-item-trigger.js";
 import { ephemeralAdapter, validateCapabilityTags } from "@bivy/core";
+import { notificationLink } from "./notification-link.js";
 import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity } from "./central-github-app.js";
 import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, provisionEphemeralForAccount, provisionEphemeralRestore, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
@@ -1953,20 +1954,13 @@ app.post("/internal/notifications/hints", requireNode, asyncHandler(async (req, 
   const kind = String(req.body?.kind || req.body?.type || "session");
   const sessionId = String(req.body?.sessionId || "");
   const attentionId = String(req.body?.attentionId || "");
-  const title = String(req.body?.title || (kind === "approval_requested" ? "Approval needed" : kind === "session_done" ? "Session finished" : kind === "session_error" ? "Session hit an error" : kind === "question_asked" ? "Bivy needs your input" : kind === "terminal_bell" ? "Terminal bell" : "Bivy update"));
-  const body = String(req.body?.body || (kind === "approval_requested" ? "A session wants to run something — tap to approve or deny." : kind === "session_done" ? "A session finished — tap to review the result." : kind === "session_error" ? "A session failed its last turn — tap to see what went wrong." : kind === "question_asked" ? "A session is asking a question — tap to answer." : kind === "terminal_bell" ? "A terminal rang the bell — it may be waiting for you." : "Open Bivy to continue."));
-  // Deep link via the SPA session route (`/sessions/:id`) — the client router
-  // matches that path — carrying the owning node as a query param so a click can
-  // switch to it before opening. Without a session id we can only open the root.
-  // A run that visibly changed the app opens at its review card. IDs only:
-  // the screenshot never passes through here, and the device fetches it
-  // over the encrypted session channel.
-  const reviewId = typeof req.body?.review?.reviewId === "string" && /^review-[a-f0-9]{16}$/.test(req.body.review.reviewId) ? req.body.review.reviewId : "";
-  const url = sessionId
-    ? `/sessions/${encodeURIComponent(sessionId)}?node=${encodeURIComponent(node.id)}${attentionId ? `&attention=${encodeURIComponent(attentionId)}` : ""}${reviewId ? `&review=${reviewId}` : ""}`
-    : "/";
+  const title = String(req.body?.title || (kind === "approval_requested" ? "Approval needed" : kind === "session_done" ? "Session finished" : kind === "session_error" ? "Session hit an error" : kind === "question_asked" ? "Bivy needs your input" : kind === "terminal_bell" ? "Terminal bell" : kind === "app_notes" ? "Reviewer notes" : "Bivy update"));
+  const body = String(req.body?.body || (kind === "approval_requested" ? "A session wants to run something — tap to approve or deny." : kind === "session_done" ? "A session finished — tap to review the result." : kind === "session_error" ? "A session failed its last turn — tap to see what went wrong." : kind === "question_asked" ? "A session is asking a question — tap to answer." : kind === "terminal_bell" ? "A terminal rang the bell — it may be waiting for you." : kind === "app_notes" ? "Someone left notes on your app — tap to read them." : "Open Bivy to continue."));
+  // Deep link: see notification-link.ts. IDs only — a review card's screenshot
+  // and reviewer notes' text never pass through here.
+  const { url, review } = notificationLink({ nodeId: node.id, kind, sessionId, attentionId, review: req.body?.review, apps: req.body?.apps });
   // The device offers "Show me the app" (opening with `show=1`) for a finished session with a preview.
-  const showMe = kind === "session_done" && Boolean(sessionId) && !reviewId && req.body?.showMe === true;
+  const showMe = kind === "session_done" && Boolean(sessionId) && !review && req.body?.showMe === true;
   const result = await sendPushToAccount(node.accountId, { title, body, kind, nodeId: node.id, sessionId, url, ...(showMe ? { showMe: true } : {}) });
   res.json({ ok: true, ...result });
 }));

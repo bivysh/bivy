@@ -30,7 +30,6 @@ const REVISION_PATH = "/__bivy/revision";
 const INSPECTOR_PATH = "/__bivy/inspector.js";
 const COMPARE_PATH = "/__bivy/compare";
 const NOTES_PATH = "/__bivy/notes";
-const MAX_NOTES = 50;
 /** Larger HTML documents pass through without the inspector. */
 const MAX_INJECT_BYTES = 5 * 1024 * 1024;
 
@@ -496,11 +495,10 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     if (!note) { res.writeHead(400); res.end("A note needs some text."); return; }
     const viewport = input.viewport as { width?: unknown; height?: unknown } | undefined;
     const path = text(input.path, 2048);
-    entry.notes = [...(entry.notes ?? []), {
+    this.registry.addNote(entry.view.id, {
       id: randomBytes(8).toString("hex"), at: Date.now(), note, selector: text(input.selector, 300), text: text(input.text, 200),
       path: path.startsWith("/") ? path : "/", viewport: { width: Number(viewport?.width) || 0, height: Number(viewport?.height) || 0 },
-    }].slice(-MAX_NOTES);
-    this.registry.emit("notes", entry.view.id);
+    });
     res.writeHead(204); res.end();
   }
   /** Compare shots for the shell: the list, or one PNG by index. */

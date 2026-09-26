@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import type { AppOffer, AppView, OpenAppViewResult, ReviewCardMode, SessionApp, SessionAppOffersResult, SessionAppsResult, ShareAppViewResult } from "@bivy/core";
+import type { AppOffer, AppView, OpenAppViewResult, ReviewCardMode, ReviewerNote, SessionApp, SessionAppOffersResult, SessionAppsResult, ShareAppViewResult } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
 import { Sheet } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -29,6 +29,12 @@ const VIEW_LABELS = {
  *  machine they hand off to the chat (`onOpenInChat`), which switches there. */
 /** What "Preview cards" means for an app, in its ⋯ menu and on review cards. */
 export const REVIEW_MODE_LABELS: Record<ReviewCardMode, string> = { ready: "When ready", every: "Every change", off: "Off" };
+
+/** Reviewer notes as a message draft. Untrusted text: it only ever becomes a draft the owner sends. */
+export function notesDraft(viewName: string, notes: readonly ReviewerNote[]): string {
+  return `Notes from people reviewing "${viewName}":\n` + notes.map((n) =>
+    `- "${n.note}" on ${n.selector}${n.text ? ` ("${n.text}")` : ""}, page ${n.path}, viewport ${n.viewport.width}×${n.viewport.height}`).join("\n");
+}
 
 /** `openView`: open this view straight away (a review card's Open preview), on `path` if given. */
 export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, onClose }: { sessionId: string; appId?: string; nodeId?: string | null; openView?: { viewId: string; path?: string }; onOpenInChat?: () => void; onClose: () => void }) {
@@ -179,10 +185,17 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
   };
   /** Reviewer notes are untrusted text: they only ever become a draft. */
   const notesToMessage = (view: AppView & { kind: "web" }) => {
-    const text = `Notes from people reviewing "${view.name}":\n` + (view.notes ?? []).map((n) =>
-      `- "${n.note}" on ${n.selector}${n.text ? ` ("${n.text}")` : ""}, page ${n.path}, viewport ${n.viewport.width}×${n.viewport.height}`).join("\n");
+    const text = notesDraft(view.name, view.notes ?? []);
     if (!controller.prefillComposer(text)) seedSessionDraft(localStorage, sessionId, text);
     onClose();
+  };
+  /** The owner's choice: `bivy app notes` works only on apps where this is on. */
+  const setAgentNotes = async (app: SessionApp, enabled: boolean) => {
+    setError("");
+    try {
+      await controller.appCommand("apps.agentNotes", sessionId, { appId: app.id, enabled }, nodeId);
+      setResult((prev) => prev && { ...prev, apps: prev.apps.map((item) => item.id === app.id ? { ...item, agentNotes: enabled || undefined } : item) });
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not change who can read notes."); }
   };
   const clearNotes = async (app: SessionApp, view: AppView) => {
     const current = generation.current;
@@ -254,6 +267,7 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
           action={<MoreMenu label={`More actions for ${app.name}`} items={[
             { heading: "Preview cards in chat" },
             ...(["ready", "every", "off"] as const).map((mode) => ({ label: REVIEW_MODE_LABELS[mode], checked: (app.reviewMode ?? "ready") === mode, disabled: busy || !online, onSelect: () => void setReviewMode(app, mode) })),
+            ...(app.views.some((view) => view.kind === "web") ? [{ heading: "Reviewer notes" }, { label: "Agents can read notes", toggle: true, checked: app.agentNotes === true, disabled: busy || !online, onSelect: () => void setAgentNotes(app, app.agentNotes !== true) }] : []),
             { label: "Remove app…", danger: true, disabled: busy || !online, onSelect: () => setConfirm({ app }), separated: true },
           ]} />} />
         {app.views.map((view) => {
@@ -317,8 +331,9 @@ export function formatCommand(command: string, args: readonly string[] = []): st
 }
 
 export type MoreItem = { heading: string } | { label: string; danger?: boolean; disabled?: boolean; onSelect: () => void;
-  /** A choice among the items after the last heading (menuitemradio). */
+  /** A choice among the items after the last heading (menuitemradio), or with `toggle` an on/off switch (menuitemcheckbox). */
   checked?: boolean;
+  toggle?: boolean;
   /** A rule above it, to set it apart from the choices before. */
   separated?: boolean };
 /** Rare or destructive actions, and settings, behind a ⋯ button (the canonical .menu). */
@@ -339,7 +354,7 @@ export function MoreMenu({ label, items, onOpen }: { label: string; items: MoreI
     {open && <div className="menu apps-more-menu" role="menu" aria-label={label}>
       {items.map((item) => "heading" in item
         ? <div key={item.heading} className="menu-heading" role="presentation">{item.heading}</div>
-        : <button key={item.label} type="button" role={item.checked === undefined ? "menuitem" : "menuitemradio"} aria-checked={item.checked}
+        : <button key={item.label} type="button" role={item.checked === undefined ? "menuitem" : item.toggle ? "menuitemcheckbox" : "menuitemradio"} aria-checked={item.checked}
             className={`menu-item${item.danger ? " danger" : ""}${item.separated ? " separated" : ""}`} disabled={item.disabled}
             onClick={() => { setOpen(false); item.onSelect(); }}>
             <span className="menu-item-label">{item.label}</span>{item.checked && <CheckIcon size={15} aria-hidden />}

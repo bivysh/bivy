@@ -75,6 +75,17 @@ for (const theme of themes) {
     await expect(notes).toContainText("“Logo is blurry”");
     await notes.getByRole("button", { name: "Clear" }).click();
     await expect.poll(() => page.evaluate(() => (window as any).commands.some((c: any) => c.kind === "apps.clearNotes" && c.viewId === "web"))).toBe(true);
+    // Agents read notes only when the owner turns it on, per app: an on/off switch, off by default.
+    await expect(page.getByRole("button", { name: "Copy link to Website and invoice editor" })).toBeEnabled(); // Clear has finished
+    await page.getByRole("button", { name: /^More actions for Accounting application/ }).click();
+    const agentNotes = page.getByRole("menuitemcheckbox", { name: "Agents can read notes" });
+    await expect(agentNotes).toHaveAttribute("aria-checked", "false");
+    await agentNotes.click();
+    await expect.poll(() => page.evaluate(() => (window as any).commands.filter((c: any) => c.kind === "apps.agentNotes").map((c: any) => [c.appId, c.enabled]))).toEqual([["a", true]]);
+    await expect(page.getByRole("button", { name: "Copy link to Website and invoice editor" })).toBeEnabled();
+    await page.getByRole("button", { name: /^More actions for Accounting application/ }).click();
+    await expect(page.getByRole("menuitemcheckbox", { name: "Agents can read notes" })).toHaveAttribute("aria-checked", "true");
+    await page.keyboard.press("Escape");
     // A copied link is reusable, so the sheet states who can use it and for how long.
     await page.getByRole("button", { name: "Copy link to Website and invoice editor" }).click();
     await expect(page.getByRole("status").filter({ hasText: "for 24 hours, or until you revoke access" })).toBeVisible();

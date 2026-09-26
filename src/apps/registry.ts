@@ -8,13 +8,25 @@ import type { AppManifest, AppView, DisplayStats, ReviewCardMode, ReviewerNote, 
 import { REVIEW_CARD_MODES } from "./types.js";
 
 const MAX_BYTES = 25 * 1024 * 1024;
+/** Reviewer notes kept per view; the oldest drop first. */
+export const MAX_NOTES = 50;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 const MAX_FILES = 2000;
 type StaticTarget = { kind: "static"; files: Map<string, Buffer>; bytes: number };
 type Command = { command: string; args: string[]; workspace: string };
 export type AppTarget = StaticTarget | { kind: "service"; port: number; start?: Command } | ({ kind: "terminal" } & Command) | ({ kind: "display"; restartOnChange: boolean } & Command);
 /** What survives a node restart: the manifest and the IDs chat links point at. */
-interface Persisted { sessionId: string; workspace: string; manifest: AppManifest; id: string; viewIds: string[]; createdAt: number; reviewMode?: ReviewCardMode }
+interface Persisted { sessionId: string; workspace: string; manifest: AppManifest; id: string; viewIds: string[]; createdAt: number; reviewMode?: ReviewCardMode; agentNotes?: boolean;
+  /** Reviewer notes per view ID, so a restart doesn't lose unread feedback. */
+  notes?: Record<string, ReviewerNote[]> }
+type Restore = { id: string; viewIds: string[]; createdAt: number; reviewMode?: ReviewCardMode; agentNotes?: boolean; notes?: Record<string, ReviewerNote[]> };
+/** Stored notes are re-read from disk: keep only well-formed ones, bounded as when they arrived. */
+const isNote = (value: unknown): value is ReviewerNote => {
+  const note = value as Partial<ReviewerNote> | undefined;
+  return !!note && typeof note.id === "string" && typeof note.at === "number" && typeof note.note === "string" && note.note.length <= 1000
+    && typeof note.selector === "string" && typeof note.text === "string" && typeof note.path === "string"
+    && typeof note.viewport?.width === "number" && typeof note.viewport?.height === "number";
+};
 export interface RegisteredView {
   app: SessionApp; view: AppView; target: AppTarget;
   /** Bumped when an agent turn changes files, so open previews reload. */
@@ -121,7 +133,7 @@ export class AppRegistry extends EventEmitter {
       if (!keep.length) continue;
       // A workspace that moved or a build that vanished drops that app, not the rest.
       try {
-        this.publish(record.sessionId, record.workspace, { ...record.manifest, views: keep.map((k) => k.spec) }, { id: record.id, viewIds: keep.map((k) => k.id!), createdAt: record.createdAt, reviewMode: record.reviewMode });
+        this.publish(record.sessionId, record.workspace, { ...record.manifest, views: keep.map((k) => k.spec) }, { id: record.id, viewIds: keep.map((k) => k.id!), createdAt: record.createdAt, reviewMode: record.reviewMode, agentNotes: record.agentNotes, notes: record.notes });
       } catch { /* skipped */ }
     }
     this.save();
@@ -135,7 +147,7 @@ export class AppRegistry extends EventEmitter {
     } catch { try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ } }
   }
 
-  publish(sessionId: string, workspace: string, input: AppManifest, restore?: { id: string; viewIds: string[]; createdAt: number; reviewMode?: ReviewCardMode }): SessionApp {
+  publish(sessionId: string, workspace: string, input: AppManifest, restore?: Restore): SessionApp {
     const name = (value: unknown): string => {
       if (typeof value !== "string" || !value.trim() || value.length > 100) throw new Error("App and view names must contain 1–100 characters.");
       return value.trim();
@@ -143,7 +155,7 @@ export class AppRegistry extends EventEmitter {
     if (!input || input.version !== 1 || !Array.isArray(input.views) || !input.views.length || input.views.length > 8) throw new Error("Expected manifest version 1 with 1–8 views.");
     if (this.apps.size >= 50) throw new Error("Remove an app before publishing more (limit: 50).");
     const id = (i?: number) => (i === undefined ? restore?.id : restore?.viewIds[i]) ?? randomBytes(16).toString("hex");
-    const app: SessionApp = { id: id(), sessionId, name: name(input.name), views: [], createdAt: restore?.createdAt ?? Date.now(), ...(restore?.reviewMode && REVIEW_CARD_MODES.includes(restore.reviewMode) ? { reviewMode: restore.reviewMode } : {}) };
+    const app: SessionApp = { id: id(), sessionId, name: name(input.name), views: [], createdAt: restore?.createdAt ?? Date.now(), ...(restore?.reviewMode && REVIEW_CARD_MODES.includes(restore.reviewMode) ? { reviewMode: restore.reviewMode } : {}), ...(restore?.agentNotes === true ? { agentNotes: true } : {}) };
     const entries: RegisteredView[] = [];
     let total = [...this.views.values()].reduce((sum, item) => sum + (item.target.kind === "static" ? item.target.bytes : 0), 0);
     for (const [index, spec] of input.views.entries()) {
@@ -173,12 +185,15 @@ export class AppRegistry extends EventEmitter {
         view = { ...base, kind: "web", source: "display", managed: true };
       } else throw new Error("Unsupported app view. Supported views: web, terminal and display.");
       app.views.push(view);
-      entries.push({ app, view, target, revision: 0, source });
+      const stored = restore?.notes?.[view.id];
+      const notes = view.kind === "web" && Array.isArray(stored) ? stored.filter(isNote).slice(-MAX_NOTES) : [];
+      entries.push({ app, view, target, revision: 0, source, ...(notes.length ? { notes } : {}) });
     }
     // Commit all views together: a bad later view cannot leave a partial app.
     this.apps.set(app.id, app);
     for (const entry of entries) this.views.set(entry.view.id, entry);
-    this.persisted.set(app.id, { sessionId, workspace, manifest: structuredClone(input), id: app.id, viewIds: app.views.map((v) => v.id), createdAt: app.createdAt, ...(app.reviewMode ? { reviewMode: app.reviewMode } : {}) });
+    this.persisted.set(app.id, { sessionId, workspace, manifest: structuredClone(input), id: app.id, viewIds: app.views.map((v) => v.id), createdAt: app.createdAt, ...(app.reviewMode ? { reviewMode: app.reviewMode } : {}), ...(app.agentNotes ? { agentNotes: true } : {}) });
+    this.persistNotes(app.id);
     if (!restore) this.save();
     return structuredClone(app);
   }
@@ -237,6 +252,38 @@ export class AppRegistry extends EventEmitter {
     this.save();
   }
   reviewMode(id: string): ReviewCardMode { return this.apps.get(id)?.reviewMode ?? "ready"; }
+  /** Whether agents may read this app's reviewer notes. Only the owner's app sets it. */
+  setAgentNotes(sessionId: string, id: string, enabled: boolean): void {
+    const app = this.require(sessionId, id);
+    if (enabled) app.agentNotes = true; else delete app.agentNotes;
+    const record = this.persisted.get(id);
+    if (record) { if (enabled) record.agentNotes = true; else delete record.agentNotes; }
+    this.save();
+  }
+  agentNotes(id: string): boolean { return this.apps.get(id)?.agentNotes === true; }
+  /** A reviewer's note: kept bounded, saved with the app, announced (`notes`). */
+  addNote(viewId: string, note: ReviewerNote): void {
+    const entry = this.views.get(viewId);
+    if (!entry || entry.view.kind !== "web") return;
+    entry.notes = [...(entry.notes ?? []), note].slice(-MAX_NOTES);
+    this.persistNotes(entry.app.id);
+    this.save();
+    this.emit("notes", viewId);
+  }
+  clearNotes(viewId: string): void {
+    const entry = this.views.get(viewId);
+    if (!entry?.notes) return;
+    delete entry.notes;
+    this.persistNotes(entry.app.id);
+    this.save();
+  }
+  private persistNotes(appId: string): void {
+    const record = this.persisted.get(appId);
+    const app = this.apps.get(appId);
+    if (!record || !app) return;
+    const notes = Object.fromEntries(app.views.map((view) => [view.id, this.views.get(view.id)?.notes]).filter(([, list]) => Array.isArray(list) && list.length));
+    if (Object.keys(notes).length) record.notes = notes; else delete record.notes;
+  }
   remove(sessionId: string, id: string): void {
     const app = this.require(sessionId, id);
     for (const view of app.views) this.views.delete(view.id);

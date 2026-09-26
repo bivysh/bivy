@@ -86,7 +86,8 @@ self.addEventListener("push", (event) => {
     icon: "/icon-192.png",
     badge: "/icon-192.png",
     // Collapse repeat notifications for the same session/kind instead of stacking.
-    tag: payload.sessionId || payload.kind || "bivy",
+    // Reviewer notes keep their own slot, so they don't replace a "finished".
+    tag: payload.kind === "app_notes" && payload.sessionId ? `${payload.sessionId}:notes` : payload.sessionId || payload.kind || "bivy",
     data: { url: payload.url || "/" },
     // Where supported (not iOS): capture the app now, from the notification.
     ...(payload.showMe ? { actions: [{ action: "show", title: "Show me the app" }] } : {}),

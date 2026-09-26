@@ -302,6 +302,7 @@ export class DirectTransport implements Transport {
         case "apps.reviewMode":
         case "apps.annotate":
         case "apps.clearNotes":
+        case "apps.agentNotes":
         case "apps.share":
         case "apps.revoke":
         case "apps.remove":

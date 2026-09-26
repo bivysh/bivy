@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import type { AppManifest, AppOffer, AppReview, OpenAppViewResult, ReviewCardMode, SessionApp, SessionAppOffersResult, SessionAppsResult, ShareAppViewResult } from "./types.js";
+import type { AppManifest, AppOffer, AppReview, OpenAppViewResult, ReviewCardMode, ReviewerNote, SessionApp, SessionAppOffersResult, SessionAppsResult, ShareAppViewResult } from "./types.js";
 import { randomBytes } from "node:crypto";
 import { REVIEW_MODES, shouldReview, visualChange } from "./review.js";
 import { AppRegistry, type RegisteredView } from "./registry.js";
@@ -87,6 +87,8 @@ export class AppService {
   private runs = new Map<string, Run>();
   /** The latest card per view: a newer one expires its images. */
   private latest = new Map<string, AppReview>();
+  /** Per view: the newest reviewer note a run-end card has already counted. */
+  private handedOver = new Map<string, number>();
   /** Screenshots in progress, so a card, Compare and a baseline share one browser run. */
   private inflight = new Map<string, Promise<Buffer | undefined>>();
   constructor(readonly registry: AppRegistry, readonly gateway: AppPreviewProvider | undefined, private readonly terminals: AppTerminalProvider, options: {
@@ -218,6 +220,26 @@ export class AppService {
       if (!shouldReview({ trigger: "run", mode, muted: run.muted, revisionChanged: true, change }) && !(presented && after)) continue;
       latest = this.review(entry, run, { trigger: presented ? current.trigger : "run", note: presented ? current.note : undefined, path: entry.lastPath ?? "/", shot: after, before });
     }
+    // Reviewer notes that arrived since the last hand-over ride on the view's
+    // card for this run, or get a card of their own. A count only: the notes
+    // stay on the machine until the owner drafts them into a message.
+    for (const entry of this.webViews(sessionId)) {
+      const waiting = (entry.notes ?? []).filter((note) => note.at > (this.handedOver.get(entry.view.id) ?? 0));
+      if (!waiting.length || run.muted || this.registry.reviewMode(entry.app.id) === "off") continue;
+      this.handedOver.set(entry.view.id, Math.max(...waiting.map((note) => note.at)));
+      const notes = entry.notes!.length;
+      const current = this.latest.get(entry.view.id);
+      if (current && run.reviews.get(entry.app.id) === current.id) {
+        const card = this.reviews.publish({ ...current, notes, at: Date.now() }, {});
+        this.latest.set(entry.view.id, card);
+        if (!latest || latest.id === card.id) latest = card;
+      } else {
+        // Cards are one per app per run: another view's card keeps its own; these notes get a new one.
+        const card = this.review(entry, run.reviews.has(entry.app.id) ? undefined : run, { trigger: "notes", path: entry.lastPath ?? "/", notes });
+        // A visible change stays what "finished" talks about; notes fill in when there's nothing else.
+        latest ??= card;
+      }
+    }
     if (!latest) {
       const id = [...run.reviews.values()].at(-1);
       latest = [...this.latest.values()].find((review) => review.id === id);
@@ -276,7 +298,7 @@ export class AppService {
     return views.reduce((best, entry) => (entry.openedAt ?? 0) > (best.openedAt ?? 0) || ((entry.openedAt ?? 0) === (best.openedAt ?? 0) && entry.app.createdAt > best.app.createdAt) ? entry : best);
   }
   /** Makes or updates a card, keeping each view's images to the latest card. */
-  private review(entry: RegisteredView, run: Run | undefined, fields: Pick<AppReview, "trigger" | "path" | "note" | "screenshotsOff"> & { shot?: Buffer; before?: Buffer }): AppReview {
+  private review(entry: RegisteredView, run: Run | undefined, fields: Pick<AppReview, "trigger" | "path" | "note" | "screenshotsOff" | "notes"> & { shot?: Buffer; before?: Buffer }): AppReview {
     const id = (run && run.reviews.get(entry.app.id)) ?? `review-${randomBytes(8).toString("hex")}`;
     const { shot, before, ...rest } = fields;
     const review = this.reviews.publish({
@@ -525,21 +547,37 @@ export class AppService {
   /** `bivy app share`: mints a share link for a web view picked by app and/or
    * view ID or name, like `present` (default: the one opened last). */
   shareView(sessionId: string, input: { app?: string; view?: string }): ShareAppViewResult & { appId: string; viewId: string; app: string; view: string } {
-    let entry: RegisteredView;
-    if (input.view) {
-      const wantedApp = input.app?.trim().toLowerCase();
-      const scope = this.webViews(sessionId).filter((candidate) => !wantedApp || candidate.app.id === wantedApp || candidate.app.name.toLowerCase() === wantedApp);
-      if (wantedApp && !scope.length) throw new Error(`No app called "${input.app}" with web views in this session. Run bivy app list to see them.`);
-      const wanted = input.view.trim().toLowerCase();
-      const found = scope.find((candidate) => candidate.view.id === wanted) ?? scope.find((candidate) => candidate.view.name.toLowerCase() === wanted);
-      if (!found) throw new Error(`No web view called "${input.view}"${input.app ? ` in "${input.app}"` : ""}. Run bivy app list to see them.`);
-      entry = found;
-    } else entry = this.pickView(sessionId, input.app);
+    const entry = this.pickTarget(sessionId, input);
     return { ...this.share(sessionId, entry.app.id, entry.view.id), appId: entry.app.id, viewId: entry.view.id, app: entry.app.name, view: entry.view.name };
   }
   clearNotes(sessionId: string, appId: string, viewId: string): { ok: true } {
-    delete this.registry.requireView(sessionId, appId, viewId).notes;
+    this.registry.requireView(sessionId, appId, viewId);
+    this.registry.clearNotes(viewId);
     return { ok: true };
+  }
+  /** The owner's choice (never the agent's): may agents read this app's notes? */
+  setAgentNotes(sessionId: string, appId: string, enabled: boolean): { ok: true } {
+    this.registry.setAgentNotes(sessionId, appId, enabled);
+    return { ok: true };
+  }
+  /** `bivy app notes`: reviewer notes for an agent, only on apps whose owner
+   * allowed it. Picked like `bivy app share`. Untrusted text, and labelled so. */
+  notes(sessionId: string, input: { app?: string; view?: string; since?: number }): { app: string; view: string; appId: string; viewId: string; untrusted: true; notes: ReviewerNote[] } {
+    const entry = this.pickTarget(sessionId, input);
+    if (!this.registry.agentNotes(entry.app.id)) throw new Error(`Reviewer notes on ${entry.app.name} are private to its owner. They can allow agents to read them in Apps → ${entry.app.name} → ⋯ → Agents can read notes.`);
+    const since = typeof input.since === "number" && Number.isFinite(input.since) ? input.since : 0;
+    return { app: entry.app.name, view: entry.view.name, appId: entry.app.id, viewId: entry.view.id, untrusted: true, notes: structuredClone((entry.notes ?? []).filter((note) => note.at > since)) };
+  }
+  /** An app and/or view by ID or name (`bivy app share`, `bivy app notes`); by default the view opened last. */
+  private pickTarget(sessionId: string, input: { app?: string; view?: string }): RegisteredView {
+    if (!input.view) return this.pickView(sessionId, input.app);
+    const wantedApp = input.app?.trim().toLowerCase();
+    const scope = this.webViews(sessionId).filter((candidate) => !wantedApp || candidate.app.id === wantedApp || candidate.app.name.toLowerCase() === wantedApp);
+    if (wantedApp && !scope.length) throw new Error(`No app called "${input.app}" with web views in this session. Run bivy app list to see them.`);
+    const wanted = input.view.trim().toLowerCase();
+    const found = scope.find((candidate) => candidate.view.id === wanted) ?? scope.find((candidate) => candidate.view.name.toLowerCase() === wanted);
+    if (!found) throw new Error(`No web view called "${input.view}"${input.app ? ` in "${input.app}"` : ""}. Run bivy app list to see them.`);
+    return found;
   }
   /** Ends every link, browser session and open connection for one view; the app stays. */
   revoke(sessionId: string, appId: string, viewId: string): { ok: true } {

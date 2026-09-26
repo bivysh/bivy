@@ -36,6 +36,8 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
     "apps.reviewMode": (msg) => service.setReviewMode(String(msg.sessionId), String(msg.appId), msg.mode as ReviewCardMode),
     "apps.annotate": (msg) => service.annotate(String(msg.sessionId), msg as never),
     "apps.clearNotes": (msg) => service.clearNotes(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
+    "apps.agentNotes": (msg) => service.setAgentNotes(String(msg.sessionId), String(msg.appId), msg.enabled === true),
+    "apps.notes": (msg) => service.notes(String(msg.sessionId), { app: typeof msg.appId === "string" ? msg.appId : undefined, view: typeof msg.view === "string" ? msg.view : undefined, since: typeof msg.since === "number" ? msg.since : undefined }),
     "apps.logs": (msg) => service.logs(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
     // The app UI passes exact IDs; `bivy app share` passes an app and/or view by ID or name.
     "apps.share": (msg) => typeof msg.viewId === "string" && typeof msg.appId === "string"
@@ -47,7 +49,7 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
   return Object.fromEntries(Object.entries(operations).map(([kind, execute]) => [kind, async (msg, ctx) => {
     try {
       ctx.reply({ type: `${kind}.ok`, requestId: msg.requestId, ...await execute(msg) as object });
-      if (kind === "apps.publish" || kind === "apps.adopt" || kind === "apps.remove" || kind === "apps.reviewMode") ctx.broadcast({ type: "apps.changed", sessionId: msg.sessionId });
+      if (kind === "apps.publish" || kind === "apps.adopt" || kind === "apps.remove" || kind === "apps.reviewMode" || kind === "apps.agentNotes") ctx.broadcast({ type: "apps.changed", sessionId: msg.sessionId });
     } catch (error) {
       // Static filesystem errors can disclose host paths; keep those local.
       const message = error instanceof Error && !("code" in error) ? error.message : "Could not read the app directory. Check its path and permissions.";

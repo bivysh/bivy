@@ -31,6 +31,8 @@ export interface SessionApp {
   createdAt: number;
   /** When this app gets review cards in the chat (default "ready"). */
   reviewMode?: ReviewCardMode;
+  /** The owner lets agents read this app's reviewer notes (`bivy app notes`). Off by default. */
+  agentNotes?: boolean;
 }
 /** Review cards: "ready" when the agent presents the app or a run ends with a
  * visible change; "every" also for small visual tweaks; "off" never on its own
@@ -44,8 +46,9 @@ export interface ReviewShot { hash: string; size: number; width: number; height:
 export interface AppReview {
   id: string; sessionId: string; appId: string; viewId: string;
   name: string; view: string; path: string;
-  /** "present": the agent said it's ready; "run": a run ended with a visual change; "asked": Show me. */
-  trigger: "present" | "run" | "asked";
+  /** "present": the agent said it's ready; "run": a run ended with a visual change; "asked": Show me;
+   * "notes": a run ended with reviewer notes waiting and nothing else to show. */
+  trigger: "present" | "run" | "asked" | "notes";
   /** The agent's note from bivy app present. Agent text, shown as text. */
   note?: string;
   at: number;
@@ -56,6 +59,9 @@ export interface AppReview {
   expired?: boolean;
   /** Agent screenshots are off on this machine, so the card has no image. */
   screenshotsOff?: boolean;
+  /** Reviewer notes waiting on this view when the run ended. A count only:
+   * the notes stay on the machine until the owner drafts them into a message. */
+  notes?: number;
 }
 export const APP_REVIEW_BLOCK = "bivy_app_review";
 const isShot = (value: unknown): value is ReviewShot => {
@@ -67,9 +73,10 @@ export function isAppReview(value: unknown): value is AppReview {
   const review = value as Partial<AppReview>;
   return typeof review.id === "string" && typeof review.sessionId === "string" && typeof review.appId === "string" && /^[a-f0-9]{32}$/.test(review.appId)
     && typeof review.viewId === "string" && typeof review.name === "string" && typeof review.view === "string" && typeof review.path === "string"
-    && (review.trigger === "present" || review.trigger === "run" || review.trigger === "asked") && typeof review.at === "number"
+    && (review.trigger === "present" || review.trigger === "run" || review.trigger === "asked" || review.trigger === "notes") && typeof review.at === "number"
     && (review.shot === undefined || isShot(review.shot)) && (review.before === undefined || isShot(review.before))
-    && (review.note === undefined || typeof review.note === "string");
+    && (review.note === undefined || typeof review.note === "string")
+    && (review.notes === undefined || (Number.isInteger(review.notes) && review.notes >= 0));
 }
 /** Input→frame latency and bandwidth measured by a display view's viewer. */
 export interface DisplayStats { at: number; latencyMs: { p50: number; p95: number }; kBps: number; viewport: { width: number; height: number; scale: number } }

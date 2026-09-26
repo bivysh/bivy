@@ -151,6 +151,7 @@ export const NOTIFICATION_KINDS = [
   "session_error",
   "terminal_bell",
   "automation_blocked",
+  "app_notes",
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
