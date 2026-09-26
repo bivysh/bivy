@@ -323,17 +323,41 @@ export function App() {
   // send fail with an error, lock the composer and show a banner offering to
   // jump to the terminal or take the session back into chat.
   const activeTuiLocked = Boolean(state.activeSession.activeSessionId && state.sessionIndex.tuiSessions.includes(state.activeSession.activeSessionId));
-  // Chat | Terminal for the open session (topbar toggle). The terminal is a
-  // shell in the session's workspace; leaving it only unmounts the view — the
-  // PTY keeps running and switching back reattaches with its scrollback.
+  // The open session's runtime can hand itself to its native interactive TUI on
+  // the node (capability `interactiveTui`, online). Prefer the live session's
+  // runtime identity; older/remote summaries may omit runtimeId, so fall back to
+  // the active-session projection. Shared by the Chat | Terminal toggle below and
+  // the SessionMenu "Continue in terminal" action.
+  const activeSession = state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId);
+  const activeRuntimeId = activeSession?.runtimeId ?? state.activeSession.activeRuntimeId;
+  const activeRuntimeCaps = state.catalogs.runtimes.find((r) => r.id === activeRuntimeId)?.capabilities as
+    | { interactiveTui?: boolean }
+    | undefined;
+  const canContinueInTerminal = online && Boolean(activeRuntimeCaps?.interactiveTui);
+  // Chat | Terminal for the open session (topbar toggle). Terminal is the LIVE
+  // agent, not a bare shell: it resumes or attaches to the session's interactive
+  // TUI on the node (single writer — the composer locks while it runs), so both
+  // views drive the same conversation. Switching back to Chat takes the session
+  // back (stops the TUI; the node rebuilds it from disk and the composer unlocks).
   const activeSessionId = state.activeSession.activeSessionId;
   const [sessionView, setSessionViewState] = useState<SessionView>(() => readSessionView(sessionStorage, activeSessionId));
   useEffect(() => { setSessionViewState(readSessionView(sessionStorage, activeSessionId)); }, [activeSessionId]);
   const setSessionView = useCallback((view: SessionView) => {
     if (activeSessionId) writeSessionView(sessionStorage, activeSessionId, view);
+    // Leaving Terminal for Chat hands the session back: stop the single-writer TUI
+    // so the composer unlocks (only when one is actually live for this session).
+    if (view === "chat" && activeSessionId && state.sessionIndex.tuiSessions.includes(activeSessionId)) {
+      controller.closeSessionTui(activeSessionId);
+    }
     setSessionViewState(view);
-  }, [activeSessionId]);
-  const canToggleSessionView = Boolean(activeSessionId) && !activeTuiLocked && !pendingRunTerm;
+  }, [activeSessionId, state.sessionIndex.tuiSessions]);
+  // Only offered when the runtime advertises an interactive TUI and we're online,
+  // so the toggle always means "the live agent." The lock (activeTuiLocked) does
+  // NOT hide it — the user needs it to switch back to Chat while the TUI runs.
+  const canToggleSessionView = Boolean(activeSessionId) && canContinueInTerminal && !pendingRunTerm;
+  // Render the embedded terminal whenever the user has chosen it — independent of
+  // the TUI lock, so the view we launched isn't swapped out for the lock banner
+  // once `terminal.tui {active:true}` arrives from our own TUI.
   const showSessionTerminal = canToggleSessionView && sessionView === "terminal";
   const showNodeSwitcher = !controller.direct && !controller.solo;
   // When the node is an offline-but-resumable ephemeral machine (a suspended
@@ -613,7 +637,6 @@ export function App() {
     );
   }
 
-  const activeSession = state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId);
   // Every active session shows the run card (source + live status) in the band
   // above the composer; `null` for a draft (no session yet) falls back to the
   // plain GitHub pill.
@@ -630,18 +653,6 @@ export function App() {
     ? `${activeSessionNode.name || activeSessionNode.id} (${activeSessionNode.id})`
     : activeSessionNodeId;
   const isRepoSession = Boolean(activeSession?.source && String(activeSession.source).startsWith("repo:"));
-  // "Continue in terminal" is offered only when this session's runtime can hand
-  // itself to its native TUI on the node (capability `interactiveTui`) — the
-  // analog of the terminal's capability-gated "continue in chat". Absent caps
-  // (older node / runtime not yet loaded) default to hidden.
-  // Prefer the live session's runtime identity. Older/remote session summaries
-  // can omit `runtimeId` even though the active-session projection has it; in
-  // that case the capability lookup must still be able to expose the handoff.
-  const activeRuntimeId = activeSession?.runtimeId ?? state.activeSession.activeRuntimeId;
-  const activeRuntimeCaps = state.catalogs.runtimes.find((r) => r.id === activeRuntimeId)?.capabilities as
-    | { interactiveTui?: boolean }
-    | undefined;
-  const canContinueInTerminal = online && Boolean(activeRuntimeCaps?.interactiveTui);
 
   return (
     <div className="app">
@@ -896,7 +907,23 @@ export function App() {
               />
             );
           })()
+        ) : showSessionTerminal ? (
+          // The live agent as its interactive TUI: resumes the session, or attaches
+          // to the TUI if one is already running (reused by the node). Checked before
+          // the lock branch so our own `terminal.tui {active:true}` doesn't swap this
+          // view out for the lock banner.
+          <Suspense fallback={null}>
+            <TerminalOverlay
+              key={activeSessionId}
+              embedded
+              tui
+              sessionId={activeSessionId}
+              onClose={() => setSessionView("chat")}
+            />
+          </Suspense>
         ) : activeTuiLocked ? (
+          // Locked by a TUI opened elsewhere (another device, or SessionMenu) while
+          // this view is on Chat: offer to jump to it or take the session back.
           <TuiLockedView
             sessionId={state.activeSession.activeSessionId ?? undefined}
             sessionName={state.activeSession.activeTitle}
@@ -905,15 +932,6 @@ export function App() {
             onOpenTerminal={continueInTerminal}
             onUseChat={takeoverInChat}
           />
-        ) : showSessionTerminal ? (
-          <Suspense fallback={null}>
-            <TerminalOverlay
-              key={activeSessionId}
-              embedded
-              sessionId={activeSessionId}
-              onClose={() => setSessionView("chat")}
-            />
-          </Suspense>
         ) : (
           <>
             <ChatView
