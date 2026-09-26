@@ -110,6 +110,9 @@ function bridge(args: Args, open: (ws: WebSocket) => void): Promise<number> {
     let bound = false;
     let detachArmed = 0;
     let settled = false;
+    // Set while the session this terminal showed is continuing as a chat in the
+    // app: the next key decides whether to take it back here or leave.
+    let handedToChat: string | undefined;
     const inputDecoder = new StringDecoder("utf8");
 
     const stdin = process.stdin;
@@ -148,6 +151,18 @@ function bridge(args: Args, open: (ws: WebSocket) => void): Promise<number> {
     };
 
     const onInput = (data: Buffer) => {
+      if (handedToChat) {
+        const sessionId = handedToChat;
+        handedToChat = undefined;
+        if (data[0] !== 0x0d && data[0] !== 0x0a) { finish(0); return; }
+        // Reopen the chat's own TUI, resuming the same conversation; the node
+        // locks the chat again and every device sees the handoff.
+        process.stdout.write(c.dim("Taking it back…\r\n"));
+        modesReset = false;
+        const { cols, rows } = termSize();
+        send({ kind: "terminal.open.tui", sessionId, cols, rows });
+        return;
+      }
       // Ctrl-\ (0x1c) twice in a row detaches, leaving the daemon session alive.
       if (data.length === 1 && data[0] === 0x1c) {
         const now = Date.now();
@@ -204,6 +219,13 @@ function bridge(args: Args, open: (ws: WebSocket) => void): Promise<number> {
         finish(1);
       } else if (type === "terminal.output" && msg.termId === termId) {
         if (typeof msg.data === "string") process.stdout.write(msg.data);
+      } else if (type === "terminal.closed" && msg.reason === "chat" && msg.termId === termId) {
+        resetModes();
+        termId = undefined;
+        process.stdout.write(c.dim("\r\n[continued as chat in the Bivy app]\r\n"));
+        if (typeof msg.sessionId !== "string" || !msg.sessionId) { finish(0); return; }
+        handedToChat = msg.sessionId;
+        process.stdout.write(`Press ${c.bold("Enter")} to take it back here, or any other key to leave.\r\n`);
       } else if ((type === "terminal.exit" || type === "terminal.closed") && msg.termId === termId) {
         const code = typeof msg.code === "number" ? msg.code : 0;
         resetModes();
@@ -211,7 +233,7 @@ function bridge(args: Args, open: (ws: WebSocket) => void): Promise<number> {
         finish(code);
       } else if (type === "terminal.error") {
         process.stderr.write(c.red(`\r\n${String(msg.error || "Terminal error")}\r\n`));
-        if (!bound) finish(1);
+        if (!bound || !termId) finish(1);
       }
     });
   });

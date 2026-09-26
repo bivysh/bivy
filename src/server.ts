@@ -6504,6 +6504,20 @@ function rememberSession(record: SessionRecord) {
   persistSessionMetadata(record);
   recordSessionLocation(record);
   enforceOpenSessionCap(record.id);
+  // Opened while a `bivy run` pinned to it is live (e.g. `bivy resume` on the
+  // laptop, then the chat on a phone): the terminal owns it until it ends.
+  runTerms.adoptLiveRun(record);
+}
+
+/** The open session a run's pinned id refers to — by Bivy id or by the
+ *  runtime's own session ref. Unlike resolveSession, never the active one. */
+function findOpenSession(ref: string): SessionRecord | undefined {
+  const direct = openSessions.get(ref);
+  if (direct) return direct;
+  for (const record of openSessions.values()) {
+    if (record.sessionFile === ref) return record;
+  }
+  return undefined;
 }
 
 // Keep the number of live (in-memory) sessions bounded. Idle-close already
@@ -8880,10 +8894,17 @@ const runTerms = createRunTerminals({
   sendNotificationHint: (hint) => void sendNotificationHint(hint),
   createSession: (workspace, sessionFile, opts) => createSession(workspace, sessionFile, opts),
   resolveSession: (id) => resolveSession(id),
+  findOpenSession: (ref) => findOpenSession(ref),
   sessionBusy: (record) => sessionBusy(record as SessionRecord),
   sessionTerminalsRecord: (sessionId, val) => sessionTerminals.record(sessionId, val),
   sessionTerminalsForget: (sessionId) => sessionTerminals.forget(sessionId),
-  upsertSessionMetadata: (patch) => metadata.upsertSession(patch as Parameters<typeof metadata.upsertSession>[0]),
+  upsertSessionMetadata: (patch) => {
+    const input = patch as Parameters<typeof metadata.upsertSession>[0];
+    // A run continuing a saved session (`bivy resume`) only moves its status;
+    // the session keeps its own name, source and agent.
+    const prev = metadata.getSession(input.id);
+    metadata.upsertSession(prev ? { id: input.id, status: input.status } : input);
+  },
   sessionListChanged: () => { broadcastSessionsList(); scheduleAdvertise(); },
   saveRunLog: (termId, log) => runLogs.save(termId, log),
   loadRunLog: (termId) => runLogs.load(termId),

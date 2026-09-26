@@ -42,6 +42,7 @@ function harness(over: any = {}) {
     sendNotificationHint: () => {},
     createSession: over.createSession ?? (async (_ws, sf) => { created.push(sf ?? "<fresh>"); return { id: "new-session" }; }),
     resolveSession: over.resolveSession ?? (() => undefined),
+    findOpenSession: over.findOpenSession ?? (() => undefined),
     sessionBusy: () => false,
     sessionTerminalsRecord: async () => {},
     sessionTerminalsForget: async () => {},
@@ -54,8 +55,8 @@ function harness(over: any = {}) {
     pushModelAuthToControlPlane: async () => {},
     listPiSessions: over.listPiSessions ?? (async () => []),
     resolveAuthOwner: over.resolveAuthOwner ?? (() => "agent"),
-    broadcastTuiState: () => {},
-    refreshRecordAfterTui: () => {},
+    broadcastTuiState: over.broadcastTuiState ?? (() => {}),
+    refreshRecordAfterTui: over.refreshRecordAfterTui ?? (() => {}),
     isEmptyUntitledTitle: (n) => !n || n === "Untitled",
     getActiveSession: () => undefined,
     defaultWorkspace: "/ws",
@@ -270,4 +271,81 @@ test("a mux attach (tmux/zellij) is not a session and never touches the list", a
   await new Promise((r) => setTimeout(r, 0));
   assert.equal(metadata.length, 0);
   assert.equal(listChanged(), 0);
+});
+
+// A fake PTY manager whose meta/list reflect what was actually opened, for the
+// single-writer handoff between a chat and its terminal.
+function livePtys() {
+  const base = fakeTerminals();
+  const open = new Map<string, any>();
+  let next = 0;
+  base.open = (opts: any) => { const id = `t${++next}`; base.calls.open.push(opts); open.set(id, opts); return id; };
+  base.meta = (id: string) => open.get(id)?.meta;
+  base.list = (filter: (m: any) => boolean) => [...open].filter(([, o]) => filter(o.meta)).map(([id, o]) => ({ id, meta: o.meta, workspace: o.workspace, createdAt: 0 }));
+  base.close = (id: string) => { base.calls.close.push(id); };
+  return base;
+}
+
+function chatRecord(id: string) {
+  return {
+    id,
+    runtimeId: "claude-code-sdk",
+    workspace: "/w",
+    session: { cwd: "/w", getName: () => "Fix login", interactiveTuiCommand: () => ({ command: "claude", args: ["--resume", id], env: { A: "1" } }) },
+  } as any;
+}
+
+test("opening a chat in the terminal locks the chat until the terminal ends, then reloads it", async () => {
+  const record = chatRecord("s1");
+  const tui: Array<[string, boolean]> = [];
+  const refreshed: string[] = [];
+  const terminals = livePtys();
+  const { rt, emit, metadata } = harness({
+    terminals,
+    findOpenSession: (ref: string) => (ref === "s1" ? record : undefined),
+    broadcastTuiState: (id: string, active: boolean) => tui.push([id, active]),
+    refreshRecordAfterTui: (r: any) => refreshed.push(r.id),
+  });
+  const viewed: string[] = [];
+  rt.handleTerminalMessage({ kind: "terminal.open.tui", sessionId: "s1" } as any, emit, new Set(), "c1", (id) => viewed.push(id));
+  await new Promise((r) => setImmediate(r));
+
+  const opened = terminals.calls.open[0];
+  assert.equal(opened.command, "claude");
+  assert.equal(opened.env.A, "1", "the chat's own TUI launch environment is kept");
+  assert.equal(opened.meta.sessionId, "s1", "a daemon-owned run pinned to the session, so any device can join it");
+  assert.deepEqual(viewed, ["t1"]);
+  assert.equal(record.tuiTermId, "t1");
+  assert.deepEqual(tui, [["s1", true]]);
+  assert.equal(metadata.length, 0, "the chat keeps its own metadata");
+
+  // Opening it again (another device, or `bivy resume`) joins the same PTY.
+  const again = await rt.openRunTerminal({ command: "claude", args: [], sessionId: "s1" }, emit);
+  assert.equal(again, "t1");
+  assert.equal(terminals.calls.open.length, 1, "never a second writer");
+
+  opened.onExit(0);
+  assert.equal(record.tuiTermId, undefined);
+  assert.deepEqual(tui, [["s1", true], ["s1", false]]);
+  assert.deepEqual(refreshed, ["s1"], "the chat reloads what the terminal wrote");
+});
+
+test("a live run adopted by its chat hands back without a second session and tells viewers where it went", async () => {
+  const record = chatRecord("sess-abc");
+  let chatOpen = false;
+  const terminals = livePtys();
+  const { rt, emit, created, broadcasts } = harness({ terminals, findOpenSession: (ref: string) => (chatOpen && ref === "sess-abc" ? record : undefined) });
+  // Started from a laptop terminal before the chat existed…
+  await rt.openRunTerminal({ command: "claude", args: [], agent: "claude", sessionId: "sess-abc" }, emit);
+  // …then the session was opened as a chat on a phone.
+  chatOpen = true;
+  rt.adoptLiveRun(record);
+  assert.equal(record.tuiTermId, "t1", "the chat is locked to the live terminal");
+
+  const r = await rt.takeoverRunTerminal({ termId: "t1" });
+  assert.equal(r.ok, true);
+  if (r.ok) assert.equal(r.sessionId, "sess-abc");
+  assert.deepEqual(created, [], "the existing chat is reused, not re-created");
+  assert.deepEqual(terminals.calls.close, ["t1"]);
+  assert.deepEqual(broadcasts.find((b) => b.type === "terminal.closed" && b.reason), { type: "terminal.closed", termId: "t1", reason: "chat", sessionId: "sess-abc" });
 });
