@@ -276,7 +276,7 @@ test("the preview works framed inside Bivy and hands drafts to it", async ({ pag
 // A stable address on a home screen: the signed-out redirect is covered in
 // test/apps.test.ts. Here, the return leg: the signed-in client's one-use
 // direct link lands on the same page, unframed.
-test("a stable address comes back from Bivy to the same page", async ({ page }) => {
+test("a stable address, and a review card's Open preview, land on the same page", async ({ page }) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bivy-address-"));
   const registry = new AppRegistry();
   const fixture = await delivery(registry, false);
@@ -294,6 +294,9 @@ test("a stable address comes back from Bivy to the same page", async ({ page }) 
     await expect(page.getByRole("heading", { name: "Ledger" })).toBeVisible();
     await expect(page.locator("body")).toContainText("/invoices");
     expect(await page.evaluate(() => window.top === window)).toBe(true);
+    // A review card opens the preview shell on the page its screenshot shows.
+    await page.goto(`${gateway.open(id, "https://bivy.example/sessions/s")}~${encodeURIComponent("/checkout")}`);
+    await expect(page.frameLocator("#app").locator("body")).toContainText("/checkout");
   } finally { fixture.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });
 

@@ -89,7 +89,8 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
 <script nonce="${nonce}">
 const $=id=>document.getElementById(id);
 const frame=$('app'),status=$('status'),back=$('back'),reload=$('reload'),stage=$('stage');
-const ticket=location.hash.slice(1);history.replaceState(null,'',location.pathname);
+// "#ticket~page": a review card opens the preview on the page it shows.
+const [ticket,startPage='']=location.hash.slice(1).split('~');history.replaceState(null,'',location.pathname);
 let metadata,currentPath='/';
 // Peek: framed by a Bivy client, which owns closing and the composer.
 const embedded=parent!==window;
@@ -110,7 +111,7 @@ function show(data,launch){
   // (Set before navigating: the policy is fixed when the frame loads.)
   for(const b of [$('point'),$('errors')])b.hidden=data.inspect===false;
   if(data.inspect===false)frame.allow='clipboard-read; clipboard-write';
-  frame.src=data.origin+(launch?'/__bivy/open#'+(embedded?'e:':'')+launch:'/');
+  frame.src=data.origin+(launch?'/__bivy/open#'+(embedded?'e:':'')+launch+(startPage?'~'+startPage:''):'/');
   back.hidden=embedded&&Boolean(data.returnTo);
   for(const b of [reload,$('point'),$('errors')])b.disabled=false;
   status.textContent='Loading app…';

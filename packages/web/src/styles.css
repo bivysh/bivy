@@ -116,6 +116,10 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 }
 .menu-item:hover, .menu-item[aria-checked="true"], .menu-item.active { background: var(--surface-2); }
 .menu-item.danger { color: var(--danger); }
+.menu-item-label { flex: 1; min-width: 0; }
+.menu-item.separated { margin-top: var(--space-1); border-top: 1px solid var(--line); border-radius: 0 0 var(--radius-sm) var(--radius-sm); }
+/* A section title inside a menu (e.g. "Preview cards" above its choices). */
+.menu-heading { padding: var(--space-2) var(--space-3) var(--space-1); color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: 0.04em; text-transform: uppercase; }
 
 /* ---- Feedback ---- */
 .toast {
@@ -3038,6 +3042,21 @@ select.picker-search { appearance: auto; }
 .app-row-meta { color: var(--muted); font-size: var(--text-xs); line-height: var(--lh-xs); }
 .app-row-action { flex: none; display: flex; align-items: center; gap: var(--space-1); }
 .app-message { margin-block: var(--space-2); }
+/* Review card (ReviewCard.tsx): the app at a moment worth judging. The
+   screenshot is shown whole, phone-shaped, on a quiet stage; Before/Now is the
+   canonical .segmented switch; one primary action. */
+.review-card { margin-block: var(--space-2); max-inline-size: 440px; }
+.review-stage { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); margin: 0 var(--space-3); padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-2); }
+.review-shot { display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--bg); overflow: hidden; cursor: zoom-in; box-shadow: var(--shadow-sm); }
+.review-shot img { display: block; inline-size: auto; block-size: auto; max-inline-size: 100%; max-block-size: min(300px, 40vh); }
+.review-loading { display: grid; place-items: center; inline-size: 139px; block-size: min(300px, 40vh); max-inline-size: 100%; }
+.review-gone { margin: 0; padding: var(--space-6) var(--space-3); color: var(--muted); font-size: var(--text-sm); text-align: center; }
+.review-side .seg-btn { min-block-size: 44px; min-inline-size: 72px; }
+.review-banner { margin: 0 var(--space-3); }
+.review-note { margin: var(--space-3) var(--space-3) 0; padding-inline-start: var(--space-3); border-inline-start: 2px solid var(--line-strong); color: var(--ink); font-size: var(--text-sm); white-space: pre-wrap; }
+.review-status { margin: var(--space-2) var(--space-3) 0; color: var(--muted); font-size: var(--text-sm); }
+.review-actions { display: flex; padding: var(--space-3); }
+.review-actions .btn { flex: 1; min-block-size: 44px; }
 
 /* Apps sheet (AppsSheet.tsx): one card per app, its views nested, one primary
    action per view; secondary tools as quiet icon buttons; rare or destructive

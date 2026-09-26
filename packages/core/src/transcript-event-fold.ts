@@ -7,7 +7,7 @@ import { toHtml } from "./markdown.js";
 import { eventKind, toolCallId, toolDetail, toolInput, toolName, toolParentId } from "./tool-activity.js";
 import { contentThinking, contentToText, toolEntriesFromContent } from "./store-render.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
-import { isAppReference, type AppReference } from "./apps.js";
+import { isAppReference, isAppReview, type AppReference, type AppReview } from "./apps.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -18,6 +18,7 @@ export interface TranscriptFoldTool {
 }
 export interface TranscriptFoldEntry {
   app?: AppReference;
+  review?: AppReview;
   id: string; role: "user" | "assistant" | "system" | "thinking" | "error"; text: string;
   html?: string; tool?: TranscriptFoldTool; streaming?: boolean; attachments?: PromptAttachment[];
   imageRefs?: Record<string, unknown>;
@@ -207,6 +208,17 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
       if (!value.transcript.some((entry) => entry.app?.appId === app.appId)) {
         value.transcript.push({ id: `app-${app.appId}`, role: "assistant", text: "", app });
       }
+      break;
+    }
+    case "app_review": {
+      const review = (event as any).review;
+      if (!isAppReview(review)) break;
+      const index = value.transcript.findIndex((entry) => entry.review?.id === review.id);
+      const entry: TranscriptFoldEntry = { id: review.id, role: "assistant", text: "", review };
+      // An expired card keeps its place; an update moves to the end of the run,
+      // so the card stays with the agent's latest message.
+      if (index >= 0 && review.expired) value.transcript[index] = entry;
+      else { if (index >= 0) value.transcript.splice(index, 1); value.transcript.push(entry); }
       break;
     }
     case "attachment": {

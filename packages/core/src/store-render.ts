@@ -20,7 +20,7 @@ import type { ToolActivity, TranscriptEntry } from "./store.js";
  *  attachment chip/thumbnail, reusing the same PromptAttachment path user
  *  uploads use. */
 export const AGENT_ATTACHMENT_BLOCK = "bivy_attachment";
-import { APP_PUBLICATION_BLOCK, isAppReference } from "./apps.js";
+import { APP_PUBLICATION_BLOCK, APP_REVIEW_BLOCK, isAppReference, isAppReview } from "./apps.js";
 
 interface AgentAttachmentBlock {
   type: typeof AGENT_ATTACHMENT_BLOCK;
@@ -268,6 +268,9 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
           } else if (block?.type === APP_PUBLICATION_BLOCK && isAppReference(block.app)) {
             flushRuns();
             entries.push({ id: nextId(), role: "assistant", text: "", app: block.app });
+          } else if (block?.type === APP_REVIEW_BLOCK && isAppReview(block.review)) {
+            flushRuns();
+            entries.push({ id: block.review.id, role: "assistant", text: "", review: block.review });
           } else if (isAgentAttachmentBlock(block)) {
             // Seal any prose/reasoning before the attachment so its source order
             // is retained and the chip lands as its own entry.

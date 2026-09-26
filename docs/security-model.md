@@ -69,6 +69,10 @@ no new server, no new wire command, and reaches the control plane not at all.
 The `artifact` marking (`bivy attach --artifact`) is carried the same way: it
 rides the same end-to-end-encrypted `attachment` event/history payload as the
 filename and caption it sits next to, never as a separate control-plane call.
+Review cards (`docs/apps.md`) follow the same path: their screenshots are
+attachments fetched over the session channel, never through the preview
+origin. The one control-plane touch is the "finished" push hint, which carries
+the card's app, view and card IDs so a tap opens it, never the image.
 The one exception, as noted below, is a GitHub-queue run's bounded
 `output.artifactUrl` — an external link a run reports as its outcome, not a
 filename or byte.

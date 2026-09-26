@@ -591,6 +591,21 @@ export function App() {
     if (state.activeSession.activeSessionId) controller.closeSessionTui(state.activeSession.activeSessionId);
   }, [state.activeSession.activeSessionId]);
 
+  // A "finished" notification for a run that changed the app lands on its review card.
+  useEffect(() => {
+    const review = new URLSearchParams(location.search).get("review");
+    if (review && state.activeSession.activeSessionId) requestMessageJump(state.activeSession.activeSessionId, { reviewId: review });
+  }, [state.activeSession.activeSessionId]);
+  // "Show me the app" on a finished notification: capture it now, once.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const sessionId = state.activeSession.activeSessionId;
+    if (params.get("show") !== "1" || !sessionId || state.connection.status !== "online") return;
+    params.delete("show");
+    history.replaceState(history.state, "", `${location.pathname}${params.size ? `?${params}` : ""}${location.hash}`);
+    void controller.appCommand("apps.showMe", sessionId).catch((e: unknown) => controller.store.setError(e instanceof Error ? e.message : "Couldn't show the app"));
+  }, [state.activeSession.activeSessionId, state.connection.status]);
+
   // Push taps and copied inbox links use the same `attention` target. Wait until
   // the owning session's live card has arrived, then reveal and focus it.
   useEffect(() => {
@@ -824,6 +839,7 @@ export function App() {
             {state.activeSession.activeSessionId && (
               <SessionMenu
                 sessionId={state.activeSession.activeSessionId}
+                hasApps={(liveApps.published ?? 0) > 0}
                 name={state.activeSession.activeTitle}
                 isRepo={isRepoSession}
                 node={activeSessionNodeLabel}

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import type { AppManifest, SessionApp } from "../apps/types.js";
+import type { AppManifest, ReviewCardMode, SessionApp } from "../apps/types.js";
 import type { CommandEntries } from "../protocol/command-registry.js";
 import type { AppService } from "../apps/service.js";
 
@@ -26,8 +26,12 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
       published(app);
       return { app };
     },
-    "apps.open": (msg) => service.open(String(msg.sessionId), String(msg.appId), String(msg.viewId), typeof msg.returnTo === "string" ? msg.returnTo : undefined, msg.direct === true, typeof msg.scale === "number" ? msg.scale : undefined),
+    "apps.open": (msg) => service.open(String(msg.sessionId), String(msg.appId), String(msg.viewId), typeof msg.returnTo === "string" ? msg.returnTo : undefined, msg.direct === true, typeof msg.scale === "number" ? msg.scale : undefined, typeof msg.path === "string" ? msg.path : undefined),
     "apps.shot": (msg) => service.shot(String(msg.sessionId), typeof msg.appId === "string" ? msg.appId : undefined, { widths: msg.widths as number[] | undefined, themes: msg.themes as ("light" | "dark")[] | undefined, path: typeof msg.path === "string" ? msg.path : undefined }),
+    "apps.present": (msg) => service.present(String(msg.sessionId), { target: typeof msg.target === "string" ? msg.target : undefined, path: typeof msg.path === "string" ? msg.path : undefined, note: typeof msg.note === "string" ? msg.note : undefined }),
+    "apps.showMe": (msg) => service.present(String(msg.sessionId), { target: typeof msg.appId === "string" ? msg.appId : undefined, trigger: "asked" }),
+    "apps.mute": (msg) => service.mute(String(msg.sessionId)),
+    "apps.reviewMode": (msg) => service.setReviewMode(String(msg.sessionId), String(msg.appId), msg.mode as ReviewCardMode),
     "apps.clearNotes": (msg) => service.clearNotes(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
     "apps.logs": (msg) => service.logs(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
     "apps.share": (msg) => service.share(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
@@ -37,7 +41,7 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
   return Object.fromEntries(Object.entries(operations).map(([kind, execute]) => [kind, async (msg, ctx) => {
     try {
       ctx.reply({ type: `${kind}.ok`, requestId: msg.requestId, ...await execute(msg) as object });
-      if (kind === "apps.publish" || kind === "apps.adopt" || kind === "apps.remove") ctx.broadcast({ type: "apps.changed", sessionId: msg.sessionId });
+      if (kind === "apps.publish" || kind === "apps.adopt" || kind === "apps.remove" || kind === "apps.reviewMode") ctx.broadcast({ type: "apps.changed", sessionId: msg.sessionId });
     } catch (error) {
       // Static filesystem errors can disclose host paths; keep those local.
       const message = error instanceof Error && !("code" in error) ? error.message : "Could not read the app directory. Check its path and permissions.";

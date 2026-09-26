@@ -56,6 +56,8 @@ interface PushPayload {
   kind?: string;
   sessionId?: string;
   url?: string;
+  /** A finished session with an app preview: offer to show it. */
+  showMe?: boolean;
 }
 
 function readPushPayload(data: PushMessageData | null): PushPayload {
@@ -77,14 +79,18 @@ self.addEventListener("push", (event) => {
     // Collapse repeat notifications for the same session/kind instead of stacking.
     tag: payload.sessionId || payload.kind || "bivy",
     data: { url: payload.url || "/" },
-  };
+    // Where supported (not iOS): capture the app now, from the notification.
+    ...(payload.showMe ? { actions: [{ action: "show", title: "Show me the app" }] } : {}),
+  } as NotificationOptions;
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const data = event.notification.data as { url?: string } | undefined;
-  const target = new URL(data?.url || "/", self.location.origin).href;
+  const url = new URL(data?.url || "/", self.location.origin);
+  if (event.action === "show") url.searchParams.set("show", "1");
+  const target = url.href;
   event.waitUntil(
     (async () => {
       const clientsList = await self.clients.matchAll({

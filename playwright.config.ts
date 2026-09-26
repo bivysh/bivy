@@ -23,6 +23,7 @@ const mobileSpecs = [
   "**/changes-card.spec.tsx",
   "**/activity-history.spec.ts",
   "**/run-pill-apps.spec.ts",
+  "**/review-card.spec.ts",
 ];
 
 // Mobile-specific specs whose mobile run does everything the desktop run does
@@ -32,6 +33,7 @@ const mobileOnlySpecs = [
   "**/app-badge.spec.ts",
   "**/changes-card.spec.tsx",
   "**/run-pill-apps.spec.ts",
+  "**/review-card.spec.ts",
 ];
 
 export default defineConfig({

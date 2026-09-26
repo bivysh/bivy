@@ -226,4 +226,13 @@ export class AttachmentStore {
       return null;
     }
   }
+
+  /** Delete one blob now, for a caller that knows nothing else references it
+   * (an expired review card's screenshot). Best-effort. */
+  remove(hash: string): void {
+    const p = this.getPath(hash);
+    if (!p) return;
+    try { fs.unlinkSync(p); } catch { /* already gone */ }
+    try { fs.unlinkSync(this.metaPath(hash)); } catch { /* sidecar optional */ }
+  }
 }

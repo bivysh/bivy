@@ -32,7 +32,9 @@ import { CLIENT_COMMAND_ROUTES } from "./protocol/client-command-routes.js";
 import { AppRegistry } from "./apps/registry.js";
 import { AppGateway } from "./apps/gateway.js";
 import { RemotePreview } from "./apps/remote-preview.js";
-import { AppService } from "./apps/service.js";
+import { AppService, type ReviewSink } from "./apps/service.js";
+import { pngSize, reviewHint } from "./apps/review.js";
+import type { AppReview, ReviewShot } from "./apps/types.js";
 import { DisplayHost } from "./apps/display.js";
 import { createAppCommands } from "./controllers/app-commands.js";
 import { bindClientCommandRoutes } from "./http/client-command-routes.js";
@@ -1067,6 +1069,9 @@ function harnessDirFor(record: SessionRecord): string {
  *  changes card — acceptable for a best-effort diff, and the prompt no longer
  *  waits on git. Never throws into the prompt path. */
 function harnessBeginTurn(record: SessionRecord): void {
+  // A run starts: review cards measure what the app looked like before it.
+  appService.runStarted(record.id);
+  record.runReview = undefined;
   const dir = harnessDirFor(record);
   record.harnessTurnReady = undefined;
   record.harnessTurnFinished = false;
@@ -1095,9 +1100,12 @@ function harnessBeginTurn(record: SessionRecord): void {
 function finishHarnessTurn(record: SessionRecord): void {
   if (record.harnessTurnFinished) return;
   record.harnessTurnFinished = true;
-  void harnessEndTurn(record).finally(() => {
+  const ended = harnessEndTurn(record);
+  void ended.finally(() => {
     void replication.onTurnComplete(record.id);
   });
+  // After the diff has bumped preview revisions: decide on this run's review card.
+  record.runReview = ended.then(() => appService.runEnded(record.id)).catch(() => undefined);
 }
 
 async function harnessEndTurn(record: SessionRecord): Promise<void> {
@@ -1986,8 +1994,9 @@ function referencedAttachmentHashes(): Set<string> | null {
   // `scan`, not `entries`: this visits every session ever created, and must not pin
   // each one's full log in the event-log cache.
   for (const id of ids) {
-    for (const entry of eventLog.scan(id, ["attachment", "outbound-attachment", "inline-image"])) {
+    for (const entry of eventLog.scan(id, ["attachment", "outbound-attachment", "inline-image", "app-review"])) {
       if (entry.bivyKind === "attachment") for (const ref of entry.refs) hashes.add(ref.hash);
+      else if (entry.bivyKind === "app-review") { for (const shot of [entry.review.shot, entry.review.before]) if (shot) hashes.add(shot.hash); }
       else if (entry.bivyKind === "outbound-attachment" || entry.bivyKind === "inline-image") hashes.add(entry.ref.hash);
     }
   }
@@ -2179,6 +2188,47 @@ const appGateway = process.env.BIVY_APPS_ORIGIN ? new AppGateway(appRegistry, pr
 const remotePreview = new RemotePreview(appRegistry, appReturnOrigins, appSignIn);
 // Desktop app views: one private display per view, started on first open.
 const appDisplays = new DisplayHost();
+/** Review cards: screenshots become encrypted attachments (fetched by hash
+ * like any image), and the card is logged so it survives a reload. A card
+ * that updates moves to the end of the run; an expired one stays put. */
+function createReviewSink(): ReviewSink {
+  const anchors = new Map<string, { afterMessageCount: number; createdAt: number }>();
+  const emit = (review: AppReview, anchor?: { afterMessageCount: number; createdAt: number }) => {
+    const record = resolveSession(review.sessionId);
+    if (!record) return;
+    const at = anchor ?? { afterMessageCount: record.session.getMessages().length, createdAt: Date.now() };
+    anchors.set(review.id, at);
+    eventLog.appendAppReview(record.id, { ...at, review });
+    broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "app_review", id: review.id, review } }));
+  };
+  const store = (png: Buffer | undefined, name: string): ReviewShot | undefined => {
+    if (!png) return undefined;
+    try {
+      const ref = attachmentStore.put(png, { name, mimeType: "image/png", kind: "image" });
+      return { hash: ref.hash, size: ref.size, ...pngSize(png) };
+    } catch { return undefined; }
+  };
+  return {
+    publish(review, images) {
+      const card: AppReview = { ...review };
+      const shot = store(images.shot, `${review.name} ${review.path}.png`);
+      const before = store(images.before, `${review.name} ${review.path} before.png`);
+      if (shot) card.shot = shot;
+      if (before) card.before = before;
+      emit(card);
+      return card;
+    },
+    expire(review, keep) {
+      const record = resolveSession(review.sessionId);
+      for (const hash of [review.shot?.hash, review.before?.hash]) {
+        // Never delete bytes anything else in the chat points at.
+        if (hash && !keep.has(hash) && !record?.seenAttachmentHashes?.has(hash)) attachmentStore.remove(hash);
+      }
+      const { shot: _shot, before: _before, ...rest } = review;
+      emit({ ...rest, expired: true }, anchors.get(review.id));
+    },
+  };
+}
 const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   start: async (spec) => {
     let failure = "Could not start the app terminal.";
@@ -2191,7 +2241,7 @@ const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   },
   has: (id) => terminals.has(id),
   close: (id) => { terminals.close(id); },
-}, { screenshots: { enabled: appScreenshotsEnabled }, displays: appDisplays });
+}, { screenshots: { enabled: appScreenshotsEnabled }, displays: appDisplays, reviews: createReviewSink() });
 // A reviewer's note shows up in an open Apps sheet without reopening it.
 appRegistry.on("notes", (viewId: string) => {
   const entry = appRegistry.getView(viewId);
@@ -4140,7 +4190,20 @@ function sessionNotifyLabel(record: SessionRecord | undefined, fallback = "A ses
   return agent || branch || fallback;
 }
 
-async function sendNotificationHint(input: { kind: string; sessionId?: string; title?: string; body?: string; targetSessionId?: string; attentionId?: string }) {
+/** How long the "finished" notification waits for a review card. */
+const DONE_REVIEW_WAIT_MS = 30_000;
+async function doneNotification(record: SessionRecord): Promise<Parameters<typeof sendNotificationHint>[0]> {
+  const label = sessionNotifyLabel(record);
+  const review = await Promise.race([record.runReview ?? Promise.resolve(undefined), new Promise<undefined>((r) => setTimeout(r, DONE_REVIEW_WAIT_MS))]);
+  const base = { kind: "session_done", sessionId: record.id, targetSessionId: record.id, title: "Session finished" };
+  // No card, but the session has a preview: the notification offers Show me.
+  const showMe = appRegistry.list(record.id).some((app) => app.views.some((view) => view.kind === "web"));
+  if (!review || review.expired) return { ...base, body: `${label} finished — tap to review the result.`, ...(showMe ? { showMe } : {}) };
+  const hint = reviewHint(review);
+  return { ...base, title: `${label} finished`, body: hint.body, review: hint.review };
+}
+
+async function sendNotificationHint(input: { kind: string; sessionId?: string; title?: string; body?: string; targetSessionId?: string; attentionId?: string; review?: { appId: string; viewId: string; reviewId: string }; showMe?: boolean }) {
   if (!sessionAdvertiseTarget) return;
   try {
     await modelAuthFetch("/internal/notifications/hints", { method: "POST", body: JSON.stringify(input) });
@@ -7954,13 +8017,10 @@ function attachSessionListeners(record: SessionRecord) {
           body: `${sessionNotifyLabel(record)} failed its last turn — tap to see what went wrong.`,
         });
       } else if (!record.isWorking && !record.remoteActive && clients.size === 0 && (relay?.clientCount ?? 0) === 0 && (record.backgroundTaskCount ?? 0) === 0) {
-        void sendNotificationHint({
-          kind: "session_done",
-          sessionId: record.id,
-          targetSessionId: record.id,
-          title: "Session finished",
-          body: `${sessionNotifyLabel(record)} finished — tap to review the result.`,
-        });
+        // Nobody is watching: the one "finished" notification also says when
+        // the app changed, and opens its review card. Waits (bounded) for the
+        // card; the hint carries IDs only, never the screenshot.
+        void doneNotification(record).then((hint) => sendNotificationHint(hint));
       }
       // Any turn that didn't schedule another resume broke the limit streak —
       // clear the durable counter so a future limit starts with a full budget

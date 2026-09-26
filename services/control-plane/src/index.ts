@@ -1956,10 +1956,16 @@ app.post("/internal/notifications/hints", requireNode, asyncHandler(async (req, 
   // Deep link via the SPA session route (`/sessions/:id`) — the client router
   // matches that path — carrying the owning node as a query param so a click can
   // switch to it before opening. Without a session id we can only open the root.
+  // A run that visibly changed the app opens at its review card. IDs only:
+  // the screenshot never passes through here, and the device fetches it
+  // over the encrypted session channel.
+  const reviewId = typeof req.body?.review?.reviewId === "string" && /^review-[a-f0-9]{16}$/.test(req.body.review.reviewId) ? req.body.review.reviewId : "";
   const url = sessionId
-    ? `/sessions/${encodeURIComponent(sessionId)}?node=${encodeURIComponent(node.id)}${attentionId ? `&attention=${encodeURIComponent(attentionId)}` : ""}`
+    ? `/sessions/${encodeURIComponent(sessionId)}?node=${encodeURIComponent(node.id)}${attentionId ? `&attention=${encodeURIComponent(attentionId)}` : ""}${reviewId ? `&review=${reviewId}` : ""}`
     : "/";
-  const result = await sendPushToAccount(node.accountId, { title, body, kind, nodeId: node.id, sessionId, url });
+  // The device offers "Show me the app" (opening with `show=1`) for a finished session with a preview.
+  const showMe = kind === "session_done" && Boolean(sessionId) && !reviewId && req.body?.showMe === true;
+  const result = await sendPushToAccount(node.accountId, { title, body, kind, nodeId: node.id, sessionId, url, ...(showMe ? { showMe: true } : {}) });
   res.json({ ok: true, ...result });
 }));
 
