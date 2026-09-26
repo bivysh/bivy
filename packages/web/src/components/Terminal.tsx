@@ -357,6 +357,7 @@ export function TerminalOverlay({
   attachOnly = false,
   standalone,
   tui,
+  embedded = false,
   onClose,
 }: {
   sessionId: string | null;
@@ -372,6 +373,9 @@ export function TerminalOverlay({
    *  conversation) via `terminal.open.tui`. Requires `sessionId`. The reverse
    *  of "continue in chat" (takeover). */
   tui?: boolean;
+  /** Rendered inside the session pane (Chat | Terminal toggle) instead of as a
+   *  full-screen overlay. The toggle replaces the close button. */
+  embedded?: boolean;
   onClose: () => void;
 }) {
   // Runtime capabilities (e.g. `sessionDiscovery`) drive whether a run-terminal
@@ -1356,7 +1360,7 @@ export function TerminalOverlay({
   );
 
   return (
-    <div className="term-overlay">
+    <div className={`term-overlay${embedded ? " term-embedded" : ""}`}>
       {touch ? (
         // Minimal touch header: terminal glyph · Search · Paste · (contextual) · Close.
         // Everything else moves to the bottom toolbar and the `ctrl` sheet.
@@ -1375,9 +1379,11 @@ export function TerminalOverlay({
           <div className="term-head-actions">
             {attachControl}
             {continueControl}
-            <button className="btn ghost icon" onClick={onClose} aria-label="Close terminal">
-              <CloseIcon />
-            </button>
+            {!embedded && (
+              <button className="btn ghost icon" onClick={onClose} aria-label="Close terminal">
+                <CloseIcon />
+              </button>
+            )}
           </div>
         </div>
       ) : (
@@ -1425,9 +1431,11 @@ export function TerminalOverlay({
             <button className="btn sm ghost" onClick={endShell}>
               End
             </button>
-            <button className="btn ghost icon" onClick={onClose} aria-label="Close terminal">
-              ×
-            </button>
+            {!embedded && (
+              <button className="btn ghost icon" onClick={onClose} aria-label="Close terminal">
+                ×
+              </button>
+            )}
           </div>
         </div>
       )}

@@ -1402,7 +1402,12 @@ button.sheet-action:last-child { border-bottom: 0; }
   font-weight: var(--weight-semibold); cursor: pointer; white-space: nowrap;
 }
 .seg-btn:hover { color: var(--ink); }
-.seg-btn[aria-selected="true"] { background: var(--surface); color: var(--accent); box-shadow: var(--shadow-sm); }
+.seg-btn[aria-selected="true"], .seg-btn[aria-checked="true"] { background: var(--surface); color: var(--accent); box-shadow: var(--shadow-sm); }
+/* Chat | Terminal in the session topbar (SessionViewToggle). */
+.topbar-subline { display: flex; align-items: center; gap: var(--space-3); min-width: 0; margin-top: 2px; }
+.topbar-subline .node-switcher { flex: 0 1 auto; }
+.session-view-toggle { flex: none; padding: 2px; }
+.session-view-toggle .seg-btn { display: inline-flex; align-items: center; gap: var(--space-1); padding: 2px var(--space-2); line-height: 1.25; }
 .automations-tabs {
   flex: none; align-self: center; max-width: calc(100% - var(--space-6));
   margin: var(--space-2) auto 0; overflow-x: auto;
@@ -2508,6 +2513,12 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
   height: var(--app-h, 100dvh); z-index: var(--z-sheet); display: flex; flex-direction: column;
   background: var(--bg); padding-top: env(safe-area-inset-top);
 }
+/* The same terminal inside the session pane (Chat | Terminal toggle): in the
+   main column's flow under the topbar, not a fixed full-screen layer. */
+.term-overlay.term-embedded {
+  position: relative; top: auto; left: auto; width: auto; height: auto;
+  flex: 1 1 auto; min-height: 0; z-index: auto; padding-top: 0;
+}
 .term-head { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
 .term-title { font-weight: 700; flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .term-status { color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 12px; }
@@ -2555,6 +2566,10 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 }
 .term-out .xterm { height: 100%; }
 .term-out .xterm-viewport { overflow-y: auto; overscroll-behavior: contain; }
+/* xterm.css paints the viewport #000; the GPU renderers cover it with the theme
+   background, the DOM fallback does not — a light-theme sliver below the last
+   row. Match readTheme()'s background. */
+.term-out .xterm .xterm-viewport { background-color: var(--bg); }
 /* Smooth momentum scrolling for the terminal viewport on touch devices. */
 .term-out .xterm-viewport { -webkit-overflow-scrolling: touch; scrollbar-width: thin; }
 
@@ -2915,6 +2930,9 @@ select.picker-search { appearance: auto; }
 .scrim { position: fixed; inset: 0; background: var(--overlay); z-index: var(--z-dropdown); }
 @media (max-width: 900px) {
   .app { grid-template-columns: 1fr; }
+  /* Share the subtitle line with the machine name: icons only (the accessible
+     name stays via aria-label). */
+  .session-view-label { display: none; }
   .only-mobile { display: inline-flex; }
   .sidebar {
     position: fixed; top: var(--app-top, 0px); left: 0; height: var(--app-h, 100dvh);
