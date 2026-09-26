@@ -99,9 +99,9 @@ export function seedSessionDraft(drafts: DraftStorage, sessionId: string | null,
   writeComposerDraft(drafts, sessionId, mergeSharedText(draft.text, text), draft.attachments);
 }
 
-/** Browser wiring. Must run before the app mounts (see main.tsx) so the App's
- *  one-shot pending-share read sees the stash and every later parseRoute()
- *  sees `/sessions/new` instead of `/share`. */
+/** Browser wiring. Must run before mount.js is imported (see main.tsx): that
+ *  import constructs the controller, which records its boot route from the URL,
+ *  so it and every later parseRoute() must see the redirect, not `/share`. */
 export function consumeShareTarget(): void {
   const redirect = applyShareTarget(location.pathname, location.search, sessionStorage, localStorage);
   // Drop the share query entirely (routePath() preserves location.search, so it
