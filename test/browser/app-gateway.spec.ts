@@ -192,6 +192,14 @@ test("inspector reports console errors and pointed elements to the pill", async 
     // Pointing swallowed the tap: the app's own handler never ran.
     await page.getByRole("button", { name: "Cancel" }).click();
     await content.getByRole("button", { name: "Add transaction" }).click();
+    // iOS sends no click for a tap on a non-clickable element: pointer events alone pick.
+    await page.getByRole("button", { name: "Point" }).click();
+    await content.getByRole("heading", { name: "Ledger" }).evaluate((el) => {
+      const r = el.getBoundingClientRect(), at = { bubbles: true, clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 };
+      el.dispatchEvent(new PointerEvent("pointerdown", at)); el.dispatchEvent(new PointerEvent("pointerup", at));
+    });
+    await expect(page.locator("#draft-context")).toContainText('main > h1 ("Ledger")');
+    await page.getByRole("button", { name: "Cancel" }).click();
 
     await page.getByRole("radio", { name: "Phone" }).click();
     await expect.poll(() => page.locator("iframe").evaluate((el) => el.getBoundingClientRect().width)).toBeLessThanOrEqual(391);
