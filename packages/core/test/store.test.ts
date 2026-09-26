@@ -756,6 +756,16 @@ describe("SessionStore", () => {
     expect(store.getState().activeSession.transcript.filter((e) => e.role === "user")).toHaveLength(2);
   });
 
+  it("never renders the node's re-ack of a retried prompt as a new message", () => {
+    // Regression: a phone that missed the first echo resends on reconnect; the
+    // node acks the duplicate (retry: true) instead of running it again. That
+    // ack must not paint the old message at the bottom of the chat.
+    const store = new SessionStore();
+    store.apply({ type: "session.history", requestId: "r1", sessionId: "s1", messages: [{ role: "user", content: "old prompt" }] });
+    store.apply({ type: "session.user_message", sessionId: "s1", text: "old prompt", clientMessageId: "cm-old", retry: true });
+    expect(store.getState().activeSession.transcript.filter((e) => e.role === "user")).toHaveLength(1);
+  });
+
   it("keeps an optimistic user bubble through a new session's empty history", () => {
     const store = new SessionStore();
     // New-session flow: the bubble is shown, then session.new answers with an

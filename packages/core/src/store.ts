@@ -2481,6 +2481,9 @@ export class SessionStore {
         // A new turn is starting for the focused session — retire the previous
         // turn's "files changed / undo" card so it can't be mistaken for this one.
         if (this.state.activeSession.changes) this.set({ changes: null });
+        // A retry ack only resolves our own unconfirmed send; the message
+        // itself was already echoed (and is in history) the first time.
+        if (e.retry && !own) return;
         if (own && ownSend) {
           // The node echoes back the *composed* text it actually persisted —
           // our own caption plus an appended attachment placeholder line (see
