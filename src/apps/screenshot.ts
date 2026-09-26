@@ -10,9 +10,15 @@ import { WebSocket } from "ws";
 import type { RegisteredView } from "./registry.js";
 import { captureFrame, encodePng } from "./rfb.js";
 
-export interface ShotRequest { widths: number[]; themes: ("light" | "dark")[]; path: string }
-/** Desktop apps are shot as they are on screen: `theme` is "native" for them. */
-export interface Shot { viewId: string; view: string; width: number; theme: "light" | "dark" | "native"; file: string }
+export interface ShotRequest {
+  widths: number[]; themes: ("light" | "dark")[]; path: string;
+  /** Match a particular device instead of the defaults (a phone at 844×2, a
+   * desktop at 800×1): its viewport height, pixel ratio and scroll position. */
+  height?: number; scale?: number; scroll?: { x: number; y: number };
+}
+/** Desktop apps are shot as they are on screen: `theme` is "native" for them.
+ * `scroll`: where the page actually scrolled to, when asked to scroll. */
+export interface Shot { viewId: string; view: string; width: number; theme: "light" | "dark" | "native"; file: string; scroll?: { x: number; y: number } }
 
 /** Browsers tried in order; BIVY_CHROME overrides. Any Chromium works. */
 const CANDIDATES = [
@@ -131,16 +137,22 @@ export async function takeShots(views: RegisteredView[], request: ShotRequest, o
       else continue;
       for (const width of request.widths) for (const theme of request.themes) {
         const mobile = width < 600;
-        await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: mobile ? 844 : 800, deviceScaleFactor: mobile ? 2 : 1, mobile }, sessionId);
+        await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: request.height ?? (mobile ? 844 : 800), deviceScaleFactor: request.scale ?? (mobile ? 2 : 1), mobile }, sessionId);
         await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: theme }] }, sessionId);
         const loaded = cdp.once("Page.loadEventFired", sessionId, 15_000);
         await cdp.send("Page.navigate", { url: origin + request.path }, sessionId);
         await loaded;
         await new Promise((r) => setTimeout(r, 400)); // let fonts and first effects settle
+        let scroll: { x: number; y: number } | undefined;
+        if (request.scroll) {
+          const { result } = await cdp.send("Runtime.evaluate", { expression: `scrollTo(${Number(request.scroll.x) || 0}, ${Number(request.scroll.y) || 0}); [scrollX, scrollY]`, returnByValue: true }, sessionId);
+          scroll = { x: Number(result?.value?.[0]) || 0, y: Number(result?.value?.[1]) || 0 };
+          await new Promise((r) => setTimeout(r, 150));
+        }
         const { data } = await cdp.send("Page.captureScreenshot", { format: "png" }, sessionId);
         const file = path.join(outDir, `${entry.view.id.slice(0, 8)}-${width}-${theme}.png`);
         fs.writeFileSync(file, Buffer.from(data, "base64"));
-        shots.push({ viewId: entry.view.id, view: entry.view.name, width, theme, file });
+        shots.push({ viewId: entry.view.id, view: entry.view.name, width, theme, file, ...(scroll ? { scroll } : {}) });
       }
     }
     return shots;

@@ -17,7 +17,9 @@ const log=(level,text)=>post({type:'console',level,text:String(text).slice(0,500
 for(const level of ['error','warn']){const original=console[level];console[level]=function(...args){log(level,args.map(fmt).join(' '));return original.apply(this,args);};}
 addEventListener('error',e=>{if(e.message)log('error',e.message+(e.filename?' ('+e.filename.split('/').pop()+':'+e.lineno+')':''));},true);
 addEventListener('unhandledrejection',e=>log('error','Unhandled rejection: '+fmt(e.reason)));
-const route=()=>post({type:'route',path:location.pathname+location.search+location.hash});
+// Taps and keys since this page (or route) loaded: state a retaken picture may lack.
+let interacted=false;
+const route=()=>{interacted=false;post({type:'route',path:location.pathname+location.search+location.hash});};
 for(const name of ['pushState','replaceState']){const original=history[name];history[name]=function(...args){const result=original.apply(this,args);route();return result;};}
 addEventListener('popstate',route);addEventListener('hashchange',route);route();
 const selector=el=>{
@@ -79,6 +81,50 @@ function startPointing(){
   document.documentElement.append(layer,box);
   addEventListener('keydown',key,true);
 }
+for(const type of ['pointerdown','keydown'])addEventListener(type,e=>{if(!layer&&!(host&&e.composedPath?.().includes(host)))interacted=true;},true);
+// Draw (in the shell, over this page): where the page is, what state it holds
+// that a fresh browser on the machine wouldn't, and what's under each mark.
+const signals=()=>{
+  let storage=false;try{storage=localStorage.length+sessionStorage.length>0;}catch{}
+  const edited=[...document.querySelectorAll('input,textarea,select')].some(el=>el.type==='checkbox'||el.type==='radio'?el.checked!==el.defaultChecked:el.localName==='select'?[...el.options].some(o=>o.selected!==o.defaultSelected):el.type!=='hidden'&&el.value!==el.defaultValue);
+  const open=Boolean(document.querySelector('dialog[open],details[open],[aria-expanded="true"],[aria-modal="true"]'));
+  return {storage,cookies:Boolean(document.cookie),interacted,open,edited};
+};
+const drawState=()=>({type:'draw-state',scroll:{x:Math.round(scrollX),y:Math.round(scrollY)},viewport:{width:innerWidth,height:innerHeight},dpr:devicePixelRatio,
+  theme:matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light',path:location.pathname+location.search+location.hash,signals:signals()});
+/** Elements inside a mark (viewport rect): a grid sample, then the largest
+ * element under each hit that sits mostly inside the mark — circling a
+ * button names the button, not the bar it's in. A line through something
+ * falls back to what it crossed. Outermost first, at most eight. */
+const marked=r=>{
+  const hits=new Set();
+  for(let i=0;i<8;i++)for(let j=0;j<8;j++){
+    const x=Math.min(innerWidth-1,Math.max(0,r.x+r.width*(i+0.5)/8)),y=Math.min(innerHeight-1,Math.max(0,r.y+r.height*(j+0.5)/8));
+    const el=document.elementsFromPoint(x,y).find(n=>n!==layer&&n!==box&&n!==host);if(el)hits.add(el);
+  }
+  const big=innerWidth*innerHeight*0.6,page=n=>n===document.body||n===document.documentElement;
+  // Where an element's content is: a full-width block around "Total $102"
+  // is judged by its text, which is what a circle goes around.
+  const range=document.createRange();
+  const rectOf=n=>{const b=n.getBoundingClientRect();if(!n.firstChild||/^(img|svg|video|canvas|input|select|textarea|button)$/.test(n.localName))return b;range.selectNodeContents(n);const c=range.getBoundingClientRect();return c.width&&c.height?c:b;};
+  const inside=n=>{const b=rectOf(n),a=b.width*b.height;if(!a)return 0;const w=Math.max(0,Math.min(b.right,r.x+r.width)-Math.max(b.left,r.x)),h=Math.max(0,Math.min(b.bottom,r.y+r.height)-Math.max(b.top,r.y));return w*h/a;};
+  const area=n=>{const b=rectOf(n);return b.width*b.height;};
+  const picked=new Set();
+  for(const hit of hits){let best=null;for(let n=hit;n&&n.nodeType===1&&!page(n);n=n.parentElement){if(inside(n)>=0.6&&area(n)<big)best=n;else if(best)break;}if(best)picked.add(best);}
+  if(!picked.size)for(const hit of hits)if(!page(hit)&&area(hit)<big&&(hit.innerText||'').trim())picked.add(hit);
+  const list=[...picked].filter(n=>![...picked].some(o=>o!==n&&o.contains(n)))
+    .sort((a,b)=>{const p=a.getBoundingClientRect(),q=b.getBoundingClientRect();return p.top-q.top||p.left-q.left;});
+  return list.slice(0,8).map(el=>{const b=el.getBoundingClientRect();return {selector:selector(el).slice(0,300),tag:el.localName,
+    text:(el.innerText||el.getAttribute('aria-label')||el.getAttribute('alt')||'').trim().replace(/\\s+/g,' ').slice(0,120),
+    rect:{x:Math.round(b.left+scrollX),y:Math.round(b.top+scrollY),width:Math.round(b.width),height:Math.round(b.height)}};});
+};
+addEventListener('message',e=>{
+  if(!framed||e.origin!==SHELL||e.source!==parent)return;
+  const d=e.data||{},n=v=>Number.isFinite(+v)?+v:0;
+  if(d.type==='bivy:draw')post(drawState());
+  else if(d.type==='bivy:scroll'){scrollBy({left:n(d.dx),top:n(d.dy),behavior:'instant'});post({type:'scrolled',scroll:{x:Math.round(scrollX),y:Math.round(scrollY)}});}
+  else if(d.type==='bivy:marks'&&d.rect)post({type:'marked',id:n(d.id),elements:marked({x:n(d.rect.x),y:n(d.rect.y),width:n(d.rect.width),height:n(d.rect.height)})});
+});
 addEventListener('message',e=>{
   if(!framed||e.origin!==SHELL||e.source!==parent||e.data?.type!=='bivy:point')return;
   // Held: the layer goes when the finger lifts (see up).

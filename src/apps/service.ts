@@ -9,6 +9,9 @@ import os from "node:os";
 import path from "node:path";
 import { scanListeners } from "./listeners.js";
 import { takeShots, type Shot, type ShotRequest } from "./screenshot.js";
+import { approximate, composite, readStrokes, type PageSignals } from "./annotate.js";
+import { captureFrame, encodePng } from "./rfb.js";
+import { pngSize } from "./review.js";
 
 export interface AppPreviewProvider {
   readonly available?: boolean;
@@ -346,6 +349,56 @@ export class AppService {
     const run = this.shooting.catch(() => {}).then(() => this.screenshots.take(views, { widths, themes: [...new Set(themes)], path: page }, outDir));
     this.shooting = run;
     return { shots: await run };
+  }
+  /** Draw on the preview: the user's marks on a picture of what they saw.
+   * The picture is the Compare screenshot they drew on, a desktop app's
+   * current frame, or a web page retaken at their viewport, pixel ratio and
+   * scroll — "approximate" when the page may hold state a fresh browser
+   * doesn't. Returned to the client (over the session channel) as a PNG. */
+  async annotate(sessionId: string, input: {
+    appId: string; viewId: string; path?: string; viewport: { width: number; height: number };
+    scroll?: { x: number; y: number }; dpr?: number; theme?: "light" | "dark"; strokes: unknown; compare?: number; signals?: PageSignals;
+  }): Promise<{ image?: { data: string; mimeType: "image/png"; name: string; width: number; height: number }; approximate: boolean; screenshotsOff?: true }> {
+    const entry = this.registry.requireView(sessionId, input.appId, input.viewId);
+    if (entry.view.kind !== "web") throw new Error("Only previews can be drawn on.");
+    const strokes = readStrokes(input.strokes);
+    const whole = (n: unknown, min: number, max: number) => typeof n === "number" && Number.isFinite(n) && n >= min && n <= max;
+    // Compare's shot is drawn on at its on-screen size, which can be small.
+    if (!whole(input.viewport?.width, 40, 4000) || !whole(input.viewport?.height, 40, 8000)) throw new Error("Invalid viewport.");
+    const viewport = { width: Math.round(input.viewport.width), height: Math.round(input.viewport.height) };
+    const page = typeof input.path === "string" && input.path.startsWith("/") && !input.path.startsWith("//") && input.path.length <= 2048 ? input.path : entry.lastPath ?? "/";
+    const scroll = { x: whole(input.scroll?.x, 0, 1e6) ? input.scroll!.x : 0, y: whole(input.scroll?.y, 0, 1e6) ? input.scroll!.y : 0 };
+    const name = `${entry.app.name} ${page === "/" ? "" : page} marked.png`.replace(/[^\w .()-]+/g, "-").replace(/\s+/g, " ").trim();
+    const finish = (base: Buffer, offset: { x: number; y: number }, approx: boolean) => {
+      const png = composite(base, strokes, { scale: pngSize(base).width / viewport.width, offset });
+      return { image: { data: png.toString("base64"), mimeType: "image/png" as const, name, ...pngSize(png) }, approximate: approx };
+    };
+    // Compare: the exact frame they drew on, in its own coordinates.
+    if (input.compare !== undefined) {
+      const shot = Number.isInteger(input.compare) ? entry.shots?.[input.compare] : undefined;
+      if (!shot) throw new Error("That Compare screenshot is no longer kept. Open Compare again.");
+      return finish(shot.png, { x: 0, y: 0 }, approximate("exact"));
+    }
+    if (!this.screenshots.enabled()) return { approximate: false, screenshotsOff: true };
+    // A desktop app: its display's current frame is exactly what they saw.
+    if (entry.target.kind === "display") {
+      await this.windowShown(entry).catch(() => {});
+      if (!entry.display) throw new Error("The app isn't running, so there's nothing to draw on.");
+      const frame = await captureFrame(entry.display);
+      return finish(encodePng(frame.width, frame.height, frame.rgb), { x: 0, y: 0 }, approximate("exact"));
+    }
+    const outDir = path.join(os.tmpdir(), "bivy-shots", "annotate", entry.view.id);
+    const dpr = whole(input.dpr, 1, 3) ? Math.round(input.dpr! * 4) / 4 : 2;
+    const run = this.shooting.catch(() => {}).then(() => this.screenshots.take([entry], { widths: [viewport.width], themes: [input.theme === "dark" ? "dark" : "light"], path: page, height: viewport.height, scale: dpr, scroll }, outDir));
+    this.shooting = run;
+    const [shot] = await run;
+    if (!shot) throw new Error("Couldn't take a picture of the page.");
+    const base = fs.readFileSync(shot.file);
+    fs.rmSync(outDir, { recursive: true, force: true });
+    const landed = shot.scroll ?? scroll;
+    const scrolledTo = Math.abs(landed.x - scroll.x) <= 2 && Math.abs(landed.y - scroll.y) <= 2;
+    // Marks stay on the content they were drawn on, wherever the retake scrolled.
+    return finish(base, landed, approximate("retake", input.signals, scrolledTo));
   }
   /** The managed server's output, as an attachable terminal (starts it if needed). */
   async logs(sessionId: string, appId: string, viewId: string): Promise<OpenAppViewResult> {

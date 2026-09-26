@@ -7,6 +7,8 @@ import path from "node:path";
 import { once } from "node:events";
 import { AppRegistry } from "../../src/apps/registry.js";
 import { AppGateway } from "../../src/apps/gateway.js";
+import { AppService } from "../../src/apps/service.js";
+import { encodePng } from "../../src/apps/rfb.js";
 import http from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import { RemotePreview } from "../../src/apps/remote-preview.js";
@@ -17,6 +19,30 @@ import { PreviewRelay } from "../../services/relay/src/preview.js";
 async function pointAt(app: Page | FrameLocator, target: Locator): Promise<void> {
   await expect(app.locator('html > div[aria-hidden="true"]')).toHaveCount(2);
   await target.click({ force: true });
+}
+
+/** Bivy's real preview drawer (PreviewPeek) on a page of the web app, framing
+ * a real shell. `setup` stubs the client's edges (microphone, node commands);
+ * drafts reaching the composer are collected in `window.drafts`. */
+async function mountPeek(page: Page, webApp: { origin: string; transformIndexHtml(url: string, html: string): Promise<string> }, shellUrl: string, setup: string, props = "{}") {
+  // A fresh URL per mount: Vite caches a page's inline module by its URL, and
+  // a cached one would carry an earlier test's (spent) launch ticket.
+  const at = `/peek-test-${Math.random().toString(36).slice(2)}`;
+  const html = await webApp.transformIndexHtml(at, `<html><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module">
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { PreviewPeek } from '/src/components/PreviewPeek.tsx';
+    import { controller } from '/src/store/controller.ts';
+    import '/@fs/${path.resolve("packages/ui/tokens.css")}';
+    import '/src/styles.css';
+    controller.store.setStatus('online');
+    window.drafts = [];
+    controller.prefillComposer = (text, attachments = []) => { window.drafts.push(attachments.length ? { text, attachments: attachments.map(({ data, ...rest }) => ({ ...rest, bytes: data.length })) } : text); return true; };
+    ${setup}
+    createRoot(document.getElementById('root')).render(React.createElement(PreviewPeek, Object.assign({ url: ${JSON.stringify(shellUrl)}, name: 'Checkout', sessionId: 's', onClose() {}, onOpenInTab() {} }, ${props})));
+  </script></body></html>`);
+  await page.route(`${webApp.origin}${at}`, (route) => route.fulfill({ contentType: "text/html", body: html }));
+  await page.goto(`${webApp.origin}${at}`);
 }
 
 async function delivery(registry: AppRegistry, automatic: boolean) {
@@ -291,24 +317,11 @@ test("point and speak: hold the mic or long-press while pointing, and the words 
       const response = await route.fetch({ url: `http://127.0.0.1:${port}${url.pathname}${url.search}`, headers: { ...await request.allHeaders(), host: url.host }, maxRedirects: 0 }).catch(() => undefined);
       await (response ? route.fulfill({ response }) : route.abort()).catch(() => {});
     });
-    const shellUrl = gateway.open(id, `${webApp.origin}/sessions/s`);
-    const html = await webApp.transformIndexHtml("/speak-test", `<html><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module">
-      import React from 'react';
-      import { createRoot } from 'react-dom/client';
-      import { PreviewPeek } from '/src/components/PreviewPeek.tsx';
-      import { controller } from '/src/store/controller.ts';
-      import '/@fs/${path.resolve("packages/ui/tokens.css")}';
-      import '/src/styles.css';
-      controller.store.setStatus('online');
-      window.drafts = []; window.transcribed = [];
-      controller.prefillComposer = (text) => { window.drafts.push(text); return true; };
+    await mountPeek(page, webApp, gateway.open(id, `${webApp.origin}/sessions/s`), `
+      window.transcribed = [];
       controller.transcribe = async (audio, mimeType) => { window.transcribed.push({ bytes: audio.length, mimeType }); return 'give it more room above the home bar'; };
       // A microphone that hears a tone.
-      navigator.mediaDevices.getUserMedia = async () => { const ctx = new AudioContext(); const tone = ctx.createOscillator(); const out = ctx.createMediaStreamDestination(); tone.connect(out); tone.start(); return out.stream; };
-      createRoot(document.getElementById('root')).render(React.createElement(PreviewPeek, { url: ${JSON.stringify(shellUrl)}, name: 'Checkout', sessionId: 's', onClose() {}, onOpenInTab() {} }));
-    </script></body></html>`);
-    await page.route(`${webApp.origin}/speak-test`, (route) => route.fulfill({ contentType: "text/html", body: html }));
-    await page.goto(`${webApp.origin}/speak-test`);
+      navigator.mediaDevices.getUserMedia = async () => { const ctx = new AudioContext(); const tone = ctx.createOscillator(); const out = ctx.createMediaStreamDestination(); tone.connect(out); tone.start(); return out.stream; };`);
     const shell = page.frameLocator('iframe[title="Checkout"]');
     const app = shell.frameLocator('iframe[title="Checkout"]');
     await expect(app.getByRole("heading", { name: "Your bag" })).toBeVisible();
@@ -345,6 +358,110 @@ test("point and speak: hold the mic or long-press while pointing, and the words 
     await expect(shell.locator("#draft-context")).toContainText("Element: #pay");
     await expect(app.locator("#paid")).toHaveText("0");
     await expect(app.locator('html > div[aria-hidden="true"]')).toHaveCount(0);
+  } finally { gateway.close(); await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+// Draw on the preview, end to end: the real drawer frames the real shell and
+// app, and asks the real node service for the picture (the screenshot itself
+// is a stand-in; compositing is covered in test/app-annotate.test.ts).
+test("draw on the preview: marks freeze the app, name what's under them, and reach the composer with a picture", async ({ page, webApp }, testInfo) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bivy-draw-"));
+  const registry = new AppRegistry();
+  const gateway = new AppGateway(registry, "https://{app}.preview.example.net", () => [webApp.origin]);
+  gateway.server.listen(0, "127.0.0.1"); await once(gateway.server, "listening");
+  const port = (gateway.server.address() as { port: number }).port;
+  const requests: { scroll?: { x: number; y: number } }[] = [];
+  const take = async (views: { view: { id: string; name: string } }[], request: { widths: number[]; height: number; scale: number; scroll?: { x: number; y: number } }, outDir: string) => {
+    requests.push(request);
+    await fs.mkdir(outDir, { recursive: true });
+    const [w, h] = [Math.round(request.widths[0]! * request.scale), Math.round(request.height * request.scale)];
+    const file = path.join(outDir, "shot.png"); await fs.writeFile(file, encodePng(w, h, Buffer.alloc(w * h * 3, 240)));
+    return [{ viewId: views[0]!.view.id, view: views[0]!.view.name, width: request.widths[0]!, theme: "light" as const, file, scroll: request.scroll }];
+  };
+  const service = new AppService(registry, gateway, { start: async () => "t", has: () => true, close: () => {} }, { screenshots: { enabled: () => true, take: take as never } });
+  try {
+    await fs.writeFile(path.join(dir, "index.html"), '<!doctype html><html lang="en"><title>Checkout</title><body style="margin:0;font:16px sans-serif"><h1>Your bag</h1><div id="total" style="padding:8px">Total $102</div><input id="promo" aria-label="Promo code"><button id="pay" style="display:block;margin:16px 8px;padding:12px 24px" onclick="document.getElementById(\'paid\').textContent=String(+document.getElementById(\'paid\').textContent+1)">Pay now</button><output id="paid">0</output><div style="height:1600px"></div><a href="/terms">Terms</a></body></html>');
+    const app = service.publish("s", dir, { version: 1, name: "Checkout", views: [{ kind: "web", name: "Checkout", source: { kind: "static", directory: "." } }] });
+    const id = app.views[0]!.id;
+    await page.route("https://*.preview.example.net/**", async (route) => {
+      const request = route.request(); const url = new URL(request.url());
+      const response = await route.fetch({ url: `http://127.0.0.1:${port}${url.pathname}${url.search}`, headers: { ...await request.allHeaders(), host: url.host }, maxRedirects: 0 }).catch(() => undefined);
+      await (response ? route.fulfill({ response }) : route.abort()).catch(() => {});
+    });
+    await mountPeek(page, webApp, gateway.open(id, `${webApp.origin}/sessions/s`), `
+      controller.appCommand = async (kind, sessionId, fields) => kind === 'apps.annotate' ? window.annotateOnNode(fields) : {};`,
+      JSON.stringify({ appId: app.id, viewId: id }));
+    // Bound once the page is up, so it isn't injected into the preview's frames as they load.
+    await page.exposeFunction("annotateOnNode", (fields: Parameters<AppService["annotate"]>[1]) => service.annotate("s", fields));
+    const shell = page.frameLocator('iframe[title="Checkout"]');
+    const frame = shell.frameLocator('iframe[title="Checkout"]');
+    await expect(frame.getByRole("heading", { name: "Your bag" })).toBeVisible();
+
+    await shell.getByRole("button", { name: "Draw" }).click();
+    await expect(shell.getByRole("toolbar", { name: "Drawing tools" })).toBeVisible();
+    await expect(shell.getByRole("navigation", { name: "Bivy preview controls" })).toBeHidden();
+    // The app is frozen: a tap on Pay now while drawing never reaches it.
+    const pay = (await frame.locator("#pay").boundingBox())!;
+    const total = (await frame.locator("#total").boundingBox())!;
+    await page.mouse.click(pay.x + pay.width / 2, pay.y + pay.height / 2);
+    await expect(frame.locator("#paid")).toHaveText("0");
+    // Circle the total and Pay now with the pen.
+    const [left, top, right, bottom] = [total.x + 2, total.y - 6, pay.x + pay.width + 30, pay.y + pay.height + 8];
+    await page.mouse.move(left, top); await page.mouse.down();
+    for (const [x, y] of [[right, top], [right, bottom], [left, bottom], [left, top + 2]]) await page.mouse.move(x!, y!, { steps: 6 });
+    await page.mouse.up();
+    await expect(shell.getByRole("button", { name: "Done" })).toBeEnabled();
+    await page.screenshot({ path: testInfo.outputPath("draw-marked.png") });
+    // A wheel (two fingers, on a phone) scrolls the page under the marks.
+    await page.mouse.wheel(0, 300);
+    await expect.poll(() => frame.locator("body").evaluate(() => scrollY)).toBeGreaterThan(0);
+    await page.mouse.wheel(0, -300);
+    await expect.poll(() => frame.locator("body").evaluate(() => scrollY)).toBe(0);
+    await shell.getByRole("button", { name: "Done" }).click();
+    const context = shell.locator("#draft-context");
+    await expect(context).toContainText('- #total ("Total $102")');
+    await expect(context).toContainText('- #pay ("Pay now")');
+    await expect(context).not.toContainText("h1");
+    await shell.getByRole("textbox", { name: "What should change?" }).fill("Give this more room");
+    await page.screenshot({ path: testInfo.outputPath("draw-draft.png") });
+    await shell.getByRole("button", { name: "Add to chat" }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).drafts.length)).toBe(1);
+    const [draft] = await page.evaluate(() => (window as any).drafts);
+    // Top to bottom: everything inside the circle, and nothing it only crossed.
+    expect(draft.text).toMatch(/^Give this more room\n\nIn the app preview "Checkout" \(page \/, viewport \d+×\d+\), marked:\n- #total \("Total \$102"\)\n- #promo \("Promo code"\)\n- #pay \("Pay now"\)\nMarks \(page px\): pen /);
+    expect(draft.attachments).toEqual([expect.objectContaining({ kind: "image", mimeType: "image/png", name: "Checkout marked.png", bytes: expect.any(Number) })]);
+    expect(draft.text).not.toContain("approximate");
+
+    // A page holding state a fresh browser won't have: the picture is approximate.
+    await frame.getByRole("textbox", { name: "Promo code" }).fill("SPRING");
+    await shell.getByRole("button", { name: "Draw" }).click();
+    await shell.getByRole("radio", { name: "Box" }).click();
+    await page.mouse.move(pay.x - 6, pay.y - 6); await page.mouse.down(); await page.mouse.move(pay.x + pay.width + 6, pay.y + pay.height + 6, { steps: 4 }); await page.mouse.up();
+    await shell.getByRole("button", { name: "Done" }).click();
+    await shell.getByRole("button", { name: "Add to chat" }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).drafts.length)).toBe(2);
+    const second = (await page.evaluate(() => (window as any).drafts))[1];
+    expect(second.attachments[0].name).toBe("Checkout marked (approximate).png");
+    expect(second.text).toMatch(/^In the app preview[\s\S]*- #pay \("Pay now"\)\nMarks \(page px\): box [\s\S]*\nPicture: retaken on the machine/);
+    expect(requests.at(-1)?.scroll).toEqual({ x: 0, y: 0 });
+
+    // Compare: mark the "after" screenshot itself — the exact frame, no retake.
+    const grey = (v: number) => ({ revision: v, at: v, png: encodePng(780, 1688, Buffer.alloc(780 * 1688 * 3, 100 + v * 50)) });
+    registry.getView(id)!.shots = [grey(0), grey(1)];
+    const shots = requests.length;
+    await shell.getByRole("button", { name: "Reload" }).click();
+    await shell.getByRole("button", { name: "Compare" }).click();
+    await shell.getByRole("button", { name: "Draw on “now”" }).click();
+    const after = (await shell.getByRole("img", { name: "After the agent’s last change" }).boundingBox())!;
+    await page.mouse.move(after.x + 10, after.y + 10); await page.mouse.down(); await page.mouse.move(after.x + 60, after.y + 40, { steps: 4 }); await page.mouse.up();
+    await shell.getByRole("button", { name: "Done" }).click();
+    await expect(shell.locator("#draft-context")).toContainText("On the Compare screenshot after the agent’s last change");
+    await shell.getByRole("button", { name: "Add to chat" }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).drafts.length)).toBe(3);
+    const third = (await page.evaluate(() => (window as any).drafts))[2];
+    expect(third.attachments[0].name).toBe("Checkout marked.png");
+    expect(third.text).toMatch(/Marks \(screenshot px\): pen 10,10–60,40$/);
+    expect(requests.length).toBe(shots);
   } finally { gateway.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });
 

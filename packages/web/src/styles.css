@@ -3091,6 +3091,10 @@ select.picker-search { appearance: auto; }
 .preview-peek-stage { position: relative; block-size: 100%; }
 /* Point and speak: the recording bar floats over the top of the preview while
    the finger stays on the shell's mic, so nothing under it moves. */
+/* Draw: making the marked-up picture, or the choice when screenshots are off. */
+.preview-marking { position: absolute; inset-inline: var(--space-2); bottom: var(--space-2); z-index: var(--z-sticky); box-shadow: var(--shadow-lg); border-radius: var(--radius-md); background: var(--surface); }
+.preview-marking .banner { margin: 0; }
+.preview-marking .banner-actions { flex-wrap: wrap; }
 .preview-voice { position: absolute; inset-inline: var(--space-2); top: var(--space-2); z-index: var(--z-sticky); padding: var(--space-1) var(--space-2); border: 1px solid var(--line-strong); border-radius: var(--radius-full); background: var(--surface); box-shadow: var(--shadow-lg); }
 .app-terminal-status { padding: var(--space-2) var(--space-4); margin: 0; color: var(--muted); font-size: var(--text-sm); }
 .artifacts-group { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }

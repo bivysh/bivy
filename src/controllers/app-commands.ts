@@ -32,6 +32,7 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
     "apps.showMe": (msg) => service.present(String(msg.sessionId), { target: typeof msg.appId === "string" ? msg.appId : undefined, trigger: "asked" }),
     "apps.mute": (msg) => service.mute(String(msg.sessionId)),
     "apps.reviewMode": (msg) => service.setReviewMode(String(msg.sessionId), String(msg.appId), msg.mode as ReviewCardMode),
+    "apps.annotate": (msg) => service.annotate(String(msg.sessionId), msg as never),
     "apps.clearNotes": (msg) => service.clearNotes(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
     "apps.logs": (msg) => service.logs(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
     "apps.share": (msg) => service.share(String(msg.sessionId), String(msg.appId), String(msg.viewId)),

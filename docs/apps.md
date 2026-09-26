@@ -432,6 +432,29 @@ own bottom bar.
   encrypted session channel (Settings → Voice input), or to the browser's own
   dictation when no key is set. It never passes through the preview origin. A
   preview opened in a tab has no mic; use the composer's.
+- **Draw** (in the preview drawer inside Bivy): the app freezes under a
+  marking layer — nothing you draw reaches it — and you circle, scribble
+  (**Pen**) or **Box** what's wrong; **Undo**, **Clear**, **Done**. Two fingers
+  (or a mouse wheel) scroll the page, and marks stay on the content. Done opens
+  the draft box (type, or use the mic): its context names the elements inside
+  your marks (by their content, so circling "Total $102" names that line, not
+  the whole row), the page and viewport, and each mark's bounds. **Add to
+  chat** puts your words and that context in the composer with a picture of
+  what you marked, as an ordinary image attachment you can open or remove.
+  - The picture is made on the machine and fetched by the Bivy page over the
+    encrypted session channel: for a web page, the local Chrome retakes it at
+    your viewport, pixel ratio and scroll, and the marks are drawn on top. It
+    is labelled **approximate** when the page may hold state a fresh browser
+    doesn't (storage, cookies, typed input, an open menu or dialog, anything
+    you did since the page loaded) or couldn't scroll to where you were; the
+    marks and elements are exact either way. A desktop app's picture is its
+    current frame, and **Draw on "now"** in Compare marks that screenshot
+    itself, so both are exact.
+  - Needs agent screenshots for the picture. With them off, you choose: turn
+    them on, or add your words, marks and elements without a picture.
+  - Strokes, elements and pictures never go through the preview origin: the
+    shell hands them to the Bivy page by `postMessage`. The marks use the
+    `--annotate` design token, the same colour in both themes.
 - **Console**: errors and warnings from the page, with a count on the pill.
   **Send to agent…** drafts them the same way.
 - **Full / Tablet / Phone** (wide screens): constrains the app to 768 or 390 px.

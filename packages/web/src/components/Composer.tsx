@@ -358,10 +358,11 @@ export function Composer({
   // Contextual actions draft text instead of silently spending an agent turn.
   // Append rather than replace so an in-progress thought is never discarded.
   useEffect(() => {
-    return controller.onComposerPrefill((draft) => {
+    return controller.onComposerPrefill((draft, added) => {
       const clean = draft.trim();
-      if (!clean) return;
-      setText((previous) => previous.trim() ? `${previous.trimEnd()}\n\n${clean}` : clean);
+      if (added.length) setAttachments((previous) => [...previous, ...added]);
+      if (!clean && !added.length) return;
+      if (clean) setText((previous) => previous.trim() ? `${previous.trimEnd()}\n\n${clean}` : clean);
       setMenuDismissed(false);
       wantsFocusRef.current = true;
       requestAnimationFrame(() => {

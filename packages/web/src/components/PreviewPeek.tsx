@@ -5,6 +5,13 @@ import { controller, useAppState } from "../store/useStore.js";
 import { seedSessionDraft } from "../shareTarget.js";
 import { Sheet } from "./Sheet.js";
 import { Dictation, dictationEngine, NO_DICTATION } from "./Dictation.js";
+import { Spinner } from "./Spinner.js";
+import type { PromptAttachment } from "@bivy/core";
+
+/** Marks drawn in the preview, as the shell hands them over (see apps.annotate). */
+type Mark = { path?: string; viewport: { width: number; height: number }; scroll?: { x: number; y: number }; dpr?: number; theme?: string; strokes: unknown[]; compare?: number; signals?: Record<string, boolean> };
+type Annotated = { image?: { data: string; mimeType: string; name: string }; approximate: boolean; screenshotsOff?: boolean };
+const APPROXIMATE = "Picture: retaken on the machine, so it may not show this page’s state (a cart, a sign-in, an open menu). The marks and elements are exact.";
 
 const BLOCKED_KEY = "bivy.previewPeekBlocked";
 
@@ -21,8 +28,10 @@ export function peekBlocked(): boolean {
  *  origin: audio goes to the node over the encrypted session channel (or
  *  stays in the browser's own dictation), and only the transcript goes back
  *  to the shell's draft box, where it stays editable. */
-export function PreviewPeek({ url, name, sessionId, onClose, onOpenInTab }: {
+export function PreviewPeek({ url, name, sessionId, appId, viewId, onClose, onOpenInTab }: {
   url: string; name: string; sessionId: string; onClose: () => void; onOpenInTab: () => void;
+  /** The view shown: Draw asks the machine for a picture of it. */
+  appId?: string; viewId?: string;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [blocked, setBlocked] = useState(false);
@@ -31,12 +40,42 @@ export function PreviewPeek({ url, name, sessionId, onClose, onOpenInTab }: {
   // `stop` counts releases: bumping it finishes the recording like ✓.
   const [listening, setListening] = useState<{ stop: number } | null>(null);
   const origin = new URL(url).origin;
+  // Draw: the marked-up picture is being made, or needs the user's choice.
+  const [marking, setMarking] = useState<null | { state: "working" } | { state: "off" | "failed"; text: string; mark: Mark; message?: string }>(null);
 
   const toShell = useCallback((message: Record<string, unknown>) => {
     frame.current?.contentWindow?.postMessage({ source: "bivy", ...message }, origin);
   }, [origin]);
-  // Tell the shell whether it may show its mic (again when that changes).
-  useEffect(() => { toShell({ type: "voice", available: Boolean(engine) }); }, [engine, toShell]);
+  const canDraw = Boolean(appId && viewId);
+  const capabilities = useCallback(() => { toShell({ type: "voice", available: Boolean(engine) }); toShell({ type: "draw", available: canDraw }); }, [engine, canDraw, toShell]);
+  // Tell the shell whether it may show its mic and Draw (again when that changes).
+  useEffect(() => { capabilities(); }, [capabilities]);
+
+  const deliver = useCallback((text: string, attachments: PromptAttachment[] = []) => {
+    if (!controller.prefillComposer(text, attachments)) seedSessionDraft(localStorage, sessionId, text);
+    setMarking(null);
+    onClose();
+  }, [sessionId, onClose]);
+  /** The user's words and marks, plus a picture of what they marked: made on
+   *  the machine and fetched over the session channel, never the preview's. */
+  const addMarked = useCallback(async (text: string, mark: Mark) => {
+    if (!appId || !viewId) return deliver(text);
+    setMarking({ state: "working" });
+    try {
+      const result = await controller.appCommand("apps.annotate", sessionId, { appId, viewId, ...mark }) as unknown as Annotated;
+      if (result.screenshotsOff || !result.image) { setMarking({ state: "off", text, mark }); return; }
+      const image = result.image;
+      const attachment: PromptAttachment = { kind: "image", mimeType: image.mimeType, data: image.data, size: Math.round((image.data.length * 3) / 4),
+        name: result.approximate ? image.name.replace(/\.png$/, " (approximate).png") : image.name };
+      deliver(result.approximate ? `${text}\n${APPROXIMATE}` : text, [attachment]);
+    } catch (e) { setMarking({ state: "failed", text, mark, message: e instanceof Error ? e.message : "Couldn’t take the picture." }); }
+  }, [appId, viewId, sessionId, deliver]);
+  // Turning screenshots on is the user's explicit choice here, never automatic.
+  const enableShots = async (text: string, mark: Mark) => {
+    setMarking({ state: "working" });
+    try { await controller.setNodeSettings({ appScreenshots: true }); await addMarked(text, mark); }
+    catch (e) { setMarking({ state: "failed", text, mark, message: e instanceof Error ? e.message : "Couldn’t turn on screenshots." }); }
+  };
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
@@ -51,7 +90,9 @@ export function PreviewPeek({ url, name, sessionId, onClose, onOpenInTab }: {
         try { localStorage.setItem(BLOCKED_KEY, "1"); } catch { /* storage unavailable */ }
         setBlocked(true);
       } else if (data.type === "hello") {
-        toShell({ type: "voice", available: Boolean(engine) });
+        capabilities();
+      } else if (data.type === "annotation" && typeof data.text === "string" && (data as { mark?: unknown }).mark) {
+        void addMarked(data.text.slice(0, 8000), (data as unknown as { mark: Mark }).mark);
       } else if (data.type === "listen") {
         if (data.state === "start") {
           if (engine) setListening((current) => current ?? { stop: 0 });
@@ -62,7 +103,7 @@ export function PreviewPeek({ url, name, sessionId, onClose, onOpenInTab }: {
     };
     addEventListener("message", onMessage);
     return () => removeEventListener("message", onMessage);
-  }, [origin, sessionId, onClose, engine, toShell]);
+  }, [origin, sessionId, onClose, engine, toShell, capabilities, addMarked]);
 
   const done = () => { setListening(null); toShell({ type: "listening", on: false }); };
   return <Sheet title={name} ariaLabel={`Preview: ${name}`} onClose={onClose} size="large" autoFocusSearch={false}
@@ -78,7 +119,22 @@ export function PreviewPeek({ url, name, sessionId, onClose, onOpenInTab }: {
           <iframe ref={frame} className="preview-peek" src={url} title={name} referrerPolicy="no-referrer"
             sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups"
             // Delegated to Bivy's preview shell, which passes it only to desktop-app viewers.
-            allow="clipboard-read; clipboard-write" onLoad={() => toShell({ type: "voice", available: Boolean(engine) })} />
+            allow="clipboard-read; clipboard-write" onLoad={capabilities} />
+          {marking && <div className="preview-marking" role={marking.state === "working" ? "status" : "alert"}>
+            {marking.state === "working"
+              ? <div className="banner inline" data-tone="neutral"><Spinner size="sm" /><span className="banner-text">Adding a picture of what you marked…</span></div>
+              : <div className="banner inline" data-tone={marking.state === "off" ? "neutral" : "danger"}>
+                  <span className="banner-text">{marking.state === "off"
+                    ? "Screenshots are off on this machine, so there’s no picture. Your marks and the elements you marked still go with your words."
+                    : `Couldn’t add the picture: ${marking.message}`}</span>
+                  <span className="banner-actions">
+                    {marking.state === "off"
+                      ? <button className="btn primary" onClick={() => void enableShots(marking.text, marking.mark)}>Turn on and add picture</button>
+                      : <button className="btn" onClick={() => void addMarked(marking.text, marking.mark)}>Try again</button>}
+                    <button className="btn ghost" onClick={() => deliver(marking.text)}>Add without picture</button>
+                  </span>
+                </div>}
+          </div>}
         </div>}
   </Sheet>;
 }
