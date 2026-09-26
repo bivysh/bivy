@@ -29,7 +29,7 @@ client together rather than accidentally falling back to browser storage.
 | `controlPlaneOrigin` | unset/null | Optional HTTPS origin, without credentials/path/query/fragment; selects account/discovery/share API origin, not authentication or billing policy |
 | `connectionMode` | `auto` | `account` forces account/relay routing and disallows direct/solo/hash-token/pasted account overrides; independent of platform |
 | `authenticationMethods` | `password`, `github`, `email` | Intersected with server-advertised methods; cannot enable a method the server disables |
-| `accountExtension` | `visible` | `hidden` suppresses opaque deployment-extension presentation/actions and blocks their dispatch |
+| `accountExtension` | `visible` | `facts` shows read-only extension facts (e.g. plan/usage) but suppresses and blocks actions; facts matching `accountMessageRules` are omitted. `hidden` suppresses all extension presentation/actions and blocks their dispatch |
 | `signInDescription` | ordinary client copy | Optional deployment-owned sign-in description |
 | `unavailableSignInMessage` | ordinary client copy | Optional message when no allowed server login method exists |
 | `accountUnavailableMessage` | generic unavailable text | Optional replacement for errors whose extension actions are suppressed |

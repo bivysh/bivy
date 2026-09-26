@@ -19,7 +19,7 @@ import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { setCloudMachinesEnabled, useCloudMachinesEnabled } from "../cloudMachines.js";
 import { requestSignIn } from "../signInRequest.js";
 import { clientConfiguration } from "../client-config.js";
-import { accountOrigin, hasNativeSubscriptions, isPackagedClient, openAccountAction, openNativeSubscriptions, showAccountExtension } from "../packaged-client.js";
+import { accountExtensionFacts, accountOrigin, hasNativeSubscriptions, isPackagedClient, openAccountAction, openNativeSubscriptions, showAccountExtension } from "../packaged-client.js";
 import { getAppIconBadgeEnabled, setAppIconBadgeEnabled, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "../notificationSettings.js";
 import { CheckIcon, ChevronRightIcon, CloseIcon, CopyIcon } from "./UiIcons.js";
 import { writeClipboard } from "../clipboard.js";
@@ -2178,6 +2178,8 @@ function AccountPanel() {
     reloadDevices();
   }, []);
   const counts = me?.counts;
+  const extensionFacts = accountExtensionFacts(me?.extension?.facts);
+  const extensionActions = showAccountExtension() ? me?.extension?.actions ?? [] : [];
   return (
     <div className="settings-form">
       {confirm && (
@@ -2191,6 +2193,12 @@ function AccountPanel() {
         />
       )}
       {err && <div className="banner inline" data-tone="danger">{err}</div>}
+      {me?.account?.email && (
+        <div className="settings-toggle-row">
+          <span className="muted">Signed in as</span>
+          <strong>{me.account.email}</strong>
+        </div>
+      )}
       <div className="stat-grid">
         <Stat label="Machines" value={String(counts?.nodes ?? nodes.length)} />
         <Stat label="Devices" value={String(counts?.devices ?? devices.length)} />
@@ -2209,22 +2217,22 @@ function AccountPanel() {
           <p className="muted">Purchases and restores are handled by your app store.</p>
         </div>
       )}
-      {me?.extension && showAccountExtension() && (
+      {me?.extension && (extensionFacts.length > 0 || extensionActions.length > 0) && (
         <div className="settings-section">
           <h4 className="settings-subhead">{me.extension.title || "Account service"}</h4>
           {/* The extension's facts are opaque label/value pairs — render them
               through the standard settings row (label left, value right, hairline
               separators) rather than a bespoke layout. */}
           <div>
-            {(me.extension.facts ?? []).map((fact) => (
+            {extensionFacts.map((fact) => (
               <div className="settings-toggle-row" key={fact.id}>
                 <span className="muted">{fact.label}</span>
                 <strong>{fact.value}</strong>
               </div>
             ))}
           </div>
-          <div className="card-actions">
-            {(me.extension.actions ?? []).map((action) => (
+          {extensionActions.length > 0 && <div className="card-actions">
+            {extensionActions.map((action) => (
               <button
                 type="button"
                 key={action.id}
@@ -2239,7 +2247,7 @@ function AccountPanel() {
                 }}
               >{accountAction === action.id ? "Opening…" : action.label}</button>
             ))}
-          </div>
+          </div>}
         </div>
       )}
       <div className="settings-section">

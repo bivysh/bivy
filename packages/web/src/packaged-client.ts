@@ -2,7 +2,7 @@
 // Generic native platform adapter. Deployment/product policy lives in the
 // explicit client configuration, not in platform or URL detection.
 import { clientConfiguration } from "./client-config.js";
-export { showAccountExtension } from "./client-config.js";
+export { accountExtensionFacts, showAccountExtension } from "./client-config.js";
 export interface PackagedBridge {
   /** Hydrate storage from the native secure store before the controller exists. */
   ready(): Promise<void>;

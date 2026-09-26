@@ -7,7 +7,7 @@ export interface ClientConfiguration {
   controlPlaneOrigin: string | null;
   connectionMode: "auto" | "account";
   authenticationMethods: readonly ("password" | "github" | "email")[];
-  accountExtension: "visible" | "hidden";
+  accountExtension: "visible" | "facts" | "hidden";
   signInDescription?: string;
   unavailableSignInMessage?: string;
   accountUnavailableMessage?: string;
@@ -53,7 +53,7 @@ export function parseClientConfiguration(raw?: string): ClientConfiguration {
     version: 1, platform, controlPlaneOrigin: origin,
     connectionMode: choice("connectionMode", ["auto", "account"], "auto"),
     authenticationMethods: methods as ClientConfiguration["authenticationMethods"],
-    accountExtension: choice("accountExtension", ["visible", "hidden"], "visible"),
+    accountExtension: choice("accountExtension", ["visible", "facts", "hidden"], "visible"),
     signInDescription: text("signInDescription"), unavailableSignInMessage: text("unavailableSignInMessage"),
     accountUnavailableMessage: text("accountUnavailableMessage"), accountDeletionMessage: text("accountDeletionMessage"), accountMessageRules: rules,
   };
@@ -73,8 +73,16 @@ export function configuredAuthentication<T extends { enabled: boolean; github: b
     email: methods.email && config.authenticationMethods.includes("email"),
   };
 }
+/** Whether opaque extension actions (e.g. checkout/portal) may be shown and dispatched. */
 export function showAccountExtension(config = clientConfiguration): boolean {
   return config.accountExtension === "visible";
+}
+/** Read-only extension facts (plan, usage). `facts` shows these without actions;
+ * facts matching an account message rule are omitted rather than rewritten. */
+export function accountExtensionFacts<T extends { label: string; value: string }>(facts: readonly T[] | undefined, config = clientConfiguration): T[] {
+  if (config.accountExtension === "hidden") return [];
+  if (config.accountExtension === "visible") return [...(facts ?? [])];
+  return (facts ?? []).filter(fact => accountPresentationMessage(`${fact.label} ${fact.value}`, config) === `${fact.label} ${fact.value}`);
 }
 export function accountPresentationMessage(message: string, config = clientConfiguration): string {
   const rule = config.accountMessageRules.find(rule => rule.terms.some(term => message.toLowerCase().includes(term.toLowerCase())));
