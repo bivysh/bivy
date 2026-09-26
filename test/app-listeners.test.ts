@@ -16,7 +16,7 @@ import { CLIENT_COMMAND_SCHEMAS } from "../src/protocol/client-command-schemas.j
 
 /** A real server process, started the way an agent would: cwd in a directory. */
 async function server(cwd: string, host = "127.0.0.1"): Promise<{ child: ChildProcess; port: number }> {
-  const child = spawn(process.execPath, ["-e", `require("http").createServer((q,s)=>s.end("ok")).listen(0,${JSON.stringify(host)},function(){console.log(this.address().port)})`], { cwd, stdio: ["ignore", "pipe", "inherit"] });
+  const child = spawn(process.execPath, ["-e", `require("http").createServer((q,s)=>s.end("ok")).listen(0,process.argv[1],function(){console.log(this.address().port)})`, host], { cwd, stdio: ["ignore", "pipe", "inherit"] });
   const [chunk] = await once(child.stdout!, "data");
   return { child, port: Number(String(chunk).trim()) };
 }
