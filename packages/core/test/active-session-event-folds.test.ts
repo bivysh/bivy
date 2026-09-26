@@ -40,6 +40,17 @@ describe("active-session pure event folds", () => {
     expect(input.working).toBe(true);
   });
 
+  it("folds a notice's action list, and an older node's single action", () => {
+    const input = {
+      activeSessionId: "s1", working: false, workingLabel: "", opening: false,
+      usage: null, changes: null, changesHistory: [], checkpoints: [], activeTitle: "", github: {},
+    };
+    const limit = foldActiveSessionEvent(input, { type: "session.notice", sessionId: "s1", message: "Hit a limit.", actions: ["fork", "retry-at-reset:2026-09-26T12:00:00Z"] }, 1);
+    expect(limit.commands[0]).toMatchObject({ kind: "entry", role: "system", actions: ["fork", "retry-at-reset:2026-09-26T12:00:00Z"] });
+    const legacy = foldActiveSessionEvent(input, { type: "session.notice", sessionId: "s1", message: "Restarted.", action: "/new" }, 2);
+    expect(legacy.commands[0]).toMatchObject({ actions: ["/new"] });
+  });
+
   it("interleaves prose and tools immutably", () => {
     const initial = transcriptValue();
     const update = foldTranscriptEvent(initial, { type: "message_update", message: { role: "assistant", content: [{ type: "text", text: "First" }] } }, 10);

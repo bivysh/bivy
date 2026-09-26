@@ -16,6 +16,7 @@ import { listRuntimes, catalogRuntimes, agentInstallSpec, canonicalAgentId, inva
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
+import { detectSessionLimit, limitResumePlan, sessionLimitNotice } from "./policy/session-limit.js";
 import { activeRulesetFor } from "./runtime/ruleset-store.js";
 import { createRulesetController } from "./controllers/rulesets.js";
 import { createAuditLog, readAuditEvents } from "./audit/index.js";
@@ -2406,6 +2407,10 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     if (record.turnAttention) turnWatchdog.resolveTurnAttention(record, "stop");
     else abortSessionRecord(record, ctx.broadcast);
   },
+  "session.limit_retry"(msg) {
+    const record = resolveSession(msg.sessionId);
+    if (record) setSessionLimitRetry(record, msg.enabled === true);
+  },
   "session.turn_attention.resolve"(msg) {
     const record = resolveSession(msg.sessionId);
     const action = msg.action === "stop" ? "stop" : msg.action === "continue" ? "continue" : undefined;
@@ -3067,6 +3072,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       // The user is driving this turn manually — supersede any pending auto-resume
       // that was scheduled after a prior limit so it can't re-fire on top of them.
       clearSessionResume(record.id);
+      record.limitHit = undefined;
       await turnWatchdog.promptWithWatchdog(record, agentPrompt, record.lastPromptOptions);
     }).catch((error) => {
       // Mirror the HTTP path (see the /prompt route): a rejected turn after
@@ -7487,12 +7493,15 @@ function scheduleSessionResume(record: SessionRecord, plan: ResumePlan): boolean
   metadata.setResumeAt(record.id, plan.resumeAt);
   metadata.setResumeAttempts(record.id, attempts + 1);
   const when = Date.parse(plan.resumeAt);
-  const cond = plan.condition.replace(/_/g, " ");
+  const at = Number.isFinite(when)
+    ? new Date(when).toLocaleString("en-US", { timeZone: "UTC", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })
+    : plan.resumeAt;
   broadcast({
     type: "session.notice",
     sessionId: record.id,
     level: "info",
-    message: `Hit a ${cond} limit — I'll resume this automatically when it resets (${plan.resumeAt}).`,
+    message: `I'll retry this automatically when the limit resets (${at} UTC).`,
+    actions: ["cancel-resume"],
   });
   armSessionResumeTimer(record.id, Number.isFinite(when) ? when : Date.now());
   return true;
@@ -7526,6 +7535,24 @@ async function driveSessionResume(id: string): Promise<void> {
   } catch (error) {
     console.warn(`[resume] auto-resume after a provider limit failed for ${id}`, error);
   }
+}
+
+/** The user's answer to a surfaced limit: opt in to retrying the turn when the
+ *  window resets (scheduled through the same durable resume path the policy
+ *  uses), or cancel a pending retry. */
+function setSessionLimitRetry(record: SessionRecord, enabled: boolean): void {
+  if (!enabled) {
+    clearSessionResume(record.id);
+    metadata.setResumeAttempts(record.id, 0);
+    broadcast({ type: "session.notice", sessionId: record.id, level: "info", message: "Automatic retry cancelled." });
+    return;
+  }
+  const plan = record.limitHit && limitResumePlan(record.limitHit);
+  if (!plan) {
+    broadcast({ type: "session.notice", sessionId: record.id, level: "info", message: "There's no pending limit to retry — send a message to continue." });
+    return;
+  }
+  scheduleSessionResume(record, plan);
 }
 
 /** Re-arm (or immediately fire) durable auto-resume markers. Runs once at boot
@@ -7844,6 +7871,13 @@ function attachSessionListeners(record: SessionRecord) {
         scheduleAdvertise();
         broadcast({ type: "session.failed", sessionId: record.id, failedAt: record.lastFailureAt });
         if (messageError) broadcast({ type: "session.error", sessionId: record.id, error: sessionAgentError(record, messageError) });
+        // A usage/rate limit nothing recovered automatically: offer the ways past
+        // it — fork to another agent now, or retry when the window resets.
+        record.limitHit = detectSessionLimit(turnError, { resetsAtHint: limitResetHint(record, Date.now()) });
+        if (record.limitHit) {
+          const notice = sessionLimitNotice(getRuntime(record.runtimeId).displayName, record.limitHit);
+          broadcast({ type: "session.notice", sessionId: record.id, level: "warn", ...notice });
+        }
         // If the terminal error is an auth failure (expired key/token → 4xx),
         // also raise the sign-in sheet for the failing provider.
         maybeSignalAuthRequired(record, turnError);
@@ -11406,6 +11440,13 @@ app.post("/api/session/abort", (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+app.post("/api/session/limit-retry", (req, res) => {
+  const record = resolveSession(req.body?.sessionId);
+  if (!record) return res.status(404).json({ error: "No active session" });
+  setSessionLimitRetry(record, req.body?.enabled === true);
+  res.json({ ok: true });
 });
 
 app.post("/api/session/turn-attention", (req, res, next) => {

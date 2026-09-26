@@ -281,10 +281,10 @@ export interface TranscriptEntry {
    *  attachmentsByText below), so this is populated from the client's own
    *  send-time cache, not from history data. */
   attachments?: PromptAttachment[];
-  /** A slash command the node suggested for this notice (e.g. "/new"), rendered
-   *  as an inline action button on a system entry so the suggestion is tappable
-   *  instead of just describing a command the user would have to type. */
-  action?: string;
+  /** Actions the node suggested for this notice (e.g. "/new", "fork"), rendered
+   *  as inline buttons on a system/error entry so the suggestion is tappable
+   *  instead of just describing something the user would have to do. */
+  actions?: string[];
   /** Resolved AttachmentRefs for this (assistant) entry's remote markdown images
    *  (`![alt](https://…)`), keyed by the exact URL the markdown referenced — see
    *  inlineImagesByUrl / withInlineImageRefs below. ChatView's hydrate effect
@@ -2341,7 +2341,7 @@ export class SessionStore {
       if (activeFold.patch) this.set(activeFold.patch as AppStatePatch);
       for (const command of activeFold.commands) {
         if (command.kind === "row") this.updateSessionRow(command.sessionId, command.patch);
-        else if (command.kind === "entry") this.pushEntry({ id: nextId(), role: command.role, text: command.text, ...(command.action ? { action: command.action } : {}) });
+        else if (command.kind === "entry") this.pushEntry({ id: nextId(), role: command.role, text: command.text, ...(command.actions?.length ? { actions: command.actions } : {}) });
         else if (command.kind === "model-auth" && this.state.connection.currentNodeId) this.setNeedsModelAuth({ nodeId: this.state.connection.currentNodeId, provider: command.provider, reason: command.reason });
         else if (command.kind === "rename") this.renameSessionLocal(command.sessionId, command.name);
         else if (command.kind === "global-error") this.set({ error: command.message });

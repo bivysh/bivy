@@ -551,6 +551,8 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .hljs-addition { color: var(--syntax-addition); }
 .msg.system { align-self: center; color: var(--muted); font-size: 13px; font-style: italic; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; }
 .msg.system .system-text { display: block; }
+.entry-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); font-style: normal; }
+.msg.system .entry-actions { justify-content: center; }
 .msg.thinking { align-self: flex-start; color: var(--muted); font-size: 13px; border-left: 2px solid var(--line-strong); padding-left: 10px; }
 .msg.error {
   align-self: stretch; display: flex; gap: 8px; align-items: flex-start;

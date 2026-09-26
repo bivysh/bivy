@@ -173,8 +173,35 @@ function MessageAttachments({ attachments }: { attachments: PromptAttachment[] }
 function actionLabel(action: string): string {
   if (action === "/new") return "New session";
   if (action === "/resume") return "Resume";
+  if (action === "fork") return "Fork to another agent";
+  if (action === "cancel-resume") return "Cancel auto-retry";
   if (action.startsWith("connect-provider:")) return "Connect a provider";
+  if (action.startsWith("retry-at-reset:")) return `Retry automatically at ${formatResetTime(action.slice("retry-at-reset:".length))}`;
   return `Run ${action}`;
+}
+
+/** A limit's reset instant in the viewer's local time — just the clock when it's
+ *  today, with the weekday when it's further out (a weekly window). */
+function formatResetTime(iso: string): string {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return "reset";
+  const today = at.toDateString() === new Date().toDateString();
+  return at.toLocaleString(undefined, today ? { hour: "numeric", minute: "2-digit" } : { weekday: "short", hour: "numeric", minute: "2-digit" });
+}
+
+/** Inline buttons for the actions a notice/error suggests. The first is the
+ *  primary suggestion; any others are secondary alternatives. */
+function EntryActions({ actions, onAction, size }: { actions?: string[]; onAction?: (action: string) => void; size?: "sm" }) {
+  if (!actions?.length || !onAction) return null;
+  return (
+    <div className="entry-actions">
+      {actions.map((action, i) => (
+        <button key={action} type="button" className={["btn", size, i === 0 ? "primary" : ""].filter(Boolean).join(" ")} onClick={() => onAction(action)}>
+          {actionLabel(action)}
+        </button>
+      ))}
+    </div>
+  );
 }
 
 /** Clipboard glyph (two overlapping sheets) — the resting state of a copy
@@ -403,11 +430,7 @@ const EntryView = memo(function EntryView({
     return (
       <div className="msg system">
         <span className="system-text" dangerouslySetInnerHTML={{ __html: toHtml(entry.text) }} />
-        {entry.action && onAction && (
-          <button type="button" className="btn sm primary" onClick={() => onAction(entry.action!)}>
-            {actionLabel(entry.action)}
-          </button>
-        )}
+        <EntryActions actions={entry.actions} onAction={onAction} size="sm" />
       </div>
     );
   if (entry.role === "thinking")
@@ -418,11 +441,7 @@ const EntryView = memo(function EntryView({
     return (
       <div className="card" data-tone="danger" role="alert">
         <strong>{summary}</strong>
-        {entry.action && onAction && (
-          <button type="button" className="btn primary" onClick={() => onAction(entry.action!)}>
-            {actionLabel(entry.action)}
-          </button>
-        )}
+        <EntryActions actions={entry.actions} onAction={onAction} />
         {details && (
           <details className="settings-disclosure">
             <summary className="settings-disclosure-summary">Details</summary>

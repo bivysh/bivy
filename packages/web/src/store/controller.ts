@@ -4082,6 +4082,13 @@ export class AppController {
     this.send({ kind: "session.turn_attention.resolve", sessionId, action });
   }
 
+  /** Opt the active session in to (or out of) retrying its last turn
+   *  automatically when the usage limit it hit resets. */
+  setLimitRetry(enabled: boolean): void {
+    const active = this.store.getState().activeSession.activeSessionId;
+    if (active) this.send({ kind: "session.limit_retry", sessionId: active, enabled });
+  }
+
   // --- Queued follow-ups (issue #154) -------------------------------------
   //
   // A prompt sent to an already-busy session used to go straight over the

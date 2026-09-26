@@ -36,6 +36,7 @@ export interface Command extends CommandBase {
     | "prompt"
     | "abort"
     | "session.turn_attention.resolve"
+    | "session.limit_retry"
     | "session.command.invoke"
     | "session.pause"
     | "session.resume"
