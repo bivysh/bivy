@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-09-26
+
 ### Added
 
 - Pick up on one device where another left off. When you open a session that another of your devices drove in the last half hour, a note above the composer says where ("Last active on Terminal on my-laptop · 2m ago"). If that device left an unsent draft, **Continue draft** moves it into an empty composer, so a half-typed prompt follows you from laptop to phone. It never blocks anything: whoever sends next is driving. The terminal lock screen also says which device last typed into the terminal. Devices name themselves ("iPhone", "Mac", "Terminal on my-laptop"); older nodes simply show nothing.
