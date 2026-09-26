@@ -132,7 +132,9 @@ const [ticket,startPage='']=location.hash.slice(1).split('~');history.replaceSta
 let metadata,currentPath='/';
 // Peek: framed by a Bivy client, which owns closing and the composer.
 const embedded=parent!==window;
-const toBivy=m=>parent.postMessage(Object.assign({source:'bivy-preview'},m),new URL(metadata.returnTo).origin);
+// The framing client's own origin: a packaged app's differs from returnTo's.
+// (frame-ancestors already limits who that can be.)
+const toBivy=m=>parent.postMessage(Object.assign({source:'bivy-preview'},m),location.ancestorOrigins?.[0]||new URL(metadata.returnTo).origin);
 const storageKey='bivy-preview';
 const safePath=p=>typeof p==='string'&&p.startsWith('/')&&!p.startsWith('//')&&p.length<=2048?p:'/';
 const open=(path,message)=>{status.hidden=false;status.textContent=message;resetConsole();frame.src=metadata.origin+safePath(path);};

@@ -5,11 +5,14 @@
  * to the trusted shell that frames it, and everything it reports is untrusted
  * app data: the shell shows it and turns it into drafts, never into actions.
  * Agent-neutral: it observes the browser, not the framework or the agent. */
-export function inspectorScript(shellOrigin: string, reviewer = false): string {
+export function inspectorScript(shellOrigin: string, reviewer = false, embedded = false): string {
   return `(()=>{
 // Framed by the shell: report to it. Opened from a shared link: offer notes.
 const framed=parent!==window,REVIEWER=${reviewer};
 if(window.__bivyInspector||(!framed&&!REVIEWER))return;window.__bivyInspector=1;
+// Framed inside Bivy: cookies the page sets are partitioned, like the ones its
+// server sets (see partitionCookie in the gateway), or Safari drops them.
+if(${embedded}){const d=Object.getOwnPropertyDescriptor(Document.prototype,'cookie');if(d&&d.set)Object.defineProperty(document,'cookie',{configurable:true,get(){return d.get.call(document);},set(v){const [pair,...rest]=String(v).split(';');d.set.call(document,[pair,...rest.filter(a=>!['samesite','secure','partitioned'].includes(a.split('=',1)[0].trim().toLowerCase())),' Secure',' SameSite=None',' Partitioned'].join(';'));}});}
 const SHELL=${JSON.stringify(shellOrigin)};
 const post=m=>{if(!framed)return;try{parent.postMessage(Object.assign({source:'bivy-inspector'},m),SHELL);}catch{}};
 const fmt=v=>{if(v instanceof Error)return v.name+': '+v.message;if(typeof v==='string')return v;try{return JSON.stringify(v);}catch{return String(v);}};
