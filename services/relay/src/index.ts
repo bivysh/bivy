@@ -243,14 +243,14 @@ const httpServer = createServer((req, res) => {
     // internal docker network only — Caddy blocks /metrics publicly. See
     // docs/ops/monitoring.md in bivysh/bivy-cloud.
     res.writeHead(200, { "content-type": PROMETHEUS_CONTENT_TYPE });
-    res.end(renderRelayMetrics(metrics, rooms.size, shardId));
+    res.end(renderRelayMetrics(metrics, rooms.size, shardId, previews?.metrics()));
     return;
   }
   if (req.url === "/metrics.json") {
     // Backcompat: the pre-Prometheus JSON counters, kept for any tooling that
     // still reads them.
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ ok: true, shardId, rooms: rooms.size, ...metrics }));
+    res.end(JSON.stringify({ ok: true, shardId, rooms: rooms.size, ...metrics, preview: previews?.metrics() }));
     return;
   }
   if (req.method === "POST" && req.url === "/internal/run-updated") {

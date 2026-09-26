@@ -67,7 +67,7 @@ async function fixture() {
     const service = new AppService(registry, delivery, { start: async () => "term", has: () => true, close: () => {} });
     return { service, delivery, registry, control, origin, tickets };
   }
-  return { port, dir, asset, node, async close() {
+  return { port, dir, asset, node, previews, async close() {
     for (const item of remote) item.close();
     previews.close();
     for (const client of clients) client.terminate();
@@ -100,9 +100,14 @@ test("publishing becomes previewable through automatic outbound delivery; no nod
     const launch = new URL(opened.url);
     assert.ok(launch.hostname.split(".")[0].length <= 63);
     const { url, cookie } = await grant(f.port, launch);
+    const tickets = a.tickets.length;
+    const before = f.previews.metrics().bytesFromNode;
     assert.equal((await request(f.port, url.host, "/")).status, 401);
     assert.equal((await request(f.port, url.host, "/", { headers: { cookie } })).body.toString(), "<h1>It works</h1>");
     assert.deepEqual((await request(f.port, url.host, "/large.bin", { headers: { cookie } })).body, f.asset);
+    // One kept-alive node stream carries a view's successive requests, and is counted.
+    assert.equal(a.tickets.length - tickets, 1);
+    assert.ok(f.previews.metrics().bytesFromNode - before > f.asset.length);
     a.service.remove("session", app.id);
     assert.equal((await request(f.port, url.host, "/", { headers: { cookie } })).status, 404);
   } finally { await f.close(); }

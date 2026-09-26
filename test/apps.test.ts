@@ -7,6 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import { once } from "node:events";
+import { gunzipSync } from "node:zlib";
 import { WebSocket, WebSocketServer } from "ws";
 import { AppRegistry } from "../src/apps/registry.js";
 import { TerminalManager } from "../src/terminal.js";
@@ -386,6 +387,39 @@ test("static page loads fall back for client-side routes; assets still 404", asy
     const missing = await request(port, second.url.host, "/nope", { headers: { cookie: second.cookie, "sec-fetch-dest": "document" } });
     assert.equal(missing.status, 404); assert.match(missing.body, /<h1>Not here<\/h1>$/);
   } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("app content is browser-cacheable but private and always revalidated; snapshots compress", async () => {
+  const registry = new AppRegistry(); const gateway = new AppGateway(registry, "https://{app}.preview.example.net");
+  const dir = workspace(); const port = await listen(gateway.server);
+  const backend = http.createServer((_req, res) => { res.writeHead(200, { "cache-control": "public, max-age=60, s-maxage=600" }); res.end("ok"); });
+  const backendPort = await listen(backend);
+  try {
+    const script = "console.log('preview');\n".repeat(200);
+    fs.writeFileSync(path.join(dir, "dist/app.js"), script);
+    const id = registry.publish("s", dir, staticManifest).views[0].id;
+    const { url, cookie } = await grant(gateway, port, id);
+    const gzipped = await new Promise<{ headers: http.IncomingHttpHeaders; body: Buffer }>((resolve, reject) => {
+      http.get({ agent: false, hostname: "127.0.0.1", port, path: "/app.js", headers: { host: url.host, cookie, "accept-encoding": "gzip, br" } }, (res) => {
+        const chunks: Buffer[] = []; res.on("data", (chunk: Buffer) => chunks.push(chunk)); res.on("end", () => resolve({ headers: res.headers, body: Buffer.concat(chunks) }));
+      }).on("error", reject);
+    });
+    assert.equal(gzipped.headers["content-encoding"], "gzip");
+    assert.equal(gunzipSync(gzipped.body).toString(), script);
+    assert.equal(gzipped.headers["cache-control"], "private, no-cache");
+    const etag = String(gzipped.headers.etag);
+    assert.equal((await request(port, url.host, "/app.js", { headers: { cookie, "if-none-match": etag } })).status, 304);
+    // Revalidation still passes the grant check, so revoked access can't reuse the cache.
+    assert.equal((await request(port, url.host, "/app.js", { headers: { "if-none-match": etag } })).status, 401);
+    fs.writeFileSync(path.join(dir, "dist/app.js"), "changed");
+    registry.touch("s");
+    const changed = await request(port, url.host, "/app.js", { headers: { cookie, "if-none-match": etag } });
+    assert.equal(changed.status, 200); assert.equal(changed.body, "changed");
+    const service = registry.publish("s", dir, { ...staticManifest, views: [{ kind: "web", name: "Live", source: { kind: "service", port: backendPort } }] });
+    const access = await grant(gateway, port, service.views[0].id);
+    // An app's long-lived policy can't make the preview show a stale copy.
+    assert.equal((await request(port, access.url.host, "/", { headers: { cookie: access.cookie } })).headers["cache-control"], "private, no-cache");
+  } finally { backend.close(); gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("a view's stable address sends signed-out visits through Bivy and back to the same page", async () => {
