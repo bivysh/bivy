@@ -253,8 +253,11 @@ export class AppService {
     return { ok: true };
   }
   /** A view by app or view ID or name; by default the one opened last, else the newest app's first. */
+  private webViews(sessionId: string): RegisteredView[] {
+    return this.registry.list(sessionId).flatMap((app) => app.views.filter((view) => view.kind === "web").map((view) => this.registry.getView(view.id)!)).filter(Boolean);
+  }
   private pickView(sessionId: string, target?: string): RegisteredView {
-    const views = this.registry.list(sessionId).flatMap((app) => app.views.filter((view) => view.kind === "web").map((view) => this.registry.getView(view.id)!)).filter(Boolean);
+    const views = this.webViews(sessionId);
     if (!views.length) throw new Error("This session has no web views to present. Publish one with bivy app publish, or preview a detected server.");
     if (target) {
       const wanted = target.trim().toLowerCase();
@@ -476,6 +479,21 @@ export class AppService {
     if (this.registry.requireView(sessionId, appId, viewId).view.kind !== "web") throw new Error("Only web views have preview links.");
     if (!this.gateway) throw new Error("Bivy's preview service is unavailable on this connection.");
     return this.gateway.share(viewId);
+  }
+  /** `bivy app share`: mints a share link for a web view picked by app and/or
+   * view ID or name, like `present` (default: the one opened last). */
+  shareView(sessionId: string, input: { app?: string; view?: string }): ShareAppViewResult & { appId: string; viewId: string; app: string; view: string } {
+    let entry: RegisteredView;
+    if (input.view) {
+      const wantedApp = input.app?.trim().toLowerCase();
+      const scope = this.webViews(sessionId).filter((candidate) => !wantedApp || candidate.app.id === wantedApp || candidate.app.name.toLowerCase() === wantedApp);
+      if (wantedApp && !scope.length) throw new Error(`No app called "${input.app}" with web views in this session. Run bivy app list to see them.`);
+      const wanted = input.view.trim().toLowerCase();
+      const found = scope.find((candidate) => candidate.view.id === wanted) ?? scope.find((candidate) => candidate.view.name.toLowerCase() === wanted);
+      if (!found) throw new Error(`No web view called "${input.view}"${input.app ? ` in "${input.app}"` : ""}. Run bivy app list to see them.`);
+      entry = found;
+    } else entry = this.pickView(sessionId, input.app);
+    return { ...this.share(sessionId, entry.app.id, entry.view.id), appId: entry.app.id, viewId: entry.view.id, app: entry.app.name, view: entry.view.name };
   }
   clearNotes(sessionId: string, appId: string, viewId: string): { ok: true } {
     delete this.registry.requireView(sessionId, appId, viewId).notes;

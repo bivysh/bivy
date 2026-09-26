@@ -28,7 +28,7 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
     signals: Type.Optional(Type.Record(Type.String(), Type.Boolean())) }),
   "apps.clearNotes": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),
   "apps.logs": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),
-  "apps.share": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),
+  "apps.share": Type.Object({ ...request, ...session, appId: Type.Optional(Type.String({ maxLength: 200 })), viewId: Type.Optional(Type.String()), view: Type.Optional(Type.String({ maxLength: 200 })) }),
   "apps.revoke": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),
   "apps.remove": Type.Object({ ...request, ...session, appId: Type.String() }),
   "credentials.native.preview": Type.Object({ ...request, label: Type.Optional(Type.String({ maxLength: 100 })) }),
