@@ -30,6 +30,9 @@ export interface SessionNewDedupe<T> {
    *  `create()` and remember it. Without a requestId there's nothing to key on,
    *  so `create()` runs unconditionally. */
   run(requestId: string | undefined, create: () => Promise<T>): Promise<T>;
+  /** Whether `requestId` is in flight or recently handled — i.e. `run` would
+   *  join the earlier result instead of calling `create()`. */
+  has(requestId: string | undefined): boolean;
   /** Number of tracked entries (in-flight + not-yet-evicted). For tests/metrics. */
   size(): number;
 }
@@ -62,5 +65,5 @@ export function createSessionNewDedupe<T>(options: SessionNewDedupeOptions = {})
     return p;
   }
 
-  return { run, size: () => inflight.size };
+  return { run, has: (requestId) => Boolean(requestId && inflight.has(requestId)), size: () => inflight.size };
 }

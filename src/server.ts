@@ -2143,10 +2143,13 @@ const dedupeSessionNew = (requestId: string | undefined, create: () => Promise<S
 // generic key->promise cache as above, reused for a different key) — see
 // issue #154's queued follow-ups. A client that isn't sure whether a queued
 // item's send actually reached the node before the socket dropped (see
-// AppController.retryStuckFollowups) resends it verbatim after reconnecting;
+// FollowupCoordinator.retrySending) resends it verbatim after reconnecting;
 // this makes that safe by collapsing a retried clientMessageId onto the
-// original broadcast + turn instead of double-prompting the runtime.
-const promptDedupe = createSessionNewDedupe<void>();
+// original broadcast + turn instead of double-prompting the runtime. The key is
+// kept for a day, not session.new's 10 minutes: a phone backgrounded mid-send
+// can reconnect long after the turn ended, and an expired key turned its
+// retry into a fresh, duplicate turn at the bottom of the chat.
+const promptDedupe = createSessionNewDedupe<void>({ ttlMs: 24 * 60 * 60_000 });
 const dedupePrompt = (clientMessageId: string | undefined, run: () => Promise<void>) =>
   promptDedupe.run(clientMessageId, run);
 
@@ -3048,7 +3051,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       relay?.sendEvent({ type: "integrations.updated", integrations: integrations.list() });
     }
   },
-  async prompt(msg) {
+  async prompt(msg, ctx) {
     const text = String(msg.text ?? "").trim();
     const { images, imageNotes, imageRefs, files } = attachmentsFrom(msg.attachments);
     if (!text && !images.length && !files.length) return;
@@ -3099,6 +3102,14 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     eventLog.appendAttachments(record.id, promptText, [...imageRefs, ...fileRefs]);
     const agentPrompt = promptForAgent(record, promptText);
     const cmid = typeof msg.clientMessageId === "string" && msg.clientMessageId ? msg.clientMessageId : undefined;
+    // A retry of a prompt we already took: the caller missed our echo (that is
+    // why it retried), so acknowledge it again — to the caller only, since
+    // other clients already rendered the first one. Without this the client
+    // keeps the message "sending" and resends it on every reconnect.
+    if (promptDedupe.has(cmid)) {
+      ctx.reply({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: cmid, retry: true });
+      return;
+    }
     void dedupePrompt(cmid, async () => {
       broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: msg.clientMessageId });
       void sessionNamer.maybeNameSession(record, promptText);
