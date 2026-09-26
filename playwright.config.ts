@@ -10,6 +10,7 @@ const singleViewport = [
   "**/chat-attachments.spec.ts",
   "**/pwa-lifecycle.spec.ts",
   "**/library.spec.ts",
+  "**/share-landing.spec.ts",
 ];
 
 // Specs whose layout, touch targets or visual baselines differ on a phone.
