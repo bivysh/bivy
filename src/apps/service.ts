@@ -10,7 +10,8 @@ import path from "node:path";
 import { scanListeners } from "./listeners.js";
 import { takeShots, type Shot, type ShotRequest } from "./screenshot.js";
 import { approximate, composite, readStrokes, type PageSignals } from "./annotate.js";
-import { captureFrame, encodePng } from "./rfb.js";
+import { captureFrame, encodePng, sendInput } from "./rfb.js";
+import { inputEvents, readAction } from "./input.js";
 import { pngSize } from "./review.js";
 
 export interface AppPreviewProvider {
@@ -31,7 +32,8 @@ export interface AppTerminalProvider {
 /** Private displays for desktop views (see display.ts). */
 export interface AppDisplayProvider {
   unavailable(): string | undefined;
-  ensure(id: string, name: string, scale?: number): Promise<{ socket: string; env: Record<string, string>; wm: { count: number } }>;
+  /** `launch`: a command the program is started through, if the display needs one. */
+  ensure(id: string, name: string, scale?: number): Promise<{ socket: string; env: Record<string, string>; wm: { count: number }; launch?: string[] }>;
   stop(id: string): void;
 }
 /** Where review cards go: the server stores screenshots as encrypted
@@ -57,6 +59,8 @@ interface Run {
 const NO_DISPLAYS: AppDisplayProvider = { unavailable: () => "Desktop app views aren't available on this machine.", ensure: () => Promise.reject(new Error("Desktop app views aren't available on this machine.")), stop: () => {} };
 /** How long a screenshot waits for a desktop app's first window. */
 const WINDOW_WAIT_MS = 15_000;
+/** How long an app gets to react to input before its picture is taken. */
+const AFTER_INPUT_MS = 400;
 
 /** Composes view providers; registry never spawns processes and the gateway
  * never knows about terminals. New providers can extend open/remove here. */
@@ -256,14 +260,15 @@ export class AppService {
   private webViews(sessionId: string): RegisteredView[] {
     return this.registry.list(sessionId).flatMap((app) => app.views.filter((view) => view.kind === "web").map((view) => this.registry.getView(view.id)!)).filter(Boolean);
   }
-  private pickView(sessionId: string, target?: string): RegisteredView {
-    const views = this.webViews(sessionId);
-    if (!views.length) throw new Error("This session has no web views to present. Publish one with bivy app publish, or preview a detected server.");
+  private pickView(sessionId: string, target?: string, desktop = false): RegisteredView {
+    const views = this.webViews(sessionId).filter((entry) => !desktop || entry.target.kind === "display");
+    const noun = desktop ? "desktop app" : "web view";
+    if (!views.length) throw new Error(desktop ? "This session has no desktop apps. Publish one with bivy app run -- <command>." : "This session has no web views to present. Publish one with bivy app publish, or preview a detected server.");
     if (target) {
       const wanted = target.trim().toLowerCase();
       const found = views.find((entry) => [entry.app.id, entry.view.id].includes(wanted))
         ?? views.find((entry) => entry.view.name.toLowerCase() === wanted) ?? views.find((entry) => entry.app.name.toLowerCase() === wanted);
-      if (!found) throw new Error(`No web view called "${target}" in this session. Run bivy app list to see them.`);
+      if (!found) throw new Error(`No ${noun} called "${target}" in this session. Run bivy app list to see them.`);
       return found;
     }
     return views.reduce((best, entry) => (entry.openedAt ?? 0) > (best.openedAt ?? 0) || ((entry.openedAt ?? 0) === (best.openedAt ?? 0) && entry.app.createdAt > best.app.createdAt) ? entry : best);
@@ -354,6 +359,24 @@ export class AppService {
     this.shooting = run;
     return { shots: await run };
   }
+  /** Computer use: an agent clicks, types, presses keys and scrolls in one of
+   * its desktop apps, in the pixels of the app's screenshot, the way a viewer
+   * would. Starts the app if needed. With screenshots on, returns the app as
+   * it looks afterwards, so the agent sees what its action did. */
+  async act(sessionId: string, target: string | undefined, input: unknown): Promise<{ width: number; height: number; shot?: Shot; message: string }> {
+    const action = readAction(input);
+    const entry = this.pickView(sessionId, target, true);
+    if (!entry.display) await this.windowShown(entry);
+    if (!entry.display) throw new Error("The app isn't running. Check its Logs in the Apps sheet.");
+    const { width, height } = await sendInput(entry.display, inputEvents(action));
+    if (!this.screenshots.enabled()) return { width, height, message: "Done. Agent screenshots are off on this machine, so there's no picture of the result: bivy config set sessions.appScreenshots true" };
+    await new Promise((r) => setTimeout(r, AFTER_INPUT_MS));
+    const outDir = path.join(os.tmpdir(), "bivy-shots", sessionId.replace(/[^A-Za-z0-9_-]/g, "_"), String(Date.now()));
+    const run = this.shooting.catch(() => {}).then(() => this.screenshots.take([entry], { widths: [], themes: [], path: "/" }, outDir));
+    this.shooting = run;
+    const [shot] = await run;
+    return { width, height, shot, message: "Done. The shot is the app now." };
+  }
   /** Draw on the preview: the user's marks on a picture of what they saw.
    * The picture is the Compare screenshot they drew on, a desktop app's
    * current frame, or a web page retaken at their viewport, pixel ratio and
@@ -428,7 +451,8 @@ export class AppService {
     if (target.kind !== "display") throw new Error("This view has no program.");
     return this.displays.ensure(entry.view.id, entry.app.name, entry.displayScale).then((display) => {
       entry.display = display.socket;
-      return { command: target.command, args: target.args, workspace: target.workspace, env: display.env, name: `${entry.app.name} · ${entry.view.name}` };
+      const [command, ...args] = [...display.launch ?? [], target.command, ...target.args];
+      return { command: command!, args, workspace: target.workspace, env: display.env, name: `${entry.app.name} · ${entry.view.name}` };
     });
   }
   /** Services start synchronously; a desktop app waits for its display. */

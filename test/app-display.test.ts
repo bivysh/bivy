@@ -14,6 +14,10 @@ import { AppService, type AppDisplayProvider } from "../src/apps/service.js";
 import { AppGateway } from "../src/apps/gateway.js";
 import { DisplayHost, findXvnc } from "../src/apps/display.js";
 import { captureFrame } from "../src/apps/rfb.js";
+import { MacDisplayHost } from "../src/apps/macos-display.js";
+import { inflateSync, constants as zlibConstants } from "node:zlib";
+import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
 import type { AppManifest } from "../packages/core/src/apps.js";
 
 const manifest: AppManifest = { version: 1, name: "Editor", views: [{ kind: "display", name: "Window", command: "my-editor", args: ["--new"], restartOnChange: true }] };
@@ -21,10 +25,10 @@ const until = async (check: () => boolean) => { for (let i = 0; i < 400 && !chec
 
 test("desktop views start their display at the viewer's density, then the app; restart it on exit and after changes; stop both on remove", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-display-"));
-  const live = new Set<string>(); const started: { command: string; env?: Record<string, string> }[] = []; const stopped: string[] = [];
-  const terminals = { start: async (spec: { command: string; env?: Record<string, string> }) => { const id = `t${started.length}`; started.push(spec); live.add(id); return id; }, has: (id: string) => live.has(id), close: (id: string) => { live.delete(id); } };
+  const live = new Set<string>(); const started: { command: string; args?: string[]; env?: Record<string, string> }[] = []; const stopped: string[] = [];
+  const terminals = { start: async (spec: { command: string; args?: string[]; env?: Record<string, string> }) => { const id = `t${started.length}`; started.push(spec); live.add(id); return id; }, has: (id: string) => live.has(id), close: (id: string) => { live.delete(id); } };
   const scales: (number | undefined)[] = [];
-  const displays: AppDisplayProvider = { unavailable: () => undefined, ensure: async (_id, _name, scale) => { scales.push(scale); return { socket: "/run/vnc.sock", env: { DISPLAY: ":100" }, wm: { count: 1 } }; }, stop: (id) => { stopped.push(id); } };
+  const displays: AppDisplayProvider = { unavailable: () => undefined, ensure: async (_id, _name, scale) => { scales.push(scale); return { socket: "/run/vnc.sock", env: { DISPLAY: ":100" }, wm: { count: 1 }, launch: ["/bin/launcher", "run", "--"] }; }, stop: (id) => { stopped.push(id); } };
   const gateway = { open: () => "https://view-x.preview.example.net/__bivy/open#t", share: () => ({ url: "", expiresAt: 0 }), revoke: () => {} };
   try {
     const refused = new AppService(new AppRegistry(), gateway, terminals, { displays: { ...displays, unavailable: () => "Needs Linux." } });
@@ -39,7 +43,7 @@ test("desktop views start their display at the viewer's density, then the app; r
     await service.open("s", app.id, viewId, undefined, false, 2);
     await until(() => started.length === 1);
     assert.equal(scales[0], 2, "a 2× phone gets a 2× display");
-    assert.equal(started[0].command, "my-editor");
+    assert.deepEqual([started[0].command, started[0].args], ["/bin/launcher", ["run", "--", "my-editor", "--new"]], "started through the display's launcher, when it has one");
     assert.equal(started[0].env?.DISPLAY, ":100");
     assert.equal(registry.getView(viewId)!.display, "/run/vnc.sock", "the gateway can find the display");
     live.delete("t0"); // the app exits
@@ -168,11 +172,17 @@ test("a real 2× display fits windows, centers dialogs, grows for wide ones, and
     const main = client.window(300, 200);
     const dialog = client.window(400, 300, { parent: main });
     await until(() => display.wm.count === 2);
-    assert.deepEqual(await client.geometry(main), [0, 0, 2560, 1600], "a window fills the display");
-    assert.deepEqual(await client.geometry(dialog), [1080, 650, 400, 300], "a dialog keeps its size, centered");
+    // The WM configures over its own connection; the server may answer ours first.
+    const settled = async (id: number, expected: number[]) => {
+      let geometry: number[] = [];
+      for (let i = 0; i < 100 && JSON.stringify(geometry = await client.geometry(id)) !== JSON.stringify(expected); i++) await new Promise((r) => setTimeout(r, 20));
+      return geometry;
+    };
+    assert.deepEqual(await settled(main, [0, 0, 2560, 1600]), [0, 0, 2560, 1600], "a window fills the display");
+    assert.deepEqual(await settled(dialog, [1080, 650, 400, 300]), [1080, 650, 400, 300], "a dialog keeps its size, centered");
     const wide = client.window(100, 100, { min: [3000, 900] });
     await until(() => display.wm.size[0] === 3000);
-    assert.deepEqual(await client.geometry(wide), [0, 0, 3000, 1600], "the screen grows instead of cutting it off");
+    assert.deepEqual(await settled(wide, [0, 0, 3000, 1600]), [0, 0, 3000, 1600], "the screen grows instead of cutting it off");
     const frame = await captureFrame(display.socket);
     assert.deepEqual([frame.width, frame.height, frame.rgb.length], [3000, 1600, 3000 * 1600 * 3]);
     client.close();
@@ -180,4 +190,111 @@ test("a real 2× display fits windows, centers dialogs, grows for wide ones, and
     host.stop("view");
     assert.equal(fs.existsSync(dir), false, "the display's cookie and socket are removed");
   } finally { host.stopAll(); }
+});
+
+/** A VNC server that completes the handshake as an 800×600 display and records what viewers send. */
+async function fakeDisplay(socketPath: string) {
+  const received: Buffer[] = [];
+  const server = net.createServer((socket) => {
+    let stage = 0;
+    socket.write("RFB 003.008\n");
+    socket.on("data", (data: Buffer) => {
+      if (stage === 0) { stage = 1; socket.write(Buffer.from([1, 1])); }
+      else if (stage === 1) { stage = 2; socket.write(Buffer.alloc(4)); }
+      else if (stage === 2) {
+        stage = 3;
+        const init = Buffer.alloc(24); init.writeUInt16BE(800, 0); init.writeUInt16BE(600, 2);
+        socket.write(init);
+      } else received.push(data);
+    });
+  });
+  server.listen(socketPath); await once(server, "listening");
+  return { server, events: () => Buffer.concat(received) };
+}
+
+test("agents use a desktop app like a viewer does: clicks and key combos in screenshot pixels, then a picture of the result", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-display-"));
+  const vnc = await fakeDisplay(path.join(dir, "vnc.sock"));
+  const live = new Set<string>();
+  const terminals = { start: async () => { live.add("t"); return "t"; }, has: (id: string) => live.has(id), close: (id: string) => { live.delete(id); } };
+  const displays: AppDisplayProvider = { unavailable: () => undefined, ensure: async () => ({ socket: path.join(dir, "vnc.sock"), env: {}, wm: { count: 1 } }), stop: () => {} };
+  const shot = { viewId: "v", view: "Window", width: 800, theme: "native" as const, file: "/tmp/after.png" };
+  const gateway = { open: () => "", share: () => ({ url: "", expiresAt: 0 }), revoke: () => {} };
+  try {
+    const service = new AppService(new AppRegistry(), gateway, terminals, { displays, screenshots: { enabled: () => true, take: async () => [shot] } });
+    await assert.rejects(service.act("s", undefined, { kind: "click", x: 1, y: 1 }), /no desktop apps/);
+    service.publish("s", dir, manifest);
+
+    const result = await service.act("s", "editor", { kind: "click", x: 10, y: 20 });
+    assert.deepEqual(result.shot, shot, "the agent sees what its click did");
+    await service.act("s", undefined, { kind: "key", keys: "cmd+shift+s" });
+    await until(() => vnc.events().length >= 18 + 6 * 8);
+    const events = vnc.events();
+    const pointers = [0, 6, 12].map((at) => [events[at], events[at + 1], events.readUInt16BE(at + 2), events.readUInt16BE(at + 4)]);
+    assert.deepEqual(pointers, [[5, 0, 10, 20], [5, 1, 10, 20], [5, 0, 10, 20]], "move there, press, release");
+    const keys = Array.from({ length: 6 }, (_, i) => [events[18 + i * 8 + 1], events.readUInt32BE(18 + i * 8 + 4)]);
+    assert.deepEqual(keys, [[1, 0xffeb], [1, 0xffe1], [1, 0x53], [0, 0x53], [0, 0xffe1], [0, 0xffeb]], "modifiers held around a capital S");
+
+    await assert.rejects(service.act("s", undefined, { kind: "click", x: 900, y: 10 }), /outside the app, which is 800×600/);
+    await assert.rejects(service.act("s", undefined, { kind: "key", keys: "hyper+s" }), /Unknown modifier/);
+  } finally { vnc.server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("the macOS helper serves a display the way noVNC reads it: resize handshake, zlib frames, and raw frames for screenshots", { skip: process.platform !== "darwin" && "needs macOS", timeout: 600_000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-display-"));
+  const host = new MacDisplayHost({ cacheDir: path.join(dir, "bin") });
+  const socket = path.join(dir, "vnc.sock");
+  const helper = spawn(await host.helper(), ["serve", socket, "token", "1"], { stdio: ["ignore", "pipe", "ignore"] });
+  try {
+    const lines = createInterface({ input: helper.stdout! });
+    await new Promise<void>((resolve) => lines.on("line", (line) => { if (line === "ready") resolve(); }));
+    assert.equal((fs.statSync(socket).mode & 0o777), 0o600, "only this user can connect");
+
+    const viewer = net.connect(socket);
+    let buffer = Buffer.alloc(0);
+    viewer.on("data", (chunk: Buffer) => { buffer = Buffer.concat([buffer, chunk]); });
+    const read = async (n: number) => { await until(() => buffer.length >= n); const out = buffer.subarray(0, n); buffer = buffer.subarray(n); return out; };
+    assert.equal((await read(12)).toString(), "RFB 003.008\n");
+    viewer.write("RFB 003.008\n");
+    assert.deepEqual([...await read(2)], [1, 1], "no password: the socket is private");
+    viewer.write(Buffer.from([1]));
+    assert.equal((await read(4)).readUInt32BE(0), 0);
+    viewer.write(Buffer.from([1]));
+    const init = await read(24);
+    const [width, height] = [init.readUInt16BE(0), init.readUInt16BE(2)];
+    await read(init.readUInt32BE(20));
+    // noVNC's pixel format (RGBX), encodings and first request.
+    const format = Buffer.from([0, 0, 0, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 0, 8, 16, 0, 0, 0]);
+    const encodings = Buffer.alloc(4 + 3 * 4); encodings[0] = 2; encodings.writeUInt16BE(3, 2);
+    [6, -308, 0].forEach((e, i) => encodings.writeInt32BE(e, 4 + i * 4));
+    const request = Buffer.alloc(10); request[0] = 3; request.writeUInt16BE(width, 6); request.writeUInt16BE(height, 8);
+    viewer.write(Buffer.concat([format, encodings, request]));
+
+    const update = async () => {
+      const head = await read(4);
+      assert.equal(head[0], 0, "a framebuffer update");
+      const rects: { x: number; y: number; w: number; h: number; encoding: number; data: Buffer }[] = [];
+      for (let i = 0; i < head.readUInt16BE(2); i++) {
+        const r = await read(12);
+        const rect = { x: r.readUInt16BE(0), y: r.readUInt16BE(2), w: r.readUInt16BE(4), h: r.readUInt16BE(6), encoding: r.readInt32BE(8) };
+        const data = rect.encoding === -308 ? await read(4 + 16) : rect.encoding === 6 ? await read((await read(4)).readUInt32BE(0)) : await read(rect.w * rect.h * 4);
+        rects.push({ ...rect, data });
+      }
+      return rects;
+    };
+    const first = await update();
+    assert.deepEqual([first[0]!.encoding, first[0]!.x, first[0]!.w, first[0]!.h], [-308, 0, width, height], "the size comes first, so noVNC offers resizing");
+    const pixels = inflateSync(Buffer.concat(first.slice(1).map((rect) => rect.data)), { finishFlush: zlibConstants.Z_SYNC_FLUSH });
+    assert.ok(first.slice(1).every((rect) => rect.encoding === 6), "zlib for a viewer that asks for it");
+    assert.equal(pixels.length, first.slice(1).reduce((sum, rect) => sum + rect.w * rect.h * 4, 0), "the stream inflates to whole rectangles");
+
+    const resize = Buffer.alloc(8 + 16); resize[0] = 251; resize.writeUInt16BE(390, 2); resize.writeUInt16BE(844, 4); resize[6] = 1;
+    viewer.write(Buffer.concat([resize, Buffer.from([3, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1])]));
+    const reply = await update();
+    assert.deepEqual([reply[0]!.encoding, reply[0]!.x], [-308, 1], "the viewer's own resize request is answered");
+    viewer.destroy();
+
+    const frame = await captureFrame(socket);
+    assert.deepEqual([frame.width, frame.height], [width, height], "screenshots read the same display, raw");
+  } finally { helper.kill(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
