@@ -1,22 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test, themes } from "./fixtures.js";
+import { expect, test, themes, type WebApp } from "./fixtures.js";
 import { fileURLToPath } from "node:url";
-import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
 
-let server: ViteDevServer;
+let server: WebApp;
 let origin: string;
-test.beforeAll(async () => {
-  server = await createServer({
-    root: fileURLToPath(new URL("../../packages/web", import.meta.url)),
-    logLevel: "silent",
-    server: { host: "127.0.0.1", port: 0 },
-  });
-  await server.listen();
-  const address = server.httpServer!.address();
-  if (!address || typeof address === "string") throw new Error("Missing Vite address");
-  origin = `http://127.0.0.1:${address.port}`;
+test.beforeAll(async ({ webApp }) => {
+  server = webApp;
+  origin = webApp.origin;
 });
-test.afterAll(async () => { await server?.close(); });
 
 for (const theme of themes) {
   test(`${theme}: streaming preserves reading position and tool inspection`, async ({ page }, testInfo) => {

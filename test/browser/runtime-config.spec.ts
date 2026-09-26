@@ -1,17 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test } from "./fixtures.js";
-import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
-import path from "node:path";
+import { expect, test, type WebApp } from "./fixtures.js";
 import { webRuntimeConfigScript } from "../../services/control-plane/src/web-runtime-config.js";
 
-let server: ViteDevServer;
+let server: WebApp;
 let origin: string;
-test.beforeAll(async () => {
-  server = await createServer({ root: path.resolve("packages/web"), logLevel: "error", server: { host: "127.0.0.1", port: 0 } });
-  await server.listen();
-  origin = new URL(server.resolvedUrls!.local[0]).origin;
+test.beforeAll(async ({ webApp }) => {
+  server = webApp;
+  origin = webApp.origin;
 });
-test.afterAll(async () => { await server?.close(); });
 
 // Startup script ordering and reload caching do not depend on color theme.
 test("deployment flags load before app modules and change on reload", async ({ page }) => {

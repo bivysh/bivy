@@ -1,27 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test, type Page, themes } from "./fixtures.js";
+import { expect, test, themes, type Page, type WebApp } from "./fixtures.js";
 import path from "node:path";
-import { mkdtemp, rm } from "node:fs/promises";
-import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
 
 type FixtureWindow = Window & { pops: string[]; removeOverlays(): void; replaceAfterConfirm?: boolean };
 
-let server: ViteDevServer;
+let server: WebApp;
 let origin: string;
-let cacheDir: string;
 
-test.beforeAll(async () => {
-  const root = path.resolve("packages/web");
-  cacheDir = await mkdtemp(path.join(root, "node_modules/.vite-modal-history-"));
-  server = await createServer({ root, cacheDir, logLevel: "silent", server: { host: "127.0.0.1", port: 0 } });
-  await server.listen();
-  const address = server.httpServer!.address();
-  if (!address || typeof address === "string") throw new Error("No test port");
-  origin = `http://127.0.0.1:${address.port}`;
-});
-test.afterAll(async () => {
-  await server?.close();
-  if (cacheDir) await rm(cacheDir, { recursive: true, force: true });
+test.beforeAll(async ({ webApp }) => {
+  server = webApp;
+  origin = webApp.origin;
 });
 
 async function openFixture(page: Page, theme = "light") {

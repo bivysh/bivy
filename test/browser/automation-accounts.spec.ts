@@ -1,27 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test, type Page, themes } from "./fixtures.js";
+import { expect, test, themes, type Page, type WebApp } from "./fixtures.js";
 import path from "node:path";
-import { mkdtemp, rm } from "node:fs/promises";
-import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
 import { seal, open } from "../../src/e2e.js";
 import { encodeAutomationTemplate, decodeAutomationTemplate, type AutomationFilter } from "../../src/automation-template.js";
 
-let server: ViteDevServer;
+let server: WebApp;
 let origin: string;
-let cacheDir: string;
 const key = Buffer.alloc(32, 7);
 const instructions = "Review incoming work and run the relevant tests.";
 
-test.beforeAll(async () => {
-  const root = path.resolve("packages/web");
-  cacheDir = await mkdtemp(path.join(root, "node_modules/.vite-automation-accounts-"));
-  server = await createServer({ root, cacheDir, logLevel: "silent", server: { host: "127.0.0.1", port: 0 } });
-  await server.listen();
-  const address = server.httpServer!.address();
-  if (!address || typeof address === "string") throw new Error("No test port");
-  origin = `http://127.0.0.1:${address.port}`;
+test.beforeAll(async ({ webApp }) => {
+  server = webApp;
+  origin = webApp.origin;
 });
-test.afterAll(async () => { await server?.close(); if (cacheDir) await rm(cacheDir, { recursive: true, force: true }); });
 
 async function fixture(page: Page, theme: string, empty = false, trigger = "schedule", options: { multiple?: boolean; locked?: boolean; history?: boolean; filter?: AutomationFilter } = {}) {
   let item = {

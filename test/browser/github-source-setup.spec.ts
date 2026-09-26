@@ -1,29 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { expect, test, type Page, themes } from "./fixtures.js";
+import { expect, test, themes, type Page, type WebApp } from "./fixtures.js";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { mkdtemp, rm } from "node:fs/promises";
-import { createServer, type ViteDevServer } from "../../packages/web/node_modules/vite/dist/node/index.js";
 
 const installation = { installationId: "42", githubAccount: "acme", githubAccountType: "Organization", createdAt: "2026-09-01" };
 const hosted = { connected: true, appId: "123", central: true, hosted: true, installed: true, mention: "bivy-hosted", name: "Hosted Bivy App", servedBy: null, installations: [installation] };
 const custom = { connected: true, appId: "456", installed: true, mention: "acme-bot", name: "Acme custom app", servedBy: null };
-let server: ViteDevServer;
+let server: WebApp;
 let origin: string;
-let cacheDir: string;
 
-test.beforeAll(async () => {
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../packages/web");
-  // Other browser suites start Vite concurrently. Give each worker its own
-  // optimizer cache instead of racing their dependency-bundle rewrites.
-  cacheDir = await mkdtemp(path.join(root, "node_modules/.vite-source-"));
-  server = await createServer({ root, cacheDir, logLevel: "silent", server: { host: "127.0.0.1", port: 0 } });
-  await server.listen();
-  const address = server.httpServer!.address();
-  if (!address || typeof address === "string") throw new Error("No test port");
-  origin = `http://127.0.0.1:${address.port}`;
+test.beforeAll(async ({ webApp }) => {
+  server = webApp;
+  origin = webApp.origin;
 });
-test.afterAll(async () => { await server?.close(); if (cacheDir) await rm(cacheDir, { recursive: true, force: true }); });
 
 async function openSetup(page: Page, theme: string, focus = "github", apps: Array<typeof hosted | typeof custom> = [hosted], fail = false, centralConfigured = true) {
   await page.route("**/account/**", (route) => {
