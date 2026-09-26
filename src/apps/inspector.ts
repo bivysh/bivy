@@ -78,7 +78,8 @@ if(REVIEWER&&!framed){
     +'button{border:1px solid ButtonBorder;background:ButtonFace;color:ButtonText;border-radius:999px;padding:10px 14px;font-weight:600;cursor:pointer;min-height:44px}'
     +'.primary{background:CanvasText;color:Canvas;border-color:CanvasText}'
     +'form{width:min(340px,calc(100vw - 24px));background:Canvas;color:CanvasText;border:1px solid GrayText;border-radius:14px;padding:12px;box-shadow:0 8px 30px rgb(0 0 0/.25)}'
-    +'textarea{width:100%;min-height:5em;margin:8px 0;border:1px solid GrayText;border-radius:8px;padding:8px;background:Canvas;color:CanvasText;resize:vertical}'
+    // 16px: smaller, and iOS zooms the page in when the note box is focused.
+    +'textarea{width:100%;min-height:5em;margin:8px 0;border:1px solid GrayText;border-radius:8px;padding:8px;background:Canvas;color:CanvasText;resize:vertical;font-size:16px}'
     +'.row{display:flex;justify-content:flex-end;gap:8px}.muted{color:GrayText;font-size:12px;overflow-wrap:anywhere}[hidden]{display:none!important}</style>'
     +'<div class="dock"><p class="muted" role="status" id="status" hidden></p>'
     +'<form id="form" hidden><label for="note">Your note</label><div class="muted" id="about"></div><textarea id="note" required maxlength="1000"></textarea>'
