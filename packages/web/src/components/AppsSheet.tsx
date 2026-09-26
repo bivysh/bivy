@@ -56,6 +56,16 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
     return () => { generation.current = current + 1; };
   }, [sessionId, connection.currentNodeId, online, refresh]);
 
+  // Reviewer notes and publishes land while the sheet is open: refresh the
+  // list only, keeping any link or confirmation on screen.
+  useEffect(() => controller.onAppsChanged((changed) => {
+    if (changed !== sessionId) return;
+    const current = generation.current;
+    void controller.appCommand("apps.list", sessionId).then((event) => {
+      if (generation.current === current) setResult(event as unknown as SessionAppsResult);
+    }, () => {});
+  }), [sessionId]);
+
   // One-use links expire after a minute; remove stale links rather than invite
   // a failed launch. Opening in a top-level tab works with mobile cookie policy.
   useEffect(() => {

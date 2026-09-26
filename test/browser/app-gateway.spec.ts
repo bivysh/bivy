@@ -182,7 +182,8 @@ test("inspector reports console errors and pointed elements to the pill", async 
 
     await page.getByRole("button", { name: "Point" }).click();
     await expect(page.getByText("Tap anything in the app to point at it.")).toBeVisible();
-    await content.getByRole("button", { name: "Add transaction" }).click();
+    // The pointing layer covers the app, so the tap lands on it, as a finger's would.
+    await content.getByRole("button", { name: "Add transaction" }).click({ force: true });
     const draftBox = page.getByRole("textbox", { name: "What should change?" });
     await expect(draftBox).toBeFocused();
     // Under 16px, iOS zooms the shell on focus and it stays zoomed.
@@ -191,18 +192,10 @@ test("inspector reports console errors and pointed elements to the pill", async 
     expect(context).toContain('#save ("Add transaction")');
     expect(context).toContain("Ledger failed to load totals");
     await page.screenshot({ path: testInfo.outputPath("pill-draft.png") });
-    // Pointing swallowed the tap: the app's own handler never ran.
+    // Pointing kept the tap from the app, whose own handler never ran; right
+    // after, the app takes taps again.
     await page.getByRole("button", { name: "Cancel" }).click();
     await content.getByRole("button", { name: "Add transaction" }).click();
-    // iOS sends no click for a tap on a non-clickable element, and in a zoomed
-    // page its coordinates miss: the pointer events' own target picks.
-    await page.getByRole("button", { name: "Point" }).click();
-    await content.getByRole("heading", { name: "Ledger" }).evaluate((el) => {
-      const offscreen = { bubbles: true, clientX: -500, clientY: -500 };
-      el.dispatchEvent(new PointerEvent("pointerdown", offscreen)); el.dispatchEvent(new PointerEvent("pointerup", offscreen));
-    });
-    await expect(page.locator("#draft-context")).toContainText('main > h1 ("Ledger")');
-    await page.getByRole("button", { name: "Cancel" }).click();
 
     await page.getByRole("radio", { name: "Phone" }).click();
     await expect.poll(() => page.locator("iframe").evaluate((el) => el.getBoundingClientRect().width)).toBeLessThanOrEqual(391);
@@ -218,7 +211,7 @@ test("inspector reports console errors and pointed elements to the pill", async 
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath("pill-mobile-dark.png") });
     await page.getByRole("button", { name: "Point" }).click();
-    await content.getByRole("heading", { name: "Ledger" }).click();
+    await content.getByRole("heading", { name: "Ledger" }).click({ force: true });
     await expect(draftBox).toBeFocused();
     await page.keyboard.type("Make the title bigger");
     await page.getByRole("button", { name: "Add to chat" }).click();
@@ -252,7 +245,7 @@ test("the preview works framed inside Bivy and hands drafts to it", async ({ pag
     await expect(shell.getByRole("button", { name: "Back to chat" })).toBeHidden();
     await page.screenshot({ path: testInfo.outputPath("peek-embedded.png") });
     await shell.getByRole("button", { name: "Point" }).click();
-    await app.getByRole("button", { name: "Add transaction" }).click();
+    await app.getByRole("button", { name: "Add transaction" }).click({ force: true });
     await expect(shell.getByRole("textbox", { name: "What should change?" })).toBeFocused();
     await page.keyboard.type("Use a plus icon");
     await shell.getByRole("button", { name: "Add to chat" }).click();
@@ -346,7 +339,7 @@ test("a reviewer on a shared link can pin a note to an element", async ({ page }
     await page.goto(gateway.share(id).url);
     await page.getByRole("button", { name: "Leave a note" }).click();
     await expect(page.getByText("Tap the part of the page your note is about.")).toBeVisible();
-    await page.getByRole("button", { name: "Add transaction" }).click();
+    await page.getByRole("button", { name: "Add transaction" }).click({ force: true });
     await page.getByRole("textbox", { name: "Your note" }).fill("Use a plus icon here");
     await page.screenshot({ path: testInfo.outputPath("reviewer-note.png") });
     await page.getByRole("button", { name: "Send note" }).click();

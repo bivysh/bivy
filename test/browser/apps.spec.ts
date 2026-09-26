@@ -38,12 +38,13 @@ for (const theme of themes) {
         if(window.mode === 'error') throw Error('Machine unavailable. Reconnect and try again.');
         if(kind === 'apps.offers') return {offers:window.mode === 'ready' ? [{port:5173,pid:42,command:'node vite --port 5173 --host 127.0.0.1'}] : []};
         if(kind === 'apps.adopt') return {app:{id:'b',sessionId:'s',name:'node vite · :5173',createdAt:1,views:[{id:'adopted',kind:'web',name:'Port 5173',source:'service'}]}};
-        if(kind === 'apps.list') return {apps:window.mode === 'empty' ? [] : [app], previewAvailable:window.mode !== 'unconfigured'};
+        if(kind === 'apps.list') return {apps:window.mode === 'empty' ? [] : [structuredClone(app)], previewAvailable:window.mode !== 'unconfigured'};
         if(kind === 'apps.open') return fields.viewId === 'term' ? {kind:'terminal',termId:'test-terminal'} : {kind:'web',url:'https://random.preview.example.net/__bivy/open#ticket'};
         if(kind === 'apps.share') return {url:'https://random.preview.example.net/__bivy/open#shared', expiresAt:Date.now() + 24 * 3600000};
         return {ok:true};
       };
       // The session menu opens the sheet unscoped, which also lists detected servers.
+      window.noteArrives = note => { app.views[0].notes = [note]; controller.appsChangedListeners.forEach(fn => fn('s')); };
       window.showSheet = () => { const host = document.body.appendChild(document.createElement('div')); const root = createRoot(host); root.render(React.createElement(AppsSheet, {sessionId:'s', onClose(){ root.unmount(); host.remove(); }})); };
       const handlers = new Set();
       controller.onTerminal = fn => {handlers.add(fn); return () => handlers.delete(fn);};
@@ -69,6 +70,9 @@ for (const theme of themes) {
     // Notes from people with a shared link show as text and can be cleared.
     const notes = page.getByRole("group", { name: "Reviewer notes on Website and invoice editor" });
     await expect(notes).toContainText("“The total is cut off on my phone” on “12 480” · /invoices");
+    // A note sent while the sheet is open shows up without reopening it.
+    await page.evaluate(() => (window as any).noteArrives({ id: "n2", at: 2, note: "Logo is blurry", selector: "img.logo", text: "", path: "/", viewport: { width: 390, height: 844 } }));
+    await expect(notes).toContainText("“Logo is blurry”");
     await notes.getByRole("button", { name: "Clear" }).click();
     await expect.poll(() => page.evaluate(() => (window as any).commands.some((c: any) => c.kind === "apps.clearNotes" && c.viewId === "web"))).toBe(true);
     // A copied link is reusable, so the sheet states who can use it and for how long.
