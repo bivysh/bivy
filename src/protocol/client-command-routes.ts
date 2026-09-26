@@ -14,6 +14,7 @@ export const CLIENT_COMMAND_ROUTES: readonly ClientCommandRoute[] = [
   { method: "post", path: "/api/auth/credentials/native-preview", kind: "credentials.native.preview" },
   { method: "post", path: "/api/auth/credentials/native-import", kind: "credentials.native.import" },
   { method: "post", path: "/api/session/pause", kind: "session.pause" },
+  ...["get", "draft"].map((action) => ({ method: "post" as const, path: `/api/session/presence/${action}`, kind: `session.presence.${action}` })),
   { method: "post", path: "/api/session/resume", kind: "session.resume" },
   { method: "post", path: "/api/session/question/answer", kind: "session.question.answer" },
 ];

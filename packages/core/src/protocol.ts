@@ -14,6 +14,19 @@
 // can add fields without breaking an older client — the legacy code relied on
 // this and the reducer ignores unknown members.
 
+/** Device handoff (node: src/session/presence.ts): which device last drove a
+ *  session, and the unsent draft it left for the next device. */
+export interface DeviceRef {
+  id: string;
+  label: string;
+}
+
+export interface SessionPresence {
+  sessionId: string;
+  driver?: DeviceRef & { via: "chat" | "terminal"; at: number };
+  draft?: { device: DeviceRef; text: string; at: number };
+}
+
 export interface CommandBase {
   kind: string;
   requestId?: string;
@@ -39,6 +52,8 @@ export interface Command extends CommandBase {
     | "session.limit_retry"
     | "session.command.invoke"
     | "session.pause"
+    | "session.presence.get"
+    | "session.presence.draft"
     | "session.resume"
     | "session.rewind"
     | "session.checkpoints"

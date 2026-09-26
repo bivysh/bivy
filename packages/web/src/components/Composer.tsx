@@ -7,6 +7,7 @@ import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash } from "@biv
 import { useModalEscape } from "../modalStack.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
 import { FollowupQueue } from "./FollowupQueue.js";
+import { HandoffBanner } from "./HandoffBanner.js";
 import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
 import { Spinner } from "./Spinner.js";
@@ -21,6 +22,8 @@ const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS = 12;
 const MAX_ATTACHMENTS_BYTES = 40 * 1024 * 1024;
 const TEXT_ATTACHMENT_BYTES = 512 * 1024;
+/** How long typing pauses before the draft is shared with your other devices. */
+const DRAFT_PUBLISH_MS = 1500;
 const TEXT_EXT = /\.(md|txt|json|ya?ml|csv|ts|tsx|js|jsx|css|html|xml|py|rb|go|rs|java|c|cpp|h|hpp|sh|sql)$/i;
 
 function readDataUrl(file: File): Promise<string> {
@@ -278,6 +281,21 @@ export function Composer({
   }, [text, attachments, recoveredAttachments, readingCount]);
 
   useEffect(() => () => setComposerLifecycle({ hasDraft: false, pendingAttachments: 0, readingAttachments: false }), []);
+
+  // Share this session's unsent text with the node (debounced), so another of
+  // your devices can pick it up with "Continue draft" (device handoff).
+  const publishedDraft = useRef(new Map<string, string>());
+  useEffect(() => {
+    const sessionId = state.activeSession.activeSessionId;
+    if (!sessionId) return;
+    const timer = setTimeout(() => {
+      const published = publishedDraft.current.get(sessionId) ?? "";
+      if (published === text) return;
+      publishedDraft.current.set(sessionId, text);
+      controller.publishDraft(sessionId, text);
+    }, DRAFT_PUBLISH_MS);
+    return () => clearTimeout(timer);
+  }, [text, state.activeSession.activeSessionId]);
 
   // Keep the textarea height in sync with its content on EVERY text change, not
   // just keystrokes. Programmatic updates — restoring a saved draft, or the long
@@ -637,6 +655,16 @@ export function Composer({
         </div>
       )}
 
+      {state.activeSession.activeSessionId && (
+        <HandoffBanner
+          sessionId={state.activeSession.activeSessionId}
+          composerEmpty={!text.trim()}
+          onUseDraft={(draft) => {
+            setText(draft);
+            requestAnimationFrame(() => { autosize(); taRef.current?.focus(); });
+          }}
+        />
+      )}
       {state.activeSession.activeSessionId && (
         <FollowupQueue
           sessionId={state.activeSession.activeSessionId}

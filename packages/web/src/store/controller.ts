@@ -175,6 +175,8 @@ import { CredentialsModelsCoordinator } from "./coordinators/credentials-models-
 import { EphemeralCoordinator } from "./coordinators/ephemeral-coordinator.js";
 import { AutomationsAccountCoordinator } from "./coordinators/automations-account-coordinator.js";
 import { FollowupCoordinator } from "./coordinators/followup-coordinator.js";
+import type { SessionPresence } from "@bivy/core";
+import { thisDevice } from "../device.js";
 
 /**
  * Bounded discovery metadata for a provider-native session Bivy did not start
@@ -328,6 +330,7 @@ export class AppController {
    *  never carries the Run body/evidence here; subscribers refetch canonically. */
   private runUpdateListeners = new Set<(runId: string, revision?: string) => void>();
   private appsChangedListeners = new Set<(sessionId: string) => void>();
+  private presenceListeners = new Set<(presence: SessionPresence) => void>();
   /** Subscribers that want the composer input focused (e.g. after "New"). */
   private composerFocusListeners = new Set<() => void>();
   /** Subscribers that accept editable text drafted by contextual UI actions. */
@@ -756,6 +759,12 @@ export class AppController {
           if (runId) for (const listener of this.runUpdateListeners) listener(runId, revision);
           return;
         }
+        // Another device drove a session or left a draft (device handoff).
+        if (type === "session.presence") {
+          const presence = event.presence as SessionPresence | undefined;
+          if (presence?.sessionId) for (const listener of this.presenceListeners) listener(presence);
+          return;
+        }
         // A session's apps were published, adopted or removed: a refetch hint.
         if (type === "apps.changed") {
           const sessionId = typeof event.sessionId === "string" ? event.sessionId : "";
@@ -1142,6 +1151,24 @@ export class AppController {
   }
 
   /** Subscribe to `apps.changed` hints (publish/adopt/remove) for any session. */
+  /** Subscribe to device-handoff presence for any session. */
+  onPresence(fn: (presence: SessionPresence) => void): () => void {
+    this.presenceListeners.add(fn);
+    return () => this.presenceListeners.delete(fn);
+  }
+
+  /** Which device last drove a session, and the draft it left. */
+  async getPresence(sessionId: string): Promise<SessionPresence> {
+    const reply = await this.awaitAck({ kind: "session.presence.get", sessionId });
+    return (reply as { presence?: SessionPresence }).presence ?? { sessionId };
+  }
+
+  /** Publish (or clear, with "") this device's unsent draft for a session. */
+  publishDraft(sessionId: string, text: string): void {
+    if (this.store.getState().connection.status !== "online") return;
+    void this.awaitAck({ kind: "session.presence.draft", sessionId, device: thisDevice(), text }).catch(() => {});
+  }
+
   onAppsChanged(fn: (sessionId: string) => void): () => void {
     this.appsChangedListeners.add(fn);
     return () => this.appsChangedListeners.delete(fn);
@@ -1519,7 +1546,9 @@ export class AppController {
   }
 
   private send(command: Command): void {
-    this.sessionCoordinator.send(command);
+    // A prompt names the device it came from, so the next device can say where
+    // the session was last driven (device handoff, src/session/presence.ts).
+    this.sessionCoordinator.send(command.kind === "prompt" ? { ...command, device: thisDevice() } : command);
   }
 
   /** The startup acknowledgement is bounded; installation may take longer. */

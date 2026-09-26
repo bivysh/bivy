@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+import { thisDevice } from "../device.js";
+import { useSessionPresence } from "../useSessionPresence.js";
+import { relTime } from "./ChangesCard.js";
+
 /**
  * Full session-window shown in place of the chat when the active session is
  * driven by its interactive TUI (single writer — see store.ts's `tuiSessions`).
@@ -10,12 +14,15 @@
  * broadcasts `terminal.tui {active:false}`, unlocking the composer).
  */
 export function TuiLockedView({
+  sessionId,
   sessionName,
   nodeLabel,
   online,
   onOpenTerminal,
   onUseChat,
 }: {
+  /** When known, names the device typing into the terminal (device handoff). */
+  sessionId?: string;
   sessionName: string;
   nodeLabel?: string;
   online: boolean;
@@ -23,6 +30,8 @@ export function TuiLockedView({
   /** Undefined hides "Use chat" when takeover isn't supported for this agent. */
   onUseChat?: () => void;
 }) {
+  const presence = useSessionPresence(sessionId);
+  const driver = presence?.driver?.via === "terminal" && presence.driver.id !== thisDevice().id ? presence.driver : undefined;
   return (
     <div className="tui-locked" role="status" aria-live="polite">
       <div className="card tui-locked-card">
@@ -55,6 +64,9 @@ export function TuiLockedView({
             </button>
           )}
         </div>
+        {driver && (
+          <p className="tui-locked-hint">Last input from {driver.label} · {relTime(driver.at)}</p>
+        )}
         {!online && (
           <p className="tui-locked-hint">
             Reconnect to the machine to open the terminal{onUseChat ? " or take over in chat" : ""}.
