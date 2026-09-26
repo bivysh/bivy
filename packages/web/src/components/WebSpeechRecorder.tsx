@@ -19,10 +19,13 @@ export function WebSpeechRecorder({
   onResult,
   onCancel,
   onError,
+  stop = 0,
 }: {
   onResult: (text: string) => void;
   onCancel: () => void;
   onError: (message: string) => void;
+  /** Bump to finish from outside, like ✓ (a released hold-to-talk). */
+  stop?: number;
 }) {
   const [display, setDisplay] = useState("");
   const recRef = useRef<any>(null);
@@ -100,6 +103,11 @@ export function WebSpeechRecorder({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!stop) return;
+    try { recRef.current?.stop(); } catch { settle(true); }
+  }, [stop]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="voice-bar" role="group" aria-label="Voice dictation">

@@ -244,7 +244,7 @@ test("the preview works framed inside Bivy and hands drafts to it", async ({ pag
       await (response ? route.fulfill({ response }) : route.abort()).catch(() => {});
     });
     const shellUrl = gateway.open(id, "https://bivy.example/sessions/s");
-    await page.route("https://bivy.example/chat", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en"><title>Bivy</title><body><script>window.drafts=[];addEventListener("message",e=>{if(e.data&&e.data.source==="bivy-preview")window.drafts.push(e.data);});</script><iframe title="Peek" style="width:800px;height:600px" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups" src="${shellUrl}"></iframe></body></html>` }));
+    await page.route("https://bivy.example/chat", (route) => route.fulfill({ contentType: "text/html", body: `<!doctype html><html lang="en"><title>Bivy</title><body><script>window.drafts=[];addEventListener("message",e=>{if(e.data&&e.data.source==="bivy-preview"&&e.data.type!=="hello")window.drafts.push(e.data);});</script><iframe title="Peek" style="width:800px;height:600px" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups" src="${shellUrl}"></iframe></body></html>` }));
     await page.goto("https://bivy.example/chat");
     const shell = page.frameLocator('iframe[title="Peek"]');
     const app = shell.frameLocator('iframe[title="Ledger"]');
@@ -271,6 +271,81 @@ test("the preview works framed inside Bivy and hands drafts to it", async ({ pag
     await page.evaluate((url) => { (window as any).drafts = []; const old = document.querySelector("iframe")!; const next = old.cloneNode() as HTMLIFrameElement; next.src = url; old.replaceWith(next); }, gateway.open(id, "https://bivy.example/sessions/s"));
     await expect.poll(() => page.evaluate(() => (window as any).drafts)).toEqual([{ source: "bivy-preview", type: "blocked" }]);
   } finally { fixture.close(); await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+// Point and speak, end to end: Bivy's real drawer (PreviewPeek) frames the
+// real shell and app. The drawer does the listening — a stubbed microphone
+// and transcription stand in for the device and the node — and only the
+// transcript reaches the shell's draft box, spoken words first.
+test("point and speak: hold the mic or long-press while pointing, and the words lead the draft", async ({ page, webApp }, testInfo) => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bivy-speak-"));
+  const registry = new AppRegistry();
+  const gateway = new AppGateway(registry, "https://{app}.preview.example.net", () => [webApp.origin]);
+  gateway.server.listen(0, "127.0.0.1"); await once(gateway.server, "listening");
+  const port = (gateway.server.address() as { port: number }).port;
+  try {
+    await fs.writeFile(path.join(dir, "index.html"), '<!doctype html><html lang="en"><title>Checkout</title><h1>Your bag</h1><p>Total $102</p><button id="pay" onclick="document.getElementById(\'paid\').textContent=String(+document.getElementById(\'paid\').textContent+1)">Pay now</button><output id="paid">0</output></html>');
+    const id = registry.publish("s", dir, { version: 1, name: "Checkout", views: [{ kind: "web", name: "Checkout", source: { kind: "static", directory: "." } }] }).views[0].id;
+    await page.route("https://*.preview.example.net/**", async (route) => {
+      const request = route.request(); const url = new URL(request.url());
+      const response = await route.fetch({ url: `http://127.0.0.1:${port}${url.pathname}${url.search}`, headers: { ...await request.allHeaders(), host: url.host }, maxRedirects: 0 }).catch(() => undefined);
+      await (response ? route.fulfill({ response }) : route.abort()).catch(() => {});
+    });
+    const shellUrl = gateway.open(id, `${webApp.origin}/sessions/s`);
+    const html = await webApp.transformIndexHtml("/speak-test", `<html><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module">
+      import React from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { PreviewPeek } from '/src/components/PreviewPeek.tsx';
+      import { controller } from '/src/store/controller.ts';
+      import '/@fs/${path.resolve("packages/ui/tokens.css")}';
+      import '/src/styles.css';
+      controller.store.setStatus('online');
+      window.drafts = []; window.transcribed = [];
+      controller.prefillComposer = (text) => { window.drafts.push(text); return true; };
+      controller.transcribe = async (audio, mimeType) => { window.transcribed.push({ bytes: audio.length, mimeType }); return 'give it more room above the home bar'; };
+      // A microphone that hears a tone.
+      navigator.mediaDevices.getUserMedia = async () => { const ctx = new AudioContext(); const tone = ctx.createOscillator(); const out = ctx.createMediaStreamDestination(); tone.connect(out); tone.start(); return out.stream; };
+      createRoot(document.getElementById('root')).render(React.createElement(PreviewPeek, { url: ${JSON.stringify(shellUrl)}, name: 'Checkout', sessionId: 's', onClose() {}, onOpenInTab() {} }));
+    </script></body></html>`);
+    await page.route(`${webApp.origin}/speak-test`, (route) => route.fulfill({ contentType: "text/html", body: html }));
+    await page.goto(`${webApp.origin}/speak-test`);
+    const shell = page.frameLocator('iframe[title="Checkout"]');
+    const app = shell.frameLocator('iframe[title="Checkout"]');
+    await expect(app.getByRole("heading", { name: "Your bag" })).toBeVisible();
+
+    // Point, then hold the mic in the draft box.
+    await shell.getByRole("button", { name: "Point" }).click();
+    await expect(shell.getByText("Hold to point and speak.")).toBeVisible();
+    await pointAt(app, app.getByRole("button", { name: "Pay now" }));
+    const mic = shell.getByRole("button", { name: "Speak" });
+    await mic.hover(); await page.mouse.down();
+    await expect(page.getByRole("group", { name: "Voice recording" })).toBeVisible();
+    await expect(shell.getByRole("status").filter({ hasText: "Listening" })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath("point-and-speak-listening.png") });
+    await page.waitForTimeout(600);
+    await page.mouse.up();
+    const box = shell.getByRole("textbox", { name: "What should change?" });
+    await expect(box).toHaveValue("give it more room above the home bar");
+    await page.screenshot({ path: testInfo.outputPath("point-and-speak-draft.png") });
+    expect((await page.evaluate(() => (window as any).transcribed))[0].bytes).toBeGreaterThan(0);
+    await shell.getByRole("button", { name: "Add to chat" }).click();
+    await expect.poll(() => page.evaluate(() => (window as any).drafts)).toEqual([expect.stringMatching(/^give it more room above the home bar\n\nIn the app preview "Checkout" \(page \/[^)]*\):\nElement: #pay \("Pay now"\)/)]);
+
+    // Long-press while pointing: the draft opens listening; letting go stops,
+    // and the press never reaches the app.
+    await shell.getByRole("button", { name: "Point" }).click();
+    await expect(app.locator('html > div[aria-hidden="true"]')).toHaveCount(2);
+    const pay = await app.getByRole("button", { name: "Pay now" }).boundingBox();
+    await page.mouse.move(pay!.x + pay!.width / 2, pay!.y + pay!.height / 2);
+    await page.mouse.down();
+    await expect(page.getByRole("group", { name: "Voice recording" })).toBeVisible();
+    await page.waitForTimeout(400);
+    await page.mouse.up();
+    await expect(box).toHaveValue("give it more room above the home bar");
+    await expect(shell.locator("#draft-context")).toContainText("Element: #pay");
+    await expect(app.locator("#paid")).toHaveText("0");
+    await expect(app.locator('html > div[aria-hidden="true"]')).toHaveCount(0);
+  } finally { gateway.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });
 
 // A stable address on a home screen: the signed-out redirect is covered in

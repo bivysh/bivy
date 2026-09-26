@@ -11,9 +11,8 @@ import { HandoffBanner } from "./HandoffBanner.js";
 import { StandbyNotice } from "./StandbyNotice.js";
 import { standbyCopyOf } from "../standby.js";
 import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
-import { VoiceRecorder } from "./VoiceRecorder.js";
 import { Spinner } from "./Spinner.js";
-import { WebSpeechRecorder, webSpeechSupported } from "./WebSpeechRecorder.js";
+import { Dictation, dictationEngine, NO_DICTATION, type DictationEngine } from "./Dictation.js";
 import { controller } from "../store/useStore.js";
 import { clearComposerDraft, composerDraftKey, readComposerDraft, writeComposerDraft, type PendingAttachmentMetadata } from "../composerDraft.js";
 import { setComposerLifecycle } from "../pwaLifecycle.js";
@@ -169,7 +168,7 @@ export function Composer({
   const [recoveredAttachments, setRecoveredAttachments] = useState<PendingAttachmentMetadata[]>(() => initialDraft.current?.attachments ?? []);
   const [menuIndex, setMenuIndex] = useState(0);
   const [menuDismissed, setMenuDismissed] = useState(false);
-  const [recording, setRecording] = useState<null | "server" | "webspeech">(null);
+  const [recording, setRecording] = useState<null | DictationEngine>(null);
   const [dragging, setDragging] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [stopTimedOut, setStopTimedOut] = useState(false);
@@ -403,16 +402,13 @@ export function Composer({
   useEffect(() => {
     if (!disabled && !state.settings.sttConfig) controller.getSttConfig();
   }, [disabled, state.settings.sttConfig]);
-  const voiceReady = Boolean(state.settings.sttConfig?.providers.some((p) => p.configured));
-
-  // Pick the transcription engine: a stored provider key routes audio through
-  // the node (best quality); otherwise fall back to the browser's built-in Web
-  // Speech dictation (no key, no cost). Only error when neither is available.
+  // Pick the transcription engine (see dictationEngine); only error when
+  // neither the node nor the browser can dictate.
   function startRecording() {
     if (disabled) return;
-    if (voiceReady || !state.settings.sttConfig) setRecording("server");
-    else if (webSpeechSupported()) setRecording("webspeech");
-    else onError?.("Add a Groq or OpenAI key in Settings → Voice input to use voice input.");
+    const engine = dictationEngine(state.settings.sttConfig);
+    if (engine) setRecording(engine);
+    else onError?.(NO_DICTATION);
   }
 
   // Drop the transcript into the composer at the caret (or append), then refocus.
@@ -807,20 +803,8 @@ export function Composer({
               })}
             </div>
           )}
-          {recording === "server" && (
-            <VoiceRecorder
-              transcribe={(audio, mime) => controller.transcribe(audio, mime)}
-              onResult={insertTranscript}
-              onCancel={() => setRecording(null)}
-              onError={(m) => onError?.(m)}
-            />
-          )}
-          {recording === "webspeech" && (
-            <WebSpeechRecorder
-              onResult={insertTranscript}
-              onCancel={() => setRecording(null)}
-              onError={(m) => onError?.(m)}
-            />
+          {recording && (
+            <Dictation engine={recording} onResult={insertTranscript} onCancel={() => setRecording(null)} onError={(m) => onError?.(m)} />
           )}
           <textarea
             ref={taRef}
