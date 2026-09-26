@@ -2915,9 +2915,9 @@ select.picker-search { appearance: auto; }
 .setup-email .btn { width: 100%; white-space: nowrap; min-height: var(--space-7); }
 .setup-note { margin-top: 10px; word-break: break-word; }
 .setup-note .btn { min-height: var(--space-7); }
-/* Inline text actions flow with the sentence; a block-sized button breaks the
-   paragraph's line rhythm. */
-.setup-note .btn.link { display: inline; min-height: 0; padding: 0 2px; font: inherit; vertical-align: baseline; }
+/* Inline text actions flow with the sentence: negative block margins keep the
+   44px touch target from stretching the paragraph's line box. */
+p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2); padding-block: 0; font: inherit; vertical-align: middle; }
 .setup-error { margin: 8px 0 4px; padding: 10px 12px; border: 1px solid var(--danger); border-left-width: 3px; border-radius: var(--radius-md); background: var(--danger-soft, transparent); color: var(--ink); font-size: 13px; line-height: 1.4; text-align: left; }
 /* Setup / connect surfaces prefer a little vertical rhythm on inline banners. */
 .setup-card .banner.inline,
