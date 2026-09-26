@@ -2193,6 +2193,12 @@ function AccountPanel() {
         />
       )}
       {err && <div className="banner inline" data-tone="danger">{err}</div>}
+      {me?.account?.email && (
+        <div className="settings-toggle-row">
+          <span className="muted">Signed in as</span>
+          <strong>{me.account.email}</strong>
+        </div>
+      )}
       <div className="stat-grid">
         <Stat label="Machines" value={String(counts?.nodes ?? nodes.length)} />
         <Stat label="Devices" value={String(counts?.devices ?? devices.length)} />
