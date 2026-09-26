@@ -290,7 +290,9 @@ jobs:
         run: |
           # Only a pull-request push narrows; every other event runs the lot.
           if [ "${{ github.event_name }}" = pull_request ] && [ "${{ needs.changes.outputs.tier }}" != full ]; then
-            git fetch --no-tags --depth=0 origin "$BASE_REF"
+            # checkout already fetched full history; make sure the base tip is
+            # present even if the branch moved since this run was queued.
+            git fetch --no-tags origin "$BASE_REF"
             echo "args=--changed-since origin/$BASE_REF" >> "$GITHUB_OUTPUT"
           else
             echo "args=" >> "$GITHUB_OUTPUT"
@@ -309,6 +311,11 @@ jobs:
       # Within the runner, independent suites run across its CPUs while suites
       # with a shared port are serialized (scripts/run-tests.mjs).
       - run: node scripts/run-tests.mjs ${{ steps.select.outputs.args }}
+      # The loader's transform cache is content-addressed, so entries accumulate
+      # across runs. Cap it before the warm cache is saved. After the suites, so
+      # this run always had a fully warm cache.
+      - run: node scripts/prune-ts-cache.mjs
+        if: always()
 
   core:
     needs: changes

@@ -22,7 +22,10 @@
 //
 // Cache entries are content-addressed, so a stale entry cannot be served; the
 // cache never needs invalidating and is safe to share between concurrent
-// suites. Delete `node_modules/.cache/bivy-ts` to reclaim the space.
+// suites. It does mean every edit adds an entry and none are ever overwritten,
+// so a long-lived checkout (or the CI cache this directory is restored from)
+// would grow without bound; `pruneCache` below caps it. Delete
+// `node_modules/.cache/bivy-ts` to reclaim the space by hand.
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { createRequire, registerHooks } from "node:module";
