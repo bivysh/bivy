@@ -7,8 +7,10 @@ import { createServer, type ViteDevServer } from "../../packages/web/node_module
 // The published-app launcher card anchors chronologically in the transcript, so
 // after a long turn it scrolls out of view. The run pill's action sheet — the
 // same sheet that surfaces the PR, branch, changes and artifacts — is the stable
-// way back: it shows "N apps" and reopens the Apps sheet. This renders the real
-// RunPill and proves that affordance appears, is keyboard-reachable, and fires.
+// way back: it shows "N apps" and reopens the Apps sheet. A server the agent
+// started but nobody previewed yet also shows on the pill itself, so it doesn't
+// wait for someone to open the sheet. This renders the real RunPill and proves
+// both appear, the row is keyboard-reachable, and it fires.
 let server: ViteDevServer;
 let origin: string;
 let cacheDir: string;
@@ -24,7 +26,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => { await server?.close(); if (cacheDir) await rm(cacheDir, { recursive: true, force: true }); });
 
 for (const theme of themes) {
-  test(`run pill surfaces published apps and opens the apps sheet (${theme})`, async ({ page }, testInfo) => {
+  test(`run pill surfaces apps and detected servers and opens the apps sheet (${theme})`, async ({ page }, testInfo) => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
     const html = await server.transformIndexHtml("/run-pill-apps", `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module">
@@ -46,17 +48,22 @@ for (const theme of themes) {
         artifactsCount: 1,
         onOpenArtifacts: () => {},
         appsCount: 2,
+        serverPorts: [3000],
         onOpenApps: () => { window.opened += 1; },
       }));
     </script></body></html>`);
     await page.route(`${origin}/run-pill-apps`, (route) => route.fulfill({ contentType: "text/html", body: html }));
     await page.goto(`${origin}/run-pill-apps`);
 
-    // The pill itself carries the status; apps live one tap deeper in its sheet.
-    await page.locator("#attention-s1").click();
-    const appsRow = page.getByRole("button", { name: /2 apps/ });
+    // A detected server shows on the pill; the apps row lives one tap deeper.
+    const pill = page.locator("#attention-s1");
+    await expect(pill).toContainText("Server on :3000");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`run-pill-${theme}.png`) });
+    await pill.click();
+    const appsRow = page.getByRole("button", { name: /2 apps · Server on :3000/ });
     await expect(appsRow).toBeVisible();
-    await expect(appsRow).toContainText("Open apps");
+    await expect(appsRow).toContainText("Preview");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`run-pill-apps-${theme}.png`), fullPage: true });
 

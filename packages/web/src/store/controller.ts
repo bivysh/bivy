@@ -327,6 +327,7 @@ export class AppController {
   /** Subscribers for content-free control-plane Run-change hints. The relay
    *  never carries the Run body/evidence here; subscribers refetch canonically. */
   private runUpdateListeners = new Set<(runId: string, revision?: string) => void>();
+  private appsChangedListeners = new Set<(sessionId: string) => void>();
   /** Subscribers that want the composer input focused (e.g. after "New"). */
   private composerFocusListeners = new Set<() => void>();
   /** Subscribers that accept editable text drafted by contextual UI actions. */
@@ -755,6 +756,12 @@ export class AppController {
           if (runId) for (const listener of this.runUpdateListeners) listener(runId, revision);
           return;
         }
+        // A session's apps were published, adopted or removed: a refetch hint.
+        if (type === "apps.changed") {
+          const sessionId = typeof event.sessionId === "string" ? event.sessionId : "";
+          if (sessionId) for (const listener of this.appsChangedListeners) listener(sessionId);
+          return;
+        }
         // One-shot transcription result — resolve the awaiting caller and stop;
         // it never touches the session reducer.
         if (type === "transcription") {
@@ -1132,6 +1139,12 @@ export class AppController {
   onRunUpdated(fn: (runId: string, revision?: string) => void): () => void {
     this.runUpdateListeners.add(fn);
     return () => this.runUpdateListeners.delete(fn);
+  }
+
+  /** Subscribe to `apps.changed` hints (publish/adopt/remove) for any session. */
+  onAppsChanged(fn: (sessionId: string) => void): () => void {
+    this.appsChangedListeners.add(fn);
+    return () => this.appsChangedListeners.delete(fn);
   }
 
   /** Subscribe to composer-focus requests (the Composer wires its textarea here).

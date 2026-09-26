@@ -20,6 +20,7 @@ const mobileSpecs = [
   "**/fresh-composer-layout.spec.ts",
   "**/changes-card.spec.tsx",
   "**/activity-history.spec.ts",
+  "**/run-pill-apps.spec.ts",
 ];
 
 // Mobile-specific specs whose mobile run does everything the desktop run does
@@ -28,6 +29,7 @@ const mobileOnlySpecs = [
   "**/self-host-onboarding.spec.ts",
   "**/app-badge.spec.ts",
   "**/changes-card.spec.tsx",
+  "**/run-pill-apps.spec.ts",
 ];
 
 export default defineConfig({
