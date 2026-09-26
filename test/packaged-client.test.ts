@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import assert from "node:assert/strict";
 import test from "node:test";
-import { parseClientConfiguration, configuredAuthentication, showAccountExtension, accountPresentationMessage } from "../packages/web/src/client-config.js";
+import { parseClientConfiguration, configuredAuthentication, showAccountExtension, accountExtensionFacts, accountPresentationMessage } from "../packages/web/src/client-config.js";
 import { hasNativeSubscriptions, openNativeSubscriptions, synchronizeNativeSubscriptions, clearNativeSubscriptions } from "../packages/web/src/packaged-client.js";
 
 const methods = { enabled: true, github: true, email: true, passwordConfigured: true };
@@ -38,6 +38,15 @@ test("explicit deployment presentation is independent of platform and cannot ena
   assert.equal(accountPresentationMessage("QUOTA exhausted", config), "Contact your administrator.");
   assert.equal(accountPresentationMessage("Computer offline", config), "Computer offline");
   assert.equal(accountPresentationMessage("Buy a subscription", config), "Buy a subscription"); // no built-in commercial vocabulary
+});
+
+test("facts mode shows read-only extension facts without actions", () => {
+  const facts = [{ id: "plan", label: "Plan", value: "Free" }, { id: "offer", label: "Upgrade", value: "Available" }];
+  const config = parse({ accountExtension: "facts", accountMessageRules: [{ terms: ["upgrade"], replacement: "Unavailable." }] });
+  assert.equal(showAccountExtension(config), false);
+  assert.deepEqual(accountExtensionFacts(facts, config), [facts[0]]);
+  assert.deepEqual(accountExtensionFacts(facts, parse({ accountExtension: "hidden" })), []);
+  assert.deepEqual(accountExtensionFacts(facts, parse({})), facts);
 });
 
 test("malformed and misspelled configuration fails closed", () => {
