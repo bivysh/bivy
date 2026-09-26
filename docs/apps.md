@@ -211,8 +211,8 @@ restarts in ten minutes it is left down until someone opens the view again.
 
 ### Desktop apps (`display`)
 
-A desktop GUI program (GTK, Qt, Electron, Tauri, Flutter desktop, Java, SDL…)
-is a view too:
+A desktop GUI program (GTK, Qt, Electron, Tauri, Flutter desktop, Java, SDL,
+and on a Mac also AppKit and SwiftUI…) is a view too, on Linux and macOS:
 
 ```json
 { "kind": "display", "name": "Editor", "command": "cargo", "args": ["run"], "restartOnChange": true }
@@ -251,13 +251,74 @@ device that opens it.
   p95) and bandwidth every 10 seconds while you use it; `bivy app list` shows
   the latest as the view's `stats`.
 
-Requirements: **Linux**, with TigerVNC's X server on the machine (Debian/Ubuntu:
+#### Agents using the app (computer use)
+
+An agent can use its desktop app the way you would, in the pixels of the
+app's screenshot:
+
+```sh
+bivy app shot                        # see it: prints the PNG path and size
+bivy app click 412 230               # --right, --middle, --double
+bivy app type "hello world"
+bivy app key cmd+s                   # enter, tab, escape, arrows, f1–f12…
+bivy app scroll 400 300 --down --steps 5
+bivy app drag 100 100 300 240
+```
+
+Each command sends the same pointer and key events a viewer sends, to the
+app's display only, and prints the app as it looks afterwards (`shot`), so the
+agent sees what its action did. `--app` picks the app by name or ID (default:
+the desktop app opened last); the app is started if it isn't running. A point
+outside the app is refused with the app's size. Modifiers are `shift`,
+`ctrl`, `alt`/`option` and `cmd` (⌘ on a Mac, Super on Linux). The pictures
+need agent screenshots on (see above); the actions themselves don't.
+
+#### Linux
+
+Requires TigerVNC's X server on the machine (Debian/Ubuntu:
 `sudo apt install tigervnc-standalone-server`, or set `BIVY_XVNC` to an `Xvnc`
 binary). Publishing says so when it's missing. Programs get `DISPLAY`,
 `XAUTHORITY` and toolkit hints (`GDK_BACKEND=x11`, `QT_QPA_PLATFORM=xcb`,
 `SDL_VIDEODRIVER=x11`, `ELECTRON_OZONE_PLATFORM_HINT=x11`), so they use the
 preview display rather than the machine's own. Each display costs about 30 MB
-plus the app. Not yet: sound, Wayland-only apps, and macOS apps.
+plus the app. Not yet: sound and Wayland-only apps.
+
+#### macOS
+
+A Mac has no private displays, so the app runs on the Mac's own screen and the
+preview shows **only that app's windows**: its largest window is the picture,
+and its dialogs, sheets and menus are drawn over it. Nothing else on the
+screen is captured. Everything above works the same: sizing to the viewer,
+2× on high-density devices, clipboard (Paste presses ⌘V), screenshots,
+Compare, restart on change, and agent input.
+
+- **Which windows:** Bivy starts the command through its helper, which stays
+  its parent, with `BIVY_MAC_DISPLAY` in its environment. Windows of the
+  program and anything it starts are shown (`swift run`, `npm start` →
+  Electron, `cargo run`, `flutter run -d macos`,
+  `./MyApp.app/Contents/MacOS/MyApp`), including signed apps that hide their
+  environment. An app launched through `open` or Launch Services isn't a
+  descendant, so run the binary directly (sandboxed App Store apps can't be
+  run that way).
+- **Sizing:** the app's main window moves to the top-left of the screen and
+  takes the viewer's size, up to the visible screen. A window with a larger
+  minimum size stays larger and the preview scales it down.
+- **Input:** keys go to the app's process only. Clicks and scrolls move the
+  Mac's own pointer, and the app comes to the front first; a click lands only
+  if the app's window is the one under it, never on something covering it.
+  Hovering moves the pointer only over the app. The clipboard is the Mac's
+  own: pasting from a viewer replaces it, and "Copy from app" offers text
+  copied while the app is in front.
+- **Permissions:** a small helper, built from source with Apple's command
+  line tools (`xcode-select --install`) on first use and kept in Bivy's data
+  directory, captures the app with ScreenCaptureKit and sends input with
+  Accessibility. Allow **Screen Recording** and **Accessibility** in System
+  Settings → Privacy & Security for the program that runs Bivy (your terminal
+  app, or `node` when Bivy runs as a background service), then restart Bivy.
+  Publishing says what's missing, and the first open asks macOS to prompt.
+- Requires macOS 13 or later. The Mac must be logged in with its screen
+  unlocked, as for any app you want to see. Not yet: sound, apps in full
+  screen, and the menu bar (use keyboard shortcuts).
 
 ### Static sites
 

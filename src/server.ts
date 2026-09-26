@@ -35,7 +35,7 @@ import { RemotePreview } from "./apps/remote-preview.js";
 import { AppService, type ReviewSink } from "./apps/service.js";
 import { pngSize, reviewHint } from "./apps/review.js";
 import type { AppReview, ReviewShot } from "./apps/types.js";
-import { DisplayHost } from "./apps/display.js";
+import { createDisplayHost } from "./apps/display.js";
 import { createAppCommands } from "./controllers/app-commands.js";
 import { bindClientCommandRoutes } from "./http/client-command-routes.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
@@ -2187,7 +2187,7 @@ const appSignIn = (view: { app: { id: string; sessionId: string }; view: { id: s
 const appGateway = process.env.BIVY_APPS_ORIGIN ? new AppGateway(appRegistry, process.env.BIVY_APPS_ORIGIN, appReturnOrigins, appSignIn) : undefined;
 const remotePreview = new RemotePreview(appRegistry, appReturnOrigins, appSignIn);
 // Desktop app views: one private display per view, started on first open.
-const appDisplays = new DisplayHost();
+const appDisplays = createDisplayHost(appDir);
 /** Review cards: screenshots become encrypted attachments (fetched by hash
  * like any image), and the card is logged so it survives a reload. A card
  * that updates moves to the end of the run; an expired one stays put. */

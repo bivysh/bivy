@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { FitWindowManager, writeXauthority } from "./x11.js";
+import { MacDisplayHost } from "./macos-display.js";
 
 /** Environment for programs on a preview display. X11 for every toolkit, so an
  * app never escapes to the machine's own Wayland/X session. */
@@ -56,7 +57,7 @@ export class DisplayHost {
 
   /** Why desktop views can't run here, or undefined when they can. */
   unavailable(): string | undefined {
-    if ((this.options.platform ?? process.platform) !== "linux") return "Desktop app views need a Linux machine for now.";
+    if ((this.options.platform ?? process.platform) !== "linux") return "Desktop app views need a Linux or macOS machine.";
     if (!(this.options.xvnc ?? findXvnc)()) return "Desktop app views need TigerVNC's X server. Install it (Debian/Ubuntu: sudo apt install tigervnc-standalone-server), or set BIVY_XVNC to its path.";
     return undefined;
   }
@@ -129,4 +130,14 @@ function freeDisplay(x11Dir: string): number {
     if (!fs.existsSync(path.join(x11Dir, `X${n}`)) && !fs.existsSync(`/tmp/.X${n}-lock`)) return n;
   }
   throw new Error("No free X display number.");
+}
+
+/** How each platform gives a desktop app a preview display: a private X
+ * server on Linux, the app's own windows on a Mac. Both serve VNC on a
+ * private socket, so everything downstream is shared. */
+const HOSTS: Partial<Record<NodeJS.Platform, (dataDir: string) => DisplayHost | MacDisplayHost>> = {
+  darwin: (dataDir) => new MacDisplayHost({ cacheDir: path.join(dataDir, "bin") }),
+};
+export function createDisplayHost(dataDir: string, platform: NodeJS.Platform = process.platform): DisplayHost | MacDisplayHost {
+  return HOSTS[platform]?.(dataDir) ?? new DisplayHost({ platform });
 }

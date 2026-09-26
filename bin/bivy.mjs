@@ -2434,6 +2434,12 @@ async function cmdApp(args = []) {
        bivy app present [view] [--path /page] [--note "…"] [--session <id>]
        bivy app share [app-id] [--view <view>] [--session <id>]
        bivy app run [--name <name>] [--restart-on-change] [--session <id>] -- <command> [args…]
+       bivy app click <x> <y> [--right|--middle] [--double] [--app <app>]
+       bivy app type <text> [--app <app>]
+       bivy app key <keys> [--app <app>]            e.g. enter, cmd+s, ctrl+shift+t
+       bivy app scroll <x> <y> [--up|--down|--left|--right] [--steps <n>] [--app <app>]
+       bivy app drag <x> <y> <to-x> <to-y> [--app <app>]
+       bivy app move <x> <y> [--app <app>]
 
 Manifest: {"version":1,"name":"My app","views":[
   {"kind":"web","name":"Website","source":{"kind":"service","port":3000}},
@@ -2442,9 +2448,10 @@ Manifest: {"version":1,"name":"My app","views":[
 
 Static web source: {"kind":"static","directory":"./dist"}
 Server Bivy runs: {"kind":"service","port":5173,"start":{"command":"pnpm","args":["dev"]}}
-Desktop GUI app (Linux, needs TigerVNC's Xvnc):
+Desktop GUI app (Linux with TigerVNC's Xvnc, or macOS 13+):
   {"kind":"display","name":"Editor","command":"cargo","args":["run"],"restartOnChange":true}
-  It runs on a private display streamed into the preview, sized to the viewer.
+  It runs on a private display (Linux) or shows its own windows (macOS),
+  streamed into the preview and sized to the viewer.
   "restartOnChange" restarts it after a turn that changed files. Shortcut with
   no manifest: bivy app run -- cargo run
 Publishing does not start commands. Open Apps in the session menu to view or run;
@@ -2455,6 +2462,13 @@ Terminal commands run with the node user's permissions, not in a new sandbox.
 Chrome/Chromium (desktop apps: straight from their display) and prints the PNG paths — look at them before saying the UI is
 done. It is off by default: turn it on in Bivy → Settings → this machine, or
 run: bivy config set sessions.appScreenshots true
+click/type/key/scroll/drag/move use a desktop app like a person would, in the
+pixels of its screenshot (bivy app shot), and print a new screenshot after
+(when screenshots are on) — look at it to see what happened. --app picks the
+app (default: the one opened last). Keys: a character or enter, tab, escape,
+backspace, delete, arrows (up…), home, end, pageup, pagedown, f1–f12, with
+modifiers shift, ctrl, alt/option, cmd. On a Mac, the pointer and keyboard
+focus move to the app while it's used.
 "present" says a change is ready for the user to look at: they get a card in
 the chat with the app at phone width (and before/after), and it opens the live
 preview. Use it when you finish a visible change, or when the user asks to see
@@ -2468,6 +2482,7 @@ who can read it may use the app.
 Web previews require operator setup; see docs/apps.md.`);
     return;
   }
+  if (INPUT_ACTIONS[action]) return appInput(action, rest);
   if (!["publish", "list", "remove", "shot", "run", "present", "share"].includes(action)) throw new Error("Unknown app command. Run bivy app --help.");
   // `run -- <command> [args…]`: publish a one-window desktop app without a manifest file.
   let runManifest;
@@ -2528,10 +2543,14 @@ Web previews require operator setup; see docs/apps.md.`);
     body.manifest = manifest;
   } else if (action === "run") body.manifest = runManifest;
   else if (action === "remove") body.appId = positional[0];
+  await appRequest(action === "run" ? "publish" : action, body);
+}
+
+async function appRequest(action, body) {
   const config = loadConfig();
   if (!(await ensureNodeRunning(config))) throw new Error("Could not reach the Bivy node.");
   const token = await localDeviceToken(config);
-  const response = await fetch(`${url(config)}/api/apps/${action === "run" ? "publish" : action}`, {
+  const response = await fetch(`${url(config)}/api/apps/${action}`, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body),
   });
   const result = await response.json();
@@ -2543,6 +2562,38 @@ Web previews require operator setup; see docs/apps.md.`);
     return;
   }
   console.log(JSON.stringify(result, null, 2));
+}
+
+// Computer use in desktop apps: each command's positional arguments, and the
+// flags that shape its action. The node validates the action.
+const INPUT_ACTIONS = {
+  click: { args: ["x", "y"], flags: { "--right": { button: "right" }, "--middle": { button: "middle" }, "--double": { count: 2 } } },
+  move: { args: ["x", "y"], flags: {} },
+  drag: { args: ["x", "y", "toX", "toY"], flags: {} },
+  scroll: { args: ["x", "y"], flags: { "--up": { direction: "up" }, "--down": { direction: "down" }, "--left": { direction: "left" }, "--right": { direction: "right" } }, defaults: { direction: "down" }, values: { "--steps": "steps" } },
+  type: { args: ["text"], flags: {}, text: true },
+  key: { args: ["keys"], flags: {}, text: true },
+};
+async function appInput(kind, rest) {
+  const spec = INPUT_ACTIONS[kind];
+  const action = { kind, ...spec.defaults };
+  const options = {};
+  const positional = [];
+  for (let i = 0; i < rest.length; i++) {
+    const arg = rest[i];
+    if (spec.flags[arg]) Object.assign(action, spec.flags[arg]);
+    else if (arg === "--app" || arg === "--session" || spec.values?.[arg]) {
+      const value = rest[++i];
+      if (value === undefined || value.startsWith("--")) throw new Error(`${arg} requires a value.`);
+      if (spec.values?.[arg]) action[spec.values[arg]] = Number(value); else options[arg] = value;
+    } else if (arg.startsWith("--")) throw new Error(`Unknown option ${arg}. Run bivy app --help.`);
+    else positional.push(arg);
+  }
+  if (positional.length !== spec.args.length) throw new Error(`Usage: bivy app ${kind} ${spec.args.map((name) => `<${name}>`).join(" ")}. Run bivy app --help.`);
+  spec.args.forEach((name, i) => { action[name] = spec.text ? positional[i] : Number(positional[i]); });
+  const sessionId = resolveAttachSessionId({ sessionFlag: options["--session"], env: process.env });
+  if (!sessionId) throw new Error("Set --session <id> or run inside a Bivy agent session.");
+  await appRequest("input", { sessionId, action, ...(options["--app"] ? { target: options["--app"] } : {}) });
 }
 
 // Map a saved session's runtime id to the `bivy run` agent whose native CLI can
