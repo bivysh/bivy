@@ -21,6 +21,8 @@ iframe { width:100%; height:100%; border:0; background:var(--bg); }
 /* The pill floats above the app instead of taking a header row from it. */
 #dock { position:fixed; left:var(--space-2); right:var(--space-2); bottom:calc(var(--space-2) + env(safe-area-inset-bottom)); z-index:var(--z-sticky); display:flex; flex-direction:column; align-items:center; gap:var(--space-2); pointer-events:none; }
 #dock > * { pointer-events:auto; }
+/* The hint sits over the app; a tap on it is meant for the app underneath. */
+#dock > #pointing { pointer-events:none; }
 nav { display:flex; align-items:center; gap:var(--space-1); max-width:100%; padding:var(--space-1); background:var(--surface); border:thin solid var(--line); border-radius:var(--radius-full); box-shadow:var(--shadow-lg); }
 nav .btn { flex-shrink:0; border-radius:var(--radius-full); }
 nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); }
@@ -40,7 +42,8 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
 #compare-hint { font-size:var(--text-xs); margin:var(--space-1) 0 0; }
 #entries { list-style:none; margin:0; padding:0; font-family:var(--font-mono); font-size:var(--text-xs); }
 #entries li { display:flex; gap:var(--space-2); align-items:baseline; padding:var(--space-1) 0; border-top:thin solid var(--line); overflow-wrap:anywhere; }
-#draft-text { width:100%; min-height:5em; box-sizing:border-box; font:inherit; font-size:var(--text-sm); resize:vertical; }
+/* Keeps .field's 16px: smaller, and iOS zooms the shell on focus and stays zoomed. */
+#draft-text { width:100%; min-height:5em; box-sizing:border-box; resize:vertical; }
 #draft-hint { font-size:var(--text-xs); margin:var(--space-2) 0 var(--space-1); }
 #draft-context { margin:0; padding:var(--space-2); background:var(--surface-2); border-radius:var(--radius-md); font-family:var(--font-mono); font-size:var(--text-xs); white-space:pre-wrap; overflow-wrap:anywhere; color:var(--muted); }
 #show { position:fixed; right:var(--space-3); bottom:calc(var(--space-3) + env(safe-area-inset-bottom)); z-index:var(--z-sticky); border-radius:var(--radius-full); box-shadow:var(--shadow-lg); }
