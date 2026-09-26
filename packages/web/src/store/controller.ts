@@ -1578,6 +1578,8 @@ export class AppController {
   /** Apps use the same authenticated command path over direct HTTP or relay. */
   async appCommand(command: "apps.list" | "apps.offers" | "apps.adopt" | "apps.open" | "apps.logs" | "apps.clearNotes" | "apps.share" | "apps.revoke" | "apps.remove", sessionId: string, fields: { appId?: string; viewId?: string; returnTo?: string; port?: number; direct?: boolean } = {}): Promise<ServerEvent> {
     const { connection } = this.store.getState();
+    // A desktop app's display starts at this device's pixel density (1× or 2×).
+    if (command === "apps.open") Object.assign(fields, { scale: typeof devicePixelRatio === "number" && devicePixelRatio >= 1.5 ? 2 : 1 });
     if (connection.status !== "online") throw new Error("Connect to the machine to open its apps.");
     const result = await this.awaitAck({ kind: command, sessionId, ...fields }, 30_000);
     if (this.store.getState().connection.currentNodeId !== connection.currentNodeId) throw new Error("Machine changed. Reopen Apps on the selected machine.");

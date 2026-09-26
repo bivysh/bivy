@@ -32,6 +32,7 @@ import { AppRegistry } from "./apps/registry.js";
 import { AppGateway } from "./apps/gateway.js";
 import { RemotePreview } from "./apps/remote-preview.js";
 import { AppService } from "./apps/service.js";
+import { DisplayHost } from "./apps/display.js";
 import { createAppCommands } from "./controllers/app-commands.js";
 import { bindClientCommandRoutes } from "./http/client-command-routes.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
@@ -2144,6 +2145,8 @@ const appSignIn = (view: { app: { id: string; sessionId: string }; view: { id: s
 };
 const appGateway = process.env.BIVY_APPS_ORIGIN ? new AppGateway(appRegistry, process.env.BIVY_APPS_ORIGIN, appReturnOrigins, appSignIn) : undefined;
 const remotePreview = new RemotePreview(appRegistry, appReturnOrigins, appSignIn);
+// Desktop app views: one private display per view, started on first open.
+const appDisplays = new DisplayHost();
 const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   start: async (spec) => {
     let failure = "Could not start the app terminal.";
@@ -2156,7 +2159,7 @@ const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   },
   has: (id) => terminals.has(id),
   close: (id) => { terminals.close(id); },
-}, { screenshots: { enabled: appScreenshotsEnabled } });
+}, { screenshots: { enabled: appScreenshotsEnabled }, displays: appDisplays });
 
 const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   ...createAppCommands(appService, (id) => { const record = resolveSession(id); return record ? harnessDirFor(record) : undefined; }, (app) => {
@@ -11695,6 +11698,7 @@ function shutdown(signal: string) {
   // are coalesced on the hot path — see MetadataStore.save).
   try { metadata.flushSync(); } catch {}
   terminals.disposeAll();
+  appDisplays.stopAll();
   // Drop persistent client/relay sockets so server.close() can actually drain;
   // otherwise a lingering WebSocket keeps the process alive until the supervisor
   // SIGKILLs it, orphaning children.

@@ -8,9 +8,11 @@ import { once } from "node:events";
 import { spawn, execFileSync } from "node:child_process";
 import { WebSocket } from "ws";
 import type { RegisteredView } from "./registry.js";
+import { captureFrame, encodePng } from "./rfb.js";
 
 export interface ShotRequest { widths: number[]; themes: ("light" | "dark")[]; path: string }
-export interface Shot { viewId: string; view: string; width: number; theme: "light" | "dark"; file: string }
+/** Desktop apps are shot as they are on screen: `theme` is "native" for them. */
+export interface Shot { viewId: string; view: string; width: number; theme: "light" | "dark" | "native"; file: string }
 
 /** Browsers tried in order; BIVY_CHROME overrides. Any Chromium works. */
 const CANDIDATES = [
@@ -79,10 +81,21 @@ class Cdp {
 
 /** Screenshots web views with one headless browser, one shot at a time, so
  * small machines cope. Service views are loaded straight from loopback;
- * static views from a throwaway loopback server. Files are PNGs in `outDir`. */
+ * static views from a throwaway loopback server. Desktop apps are read from
+ * their display, at its current size, without a browser. Files are PNGs in `outDir`. */
 export async function takeShots(views: RegisteredView[], request: ShotRequest, outDir: string, chrome = findChrome()): Promise<Shot[]> {
-  if (!chrome) throw new Error("No Chrome or Chromium found on this machine. Install one, or set BIVY_CHROME to its path.");
   fs.mkdirSync(outDir, { recursive: true });
+  const shots: Shot[] = [];
+  for (const entry of views) {
+    if (entry.target.kind !== "display" || !entry.display) continue;
+    const frame = await captureFrame(entry.display);
+    const file = path.join(outDir, `${entry.view.id.slice(0, 8)}-${frame.width}-native.png`);
+    fs.writeFileSync(file, encodePng(frame.width, frame.height, frame.rgb));
+    shots.push({ viewId: entry.view.id, view: entry.view.name, width: frame.width, theme: "native", file });
+  }
+  views = views.filter((entry) => entry.target.kind === "service" || entry.target.kind === "static");
+  if (!views.length) return shots;
+  if (!chrome) throw new Error("No Chrome or Chromium found on this machine. Install one, or set BIVY_CHROME to its path.");
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-shot-"));
   const servers: { close: () => void }[] = [];
   let ws: WebSocket | undefined;
@@ -111,7 +124,6 @@ export async function takeShots(views: RegisteredView[], request: ShotRequest, o
     const { targetId } = await cdp.send("Target.createTarget", { url: "about:blank" });
     const { sessionId } = await cdp.send("Target.attachToTarget", { targetId, flatten: true });
     await cdp.send("Page.enable", {}, sessionId);
-    const shots: Shot[] = [];
     for (const entry of views) {
       let origin: string;
       if (entry.target.kind === "service") origin = `http://127.0.0.1:${entry.target.port}`;

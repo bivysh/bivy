@@ -1,11 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import http, { type IncomingMessage, type ServerResponse, type OutgoingHttpHeaders } from "node:http";
+import net from "node:net";
 import type { Duplex } from "node:stream";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { WebSocketServer } from "ws";
 import { previewShell } from "./preview-shell.js";
+import { displayViewer, DISPLAY_SOCKET_PATH, DISPLAY_STATS_PATH, NOVNC_PATH } from "./display-viewer.js";
 import { inspectorScript } from "./inspector.js";
 import type { AppRegistry, RegisteredView } from "./registry.js";
 
@@ -51,6 +55,18 @@ function allowInspector(policy: string, url: string): string {
   return directives.join("; ");
 }
 const HOUR = 60 * 60_000;
+/** A viewer that stops reading doesn't make the node buffer the display. */
+const DISPLAY_BUFFER_BYTES = 4 * 1024 * 1024;
+
+/** noVNC's browser modules (core/ and its vendored zlib), served as-is. */
+const novncRoot = (() => { try { return path.dirname(path.dirname(createRequire(import.meta.url).resolve("@novnc/novnc"))); } catch { return undefined; } })();
+const novncFiles = new Map<string, Buffer>();
+function novncFile(relative: string): Buffer | undefined {
+  if (!novncRoot || !/^(?:core|vendor)(?:\/[A-Za-z0-9_-]+)+\.js$/.test(relative)) return undefined;
+  let data = novncFiles.get(relative);
+  if (!data) { try { data = readFileSync(path.join(novncRoot, relative)); novncFiles.set(relative, data); } catch { return undefined; } }
+  return data;
+}
 /** Marks gateway-generated "server not answering" responses, so recovery
  * polling can tell them apart from an app's own 502s. */
 const UPSTREAM_DOWN = "x-bivy-upstream-down";
@@ -131,6 +147,7 @@ export class AppGateway {
   /** `reviewer`: the browser session came from a copied (shared) link. */
   private readonly sessions = new Map<string, { appId: string; expires: number; reviewer?: boolean }>();
   private readonly sockets = new Map<string, Set<Duplex>>();
+  private readonly displays = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024, perMessageDeflate: false });
 
   /** `signIn` sends a signed-out visit to a view's stable address back
    * through Bivy, which re-opens it for a signed-in device. */
@@ -182,6 +199,7 @@ export class AppGateway {
   close(): void {
     for (const id of this.sockets.keys()) this.revoke(id);
     this.tickets.clear(); this.sessions.clear();
+    this.displays.close();
     this.server.close();
     this.server.closeAllConnections();
   }
@@ -244,7 +262,7 @@ export class AppGateway {
       const entry = this.registry.getView(id);
       if (!grant || grant.appId !== id || !entry) { res.writeHead(401); res.end(); return; }
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ name: entry.app.name, origin: this.origin(id), returnTo: grant.returnTo })); return;
+      res.end(JSON.stringify({ name: entry.app.name, origin: this.origin(id), returnTo: grant.returnTo, ...(entry.target.kind === "display" ? { inspect: false } : {}) })); return;
     }
     res.writeHead(404); res.end("Preview shell route not found.");
   }
@@ -309,6 +327,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
       res.end(inspectorScript(this.shellOrigin(id), this.session(req, id)?.reviewer === true)); return;
     }
     if (req.url === NOTES_PATH && req.method === "POST") { await this.note(req, res, entry); return; }
+    if (entry.target.kind === "display") { await this.display(req, res, entry); return; }
     const inspect = isPageLoad(req);
     // Remember the framed page so a turn reload lands where the user was.
     if (req.method === "GET" && req.headers["sec-fetch-dest"] === "iframe" && req.url.length <= 2048) entry.lastPath = req.url;
@@ -367,6 +386,53 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     res.on("close", () => upstream.destroy());
     req.pipe(upstream);
   }
+  /** A display view's origin serves only its viewer and noVNC's modules; the
+   * pixels come over the WebSocket (see upgrade). */
+  private async display(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): Promise<void> {
+    const id = entry.view.id;
+    // The viewer's measurements (same-origin POST, checked above). Numbers only.
+    if (req.url === DISPLAY_STATS_PATH && req.method === "POST") {
+      let body = "";
+      for await (const chunk of req) { body += chunk.toString(); if (body.length > 1024) { res.writeHead(413); res.end(); return; } }
+      let input: Record<string, any>;
+      try { input = JSON.parse(body); } catch { res.writeHead(400); res.end(); return; }
+      const num = (value: unknown, max: number) => { const n = Number(value); return Number.isFinite(n) ? Math.min(Math.max(0, Math.round(n * 10) / 10), max) : 0; };
+      entry.stats = { at: Date.now(), latencyMs: { p50: num(input.latencyMs?.p50, 60_000), p95: num(input.latencyMs?.p95, 60_000) }, kBps: num(input.kBps, 1e6),
+        viewport: { width: num(input.viewport?.width, 10_000), height: num(input.viewport?.height, 10_000), scale: num(input.viewport?.scale, 8) } };
+      res.writeHead(204); res.end(); return;
+    }
+    if (!["GET", "HEAD"].includes(req.method ?? "")) { res.writeHead(405, { Allow: "GET, HEAD" }); res.end(); return; }
+    const url = req.url!.split("?")[0]!;
+    if (url.startsWith(NOVNC_PATH)) {
+      const data = novncFile(url.slice(NOVNC_PATH.length));
+      if (!data) { res.writeHead(404); res.end(); return; }
+      res.writeHead(200, { ...responseHeaders({}, this.ancestors(id)), "content-type": "text/javascript; charset=utf-8", "content-length": data.length });
+      res.end(req.method === "HEAD" ? undefined : data); return;
+    }
+    if (!isPageLoad(req)) { res.writeHead(404); res.end(); return; }
+    const nonce = randomBytes(16).toString("hex");
+    const body = Buffer.from(displayViewer(nonce, entry.app.name, entry.displayScale ?? 1));
+    const headers = responseHeaders({}, this.ancestors(id));
+    headers["content-security-policy"] = `default-src 'none'; script-src 'self' 'nonce-${nonce}'; style-src 'nonce-${nonce}'; img-src data: blob:; connect-src 'self' ${this.origin(id).replace(/^https:/, "wss:")}; frame-ancestors ${this.ancestors(id)}; worker-src 'none'; base-uri 'none'; form-action 'none'`;
+    res.writeHead(200, { ...headers, "content-type": "text/html; charset=utf-8", "content-length": body.length });
+    res.end(req.method === "HEAD" ? undefined : body);
+  }
+  /** Relays a viewer's WebSocket to the display's private VNC socket. */
+  private displaySocket(req: IncomingMessage, socket: Duplex, head: Buffer, entry: RegisteredView): void {
+    this.displays.handleUpgrade(req, socket, head, (ws) => {
+      // Not running yet (or any more): the viewer retries while the app starts.
+      if (!entry.display) { ws.close(1013, "The display isn't running."); return; }
+      const peer = net.connect(entry.display);
+      const close = () => { peer.destroy(); ws.terminate(); };
+      peer.on("data", (data) => {
+        ws.send(data);
+        if (ws.bufferedAmount > DISPLAY_BUFFER_BYTES) { peer.pause(); const resume = setInterval(() => { if (ws.bufferedAmount < DISPLAY_BUFFER_BYTES / 2 || ws.readyState !== ws.OPEN) { clearInterval(resume); peer.resume(); } }, 20); }
+      });
+      ws.on("message", (data) => peer.write(data as Buffer));
+      peer.on("error", close); peer.on("close", close);
+      ws.on("error", close); ws.on("close", close);
+    });
+  }
   /** A reviewer's note. Untrusted text: stored bounded, shown as text, and only
    * ever turned into a draft by the owner. Same-origin POSTs only (checked above). */
   private async note(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): Promise<void> {
@@ -422,10 +488,13 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
   private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const entry = this.entry(req);
     const expires = entry && this.authorize(req, entry.view.id);
-    if (!entry || !expires || entry.target.kind !== "service" || req.headers.origin !== this.origin(entry.view.id) || req.headers.upgrade?.toLowerCase() !== "websocket" || !req.url?.startsWith("/") || req.url.startsWith("//")) {
+    const display = entry?.target.kind === "display";
+    if (!entry || !expires || (entry.target.kind !== "service" && !(display && req.url === DISPLAY_SOCKET_PATH)) || req.headers.origin !== this.origin(entry.view.id) || req.headers.upgrade?.toLowerCase() !== "websocket" || !req.url?.startsWith("/") || req.url.startsWith("//")) {
       socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); return;
     }
     this.track(entry.view.id, socket, expires);
+    if (display) { this.displaySocket(req, socket, head, entry); return; }
+    if (entry.target.kind !== "service") return;
     const port = entry.target.port;
     const upstream = http.request({ hostname: "127.0.0.1", port, path: req.url, headers: { ...upstreamHeaders(req, this.origin(entry.view.id)), connection: "Upgrade", upgrade: "websocket" } });
     upstream.setTimeout(10_000, () => upstream.destroy());

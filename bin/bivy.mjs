@@ -2427,6 +2427,7 @@ async function cmdApp(args = []) {
        bivy app list [--session <id>]
        bivy app remove <app-id> [--session <id>]
        bivy app shot [app-id] [--widths 390,1280] [--themes light,dark] [--path /page] [--session <id>]
+       bivy app run [--name <name>] [--restart-on-change] [--session <id>] -- <command> [args…]
 
 Manifest: {"version":1,"name":"My app","views":[
   {"kind":"web","name":"Website","source":{"kind":"service","port":3000}},
@@ -2435,17 +2436,36 @@ Manifest: {"version":1,"name":"My app","views":[
 
 Static web source: {"kind":"static","directory":"./dist"}
 Server Bivy runs: {"kind":"service","port":5173,"start":{"command":"pnpm","args":["dev"]}}
+Desktop GUI app (Linux, needs TigerVNC's Xvnc):
+  {"kind":"display","name":"Editor","command":"cargo","args":["run"],"restartOnChange":true}
+  It runs on a private display streamed into the preview, sized to the viewer.
+  "restartOnChange" restarts it after a turn that changed files. Shortcut with
+  no manifest: bivy app run -- cargo run
 Publishing does not start commands. Open Apps in the session menu to view or run;
-a server with "start" starts on first open and is restarted if it exits.
+a server with "start" or a desktop app starts on first open and is restarted if
+it exits.
 Terminal commands run with the node user's permissions, not in a new sandbox.
 "shot" screenshots the session's web views (or one app) with a local headless
-Chrome/Chromium and prints the PNG paths — look at them before saying the UI is
+Chrome/Chromium (desktop apps: straight from their display) and prints the PNG paths — look at them before saying the UI is
 done. It is off by default: turn it on in Bivy → Settings → this machine, or
 run: bivy config set sessions.appScreenshots true
 Web previews require operator setup; see docs/apps.md.`);
     return;
   }
-  if (!["publish", "list", "remove", "shot"].includes(action)) throw new Error("Unknown app command. Run bivy app --help.");
+  if (!["publish", "list", "remove", "shot", "run"].includes(action)) throw new Error("Unknown app command. Run bivy app --help.");
+  // `run -- <command> [args…]`: publish a one-window desktop app without a manifest file.
+  let runManifest;
+  if (action === "run") {
+    const split = rest.indexOf("--");
+    if (split < 0 || !rest[split + 1]) throw new Error("Usage: bivy app run [--name <name>] [--restart-on-change] -- <command> [args…]");
+    const [command, ...commandArgs] = rest.splice(split).slice(1);
+    const nameIndex = rest.indexOf("--name");
+    const name = nameIndex >= 0 ? rest.splice(nameIndex, 2)[1] : path.basename(command);
+    if (!name) throw new Error("--name requires a value.");
+    const restartIndex = rest.indexOf("--restart-on-change");
+    if (restartIndex >= 0) rest.splice(restartIndex, 1);
+    runManifest = { version: 1, name: name.slice(0, 100), views: [{ kind: "display", name: "Window", command, args: commandArgs, ...(restartIndex >= 0 ? { restartOnChange: true } : {}) }] };
+  }
   const shot = {};
   if (action === "shot") {
     for (const flag of ["--widths", "--themes", "--path"]) {
@@ -2464,7 +2484,7 @@ Web previews require operator setup; see docs/apps.md.`);
   const sessionId = resolveAttachSessionId({ sessionFlag: sessionIndex >= 0 ? rest[sessionIndex + 1] : undefined, env: process.env });
   if (!sessionId) throw new Error("Set --session <id> or run inside a Bivy agent session.");
   const positional = rest.filter((_, i) => i !== sessionIndex && (sessionIndex < 0 || i !== sessionIndex + 1));
-  if (positional.some((a) => a.startsWith("-")) || (action === "shot" ? positional.length > 1 : positional.length !== (action === "list" ? 0 : 1))) throw new Error("Invalid arguments. Run bivy app --help.");
+  if (positional.some((a) => a.startsWith("-")) || (action === "shot" ? positional.length > 1 : positional.length !== (action === "list" || action === "run" ? 0 : 1))) throw new Error("Invalid arguments. Run bivy app --help.");
   const body = { sessionId, ...shot };
   if (action === "shot" && positional[0]) body.appId = positional[0];
   if (action === "publish") {
@@ -2478,11 +2498,12 @@ Web previews require operator setup; see docs/apps.md.`);
       }
     }
     body.manifest = manifest;
-  } else if (action === "remove") body.appId = positional[0];
+  } else if (action === "run") body.manifest = runManifest;
+  else if (action === "remove") body.appId = positional[0];
   const config = loadConfig();
   if (!(await ensureNodeRunning(config))) throw new Error("Could not reach the Bivy node.");
   const token = await localDeviceToken(config);
-  const response = await fetch(`${url(config)}/api/apps/${action}`, {
+  const response = await fetch(`${url(config)}/api/apps/${action === "run" ? "publish" : action}`, {
     method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body),
   });
   const result = await response.json();

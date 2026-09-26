@@ -216,6 +216,9 @@ jobs:
       - run: pnpm run typecheck
       - run: pnpm run typecheck:web
       - run: pnpm run test:core
+      # Desktop app views run on TigerVNC's X server; with it installed the
+      # display test drives a real one instead of skipping.
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends tigervnc-standalone-server
       # Within the runner, independent suites run across its CPUs while suites
       # with a shared port are serialized (scripts/run-tests.mjs).
       - run: pnpm run test:unit

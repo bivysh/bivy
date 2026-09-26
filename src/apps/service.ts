@@ -18,10 +18,20 @@ export interface AppPreviewProvider {
 }
 
 export interface AppTerminalProvider {
-  start(input: { command: string; args: string[]; workspace: string; name: string }): Promise<string>;
+  start(input: { command: string; args: string[]; workspace: string; name: string; env?: Record<string, string> }): Promise<string>;
   has(termId: string): boolean;
   close(termId: string): void;
 }
+
+/** Private displays for desktop views (see display.ts). */
+export interface AppDisplayProvider {
+  unavailable(): string | undefined;
+  ensure(id: string, name: string, scale?: number): Promise<{ socket: string; env: Record<string, string>; wm: { count: number } }>;
+  stop(id: string): void;
+}
+const NO_DISPLAYS: AppDisplayProvider = { unavailable: () => "Desktop app views aren't available on this machine.", ensure: () => Promise.reject(new Error("Desktop app views aren't available on this machine.")), stop: () => {} };
+/** How long a screenshot waits for a desktop app's first window. */
+const WINDOW_WAIT_MS = 15_000;
 
 /** Composes view providers; registry never spawns processes and the gateway
  * never knows about terminals. New providers can extend open/remove here. */
@@ -39,15 +49,18 @@ export class AppService {
   private readonly scan: (workspace: string) => Promise<AppOffer[]>;
   private readonly serverWatchMs: number;
   private readonly screenshots: { enabled: () => boolean; take: typeof takeShots };
+  private readonly displays: AppDisplayProvider;
   private shooting: Promise<unknown> = Promise.resolve();
   constructor(readonly registry: AppRegistry, readonly gateway: AppPreviewProvider | undefined, private readonly terminals: AppTerminalProvider, options: {
     scan?: (workspace: string) => Promise<AppOffer[]>; serverWatchMs?: number;
     /** Agent screenshots are a node setting, off by default. */
     screenshots?: { enabled: () => boolean; take?: typeof takeShots };
+    displays?: AppDisplayProvider;
   } = {}) {
     this.scan = options.scan ?? scanListeners;
     this.serverWatchMs = options.serverWatchMs ?? 5_000;
     this.screenshots = { enabled: options.screenshots?.enabled ?? (() => false), take: options.screenshots?.take ?? takeShots };
+    this.displays = options.displays ?? NO_DISPLAYS;
   }
 
   list(sessionId: string): SessionAppsResult {
@@ -56,16 +69,31 @@ export class AppService {
     for (const app of apps) for (const view of app.views) {
       if (view.kind !== "web") continue;
       if (available) view.address = this.gateway?.address?.(view.id);
-      const notes = this.registry.getView(view.id)?.notes;
-      if (notes?.length) view.notes = structuredClone(notes);
+      const entry = this.registry.getView(view.id);
+      if (entry?.notes?.length) view.notes = structuredClone(entry.notes);
+      if (entry?.stats) view.stats = structuredClone(entry.stats);
     }
     return { apps, previewAvailable: available };
   }
-  publish(sessionId: string, workspace: string, manifest: AppManifest) { return this.registry.publish(sessionId, workspace, manifest); }
+  publish(sessionId: string, workspace: string, manifest: AppManifest) {
+    // Tell the agent now, not on first open, when this machine can't show it.
+    const unavailable = manifest?.views?.some?.((view) => view?.kind === "display") && this.displays.unavailable();
+    if (unavailable) throw new Error(unavailable);
+    return this.registry.publish(sessionId, workspace, manifest);
+  }
   /** An agent turn changed files in this session's workspace. With agent
    * screenshots on, Compare gets an "after" shot once servers have rebuilt. */
   turnChanged(sessionId: string): string[] {
     const bumped = this.registry.touch(sessionId);
+    // Desktop apps that asked for it are restarted, so they run the new code.
+    for (const id of bumped) {
+      const entry = this.registry.getView(id);
+      const server = this.servers.get(id);
+      if (entry?.target.kind !== "display" || !server?.termId) continue;
+      this.terminals.close(server.termId);
+      server.termId = undefined;
+      void this.ensureServer(entry).catch(() => {});
+    }
     if (bumped.length && this.screenshots.enabled()) setTimeout(() => void this.capture(bumped), COMPARE_SETTLE_MS).unref?.();
     return bumped;
   }
@@ -74,6 +102,7 @@ export class AppService {
     for (const id of viewIds) {
       const entry = this.registry.getView(id);
       if (!entry || entry.view.kind !== "web") continue;
+      await this.windowShown(entry).catch(() => {});
       const outDir = path.join(os.tmpdir(), "bivy-shots", "compare", id);
       const run = this.shooting.catch(() => {}).then(() => this.screenshots.take([entry], { widths: [390], themes: ["light"], path: entry.lastPath ?? "/" }, outDir));
       this.shooting = run;
@@ -99,8 +128,10 @@ export class AppService {
   }
   /** `direct` opens the app origin itself (no shell): a signed-in device
    * returning to a view's stable address. */
-  async open(sessionId: string, appId: string, viewId: string, returnTo?: string, direct = false): Promise<OpenAppViewResult> {
+  /** `scale`: the opening device's pixel density, used if this starts a display. */
+  async open(sessionId: string, appId: string, viewId: string, returnTo?: string, direct = false, scale?: number): Promise<OpenAppViewResult> {
     const entry = this.registry.requireView(sessionId, appId, viewId);
+    if (entry.target.kind === "display" && !entry.display) entry.displayScale = scale === 2 ? 2 : 1;
     if (entry.view.kind === "web") {
       if (!this.gateway) throw new Error("Bivy's preview service is unavailable on this connection.");
       if (direct && !this.gateway.openDirect) throw new Error("This machine can't open previews directly.");
@@ -147,6 +178,7 @@ export class AppService {
     const apps = appId ? [this.registry.require(sessionId, appId)] : this.registry.list(sessionId);
     const views = apps.flatMap((app) => app.views).filter((view) => view.kind === "web").map((view) => this.registry.getView(view.id)!).filter(Boolean);
     if (!views.length) throw new Error("This session has no web views to screenshot. Publish one with bivy app publish, or preview a detected server.");
+    await Promise.all(views.map((entry) => this.windowShown(entry)));
     const outDir = path.join(os.tmpdir(), "bivy-shots", sessionId.replace(/[^A-Za-z0-9_-]/g, "_"), String(Date.now()));
     const run = this.shooting.catch(() => {}).then(() => this.screenshots.take(views, { widths, themes: [...new Set(themes)], path: page }, outDir));
     this.shooting = run;
@@ -159,14 +191,39 @@ export class AppService {
     if (!termId) throw new Error("Only views with a start command have server logs.");
     return { kind: "terminal", termId };
   }
+  /** A desktop app's display is up and showing a window (or gave up waiting),
+   * so a screenshot shows the app rather than an empty screen. */
+  private async windowShown(entry: RegisteredView): Promise<void> {
+    if (entry.target.kind !== "display") return;
+    await this.ensureServer(entry);
+    const display = await this.displays.ensure(entry.view.id, entry.app.name, entry.displayScale);
+    for (const until = Date.now() + WINDOW_WAIT_MS; !display.wm.count && Date.now() < until;) await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 800)); // first paint
+  }
+  /** The program Bivy runs for a view: a service's start command, or a desktop
+   * app on its display (started first). */
+  private program(entry: RegisteredView): { command: string; args: string[]; workspace: string; name: string; env?: Record<string, string> } | Promise<{ command: string; args: string[]; workspace: string; name: string; env?: Record<string, string> }> {
+    const target = entry.target;
+    if (target.kind === "service" && target.start) return { ...target.start, name: `${entry.app.name} · ${entry.view.name} server` };
+    if (target.kind !== "display") throw new Error("This view has no program.");
+    return this.displays.ensure(entry.view.id, entry.app.name, entry.displayScale).then((display) => {
+      entry.display = display.socket;
+      return { command: target.command, args: target.args, workspace: target.workspace, env: display.env, name: `${entry.app.name} · ${entry.view.name}` };
+    });
+  }
+  /** Services start synchronously; a desktop app waits for its display. */
+  private startProgram(entry: RegisteredView): Promise<string> {
+    const program = this.program(entry);
+    return program instanceof Promise ? program.then((spec) => this.terminals.start(spec)) : this.terminals.start(program);
+  }
   private ensureServer(entry: RegisteredView): Promise<string | undefined> {
-    if (entry.target.kind !== "service" || !entry.target.start) return Promise.resolve(undefined);
-    const id = entry.view.id, start = entry.target.start;
+    if (!(entry.target.kind === "service" && entry.target.start) && entry.target.kind !== "display") return Promise.resolve(undefined);
+    const id = entry.view.id;
     let state = this.servers.get(id);
     if (!state) { state = { restarts: [] }; this.servers.set(id, state); }
     const server = state;
     if (server.termId && this.terminals.has(server.termId)) return Promise.resolve(server.termId);
-    server.pending ??= this.terminals.start({ ...start, name: `${entry.app.name} · ${entry.view.name} server` })
+    server.pending ??= this.startProgram(entry)
       .then((termId) => {
         if (!this.registry.getView(id)) { this.terminals.close(termId); throw new Error("App was removed while starting."); }
         server.termId = termId; return termId;
@@ -188,6 +245,9 @@ export class AppService {
     return server.pending;
   }
   private stopServer(id: string): void {
+    this.displays.stop(id);
+    const entry = this.registry.getView(id);
+    if (entry) { entry.display = undefined; entry.displayScale = undefined; }
     const server = this.servers.get(id);
     if (!server) return;
     clearInterval(server.timer);

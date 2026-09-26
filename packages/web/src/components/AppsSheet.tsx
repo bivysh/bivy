@@ -10,6 +10,14 @@ import { writeClipboard } from "../clipboard.js";
 import { PreviewPeek, peekBlocked } from "./PreviewPeek.js";
 import { seedSessionDraft } from "../shareTarget.js";
 const TerminalOverlay = lazy(() => import("./Terminal.js").then((module) => ({ default: module.TerminalOverlay })));
+/** What each kind of view is, in the list. */
+const VIEW_LABELS = {
+  terminal: "Interactive terminal · starts on request",
+  static: "Web · published snapshot",
+  service: "Web · live server",
+  managed: "Web · server run by Bivy",
+  display: "Desktop app · on its own display",
+} as const;
 
 export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; appId?: string; onClose: () => void }) {
   const { connection } = useAppState();
@@ -199,12 +207,12 @@ export function AppsSheet({ sessionId, appId, onClose }: { sessionId: string; ap
       {app.views.map((view) => <div className="artifact-row app-view-row" key={view.id}>
         <div className="artifact-main">
           <strong className="artifact-name">{view.name}</strong>
-          <span className="artifact-meta">{view.kind === "terminal" ? "Interactive terminal · starts on request" : view.source === "static" ? "Web · published snapshot" : view.managed ? "Web · server run by Bivy" : "Web · live server"}</span>
+          <span className="artifact-meta">{VIEW_LABELS[view.kind === "terminal" ? "terminal" : view.source === "service" && view.managed ? "managed" : view.source]}</span>
           {view.kind === "terminal" && <code className="app-view-command">{[view.command, ...view.args.map((arg) => JSON.stringify(arg))].join(" ")}</code>}
         </div>
         <div className="app-view-actions">
           {view.kind === "web" && view.address && <button className="btn sm ghost" disabled={busy} onClick={() => void copyAddress(view)} aria-label={`Copy address of ${view.name}`}>Copy address</button>}
-          {view.kind === "web" && view.managed && <button className="btn sm ghost" disabled={busy || !online} onClick={() => void logs(app, view)} aria-label={`Server logs for ${view.name}`}>Logs</button>}
+          {view.kind === "web" && view.managed && <button className="btn sm ghost" disabled={busy || !online} onClick={() => void logs(app, view)} aria-label={`${view.source === "display" ? "App" : "Server"} logs for ${view.name}`}>Logs</button>}
           {view.kind === "web" && <>
             <button className="btn sm ghost" disabled={busy || !online || !result.previewAvailable} onClick={() => void revoke(app, view)} aria-label={`Revoke access to ${view.name}`}>Revoke access</button>
             <button className="btn sm ghost" disabled={busy || !online || !result.previewAvailable} onClick={() => void share(app, view)} aria-label={`Copy link to ${view.name}`}>Copy link</button>
