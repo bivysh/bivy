@@ -9,7 +9,8 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { WebSocketServer } from "ws";
 import { previewShell } from "./preview-shell.js";
-import { displayViewer, DISPLAY_SOCKET_PATH, DISPLAY_STATS_PATH, NOVNC_PATH } from "./display-viewer.js";
+import { displayViewer, DISPLAY_MENU_PATH, DISPLAY_SOCKET_PATH, DISPLAY_STATS_PATH, NOVNC_PATH } from "./display-viewer.js";
+import { pressMenu, readMenuPath, readMenus } from "./menu.js";
 import { inspectorScript } from "./inspector.js";
 import type { AppRegistry, RegisteredView } from "./registry.js";
 
@@ -401,6 +402,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
         viewport: { width: num(input.viewport?.width, 10_000), height: num(input.viewport?.height, 10_000), scale: num(input.viewport?.scale, 8) } };
       res.writeHead(204); res.end(); return;
     }
+    if (req.url === DISPLAY_MENU_PATH) { await this.displayMenu(req, res, entry); return; }
     if (!["GET", "HEAD"].includes(req.method ?? "")) { res.writeHead(405, { Allow: "GET, HEAD" }); res.end(); return; }
     const url = req.url!.split("?")[0]!;
     if (url.startsWith(NOVNC_PATH)) {
@@ -416,6 +418,24 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     headers["content-security-policy"] = `default-src 'none'; script-src 'self' 'nonce-${nonce}'; style-src 'nonce-${nonce}'; img-src data: blob:; connect-src 'self' ${this.origin(id).replace(/^https:/, "wss:")}; frame-ancestors ${this.ancestors(id)}; worker-src 'none'; base-uri 'none'; form-action 'none'`;
     res.writeHead(200, { ...headers, "content-type": "text/html; charset=utf-8", "content-length": body.length });
     res.end(req.method === "HEAD" ? undefined : body);
+  }
+  /** The app's menu bar for the viewer: HEAD says whether it has one, GET
+   * reads it, POST {path} chooses an item (same-origin, checked above). */
+  private async displayMenu(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): Promise<void> {
+    const control = entry.displayControl;
+    const json = (status: number, body: object) => { res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(body)); };
+    if (req.method === "HEAD") { res.writeHead(control ? 204 : 404); res.end(); return; }
+    if (!control) { json(404, { error: "This app's menus aren't available." }); return; }
+    try {
+      if (req.method === "GET") { json(200, { menus: await readMenus(control) }); return; }
+      if (req.method !== "POST") { res.writeHead(405, { Allow: "GET, HEAD, POST" }); res.end(); return; }
+      let body = "";
+      for await (const chunk of req) { body += chunk.toString(); if (body.length > 4096) { res.writeHead(413); res.end(); return; } }
+      let path: string[];
+      try { path = readMenuPath(JSON.parse(body).path); } catch (error) { json(400, { error: (error as Error).message }); return; }
+      await pressMenu(control, path);
+      res.writeHead(204); res.end();
+    } catch (error) { json(409, { error: (error as Error).message }); }
   }
   /** Relays a viewer's WebSocket to the display's private VNC socket. */
   private displaySocket(req: IncomingMessage, socket: Duplex, head: Buffer, entry: RegisteredView): void {

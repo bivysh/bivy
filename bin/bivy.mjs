@@ -2440,6 +2440,7 @@ async function cmdApp(args = []) {
        bivy app scroll <x> <y> [--up|--down|--left|--right] [--steps <n>] [--app <app>]
        bivy app drag <x> <y> <to-x> <to-y> [--app <app>]
        bivy app move <x> <y> [--app <app>]
+       bivy app menu ["File > Save"] [--app <app>]   macOS: list the menu bar, or choose an item
 
 Manifest: {"version":1,"name":"My app","views":[
   {"kind":"web","name":"Website","source":{"kind":"service","port":3000}},
@@ -2469,6 +2470,8 @@ app (default: the one opened last). Keys: a character or enter, tab, escape,
 backspace, delete, arrows (up…), home, end, pageup, pagedown, f1–f12, with
 modifiers shift, ctrl, alt/option, cmd. On a Mac, the pointer and keyboard
 focus move to the app while it's used.
+"menu" (macOS) lists the app's menu bar with shortcuts; "menu 'File > Save'"
+chooses an item — more reliable than clicking, and prints a screenshot after.
 "present" says a change is ready for the user to look at: they get a card in
 the chat with the app at phone width (and before/after), and it opens the live
 preview. Use it when you finish a visible change, or when the user asks to see
@@ -2483,6 +2486,7 @@ Web previews require operator setup; see docs/apps.md.`);
     return;
   }
   if (INPUT_ACTIONS[action]) return appInput(action, rest);
+  if (action === "menu") return appMenu(rest);
   if (!["publish", "list", "remove", "shot", "run", "present", "share"].includes(action)) throw new Error("Unknown app command. Run bivy app --help.");
   // `run -- <command> [args…]`: publish a one-window desktop app without a manifest file.
   let runManifest;
@@ -2546,7 +2550,39 @@ Web previews require operator setup; see docs/apps.md.`);
   await appRequest(action === "run" ? "publish" : action, body);
 }
 
-async function appRequest(action, body) {
+async function appMenu(rest) {
+  const options = {};
+  const positional = [];
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i] === "--app" || rest[i] === "--session") {
+      const value = rest[++i];
+      if (value === undefined || value.startsWith("--")) throw new Error(`${rest[i - 1]} requires a value.`);
+      options[rest[i - 1]] = value;
+    } else if (rest[i].startsWith("--")) throw new Error(`Unknown option ${rest[i]}. Run bivy app --help.`);
+    else positional.push(rest[i]);
+  }
+  if (positional.length > 1) throw new Error('Usage: bivy app menu ["File > Save"] [--app <app>]');
+  const sessionId = resolveAttachSessionId({ sessionFlag: options["--session"], env: process.env });
+  if (!sessionId) throw new Error("Set --session <id> or run inside a Bivy agent session.");
+  const body = { sessionId, ...(options["--app"] ? { target: options["--app"] } : {}) };
+  if (positional[0]) body.path = positional[0].split(">").map((part) => part.trim());
+  const result = await appRequest("menu", body, { print: false });
+  if (!result.menus) { console.log(JSON.stringify(result, null, 2)); return; }
+  // A tree an agent can read: one item per line, indented by level.
+  const lines = [];
+  const walk = (items, depth) => {
+    for (const item of items) {
+      if (item.separator) continue;
+      const note = [item.shortcut, item.checked && "checked", item.enabled === false && "disabled"].filter(Boolean).join(", ");
+      lines.push(`${"  ".repeat(depth)}${item.title}${note ? `  (${note})` : ""}`);
+      if (item.items) walk(item.items, depth + 1);
+    }
+  };
+  for (const menu of result.menus) { lines.push(menu.title); walk(menu.items, 1); }
+  console.log(lines.length ? `${lines.join("\n")}\n\nChoose one with: bivy app menu "<Menu> > <Item>"` : "This app has no menus.");
+}
+
+async function appRequest(action, body, { print = true } = {}) {
   const config = loadConfig();
   if (!(await ensureNodeRunning(config))) throw new Error("Could not reach the Bivy node.");
   const token = await localDeviceToken(config);
@@ -2561,7 +2597,8 @@ async function appRequest(action, body) {
     console.error("Anyone with this link can use the app, including its live backend, until it expires or you revoke it (Apps → Revoke access).");
     return;
   }
-  console.log(JSON.stringify(result, null, 2));
+  if (print) console.log(JSON.stringify(result, null, 2));
+  return result;
 }
 
 // Computer use in desktop apps: each command's positional arguments, and the
