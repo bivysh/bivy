@@ -8,6 +8,8 @@ import { useModalEscape } from "../modalStack.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
 import { FollowupQueue } from "./FollowupQueue.js";
 import { HandoffBanner } from "./HandoffBanner.js";
+import { StandbyNotice } from "./StandbyNotice.js";
+import { standbyCopyOf } from "../standby.js";
 import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { VoiceRecorder } from "./VoiceRecorder.js";
 import { Spinner } from "./Spinner.js";
@@ -238,6 +240,11 @@ export function Composer({
   const fileRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const isDraft = !state.activeSession.activeSessionId;
+  // Only a standby copy of this session lives here (warm replication).
+  const standby = standbyCopyOf(
+    state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId)?.source,
+    state.connection.nodes,
+  );
   const activeDraftKey = useRef(composerDraftKey(state.activeSession.activeSessionId));
   const activeDraftSession = useRef(state.activeSession.activeSessionId);
   const textRef = useRef(text);
@@ -655,6 +662,23 @@ export function Composer({
         </div>
       )}
 
+      {standby && state.activeSession.activeSessionId && (() => {
+        const sessionId = state.activeSession.activeSessionId;
+        return (
+          <StandbyNotice
+            standby={standby}
+            onOpenOnOwner={() => controller.openSessionOnNode(sessionId, undefined, standby.ownerId)}
+            onContinueHere={async () => {
+              try {
+                await controller.promoteSession(sessionId, state.connection.currentNodeId ?? "");
+                controller.store.setNotice("Continuing this session on this machine.");
+              } catch (err) {
+                controller.store.setError(err instanceof Error ? err.message : String(err));
+              }
+            }}
+          />
+        );
+      })()}
       {state.activeSession.activeSessionId && (
         <HandoffBanner
           sessionId={state.activeSession.activeSessionId}

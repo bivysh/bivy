@@ -16,7 +16,12 @@ function modelKey(model: ModelInfo & { provider?: unknown }): string {
  * retires it once the destination confirms. The copy/move default is
  * context-aware: move when the node changes, copy when it doesn't.
  */
-export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: () => void }) {
+export function ForkSheet({ sessionId, intent = "fork", onClose }: {
+  sessionId: string;
+  /** "move" opens on another machine (online first), set to retire the original. */
+  intent?: "fork" | "move";
+  onClose: () => void;
+}) {
   const { connection: { nodes, currentNodeId }, catalogs: { runtimes, models, currentModel }, activeSession: { activeSessionId, activeRuntimeId }, sessionIndex: { sessions } } = useAppState();
   // selectedAgentId is the node/global draft preference, not the owner of an
   // existing session. Prefer the runtime from canonical history for the active
@@ -25,7 +30,11 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
     ? activeRuntimeId
     : sessions.find((s) => s.sessionId === sessionId)?.runtimeId ?? null;
 
-  const [destNodeId, setDestNodeId] = useState<string>(currentNodeId ?? "");
+  const [destNodeId, setDestNodeId] = useState<string>(() => {
+    if (intent !== "move") return currentNodeId ?? "";
+    const others = nodes.filter((node) => node.id !== currentNodeId);
+    return (others.find((node) => node.online) ?? others[0])?.id ?? currentNodeId ?? "";
+  });
   const [managedConfig, setManagedConfig] = useState<EphemeralNodeConfig | null>(null);
   const [agentId, setAgentId] = useState<string | null>(sourceAgentId);
   const [model, setModel] = useState<ModelInfo | null>(currentModel);
@@ -138,6 +147,13 @@ export function ForkSheet({ sessionId, onClose }: { sessionId: string; onClose: 
             ))}
           </select>
         </div>
+      )}
+
+      {crossNode && willRetire && (
+        <p className="picker-section fork-note">
+          Carries the conversation, its branch and any uncommitted changes. The session here is retired once
+          it&rsquo;s running on the other machine; if the changes are too large to carry, nothing moves.
+        </p>
       )}
 
       <div className="picker-section">

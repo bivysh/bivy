@@ -1271,6 +1271,7 @@ button.sheet-action:last-child { border-bottom: 0; }
 .fork-select-field select { width: 100%; padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface); color: var(--ink); }
 .fork-toggle { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font-size: 13px; color: var(--ink); }
 .fork-toggle input { width: 16px; height: 16px; }
+.fork-note { margin: 0; padding: var(--space-2) var(--space-3); color: var(--muted); font-size: var(--text-sm); line-height: var(--lh-sm); }
 .fork-error { margin: 4px 12px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--surface-2); color: var(--danger); font-size: 12px; }
 .fork-warn { margin: 4px 12px; padding: 8px 10px; border-radius: var(--radius-md); background: var(--surface-2); color: var(--muted); font-size: 12px; }
 .fork-submit { width: calc(100% - 24px); margin: var(--space-2) var(--space-3); }
@@ -3202,7 +3203,7 @@ select.picker-search { appearance: auto; }
   .automation-history-view .autom-section-head > strong { min-width: 0; line-height: var(--lh-lg); }
 }
 
-/* Device handoff (HandoffBanner): sits above the composer like the composer
-   itself, with one line of the other device's draft. */
+/* Handoff notes above the composer (HandoffBanner, StandbyNotice): shaped like
+   the composer itself, with one line of another device's draft. */
 .handoff-banner { border-radius: var(--radius-md); }
 .handoff-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
