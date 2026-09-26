@@ -340,8 +340,17 @@ export function App() {
   // views drive the same conversation. Switching back to Chat takes the session
   // back (stops the TUI; the node rebuilds it from disk and the composer unlocks).
   const activeSessionId = state.activeSession.activeSessionId;
-  const [sessionView, setSessionViewState] = useState<SessionView>(() => readSessionView(sessionStorage, activeSessionId));
-  useEffect(() => { setSessionViewState(readSessionView(sessionStorage, activeSessionId)); }, [activeSessionId]);
+  // The chosen view, tracked with the session it belongs to. The stored choice is
+  // read during render (not in an effect) so switching sessions never leaves one
+  // render showing the previous session's view — which would briefly mount the
+  // terminal and resume a TUI for a session that should have opened in chat.
+  const [viewState, setViewState] = useState<{ id: string | null; view: SessionView }>(
+    () => ({ id: activeSessionId, view: readSessionView(sessionStorage, activeSessionId) }));
+  let sessionView = viewState.view;
+  if (viewState.id !== activeSessionId) {
+    sessionView = readSessionView(sessionStorage, activeSessionId);
+    setViewState({ id: activeSessionId, view: sessionView });
+  }
   const setSessionView = useCallback((view: SessionView) => {
     if (activeSessionId) writeSessionView(sessionStorage, activeSessionId, view);
     // Leaving Terminal for Chat hands the session back: stop the single-writer TUI
@@ -349,7 +358,7 @@ export function App() {
     if (view === "chat" && activeSessionId && state.sessionIndex.tuiSessions.includes(activeSessionId)) {
       controller.closeSessionTui(activeSessionId);
     }
-    setSessionViewState(view);
+    setViewState({ id: activeSessionId, view });
   }, [activeSessionId, state.sessionIndex.tuiSessions]);
   // Only offered when the runtime advertises an interactive TUI and we're online,
   // so the toggle always means "the live agent." The lock (activeTuiLocked) does
