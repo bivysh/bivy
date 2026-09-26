@@ -35,8 +35,8 @@ test("a draft follows to the next device until its author sends it", () => {
 
 test("the next device offers the draft only into an empty composer, and never its own activity", () => {
   const presence = { sessionId: "s1", driver: { ...mac, via: "chat" as const, at: 1_000 }, draft: { device: mac, text: "half a prompt", at: 1_000 } };
-  assert.deepEqual(handoffFor(presence, phone, true, 2_000), { kind: "draft", from: "Mac", text: "half a prompt", at: 1_000 });
-  assert.equal(handoffFor(presence, phone, false, 2_000)?.kind, "driver", "never replaces what's typed here");
+  assert.deepEqual(handoffFor(presence, phone, true, 2_000), { from: "Mac", text: "half a prompt", at: 1_000 });
+  assert.equal(handoffFor(presence, phone, false, 2_000), undefined, "never replaces what's typed here, and who drove last isn't a handoff");
   assert.equal(handoffFor(presence, mac, true, 2_000), undefined, "a device isn't told about itself");
   assert.equal(handoffFor(presence, phone, true, 1_000 + 31 * 60_000), undefined, "old activity isn't a handoff");
   assert.equal(deviceLabel("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15", 5), "iPad", "iPadOS reports itself as a Mac");
