@@ -4,7 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { AppManifest, AppView, DisplayStats, ReviewerNote, SessionApp } from "./types.js";
+import type { AppManifest, AppView, DisplayStats, ReviewCardMode, ReviewerNote, SessionApp } from "./types.js";
+import { REVIEW_CARD_MODES } from "./types.js";
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
@@ -13,7 +14,7 @@ type StaticTarget = { kind: "static"; files: Map<string, Buffer>; bytes: number 
 type Command = { command: string; args: string[]; workspace: string };
 export type AppTarget = StaticTarget | { kind: "service"; port: number; start?: Command } | ({ kind: "terminal" } & Command) | ({ kind: "display"; restartOnChange: boolean } & Command);
 /** What survives a node restart: the manifest and the IDs chat links point at. */
-interface Persisted { sessionId: string; workspace: string; manifest: AppManifest; id: string; viewIds: string[]; createdAt: number }
+interface Persisted { sessionId: string; workspace: string; manifest: AppManifest; id: string; viewIds: string[]; createdAt: number; reviewMode?: ReviewCardMode }
 export interface RegisteredView {
   app: SessionApp; view: AppView; target: AppTarget;
   /** Bumped when an agent turn changes files, so open previews reload. */
@@ -22,8 +23,10 @@ export interface RegisteredView {
   lastPath?: string;
   /** Reviewer notes from shared links, newest last, capped. */
   notes?: ReviewerNote[];
-  /** Recent screenshots for Compare, newest last (agent screenshots on only). */
-  shots?: { revision: number; at: number; png: Buffer }[];
+  /** Recent screenshots for Compare and review cards, newest last (agent screenshots on only). */
+  shots?: { revision: number; at: number; png: Buffer; path?: string }[];
+  /** When the preview was last opened: the view Show me picks by default. */
+  openedAt?: number;
   /** Where a static snapshot came from, so a turn can re-take it. */
   source?: { workspace: string; directory: string };
   /** A running display view's private VNC socket; the gateway streams it. */
@@ -116,7 +119,7 @@ export class AppRegistry extends EventEmitter {
       if (!keep.length) continue;
       // A workspace that moved or a build that vanished drops that app, not the rest.
       try {
-        this.publish(record.sessionId, record.workspace, { ...record.manifest, views: keep.map((k) => k.spec) }, { id: record.id, viewIds: keep.map((k) => k.id!), createdAt: record.createdAt });
+        this.publish(record.sessionId, record.workspace, { ...record.manifest, views: keep.map((k) => k.spec) }, { id: record.id, viewIds: keep.map((k) => k.id!), createdAt: record.createdAt, reviewMode: record.reviewMode });
       } catch { /* skipped */ }
     }
     this.save();
@@ -130,7 +133,7 @@ export class AppRegistry extends EventEmitter {
     } catch { try { fs.rmSync(tmp, { force: true }); } catch { /* ignore */ } }
   }
 
-  publish(sessionId: string, workspace: string, input: AppManifest, restore?: { id: string; viewIds: string[]; createdAt: number }): SessionApp {
+  publish(sessionId: string, workspace: string, input: AppManifest, restore?: { id: string; viewIds: string[]; createdAt: number; reviewMode?: ReviewCardMode }): SessionApp {
     const name = (value: unknown): string => {
       if (typeof value !== "string" || !value.trim() || value.length > 100) throw new Error("App and view names must contain 1–100 characters.");
       return value.trim();
@@ -138,7 +141,7 @@ export class AppRegistry extends EventEmitter {
     if (!input || input.version !== 1 || !Array.isArray(input.views) || !input.views.length || input.views.length > 8) throw new Error("Expected manifest version 1 with 1–8 views.");
     if (this.apps.size >= 50) throw new Error("Remove an app before publishing more (limit: 50).");
     const id = (i?: number) => (i === undefined ? restore?.id : restore?.viewIds[i]) ?? randomBytes(16).toString("hex");
-    const app: SessionApp = { id: id(), sessionId, name: name(input.name), views: [], createdAt: restore?.createdAt ?? Date.now() };
+    const app: SessionApp = { id: id(), sessionId, name: name(input.name), views: [], createdAt: restore?.createdAt ?? Date.now(), ...(restore?.reviewMode && REVIEW_CARD_MODES.includes(restore.reviewMode) ? { reviewMode: restore.reviewMode } : {}) };
     const entries: RegisteredView[] = [];
     let total = [...this.views.values()].reduce((sum, item) => sum + (item.target.kind === "static" ? item.target.bytes : 0), 0);
     for (const [index, spec] of input.views.entries()) {
@@ -173,7 +176,7 @@ export class AppRegistry extends EventEmitter {
     // Commit all views together: a bad later view cannot leave a partial app.
     this.apps.set(app.id, app);
     for (const entry of entries) this.views.set(entry.view.id, entry);
-    this.persisted.set(app.id, { sessionId, workspace, manifest: structuredClone(input), id: app.id, viewIds: app.views.map((v) => v.id), createdAt: app.createdAt });
+    this.persisted.set(app.id, { sessionId, workspace, manifest: structuredClone(input), id: app.id, viewIds: app.views.map((v) => v.id), createdAt: app.createdAt, ...(app.reviewMode ? { reviewMode: app.reviewMode } : {}) });
     if (!restore) this.save();
     return structuredClone(app);
   }
@@ -222,6 +225,16 @@ export class AppRegistry extends EventEmitter {
     if (!view || view.app.id !== appId) throw new Error("View not found in this app.");
     return view;
   }
+  /** Review cards for this app: remembered across sessions' restarts. */
+  setReviewMode(sessionId: string, id: string, mode: ReviewCardMode): void {
+    if (!REVIEW_CARD_MODES.includes(mode)) throw new Error("Preview cards are ready, every or off.");
+    const app = this.require(sessionId, id);
+    app.reviewMode = mode;
+    const record = this.persisted.get(id);
+    if (record) record.reviewMode = mode;
+    this.save();
+  }
+  reviewMode(id: string): ReviewCardMode { return this.apps.get(id)?.reviewMode ?? "ready"; }
   remove(sessionId: string, id: string): void {
     const app = this.require(sessionId, id);
     for (const view of app.views) this.views.delete(view.id);

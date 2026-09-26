@@ -180,7 +180,7 @@ import { CredentialsModelsCoordinator } from "./coordinators/credentials-models-
 import { EphemeralCoordinator } from "./coordinators/ephemeral-coordinator.js";
 import { AutomationsAccountCoordinator } from "./coordinators/automations-account-coordinator.js";
 import { FollowupCoordinator } from "./coordinators/followup-coordinator.js";
-import type { SessionPresence } from "@bivy/core";
+import type { ReviewCardMode, SessionPresence } from "@bivy/core";
 import { thisDevice } from "../device.js";
 
 /**
@@ -1621,7 +1621,7 @@ export class AppController {
 
   /** Apps use the same authenticated command path over direct HTTP or relay.
    *  `nodeId` targets another machine without switching to it. */
-  async appCommand(command: "apps.list" | "apps.offers" | "apps.adopt" | "apps.open" | "apps.logs" | "apps.clearNotes" | "apps.share" | "apps.revoke" | "apps.remove", sessionId: string, fields: { appId?: string; viewId?: string; returnTo?: string; port?: number; direct?: boolean } = {}, nodeId?: string | null): Promise<ServerEvent> {
+  async appCommand(command: "apps.list" | "apps.offers" | "apps.adopt" | "apps.open" | "apps.logs" | "apps.clearNotes" | "apps.share" | "apps.revoke" | "apps.remove" | "apps.showMe" | "apps.mute" | "apps.reviewMode", sessionId: string, fields: { appId?: string; viewId?: string; returnTo?: string; port?: number; direct?: boolean; path?: string; mode?: ReviewCardMode } = {}, nodeId?: string | null): Promise<ServerEvent> {
     const { connection } = this.store.getState();
     // A desktop app's display starts at this device's pixel density (1× or 2×).
     if (command === "apps.open") Object.assign(fields, { scale: typeof devicePixelRatio === "number" && devicePixelRatio >= 1.5 ? 2 : 1 });

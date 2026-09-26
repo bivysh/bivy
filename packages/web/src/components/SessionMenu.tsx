@@ -90,6 +90,7 @@ export function SessionMenu({
   auditHealth,
   eventLogHealth,
   onContinueInTerminal,
+  hasApps,
 }: {
   sessionId: string;
   name: string;
@@ -111,6 +112,8 @@ export function SessionMenu({
    *  Undefined (item hidden) when the runtime lacks `interactiveTui` or the node
    *  is offline — the reverse of the terminal's "continue in chat". */
   onContinueInTerminal?: () => void;
+  /** The session has published apps: offer Show me (a review card now). */
+  hasApps?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -231,6 +234,11 @@ export function SessionMenu({
               <span>The last {eventLogHealth.operation ?? "storage"} operation failed. History may be incomplete.</span>
             </div>
           )}
+          {hasApps && <button className="menu-item session-actions-item" role="menuitem" onClick={() => {
+            close();
+            // The card lands in the chat when the screenshot is ready.
+            void controller.appCommand("apps.showMe", sessionId).catch((e: unknown) => controller.store.setError(e instanceof Error ? e.message : "Couldn't show the app"));
+          }}>Show me the app</button>}
           <button className="menu-item session-actions-item" role="menuitem" onClick={() => { close(); setAppsOpen(true); }}>Apps…</button>
           <button className="menu-item session-actions-item" role="menuitem" onClick={copyReference} disabled={prBusy}>
             Copy session reference

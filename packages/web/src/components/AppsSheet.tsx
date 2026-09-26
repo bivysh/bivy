@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import type { AppOffer, AppView, OpenAppViewResult, SessionApp, SessionAppOffersResult, SessionAppsResult, ShareAppViewResult } from "@bivy/core";
+import type { AppOffer, AppView, OpenAppViewResult, ReviewCardMode, SessionApp, SessionAppOffersResult, SessionAppsResult, ShareAppViewResult } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
 import { Sheet } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -27,7 +27,11 @@ const VIEW_LABELS = {
 /** `nodeId` opens a session's apps on another machine without switching to it.
  *  Terminal views stream over the connected machine's link, so for another
  *  machine they hand off to the chat (`onOpenInChat`), which switches there. */
-export function AppsSheet({ sessionId, appId, nodeId, onOpenInChat, onClose }: { sessionId: string; appId?: string; nodeId?: string | null; onOpenInChat?: () => void; onClose: () => void }) {
+/** What "Preview cards" means for an app, in its ⋯ menu and on review cards. */
+export const REVIEW_MODE_LABELS: Record<ReviewCardMode, string> = { ready: "When ready", every: "Every change", off: "Off" };
+
+/** `openView`: open this view straight away (a review card's Open preview), on `path` if given. */
+export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, onClose }: { sessionId: string; appId?: string; nodeId?: string | null; openView?: { viewId: string; path?: string }; onOpenInChat?: () => void; onClose: () => void }) {
   const { connection } = useAppState();
   const remote = Boolean(nodeId) && !controller.direct && nodeId !== connection.currentNodeId;
   const machine = remote ? nodeId : connection.currentNodeId;
@@ -88,7 +92,7 @@ export function AppsSheet({ sessionId, appId, nodeId, onOpenInChat, onClose }: {
   /** Opens a published view, or publishes a detected server first (`offer`).
    *  Web views peek in a drawer over the chat unless a tab is asked for or this
    *  browser refuses framed preview cookies. */
-  const open = async (target: { app: SessionApp; view: AppView } | { offer: AppOffer }, mode: "peek" | "tab" = "peek") => {
+  const open = async (target: { app: SessionApp; view: AppView } | { offer: AppOffer }, mode: "peek" | "tab" = "peek", path?: string) => {
     const current = generation.current;
     setBusy(true); setError(""); setLink(null); setConfirm(null);
     const web = "offer" in target || target.view.kind === "web";
@@ -116,7 +120,7 @@ export function AppsSheet({ sessionId, appId, nodeId, onOpenInChat, onClose }: {
           setOffers((prev) => prev.filter((item) => item.port !== target.offer.port));
         }
       } else ({ app, view } = target);
-      const response = await controller.appCommand("apps.open", sessionId, { appId: app.id, viewId: view.id, returnTo: `${accountOrigin()}/sessions/${encodeURIComponent(sessionId)}` }, nodeId) as unknown as OpenAppViewResult;
+      const response = await controller.appCommand("apps.open", sessionId, { appId: app.id, viewId: view.id, returnTo: `${accountOrigin()}/sessions/${encodeURIComponent(sessionId)}`, ...(path ? { path } : {}) }, nodeId) as unknown as OpenAppViewResult;
       if (generation.current !== current) { popup?.close(); return; }
       if (response.kind === "terminal") setTerminal(response.termId);
       else if (response.kind === "web") {
@@ -132,6 +136,23 @@ export function AppsSheet({ sessionId, appId, nodeId, onOpenInChat, onClose }: {
     const url = new URL(raw);
     if (url.protocol !== "https:" || url.origin === location.origin || url.username || url.password) throw new Error("Machine returned an unsafe preview URL.");
     return url.href;
+  };
+  // A review card's Open preview: go straight to the view once the list is in.
+  const opened = useRef(false);
+  useEffect(() => {
+    if (!openView || opened.current || !result) return;
+    const app = result.apps.find((item) => item.views.some((view) => view.id === openView.viewId));
+    const view = app?.views.find((item) => item.id === openView.viewId);
+    if (!app || !view) return;
+    opened.current = true;
+    void open({ app, view }, "peek", openView.path);
+  }, [openView, result]); // eslint-disable-line react-hooks/exhaustive-deps
+  const setReviewMode = async (app: SessionApp, mode: ReviewCardMode) => {
+    setError("");
+    try {
+      await controller.appCommand("apps.reviewMode", sessionId, { appId: app.id, mode }, nodeId);
+      setResult((prev) => prev && { ...prev, apps: prev.apps.map((item) => item.id === app.id ? { ...item, reviewMode: mode } : item) });
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not change preview cards."); }
   };
   /** A managed server's output opens in the existing terminal overlay. */
   const logs = async (app: SessionApp, view: AppView) => {
@@ -230,7 +251,11 @@ export function AppsSheet({ sessionId, appId, nodeId, onOpenInChat, onClose }: {
       {shown.map((app) => <section className="apps-card" key={app.id} aria-label={app.name}>
         <AppRow tile={appInitial(app.name)} name={app.name}
           meta={`${app.views.length === 1 ? "1 view" : `${app.views.length} views`}${app.createdAt ? ` · published ${relTime(app.createdAt)} ago` : ""}`}
-          action={<MoreMenu label={`More actions for ${app.name}`} items={[{ label: "Remove app…", danger: true, disabled: busy || !online, onSelect: () => setConfirm({ app }) }]} />} />
+          action={<MoreMenu label={`More actions for ${app.name}`} items={[
+            { heading: "Preview cards in chat" },
+            ...(["ready", "every", "off"] as const).map((mode) => ({ label: REVIEW_MODE_LABELS[mode], checked: (app.reviewMode ?? "ready") === mode, disabled: busy || !online, onSelect: () => void setReviewMode(app, mode) })),
+            { label: "Remove app…", danger: true, disabled: busy || !online, onSelect: () => setConfirm({ app }), separated: true },
+          ]} />} />
         {app.views.map((view) => {
           const kind = view.kind === "terminal" ? "terminal" : view.source === "service" && view.managed ? "managed" : view.source;
           const Icon = view.kind === "terminal" ? TerminalIcon : view.source === "display" ? DisplayIcon : GlobeIcon;
@@ -291,25 +316,34 @@ export function formatCommand(command: string, args: readonly string[] = []): st
   return [command, ...args].map((word) => /^[\w@%+=:,./-]+$/.test(word) ? word : JSON.stringify(word)).join(" ");
 }
 
-type MoreItem = { label: string; danger?: boolean; disabled?: boolean; onSelect: () => void };
-/** Rare or destructive actions, behind a ⋯ button (the canonical .menu). */
-function MoreMenu({ label, items }: { label: string; items: MoreItem[] }) {
+export type MoreItem = { heading: string } | { label: string; danger?: boolean; disabled?: boolean; onSelect: () => void;
+  /** A choice among the items after the last heading (menuitemradio). */
+  checked?: boolean;
+  /** A rule above it, to set it apart from the choices before. */
+  separated?: boolean };
+/** Rare or destructive actions, and settings, behind a ⋯ button (the canonical .menu). */
+export function MoreMenu({ label, items, onOpen }: { label: string; items: MoreItem[]; onOpen?: () => void }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useModalEscape(() => setOpen(false), open);
   useEffect(() => {
     if (!open) return;
-    ref.current?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)")?.focus();
+    ref.current?.querySelector<HTMLButtonElement>("[role^=menuitem]:not(:disabled)")?.focus();
     const onDoc = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
     document.addEventListener("click", onDoc);
     return () => document.removeEventListener("click", onDoc);
   }, [open]);
   return <div className="apps-more" ref={ref}>
     <button type="button" className="btn ghost icon" aria-label={label} title="More" aria-haspopup="menu" aria-expanded={open}
-      onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}><MoreIcon size={18} /></button>
+      onClick={(e) => { e.stopPropagation(); if (!open) onOpen?.(); setOpen((v) => !v); }}><MoreIcon size={18} /></button>
     {open && <div className="menu apps-more-menu" role="menu" aria-label={label}>
-      {items.map((item) => <button key={item.label} type="button" role="menuitem" className={`menu-item${item.danger ? " danger" : ""}`} disabled={item.disabled}
-        onClick={() => { setOpen(false); item.onSelect(); }}>{item.label}</button>)}
+      {items.map((item) => "heading" in item
+        ? <div key={item.heading} className="menu-heading" role="presentation">{item.heading}</div>
+        : <button key={item.label} type="button" role={item.checked === undefined ? "menuitem" : "menuitemradio"} aria-checked={item.checked}
+            className={`menu-item${item.danger ? " danger" : ""}${item.separated ? " separated" : ""}`} disabled={item.disabled}
+            onClick={() => { setOpen(false); item.onSelect(); }}>
+            <span className="menu-item-label">{item.label}</span>{item.checked && <CheckIcon size={15} aria-hidden />}
+          </button>)}
     </div>}
   </div>;
 }

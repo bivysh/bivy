@@ -7,7 +7,7 @@
 
 import type { TranscriptEntry } from "@bivy/core";
 
-export type MessageTarget = { hash: string } | { appId: string };
+export type MessageTarget = { hash: string } | { appId: string } | { reviewId: string };
 
 /** A jump that hasn't resolved by then (another machine never connected, the
  *  history never loaded, or the message was rewound away) is dropped rather
@@ -21,8 +21,8 @@ export function requestMessageJump(sessionId: string, target: MessageTarget): vo
 }
 
 const matches = (entry: TranscriptEntry, target: MessageTarget): boolean =>
-  "hash" in target
-    ? Boolean(entry.attachments?.some((attachment) => attachment.hash === target.hash))
+  "hash" in target ? Boolean(entry.attachments?.some((attachment) => attachment.hash === target.hash))
+    : "reviewId" in target ? entry.review?.id === target.reviewId
     : entry.app?.appId === target.appId;
 
 /** The pending jump's entry index for this session, once it is present. The

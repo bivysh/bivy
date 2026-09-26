@@ -50,3 +50,18 @@ test("session envelopes deliver launchers to the focused chat without starting a
   assert.equal(store.getState().activeSession.working, false);
 });
 
+
+test("a review card replays as its latest state, once, after a reload", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-review-history-"));
+  try {
+    const create = () => new EventLog(dir, (id) => path.join(dir, `${id}.jsonl`));
+    const log = create();
+    const review = { id: "review-0123456789abcdef", sessionId: "s", appId: app.appId, viewId: "b".repeat(32), name: app.name, view: "Site", path: "/", trigger: "run" as const, at: 1, shot: { hash: "c".repeat(64), size: 1, width: 780, height: 1688 } };
+    log.appendBaseSnapshot("s", [{ role: "user", content: "Tidy the invoice table" }, { role: "assistant", content: "Done." }]);
+    log.appendAppReview("s", { afterMessageCount: 1, createdAt: 1, review });
+    log.appendAppReview("s", { afterMessageCount: 2, createdAt: 2, review: { ...review, trigger: "present", note: "Ready" } });
+    log.flush("s");
+    const cards = renderHistory(create().deriveHistory("s")).filter((entry) => entry.review);
+    assert.deepEqual(cards.map((entry) => [entry.review?.trigger, entry.review?.note, entry.review?.shot?.hash]), [["present", "Ready", "c".repeat(64)]]);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});

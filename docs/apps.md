@@ -111,6 +111,55 @@ screenshot their app previews*. From a terminal, run
 `BIVY_APP_SCREENSHOTS=1`). While it's off, the command explains how to turn it
 on.
 
+### Review cards (`bivy app present`)
+
+```sh
+bivy app present                                  # the view opened last
+bivy app present Storefront --path /checkout --note "New pay button"
+```
+
+A review card shows the running app in the chat when there is something to
+judge: the app at phone width, a **Before / Now** switch when the run changed
+it, and **Open preview**, which opens the live preview on that page. There is
+one card per app per run; later changes in the same run update it in place.
+A card appears when:
+
+1. **The agent presents it.** `bivy app present` means "this is ready to look
+   at". Any agent can run it, and users can ask for it ("show me when it's
+   ready"). It first picks up files written since the turn began, so the
+   picture and any open preview show them. It prints JSON with the card and a
+   message saying what the user will see.
+2. **A run ends with a visible change.** When the agent stops (done, or
+   waiting for the user), each web view whose revision changed during the run
+   is screenshotted and compared with the page before the run. A card is made
+   only if enough pixels differ. A backend-only run makes no card.
+3. **The user asks.** *Show me the app* in the session menu, or on a
+   "finished" notification (where the device supports notification actions),
+   takes one now.
+
+**Preview cards: When ready · Every change · Off**, per app, in the app's ⋯
+menu (Apps sheet) or the card's ⋯ menu, and remembered with the app. *When
+ready* is the default (triggers 1 and 2, above a small threshold of changed
+pixels, about a changed label). *Every change* also shows small visual tweaks.
+*Off* makes no cards on its own; Show me still works. **Mute for this run** on
+a card stops further cards until the agent's next run.
+
+Cards need agent screenshots (see above). While they're off, a presented or
+requested card has no picture and offers **Turn on**; Bivy never turns
+screenshots on by itself. To measure a change, Bivy needs the page as it was
+before the run: the screenshot from the previous run or Compare, or, the first
+time, one taken when the run starts.
+
+**Notifications.** There is no new notification. When nobody has the session
+open, the existing "finished" notification says the app changed and opens the
+card. It carries IDs only, never the image: the screenshot is an encrypted
+chat attachment the device fetches over the session channel. It waits up to
+30 seconds for the card.
+
+**Storage.** Screenshots are stored like other chat attachments (end-to-end
+encrypted in transit, in the node's attachment store). Each view keeps only
+its latest card's pictures: an older card shows "Screenshot no longer stored".
+
 ### Servers Bivy runs (`start`)
 
 A service view can say how to start its server:
@@ -377,7 +426,7 @@ own bottom bar.
   **Send to agent…** drafts them the same way.
 - **Full / Tablet / Phone** (wide screens): constrains the app to 768 or 390 px.
 - **Compare** (with agent screenshots on): before/after screenshots at phone
-  width around the agent's last change, with a handle to reveal either. Bivy
+  width around the agent's last change (review cards reuse these shots), with a handle to reveal either. Bivy
   takes a baseline the first time a view is opened, and one after each turn that
   changes files, of the page last viewed. The last four are kept in memory.
 
@@ -438,6 +487,10 @@ preview gate; PWA/offline behavior must be tested outside this preview mode.
   and relay control. The CLI uses these same endpoints.
 - `AppMessage.tsx`: durable, ID-based chat launcher; the event log and live
   transcript reducer carry references, never access grants.
+- `src/apps/review.ts` and `ReviewCard.tsx`: review cards. When a card is made
+  is a table of modes (`REVIEW_MODES`); the service tracks runs and reuses
+  Compare's shots; the server stores screenshots as attachments and logs the
+  card (`app-review`), which updates in place by ID.
 - `src/apps/display.ts`, `x11.ts`, `rfb.ts`, `display-viewer.ts`: desktop
   views — a private Xvnc display per view, a minimal window manager that fits
   windows to the viewer, VNC capture for screenshots, and the noVNC viewer the
