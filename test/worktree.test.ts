@@ -4,7 +4,7 @@ import { promisify } from "node:util";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { branchSlug, gitRepoRoot, createWorktree, removeWorktree } from "../src/worktree.js";
+import { branchSlug, gitRepoRoot, createWorktree, removeWorktree, describeWorktreeAddError } from "../src/worktree.js";
 
 const exec = promisify(execFile);
 
@@ -118,7 +118,46 @@ async function main() {
       fs.rmSync(empty, { recursive: true, force: true });
     }
 
-    console.log("worktree: ok (create, local/remote recovery, dirty work preservation, collision safety, invalid-base fallback, empty-repo orphan)");
+    // Managed repos are partial clones: `worktree add` lazily fetches blobs from
+    // origin. When that fetch can't authenticate, the daemon (no TTY) used to
+    // surface git's raw "could not read Username …: Device not configured".
+    const authFailure = describeWorktreeAddError(
+      "Preparing worktree (new branch 'bivy/x')\nfatal: could not read Username for 'https://github.com': terminal prompts disabled\nfatal: could not fetch 4058 from promisor remote\n",
+    );
+    assert.match(authFailure ?? "", /^Couldn't create the session's worktree: .*no GitHub credentials/);
+    assert.match(authFailure ?? "", /\n\nPreparing worktree/, "git output is kept as details");
+    assert.match(describeWorktreeAddError("fatal: could not read Username for 'https://github.com/o/r.git': Device not configured") ?? "", /no GitHub credentials/);
+    assert.equal(describeWorktreeAddError("fatal: 'x' is already checked out"), undefined, "unrelated failures keep the raw error");
+
+    // End to end: a partial clone whose promisor remote has gone away.
+    const partialRoot = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-wt-partial-"));
+    try {
+      const src = path.join(partialRoot, "src");
+      const clone = path.join(partialRoot, "clone");
+      fs.mkdirSync(src);
+      await exec("git", ["-C", src, "init", "-q", "-b", "main"]);
+      await exec("git", ["-C", src, "config", "user.email", "t@t"]);
+      await exec("git", ["-C", src, "config", "user.name", "t"]);
+      await exec("git", ["-C", src, "config", "uploadpack.allowFilter", "true"]);
+      fs.writeFileSync(path.join(src, "a.txt"), "a\n");
+      await exec("git", ["-C", src, "add", "-A"]);
+      await exec("git", ["-C", src, "commit", "-qm", "a"]);
+      await exec("git", ["clone", "-q", "--filter=blob:none", `file://${src}`, clone]);
+      // A later commit whose blob the clone never downloaded.
+      fs.writeFileSync(path.join(src, "b.txt"), "b\n");
+      await exec("git", ["-C", src, "add", "-A"]);
+      await exec("git", ["-C", src, "commit", "-qm", "b"]);
+      await exec("git", ["-C", clone, "fetch", "-q", "origin"]);
+      fs.rmSync(src, { recursive: true, force: true });
+      await assert.rejects(
+        createWorktree({ repoDir: clone, id: "session-lazy", base: "origin/main" }),
+        /^Error: Couldn't create the session's worktree: git had to download repository files/,
+      );
+    } finally {
+      fs.rmSync(partialRoot, { recursive: true, force: true });
+    }
+
+    console.log("worktree: ok (create, local/remote recovery, dirty work preservation, collision safety, invalid-base fallback, empty-repo orphan, lazy-fetch failure message)");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -5,6 +5,7 @@ import { promisify } from "node:util";
 import fs from "node:fs";
 import path from "node:path";
 
+import { gitNonInteractiveEnv } from "./git-auth.js";
 import { cowProvisionDeps, provisionDepsByInstall } from "./worktree-provision.js";
 
 const exec = promisify(execFile);
@@ -116,7 +117,7 @@ export async function createWorktree(opts: {
   const localExists = await refExists(repoRoot, `refs/heads/${branch}`);
   const remoteExists = !localExists && await refExists(repoRoot, `refs/remotes/origin/${branch}`);
   if (localExists) {
-    await exec("git", ["-C", repoRoot, "worktree", "add", wtPath, branch]);
+    await worktreeAdd(repoRoot, [wtPath, branch]);
   } else {
     if (remoteExists) base = `refs/remotes/origin/${branch}`;
     else if (base !== "HEAD" && !(await refExists(repoRoot, base))) base = "HEAD";
@@ -125,9 +126,9 @@ export async function createWorktree(opts: {
       // Empty repo (e.g. a freshly created GitHub repo with no commits): HEAD is
       // unborn, so it can't seed a worktree. Start the branch as an orphan —
       // the session's first commit becomes the repo's root commit.
-      await exec("git", ["-C", repoRoot, "worktree", "add", "--orphan", "-b", branch, wtPath]);
+      await worktreeAdd(repoRoot, ["--orphan", "-b", branch, wtPath]);
     } else {
-      await exec("git", ["-C", repoRoot, "worktree", "add", "-b", branch, wtPath, base]);
+      await worktreeAdd(repoRoot, ["-b", branch, wtPath, base]);
     }
   }
 
@@ -148,6 +149,42 @@ export async function createWorktree(opts: {
   }
 
   return { path: wtPath, branch, repoRoot };
+}
+
+/**
+ * `git worktree add`, non-interactively. Managed repos are partial clones
+ * (`--filter=blob:none`), so the checkout lazily fetches blobs from origin and
+ * needs credentials. The daemon has no TTY: without GIT_TERMINAL_PROMPT=0 a
+ * credential miss falls through to git's terminal prompt, which fails with the
+ * cryptic "could not read Username …: Device not configured" (macOS ENXIO).
+ */
+async function worktreeAdd(repoRoot: string, args: string[]): Promise<void> {
+  try {
+    await exec("git", ["-C", repoRoot, "worktree", "add", ...args], { env: gitNonInteractiveEnv() });
+  } catch (error) {
+    const stderr = String((error as { stderr?: unknown }).stderr ?? "");
+    const friendly = describeWorktreeAddError(stderr);
+    if (friendly) throw new Error(friendly, { cause: error });
+    throw error;
+  }
+}
+
+/**
+ * Turn a `git worktree add` failure caused by the lazy blob fetch into a message
+ * a person can act on, with git's output kept below as details. Returns
+ * undefined for any other failure (the raw error is already specific).
+ */
+export function describeWorktreeAddError(stderr: string): string | undefined {
+  const detail = stderr.trim();
+  const auth = /could not read (Username|Password)|terminal prompts disabled|Authentication failed|Invalid username or (password|token)|Permission to .* denied/i.test(detail);
+  const promisor = /from promisor remote/i.test(detail);
+  if (auth) {
+    return `Couldn't create the session's worktree: git had to download repository files from GitHub, but no GitHub credentials were available on this machine. Reconnect GitHub for this machine in Bivy, then start the session again.\n\n${detail}`;
+  }
+  if (promisor) {
+    return `Couldn't create the session's worktree: git had to download repository files from the remote and the download failed. Check this machine's network connection, then start the session again.\n\n${detail}`;
+  }
+  return undefined;
 }
 
 /** True if `ref` (a fully-qualified ref) resolves in the repo. */
