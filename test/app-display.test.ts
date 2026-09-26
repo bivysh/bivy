@@ -16,14 +16,15 @@ import { DisplayHost, findXvnc } from "../src/apps/display.js";
 import { captureFrame } from "../src/apps/rfb.js";
 import type { AppManifest } from "../packages/core/src/apps.js";
 
-const manifest: AppManifest = { version: 1, name: "Editor", views: [{ kind: "display", name: "Window", command: "my-editor", args: ["--new"] }] };
+const manifest: AppManifest = { version: 1, name: "Editor", views: [{ kind: "display", name: "Window", command: "my-editor", args: ["--new"], restartOnChange: true }] };
 const until = async (check: () => boolean) => { for (let i = 0; i < 400 && !check(); i++) await new Promise((r) => setTimeout(r, 5)); assert.ok(check()); };
 
-test("desktop views start their display, then the app on it; restart the app; stop both on remove", async () => {
+test("desktop views start their display at the viewer's density, then the app; restart it on exit and after changes; stop both on remove", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-display-"));
   const live = new Set<string>(); const started: { command: string; env?: Record<string, string> }[] = []; const stopped: string[] = [];
   const terminals = { start: async (spec: { command: string; env?: Record<string, string> }) => { const id = `t${started.length}`; started.push(spec); live.add(id); return id; }, has: (id: string) => live.has(id), close: (id: string) => { live.delete(id); } };
-  const displays: AppDisplayProvider = { unavailable: () => undefined, ensure: async () => ({ socket: "/run/vnc.sock", env: { DISPLAY: ":100" }, wm: { count: 1 } }), stop: (id) => { stopped.push(id); } };
+  const scales: (number | undefined)[] = [];
+  const displays: AppDisplayProvider = { unavailable: () => undefined, ensure: async (_id, _name, scale) => { scales.push(scale); return { socket: "/run/vnc.sock", env: { DISPLAY: ":100" }, wm: { count: 1 } }; }, stop: (id) => { stopped.push(id); } };
   const gateway = { open: () => "https://view-x.preview.example.net/__bivy/open#t", share: () => ({ url: "", expiresAt: 0 }), revoke: () => {} };
   try {
     const refused = new AppService(new AppRegistry(), gateway, terminals, { displays: { ...displays, unavailable: () => "Needs Linux." } });
@@ -35,13 +36,17 @@ test("desktop views start their display, then the app on it; restart the app; st
     assert.deepEqual(app.views.map((v) => v.kind === "web" && [v.source, v.managed]), [["display", true]], "shown through the web preview, with logs");
     assert.deepEqual(started, [], "publishing starts nothing");
     const viewId = app.views[0].id;
-    await service.open("s", app.id, viewId);
+    await service.open("s", app.id, viewId, undefined, false, 2);
     await until(() => started.length === 1);
+    assert.equal(scales[0], 2, "a 2× phone gets a 2× display");
     assert.equal(started[0].command, "my-editor");
     assert.equal(started[0].env?.DISPLAY, ":100");
     assert.equal(registry.getView(viewId)!.display, "/run/vnc.sock", "the gateway can find the display");
     live.delete("t0"); // the app exits
     await until(() => started.length === 2);
+    assert.deepEqual(service.turnChanged("s"), [viewId]);
+    await until(() => started.length === 3);
+    assert.equal(live.has("t1"), false, "the old instance is closed, not left running");
     service.remove("s", app.id);
     assert.deepEqual(stopped, [viewId]);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
@@ -99,6 +104,13 @@ test("a display view's origin serves only its viewer and noVNC, and streams the 
     assert.equal(String(await new Promise((resolve) => ws.once("message", resolve))), "ping");
     ws.close();
 
+    const stats = await new Promise<number>((resolve) => {
+      const req = http.request({ agent: false, hostname: "127.0.0.1", port, path: "/__bivy/display-stats", method: "POST", headers: { host, origin, "content-type": "application/json", ...cookie } }, (res) => { res.resume(); resolve(res.statusCode!); });
+      req.end(JSON.stringify({ latencyMs: { p50: 12.34, p95: "x" }, kBps: 1e12, viewport: { width: 390, height: 844, scale: 2 }, extra: "<script>" }));
+    });
+    assert.equal(stats, 204);
+    assert.deepEqual({ ...registry.getView(id)!.stats, at: 0 }, { at: 0, latencyMs: { p50: 12.3, p95: 0 }, kBps: 1e6, viewport: { width: 390, height: 844, scale: 2 } }, "numbers only, bounded");
+
     const elsewhere = new WebSocket(`ws://127.0.0.1:${port}/other`, { headers: { host, origin, ...cookie } });
     await assert.rejects(once(elsewhere, "open"), /403/);
   } finally { gateway.close(); vnc.close(); fs.rmSync(dir, { recursive: true, force: true }); }
@@ -125,10 +137,11 @@ async function xClient(display: { env: Record<string, string> }) {
     words.forEach((w, i) => out.writeUInt32LE(w >>> 0, 4 + i * 4)); socket.write(Buffer.concat([out, extra]));
   };
   return {
-    window(width: number, height: number, parent?: number): number {
+    window(width: number, height: number, options: { parent?: number; min?: [number, number] } = {}): number {
       const id = base | ++next;
       send(1, 0, [id, root, 0, width | (height << 16), 1, 0, 0]); // CreateWindow, InputOutput
-      if (parent) send(18, 0, [id, 68, 33, 32, 1, parent]); // WM_TRANSIENT_FOR
+      if (options.parent) send(18, 0, [id, 68, 33, 32, 1, options.parent]); // WM_TRANSIENT_FOR
+      if (options.min) send(18, 0, [id, 40, 41, 32, 18, 16, 0, 0, 0, 0, ...options.min, ...Array(11).fill(0)]); // WM_NORMAL_HINTS, PMinSize
       send(8, 0, [id]); // MapWindow
       return id;
     },
@@ -136,23 +149,32 @@ async function xClient(display: { env: Record<string, string> }) {
       send(14, 0, [id]); // GetGeometry
       for (;;) { const reply = await read(32); if (reply[0] === 1) return [reply.readInt16LE(12), reply.readInt16LE(14), reply.readUInt16LE(16), reply.readUInt16LE(18)]; }
     },
+    async resources(): Promise<string> {
+      send(20, 0, [root, 23, 31, 0, 1024]); // GetProperty RESOURCE_MANAGER
+      for (;;) { const head = await read(32); if (head[0] !== 1) continue; const body = await read(head.readUInt32LE(4) * 4); return body.subarray(0, head.readUInt32LE(16)).toString(); }
+    },
     close: () => socket.destroy(),
   };
 }
 
-test("a real display fits app windows to the screen, centers dialogs, and is captured as a PNG", { skip: (process.platform !== "linux" || !findXvnc()) && "needs Linux with TigerVNC (Xvnc)" }, async () => {
+test("a real 2× display fits windows, centers dialogs, grows for wide ones, and is captured as a PNG", { skip: (process.platform !== "linux" || !findXvnc()) && "needs Linux with TigerVNC (Xvnc)" }, async () => {
   const host = new DisplayHost();
   try {
-    const display = await host.ensure("view", "Test");
-    assert.deepEqual(display.wm.size, [1280, 800]);
+    const display = await host.ensure("view", "Test", 2);
+    assert.deepEqual(display.wm.size, [2560, 1600]);
+    assert.equal(display.env.GDK_SCALE, "2");
     const client = await xClient(display);
+    assert.match(await client.resources(), /^Xft\.dpi:\t192$/m, "Chromium/Electron scale from Xft.dpi");
     const main = client.window(300, 200);
-    const dialog = client.window(400, 300, main);
+    const dialog = client.window(400, 300, { parent: main });
     await until(() => display.wm.count === 2);
-    assert.deepEqual(await client.geometry(main), [0, 0, 1280, 800], "a window fills the display");
-    assert.deepEqual(await client.geometry(dialog), [440, 250, 400, 300], "a dialog keeps its size, centered");
+    assert.deepEqual(await client.geometry(main), [0, 0, 2560, 1600], "a window fills the display");
+    assert.deepEqual(await client.geometry(dialog), [1080, 650, 400, 300], "a dialog keeps its size, centered");
+    const wide = client.window(100, 100, { min: [3000, 900] });
+    await until(() => display.wm.size[0] === 3000);
+    assert.deepEqual(await client.geometry(wide), [0, 0, 3000, 1600], "the screen grows instead of cutting it off");
     const frame = await captureFrame(display.socket);
-    assert.deepEqual([frame.width, frame.height, frame.rgb.length], [1280, 800, 1280 * 800 * 3]);
+    assert.deepEqual([frame.width, frame.height, frame.rgb.length], [3000, 1600, 3000 * 1600 * 3]);
     client.close();
     const dir = path.dirname(display.socket);
     host.stop("view");

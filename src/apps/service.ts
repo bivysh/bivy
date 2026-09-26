@@ -26,7 +26,7 @@ export interface AppTerminalProvider {
 /** Private displays for desktop views (see display.ts). */
 export interface AppDisplayProvider {
   unavailable(): string | undefined;
-  ensure(id: string, name: string): Promise<{ socket: string; env: Record<string, string>; wm: { count: number } }>;
+  ensure(id: string, name: string, scale?: number): Promise<{ socket: string; env: Record<string, string>; wm: { count: number } }>;
   stop(id: string): void;
 }
 const NO_DISPLAYS: AppDisplayProvider = { unavailable: () => "Desktop app views aren't available on this machine.", ensure: () => Promise.reject(new Error("Desktop app views aren't available on this machine.")), stop: () => {} };
@@ -69,8 +69,9 @@ export class AppService {
     for (const app of apps) for (const view of app.views) {
       if (view.kind !== "web") continue;
       if (available) view.address = this.gateway?.address?.(view.id);
-      const notes = this.registry.getView(view.id)?.notes;
-      if (notes?.length) view.notes = structuredClone(notes);
+      const entry = this.registry.getView(view.id);
+      if (entry?.notes?.length) view.notes = structuredClone(entry.notes);
+      if (entry?.stats) view.stats = structuredClone(entry.stats);
     }
     return { apps, previewAvailable: available };
   }
@@ -84,6 +85,15 @@ export class AppService {
    * screenshots on, Compare gets an "after" shot once servers have rebuilt. */
   turnChanged(sessionId: string): string[] {
     const bumped = this.registry.touch(sessionId);
+    // Desktop apps that asked for it are restarted, so they run the new code.
+    for (const id of bumped) {
+      const entry = this.registry.getView(id);
+      const server = this.servers.get(id);
+      if (entry?.target.kind !== "display" || !server?.termId) continue;
+      this.terminals.close(server.termId);
+      server.termId = undefined;
+      void this.ensureServer(entry).catch(() => {});
+    }
     if (bumped.length && this.screenshots.enabled()) setTimeout(() => void this.capture(bumped), COMPARE_SETTLE_MS).unref?.();
     return bumped;
   }
@@ -92,6 +102,7 @@ export class AppService {
     for (const id of viewIds) {
       const entry = this.registry.getView(id);
       if (!entry || entry.view.kind !== "web") continue;
+      await this.windowShown(entry).catch(() => {});
       const outDir = path.join(os.tmpdir(), "bivy-shots", "compare", id);
       const run = this.shooting.catch(() => {}).then(() => this.screenshots.take([entry], { widths: [390], themes: ["light"], path: entry.lastPath ?? "/" }, outDir));
       this.shooting = run;
@@ -117,8 +128,10 @@ export class AppService {
   }
   /** `direct` opens the app origin itself (no shell): a signed-in device
    * returning to a view's stable address. */
-  async open(sessionId: string, appId: string, viewId: string, returnTo?: string, direct = false): Promise<OpenAppViewResult> {
+  /** `scale`: the opening device's pixel density, used if this starts a display. */
+  async open(sessionId: string, appId: string, viewId: string, returnTo?: string, direct = false, scale?: number): Promise<OpenAppViewResult> {
     const entry = this.registry.requireView(sessionId, appId, viewId);
+    if (entry.target.kind === "display" && !entry.display) entry.displayScale = scale === 2 ? 2 : 1;
     if (entry.view.kind === "web") {
       if (!this.gateway) throw new Error("Bivy's preview service is unavailable on this connection.");
       if (direct && !this.gateway.openDirect) throw new Error("This machine can't open previews directly.");
@@ -183,7 +196,7 @@ export class AppService {
   private async windowShown(entry: RegisteredView): Promise<void> {
     if (entry.target.kind !== "display") return;
     await this.ensureServer(entry);
-    const display = await this.displays.ensure(entry.view.id, entry.app.name);
+    const display = await this.displays.ensure(entry.view.id, entry.app.name, entry.displayScale);
     for (const until = Date.now() + WINDOW_WAIT_MS; !display.wm.count && Date.now() < until;) await new Promise((r) => setTimeout(r, 100));
     await new Promise((r) => setTimeout(r, 800)); // first paint
   }
@@ -193,7 +206,7 @@ export class AppService {
     const target = entry.target;
     if (target.kind === "service" && target.start) return { ...target.start, name: `${entry.app.name} · ${entry.view.name} server` };
     if (target.kind !== "display") throw new Error("This view has no program.");
-    return this.displays.ensure(entry.view.id, entry.app.name).then((display) => {
+    return this.displays.ensure(entry.view.id, entry.app.name, entry.displayScale).then((display) => {
       entry.display = display.socket;
       return { command: target.command, args: target.args, workspace: target.workspace, env: display.env, name: `${entry.app.name} · ${entry.view.name}` };
     });
@@ -233,6 +246,8 @@ export class AppService {
   }
   private stopServer(id: string): void {
     this.displays.stop(id);
+    const entry = this.registry.getView(id);
+    if (entry) { entry.display = undefined; entry.displayScale = undefined; }
     const server = this.servers.get(id);
     if (!server) return;
     clearInterval(server.timer);

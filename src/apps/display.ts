@@ -16,6 +16,13 @@ const APP_ENV: Record<string, string> = {
   ELECTRON_OZONE_PLATFORM_HINT: "x11",
   NO_AT_BRIDGE: "1",
 };
+/** How each toolkit is told to draw at 2× for a high-density viewer (Chromium
+ * and Electron read the Xft.dpi the window manager publishes). */
+const SCALE_ENV: Record<number, Record<string, string>> = {
+  1: {},
+  2: { GDK_SCALE: "2", QT_SCALE_FACTOR: "2", J2D_UISCALE: "2" },
+};
+export const DISPLAY_SCALES = Object.keys(SCALE_ENV).map(Number);
 /** TigerVNC's X server; BIVY_XVNC overrides. */
 const XVNC = ["Xtigervnc", "Xvnc"];
 const START_MS = 10_000;
@@ -34,6 +41,8 @@ export interface Display {
   /** DISPLAY, XAUTHORITY and toolkit hints for programs shown on it. */
   env: Record<string, string>;
   wm: FitWindowManager;
+  /** Device pixels per CSS pixel the display was started for. */
+  scale: number;
 }
 
 interface Running { dir: string; child?: ChildProcess; ready?: Promise<Display> }
@@ -53,11 +62,12 @@ export class DisplayHost {
   }
   running(id: string): Promise<Display> | undefined { return this.displays.get(id)?.ready; }
 
-  ensure(id: string, name: string): Promise<Display> {
+  /** `scale` (1 or 2) is fixed when the display starts: programs pick it up once. */
+  ensure(id: string, name: string, scale = 1): Promise<Display> {
     const existing = this.displays.get(id);
     if (existing) return existing.ready;
     const state: Running = { dir: fs.mkdtempSync(path.join(os.tmpdir(), "bivy-display-")) };
-    state.ready = this.start(state, name).then((display) => {
+    state.ready = this.start(state, name, SCALE_ENV[scale] ? scale : 1).then((display) => {
       // If the X server dies, forget it: the next open starts a fresh one.
       state.child!.once("exit", () => { if (this.displays.get(id) === state) this.stop(id); });
       return display;
@@ -66,7 +76,7 @@ export class DisplayHost {
     return state.ready;
   }
 
-  private async start(state: Running, name: string): Promise<Display> {
+  private async start(state: Running, name: string, scale: number): Promise<Display> {
     const reason = this.unavailable();
     if (reason) throw new Error(reason);
     const xvnc = (this.options.xvnc ?? findXvnc)()!;
@@ -78,7 +88,7 @@ export class DisplayHost {
     for (let attempt = 0; attempt < 5; attempt++) {
       const number = freeDisplay(x11Dir);
       const child = spawn(xvnc, [`:${number}`, "-auth", authority, "-rfbunixpath", socket, "-rfbunixmode", "0600", "-rfbport", "-1",
-        "-SecurityTypes", "None", "-AlwaysShared=1", "-AcceptSetDesktopSize=1", "-nolisten", "tcp", "-geometry", "1280x800", "-depth", "24", "-desktop", name.slice(0, 60)],
+        "-SecurityTypes", "None", "-AlwaysShared=1", "-AcceptSetDesktopSize=1", "-SendPrimary=0", "-nolisten", "tcp", "-geometry", `${1280 * scale}x${800 * scale}`, "-depth", "24", "-dpi", String(96 * scale), "-desktop", name.slice(0, 60)],
       { stdio: "ignore" });
       state.child = child;
       const x = path.join(x11Dir, `X${number}`);
@@ -97,8 +107,8 @@ export class DisplayHost {
       });
       if (!up) continue;
       const wm = new FitWindowManager();
-      await wm.start(x, cookie);
-      return { socket, wm, env: { ...APP_ENV, DISPLAY: `:${number}`, XAUTHORITY: authority } };
+      await wm.start(x, cookie, 96 * scale);
+      return { socket, wm, scale, env: { ...APP_ENV, ...SCALE_ENV[scale], DISPLAY: `:${number}`, XAUTHORITY: authority } };
     }
     throw new Error("Couldn't start a display for this app.");
   }

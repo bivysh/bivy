@@ -6,8 +6,9 @@
 export type AppViewSpec =
   | { kind: "web"; name: string; source: { kind: "static"; directory: string } | { kind: "service"; port: number; start?: AppCommandSpec } }
   | { kind: "terminal"; name: string; command: string; args?: string[] }
-  /** A desktop GUI program, run on a private display streamed into the preview. */
-  | { kind: "display"; name: string; command: string; args?: string[] };
+  /** A desktop GUI program, run on a private display streamed into the preview.
+   * `restartOnChange`: restart it after an agent turn that changed files. */
+  | { kind: "display"; name: string; command: string; args?: string[]; restartOnChange?: boolean };
 /** A managed server: Bivy runs it on first open and restarts it if it exits. */
 export interface AppCommandSpec { command: string; args?: string[] }
 export interface AppManifest { version: 1; name: string; views: AppViewSpec[] }
@@ -16,7 +17,9 @@ export type AppView =
       /** Stable address for a home screen; opens only on signed-in devices. */
       address?: string;
       /** Notes left by people viewing a shared link. Untrusted text. */
-      notes?: ReviewerNote[] }
+      notes?: ReviewerNote[];
+      /** How a desktop app's stream performed in the last viewer's browser. */
+      stats?: DisplayStats }
   | { id: string; kind: "terminal"; name: string; command: string; args: string[] };
 export interface SessionApp {
   id: string;
@@ -25,6 +28,8 @@ export interface SessionApp {
   views: AppView[];
   createdAt: number;
 }
+/** Input→frame latency and bandwidth measured by a display view's viewer. */
+export interface DisplayStats { at: number; latencyMs: { p50: number; p95: number }; kBps: number; viewport: { width: number; height: number; scale: number } }
 /** A note pinned to an element by someone viewing a shared link. */
 export interface ReviewerNote { id: string; at: number; note: string; selector: string; text: string; path: string; viewport: { width: number; height: number } }
 /** Durable chat reference; never persist launch tickets or preview URLs. */

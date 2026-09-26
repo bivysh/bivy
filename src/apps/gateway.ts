@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { WebSocketServer } from "ws";
 import { previewShell } from "./preview-shell.js";
-import { displayViewer, DISPLAY_SOCKET_PATH, NOVNC_PATH } from "./display-viewer.js";
+import { displayViewer, DISPLAY_SOCKET_PATH, DISPLAY_STATS_PATH, NOVNC_PATH } from "./display-viewer.js";
 import { inspectorScript } from "./inspector.js";
 import type { AppRegistry, RegisteredView } from "./registry.js";
 
@@ -327,7 +327,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
       res.end(inspectorScript(this.shellOrigin(id), this.session(req, id)?.reviewer === true)); return;
     }
     if (req.url === NOTES_PATH && req.method === "POST") { await this.note(req, res, entry); return; }
-    if (entry.target.kind === "display") { this.display(req, res, entry); return; }
+    if (entry.target.kind === "display") { await this.display(req, res, entry); return; }
     const inspect = isPageLoad(req);
     // Remember the framed page so a turn reload lands where the user was.
     if (req.method === "GET" && req.headers["sec-fetch-dest"] === "iframe" && req.url.length <= 2048) entry.lastPath = req.url;
@@ -388,8 +388,19 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
   }
   /** A display view's origin serves only its viewer and noVNC's modules; the
    * pixels come over the WebSocket (see upgrade). */
-  private display(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): void {
+  private async display(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): Promise<void> {
     const id = entry.view.id;
+    // The viewer's measurements (same-origin POST, checked above). Numbers only.
+    if (req.url === DISPLAY_STATS_PATH && req.method === "POST") {
+      let body = "";
+      for await (const chunk of req) { body += chunk.toString(); if (body.length > 1024) { res.writeHead(413); res.end(); return; } }
+      let input: Record<string, any>;
+      try { input = JSON.parse(body); } catch { res.writeHead(400); res.end(); return; }
+      const num = (value: unknown, max: number) => { const n = Number(value); return Number.isFinite(n) ? Math.min(Math.max(0, Math.round(n * 10) / 10), max) : 0; };
+      entry.stats = { at: Date.now(), latencyMs: { p50: num(input.latencyMs?.p50, 60_000), p95: num(input.latencyMs?.p95, 60_000) }, kBps: num(input.kBps, 1e6),
+        viewport: { width: num(input.viewport?.width, 10_000), height: num(input.viewport?.height, 10_000), scale: num(input.viewport?.scale, 8) } };
+      res.writeHead(204); res.end(); return;
+    }
     if (!["GET", "HEAD"].includes(req.method ?? "")) { res.writeHead(405, { Allow: "GET, HEAD" }); res.end(); return; }
     const url = req.url!.split("?")[0]!;
     if (url.startsWith(NOVNC_PATH)) {
@@ -400,7 +411,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     }
     if (!isPageLoad(req)) { res.writeHead(404); res.end(); return; }
     const nonce = randomBytes(16).toString("hex");
-    const body = Buffer.from(displayViewer(nonce, entry.app.name));
+    const body = Buffer.from(displayViewer(nonce, entry.app.name, entry.displayScale ?? 1));
     const headers = responseHeaders({}, this.ancestors(id));
     headers["content-security-policy"] = `default-src 'none'; script-src 'self' 'nonce-${nonce}'; style-src 'nonce-${nonce}'; img-src data: blob:; connect-src 'self' ${this.origin(id).replace(/^https:/, "wss:")}; frame-ancestors ${this.ancestors(id)}; worker-src 'none'; base-uri 'none'; form-action 'none'`;
     res.writeHead(200, { ...headers, "content-type": "text/html; charset=utf-8", "content-length": body.length });

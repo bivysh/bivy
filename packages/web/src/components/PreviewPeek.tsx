@@ -46,6 +46,8 @@ export function PreviewPeek({ url, name, sessionId, onClose, onOpenInTab }: {
     {blocked
       ? <div className="changes-binary" role="status">This browser doesn’t allow app previews inside Bivy, so previews will open in a tab on this device. <button className="btn sm" onClick={onOpenInTab}>Open in tab ↗</button></div>
       : <iframe ref={frame} className="preview-peek" src={url} title={name} referrerPolicy="no-referrer"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups" />}
+          sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups"
+          // Delegated to Bivy's preview shell, which passes it only to desktop-app viewers.
+          allow="clipboard-read; clipboard-write" />}
   </Sheet>;
 }

@@ -102,11 +102,14 @@ function show(data,launch){
   back.title=data.returnTo?'Return to '+new URL(data.returnTo).host:'Close preview';
   frame.title=data.name;
   frame.hidden=false;
+  // Desktop apps have no page to inspect: no Point or Console. Their viewer
+  // (Bivy's own code) may use the clipboard; generated web apps may not.
+  // (Set before navigating: the policy is fixed when the frame loads.)
+  for(const b of [$('point'),$('errors')])b.hidden=data.inspect===false;
+  if(data.inspect===false)frame.allow='clipboard-read; clipboard-write';
   frame.src=data.origin+(launch?'/__bivy/open#'+(embedded?'e:':'')+launch:'/');
   back.hidden=embedded&&Boolean(data.returnTo);
   for(const b of [reload,$('point'),$('errors')])b.disabled=false;
-  // Desktop apps have no page to inspect: no Point or Console.
-  for(const b of [$('point'),$('errors')])b.hidden=data.inspect===false;
   status.textContent='Loading app…';
   frame.onload=()=>{status.hidden=true;void loadCompare();if(revision===null){revision=-1;watch();}else if(wake)wake();};
   // Store navigation metadata only, never tickets or cookies.

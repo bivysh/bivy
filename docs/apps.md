@@ -132,24 +132,41 @@ A desktop GUI program (GTK, Qt, Electron, Tauri, Flutter desktop, Java, SDL…)
 is a view too:
 
 ```json
-{ "kind": "display", "name": "Editor", "command": "cargo", "args": ["run"] }
+{ "kind": "display", "name": "Editor", "command": "cargo", "args": ["run"], "restartOnChange": true }
 ```
+
+Without a manifest: `bivy app run -- cargo run` publishes the same thing
+(`--name` names it, `--restart-on-change` sets the flag).
 
 The first **Open preview** starts a private display for the view, then runs the
 command on it in a Bivy terminal, like a server with `start`: **Logs** shows its
-output, it restarts if it exits, and removing the app stops both. The preview
-streams the display into the usual shell, so Peek, **Open in tab**, the stable
-address and **Copy link** work as for web views. **Point**, **Console** and
-reviewer notes need a page to inspect, so they're not offered; neither is
-Compare yet (an agent turn doesn't restart the app).
+output, it restarts if it exits, and removing the app stops both. With
+`restartOnChange`, an agent turn that changed files restarts it too, so it runs
+the new code, and Compare gets a before/after pair. The preview streams the
+display into the usual shell, so Peek, **Open in tab**, the stable address and
+**Copy link** work as for web views. **Point**, **Console** and reviewer notes
+need a page to inspect, so they're not offered.
 
 The display follows the viewer: it takes the preview's size (a phone gets a
 phone-sized screen), each app window fills it, and dialogs stay their own size,
-centered. A window that can't shrink that far is cut off at the right or bottom;
-the **Tablet** and **Full** sizes help there. On touch screens, **⌨** opens the
-keyboard. `bivy app shot` captures the display as it is, without a browser: one
-PNG at its current size (`"theme": "native"`); `--widths` and `--themes` don't
-apply. It waits up to 15 seconds for the app's first window.
+centered. A window that can't shrink that far makes the display larger instead,
+and the preview scales it down to fit, so nothing is cut off. On a
+high-density screen the display starts at 2× (toolkits get `GDK_SCALE=2`,
+`QT_SCALE_FACTOR=2`, `J2D_UISCALE=2`, and `Xft.dpi: 192` for Chromium/Electron),
+so text stays sharp; the density is fixed when the display starts, by the first
+device that opens it.
+
+- **Clipboard:** text the app copies shows **Copy from app**; tap it to put it
+  on your device. **Paste** sends your device's text to the app and presses
+  Ctrl+V. Where the browser won't share its clipboard, a field opens to paste
+  into. Nothing crosses without a tap.
+- **Keyboard:** on touch screens, **⌨** opens the on-screen keyboard.
+- **Screenshots:** `bivy app shot` captures the display as it is, without a
+  browser: one PNG at its current size (`"theme": "native"`); `--widths` and
+  `--themes` don't apply. It waits up to 15 seconds for the app's first window.
+- **Stream stats:** each viewer reports input-to-frame latency (median and
+  p95) and bandwidth every 10 seconds while you use it; `bivy app list` shows
+  the latest as the view's `stats`.
 
 Requirements: **Linux**, with TigerVNC's X server on the machine (Debian/Ubuntu:
 `sudo apt install tigervnc-standalone-server`, or set `BIVY_XVNC` to an `Xvnc`
@@ -157,8 +174,7 @@ binary). Publishing says so when it's missing. Programs get `DISPLAY`,
 `XAUTHORITY` and toolkit hints (`GDK_BACKEND=x11`, `QT_QPA_PLATFORM=xcb`,
 `SDL_VIDEODRIVER=x11`, `ELECTRON_OZONE_PLATFORM_HINT=x11`), so they use the
 preview display rather than the machine's own. Each display costs about 30 MB
-plus the app. Not yet: sound, clipboard, sharp rendering on high-density
-screens, Wayland-only apps, and macOS apps.
+plus the app. Not yet: sound, Wayland-only apps, and macOS apps.
 
 ### Static sites
 

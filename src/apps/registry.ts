@@ -4,14 +4,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { AppManifest, AppView, ReviewerNote, SessionApp } from "./types.js";
+import type { AppManifest, AppView, DisplayStats, ReviewerNote, SessionApp } from "./types.js";
 
 const MAX_BYTES = 25 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 const MAX_FILES = 2000;
 type StaticTarget = { kind: "static"; files: Map<string, Buffer>; bytes: number };
 type Command = { command: string; args: string[]; workspace: string };
-export type AppTarget = StaticTarget | { kind: "service"; port: number; start?: Command } | ({ kind: "terminal" } & Command) | ({ kind: "display" } & Command);
+export type AppTarget = StaticTarget | { kind: "service"; port: number; start?: Command } | ({ kind: "terminal" } & Command) | ({ kind: "display"; restartOnChange: boolean } & Command);
 /** What survives a node restart: the manifest and the IDs chat links point at. */
 interface Persisted { sessionId: string; workspace: string; manifest: AppManifest; id: string; viewIds: string[]; createdAt: number }
 export interface RegisteredView {
@@ -28,6 +28,10 @@ export interface RegisteredView {
   source?: { workspace: string; directory: string };
   /** A running display view's private VNC socket; the gateway streams it. */
   display?: string;
+  /** Device pixels per CSS pixel its display runs at (set when it starts). */
+  displayScale?: number;
+  /** The last viewer's stream measurements. */
+  stats?: DisplayStats;
 }
 
 const sameFiles = (a: Map<string, Buffer>, b: Map<string, Buffer>) => a.size === b.size && [...a].every(([key, data]) => b.get(key)?.equals(data));
@@ -160,7 +164,7 @@ export class AppRegistry extends EventEmitter {
         view = { ...base, kind: "terminal", command: target.command, args: target.args };
       } else if (spec.kind === "display") {
         // Shown through the web preview: Bivy's viewer streams the display.
-        target = { kind: "display", ...command(spec, workspace, "Display view") };
+        target = { kind: "display", ...command(spec, workspace, "Display view"), restartOnChange: spec.restartOnChange === true };
         view = { ...base, kind: "web", source: "display", managed: true };
       } else throw new Error("Unsupported app view. Supported views: web, terminal and display.");
       app.views.push(view);
@@ -184,8 +188,8 @@ export class AppRegistry extends EventEmitter {
     const bumped: string[] = [];
     let total = [...this.views.values()].reduce((sum, item) => sum + (item.target.kind === "static" ? item.target.bytes : 0), 0);
     for (const entry of this.views.values()) {
-      // A display streams live pixels; reloading its viewer would change nothing.
-      if (entry.app.sessionId !== sessionId || entry.view.kind !== "web" || entry.target.kind === "display") continue;
+      // A display streams live pixels: only one that restarts on changes has a new revision.
+      if (entry.app.sessionId !== sessionId || entry.view.kind !== "web" || (entry.target.kind === "display" && !entry.target.restartOnChange)) continue;
       if (entry.target.kind === "static") {
         if (!entry.source) continue;
         let next: StaticTarget;
