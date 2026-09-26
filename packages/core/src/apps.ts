@@ -39,9 +39,5 @@ export type OpenAppViewResult = { kind: "web"; url: string } | { kind: "terminal
  * An offer grants nothing; adopting it publishes a service view. */
 export interface AppOffer { port: number; pid: number; command: string }
 export interface SessionAppOffersResult { offers: AppOffer[] }
-/** A loopback server running inside the session workspace, not yet published.
- * An offer grants nothing; adopting it publishes a service view. */
-export interface AppOffer { port: number; pid: number; command: string }
-export interface SessionAppOffersResult { offers: AppOffer[] }
 /** A reusable preview link; a bearer capability until `expiresAt` or revoke. */
 export interface ShareAppViewResult { url: string; expiresAt: number }

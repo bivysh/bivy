@@ -33,6 +33,7 @@ import { usePreviewLanding } from "./usePreviewLanding.js";
 import { ForkProgressDialog } from "./components/ForkProgressDialog.js";
 import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
 import { AppsSheet } from "./components/AppsSheet.js";
+import { useSessionApps } from "./useSessionApps.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
 import { Spinner } from "./components/Spinner.js";
@@ -131,6 +132,10 @@ export function App() {
   const [pendingShare, setPendingShare] = useState<string | null>(() => peekPendingShare(sessionStorage));
   const artifacts = useMemo(() => deriveArtifacts(state.activeSession.transcript), [state.activeSession.transcript]);
   const apps = useMemo(() => deriveApps(state.activeSession.transcript), [state.activeSession.transcript]);
+  // The node's live count also covers adopted servers and detected ones not
+  // previewed yet, so a dev server any agent starts shows on the run pill.
+  const currentSession = state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId);
+  const liveApps = useSessionApps(currentSession?.sessionId, currentSession ? statusClass(currentSession) === "working" : false);
   const [terminalOpen, setTerminalOpen] = useState(false);
   /** A live `bivy run` PTY selected from the sidebar; null means open the
    * ordinary shell terminal for the active chat/node. */
@@ -976,7 +981,8 @@ export function App() {
                   onOpenChanges={() => setChangesSheetOpen(true)}
                   artifactsCount={artifacts.length}
                   onOpenArtifacts={() => setArtifactsSheetOpen(true)}
-                  appsCount={apps.length}
+                  appsCount={liveApps.published ?? apps.length}
+                  serverPorts={liveApps.offers.map((offer) => offer.port)}
                   onOpenApps={() => setAppsSheetOpen(true)}
                   onOpenRun={(runId) => openRun(runId)}
                   onRecover={(kind) => {
