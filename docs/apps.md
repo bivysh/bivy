@@ -263,6 +263,8 @@ bivy app type "hello world"
 bivy app key cmd+s                   # enter, tab, escape, arrows, f1–f12…
 bivy app scroll 400 300 --down --steps 5
 bivy app drag 100 100 300 240
+bivy app menu                        # macOS: the menu bar, with shortcuts
+bivy app menu "File > Export…"       # choose an item
 ```
 
 Each command sends the same pointer and key events a viewer sends, to the
@@ -270,8 +272,10 @@ app's display only, and prints the app as it looks afterwards (`shot`), so the
 agent sees what its action did. `--app` picks the app by name or ID (default:
 the desktop app opened last); the app is started if it isn't running. A point
 outside the app is refused with the app's size. Modifiers are `shift`,
-`ctrl`, `alt`/`option` and `cmd` (⌘ on a Mac, Super on Linux). The pictures
-need agent screenshots on (see above); the actions themselves don't.
+`ctrl`, `alt`/`option` and `cmd` (⌘ on a Mac, Super on Linux). On a Mac,
+choosing a menu item by its path is more reliable than clicking, and works
+whatever is on screen. The pictures need agent screenshots on (see above); the
+actions themselves don't.
 
 #### Linux
 
@@ -316,9 +320,17 @@ Compare, restart on change, and agent input.
   Settings → Privacy & Security for the program that runs Bivy (your terminal
   app, or `node` when Bivy runs as a background service), then restart Bivy.
   Publishing says what's missing, and the first open asks macOS to prompt.
+- **Menu bar:** the preview shows only the app's windows, so its menu bar
+  comes through **Menu** in the viewer instead: the app's menus, read when you
+  open it (so enabled items and check marks are current), with their
+  shortcuts. Drill into submenus and tap an item to choose it; nothing moves
+  the pointer. Arrow keys move through items and Escape goes back.
+- **Full screen:** the preview already sizes the app to your screen, so the
+  app's own full screen (its own Space on the Mac) is switched off when it
+  enters it, and the window is fitted to the viewer again.
 - Requires macOS 13 or later. The Mac must be logged in with its screen
-  unlocked, as for any app you want to see. Not yet: sound, apps in full
-  screen, and the menu bar (use keyboard shortcuts).
+  unlocked, as for any app you want to see. Not yet: sound, and games that
+  take over the whole display.
 
 ### Static sites
 

@@ -12,6 +12,7 @@ import { takeShots, type Shot, type ShotRequest } from "./screenshot.js";
 import { approximate, composite, readStrokes, type PageSignals } from "./annotate.js";
 import { captureFrame, encodePng, sendInput } from "./rfb.js";
 import { inputEvents, readAction } from "./input.js";
+import { pressMenu, readMenuPath, readMenus, type AppMenu } from "./menu.js";
 import { pngSize } from "./review.js";
 
 export interface AppPreviewProvider {
@@ -33,7 +34,8 @@ export interface AppTerminalProvider {
 export interface AppDisplayProvider {
   unavailable(): string | undefined;
   /** `launch`: a command the program is started through, if the display needs one. */
-  ensure(id: string, name: string, scale?: number): Promise<{ socket: string; env: Record<string, string>; wm: { count: number }; launch?: string[] }>;
+  /** `control`: where to ask for the app's menus, if the display can. */
+  ensure(id: string, name: string, scale?: number): Promise<{ socket: string; env: Record<string, string>; wm: { count: number }; launch?: string[]; control?: string }>;
   stop(id: string): void;
 }
 /** Where review cards go: the server stores screenshots as encrypted
@@ -370,12 +372,27 @@ export class AppService {
     if (!entry.display) throw new Error("The app isn't running. Check its Logs in the Apps sheet.");
     const { width, height } = await sendInput(entry.display, inputEvents(action));
     if (!this.screenshots.enabled()) return { width, height, message: "Done. Agent screenshots are off on this machine, so there's no picture of the result: bivy config set sessions.appScreenshots true" };
+    return { width, height, shot: await this.after(entry, sessionId), message: "Done. The shot is the app now." };
+  }
+  /** A desktop app's menu bar: listed, or one item chosen by its path of
+   * titles ("File > Save"). Choosing returns the app afterwards, like `act`. */
+  async menu(sessionId: string, target: string | undefined, path?: unknown): Promise<{ menus?: AppMenu[]; shot?: Shot; message?: string }> {
+    const item = path === undefined ? undefined : readMenuPath(path);
+    const entry = this.pickView(sessionId, target, true);
+    if (!entry.display) await this.windowShown(entry);
+    if (!entry.displayControl) throw new Error("This machine's desktop apps don't expose their menus (macOS only). Use keyboard shortcuts: bivy app key.");
+    if (!item) return { menus: await readMenus(entry.displayControl) };
+    await pressMenu(entry.displayControl, item);
+    if (!this.screenshots.enabled()) return { message: "Chosen. Agent screenshots are off on this machine, so there's no picture of the result." };
+    return { shot: await this.after(entry, sessionId), message: "Chosen. The shot is the app now." };
+  }
+  /** The app a moment after an action, as a screenshot. */
+  private async after(entry: RegisteredView, sessionId: string): Promise<Shot | undefined> {
     await new Promise((r) => setTimeout(r, AFTER_INPUT_MS));
     const outDir = path.join(os.tmpdir(), "bivy-shots", sessionId.replace(/[^A-Za-z0-9_-]/g, "_"), String(Date.now()));
     const run = this.shooting.catch(() => {}).then(() => this.screenshots.take([entry], { widths: [], themes: [], path: "/" }, outDir));
     this.shooting = run;
-    const [shot] = await run;
-    return { width, height, shot, message: "Done. The shot is the app now." };
+    return (await run)[0];
   }
   /** Draw on the preview: the user's marks on a picture of what they saw.
    * The picture is the Compare screenshot they drew on, a desktop app's
@@ -451,6 +468,7 @@ export class AppService {
     if (target.kind !== "display") throw new Error("This view has no program.");
     return this.displays.ensure(entry.view.id, entry.app.name, entry.displayScale).then((display) => {
       entry.display = display.socket;
+      entry.displayControl = display.control;
       const [command, ...args] = [...display.launch ?? [], target.command, ...target.args];
       return { command: command!, args, workspace: target.workspace, env: display.env, name: `${entry.app.name} · ${entry.view.name}` };
     });
@@ -491,7 +509,7 @@ export class AppService {
   private stopServer(id: string): void {
     this.displays.stop(id);
     const entry = this.registry.getView(id);
-    if (entry) { entry.display = undefined; entry.displayScale = undefined; }
+    if (entry) { entry.display = undefined; entry.displayControl = undefined; entry.displayScale = undefined; }
     const server = this.servers.get(id);
     if (!server) return;
     clearInterval(server.timer);
