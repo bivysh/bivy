@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Restore app previews inside Bivy on supported iOS browsers and the packaged iOS app. Embedded previews now allow the packaged app to frame them and partition the app's own cookies so sign-ins and carts work in Safari. If a browser cannot keep preview cookies, the fallback to a separate tab expires after a week and retries after a browser update, bringing back the preview drawer, drawing, and voice feedback when supported.
+
 ## [0.18.0] - 2026-09-26
 
 ### Added
