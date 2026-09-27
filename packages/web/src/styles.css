@@ -3371,3 +3371,9 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
    the composer itself, with one line of another device's draft. */
 .handoff-banner { border-radius: var(--radius-md); }
 .handoff-preview { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Keep editorial type on the wordmark; session titles retain the app's sans. */
+.brand {
+  font-family: var(--font-serif);
+  font-weight: var(--weight-medium);
+}
