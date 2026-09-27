@@ -72,7 +72,7 @@ rl.on("line", (line) => {
           turn: { id: "turn-1", status: "failed", error: { message: "You've hit your usage limit.", codexErrorInfo: "usageLimitExceeded" } },
         });
       } else {
-        notify("item/agentMessage/delta", { itemId: "item-1", delta: "BANANA" });
+        notify("item/agentMessage/delta", { itemId: "item-1", delta: MODE === "echo-input" ? JSON.stringify(params.input) : "BANANA" });
         notify("turn/completed", { threadId: params?.threadId });
       }
       reply(id, {});

@@ -528,7 +528,12 @@ async function onBivyCommand(msg) {
         bivy({ replyTo: id, ok: true });
         asRequest("turn/start", {
           threadId,
-          input: [{ type: "text", text: String(msg.text ?? "") }],
+          input: [
+            { type: "text", text: String(msg.text ?? "") },
+            ...(msg.images ?? []).map((image) => ({
+              type: "image", url: `data:${image.mimeType || "image/png"};base64,${image.data}`,
+            })),
+          ],
           ...(selectedModel ? { model: selectedModel } : {}),
         })
           .catch((error) => bivy({ type: "session.error", error: error instanceof Error ? error.message : String(error) }));

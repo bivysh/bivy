@@ -173,6 +173,7 @@ import { EventLog, mergeBases } from "./session/event-log.js";
 import { SessionEventSequencer } from "./session/event-sequencer.js";
 import { revertFile } from "./session/revert-file.js";
 import { buildDiagnosticsReport, activationRecord } from "./diagnostics.js";
+import { attachmentsFrom, materializeAttachments, sanitizeAttachmentFilename } from "./session/prompt-attachments.js";
 import { AttachmentStore, isValidAttachmentHash, type AttachmentRef } from "./session/attachment-store.js";
 import { planAttachment, isAttachPlanError, MAX_AGENT_ATTACHMENT_BYTES } from "./session/attach-to-chat.js";
 import {
@@ -1153,10 +1154,6 @@ async function setDefaultRuntime(id: string) {
 }
 
 // StreamingBehavior + PromptImage moved to ./session/record.ts (step 2a).
-type PromptAttachment =
-  | { kind: "image"; name?: unknown; size?: unknown; mimeType?: unknown; data?: unknown }
-  | { kind: "file"; name?: unknown; size?: unknown; mimeType?: unknown; data?: unknown; text?: unknown; truncated?: unknown; omitted?: unknown };
-
 function streamingBehaviorFrom(value: unknown): StreamingBehavior | undefined {
   return value === "steer" || value === "followUp" ? value : undefined;
 }
@@ -1180,150 +1177,6 @@ function promptForAgent(_record: SessionRecord, promptText: string): string {
   // user's message and can overwrite the optimistic first-message bubble in the
   // remote PWA when history arrives.
   return promptText;
-}
-
-function safeAttachmentName(value: unknown) {
-  return String(value || "attachment").replace(/[\r\n]/g, " ").slice(0, 180);
-}
-
-/** A decoded file attachment ready to be written into a session's workdir. */
-interface DecodedAttachment {
-  name: string;
-  mimeType: string;
-  size: number;
-  bytes?: Buffer;
-  text?: string;
-  truncated?: boolean;
-}
-
-/**
- * Split composer attachments into channels:
- *   - `images`     — base64 blobs passed to the model as vision.
- *   - `imageNotes` — one prose line per image for the persisted transcript.
- *   - `imageRefs`  — durable AttachmentStore references for the images, persisted
- *                    in the event log so they rehydrate after a reload / on
- *                    another device (images used to be vision-only, then lost).
- *   - `files`      — decoded file attachments (bytes or text) to be written to
- *                    disk by materializeAttachments so the agent can open them
- *                    with its normal file tools. Any file type is supported;
- *                    binary files arrive as base64 `data`.
- */
-const MAX_PROMPT_ATTACHMENT_BYTES = 10 * 1024 * 1024;
-const MAX_PROMPT_ATTACHMENTS_BYTES = 40 * 1024 * 1024;
-
-function attachmentsFrom(value: unknown): { images: PromptImage[]; imageNotes: string[]; imageRefs: AttachmentRef[]; files: DecodedAttachment[] } {
-  if (!Array.isArray(value)) return { images: [], imageNotes: [], imageRefs: [], files: [] };
-  const images: PromptImage[] = [];
-  const imageNotes: string[] = [];
-  const imageRefs: AttachmentRef[] = [];
-  const files: DecodedAttachment[] = [];
-  let totalBytes = 0;
-  if (value.length > 12) throw new Error("A message can include at most 12 attachments");
-  for (const raw of value as unknown[]) {
-    if (!raw || typeof raw !== "object") continue;
-    const attachment = raw as PromptAttachment;
-    const name = safeAttachmentName(attachment.name);
-    const size = Number(attachment.size || 0);
-    const mimeType = typeof attachment.mimeType === "string" && attachment.mimeType ? attachment.mimeType : undefined;
-    const encodedBytes = typeof attachment.data === "string" ? Math.floor(attachment.data.length * 3 / 4) : 0;
-    const textBytes = attachment.kind === "file" && typeof attachment.text === "string" ? Buffer.byteLength(attachment.text) : 0;
-    const actualBytes = encodedBytes || textBytes;
-    if (actualBytes > MAX_PROMPT_ATTACHMENT_BYTES) throw new Error(`${name} exceeds the 10 MiB attachment limit`);
-    totalBytes += actualBytes;
-    if (totalBytes > MAX_PROMPT_ATTACHMENTS_BYTES) throw new Error("Attachments exceed the 40 MiB per-message limit");
-    if (attachment.kind === "image" && typeof attachment.data === "string") {
-      const imgMime = mimeType ?? "image/png";
-      images.push({ type: "image", data: attachment.data, mimeType: imgMime });
-      imageNotes.push(`[Image attachment: ${name}${size ? ` (${size} bytes)` : ""}]`);
-      // Persist the image bytes durably (dedup by hash). Best-effort: a store
-      // failure must not break vision for the turn, so it only costs the ref.
-      try {
-        imageRefs.push(attachmentStore.put(Buffer.from(attachment.data, "base64"), { name, mimeType: imgMime, kind: "image" }));
-      } catch (error) {
-        console.warn("[attachments] failed to store image:", error instanceof Error ? error.message : String(error));
-      }
-    } else if (attachment.kind === "file") {
-      if (typeof attachment.data === "string" && attachment.data) {
-        files.push({ name, mimeType: mimeType ?? "application/octet-stream", size, bytes: Buffer.from(attachment.data, "base64"), truncated: !!attachment.truncated });
-      } else if (typeof attachment.text === "string" && attachment.text) {
-        files.push({ name, mimeType: mimeType ?? "text/plain", size, text: attachment.text, truncated: !!attachment.truncated });
-      }
-      // A file with neither bytes nor text (e.g. omitted/unreadable) carries
-      // nothing to write, so there is nothing to hand the agent — skip it.
-    }
-  }
-  return { images, imageNotes, imageRefs, files };
-}
-
-/** Strip a user-supplied filename to a safe basename — no path traversal, no
- * characters that would break the placeholder note or the filesystem. */
-function sanitizeAttachmentFilename(name: string): string {
-  const base = path
-    .basename(String(name || ""))
-    .replace(/[/\\\r\n\t[\]]/g, "_")
-    .replace(/^\.+/, "")
-    .trim()
-    .slice(0, 180);
-  return base || "attachment";
-}
-
-/**
- * Write decoded file attachments into `<workdir>/.bivy-attachments/` and return
- * one prose note per file (carrying the relative path) to append to the prompt.
- * This is what makes an uploaded file of ANY type — binary included — readable
- * by the agent's file tools. Filenames are sanitized and de-duplicated so two
- * `report.pdf`s don't clobber. Best-effort: a failure degrades to a note rather
- * than throwing, so a bad attachment never sinks the whole turn.
- */
-function materializeAttachments(record: SessionRecord, files: DecodedAttachment[]): { note: string; refs: AttachmentRef[] } {
-  if (!files.length) return { note: "", refs: [] };
-  const refs: AttachmentRef[] = [];
-  // Store every file durably in the global content-addressed store first (for
-  // re-findability), independent of the per-workdir copy below. Best-effort per
-  // file so one bad blob doesn't lose the others.
-  for (const file of files) {
-    const bytes = file.bytes ?? (typeof file.text === "string" ? Buffer.from(file.text, "utf8") : undefined);
-    if (!bytes) continue;
-    try {
-      refs.push(attachmentStore.put(bytes, { name: sanitizeAttachmentFilename(file.name), mimeType: file.mimeType, kind: "file" }));
-    } catch (error) {
-      console.warn("[attachments] failed to store file:", error instanceof Error ? error.message : String(error));
-    }
-  }
-  const workdir = harnessDirFor(record);
-  const dir = path.join(workdir, ".bivy-attachments");
-  try {
-    fs.mkdirSync(dir, { recursive: true });
-  } catch (error) {
-    const why = error instanceof Error ? error.message : String(error);
-    return { note: files.map((f) => `[File attachment: ${sanitizeAttachmentFilename(f.name)} could not be saved: ${why}]`).join("\n"), refs };
-  }
-  const notes: string[] = [];
-  const used = new Set<string>();
-  for (const file of files) {
-    const safeBase = sanitizeAttachmentFilename(file.name);
-    const ext = path.extname(safeBase);
-    const stem = safeBase.slice(0, safeBase.length - ext.length) || safeBase;
-    let safe = safeBase;
-    let n = 1;
-    while (used.has(safe) || fs.existsSync(path.join(dir, safe))) {
-      safe = `${stem}-${n}${ext}`;
-      n += 1;
-    }
-    used.add(safe);
-    const dest = path.join(dir, safe);
-    const label = `${safe} (${file.size ? `${file.size} bytes, ` : ""}${file.mimeType}${file.truncated ? ", truncated" : ""})`;
-    try {
-      if (file.bytes) fs.writeFileSync(dest, file.bytes);
-      else if (typeof file.text === "string") fs.writeFileSync(dest, file.text, "utf8");
-      else continue;
-      const rel = path.relative(workdir, dest) || safe;
-      notes.push(`[File attachment: ${label} saved to ${rel} - read it with your file tools]`);
-    } catch (error) {
-      notes.push(`[File attachment: ${label} could not be saved: ${error instanceof Error ? error.message : String(error)}]`);
-    }
-  }
-  return { note: notes.join("\n"), refs };
 }
 
 /**
@@ -3125,7 +2978,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   },
   async prompt(msg, ctx) {
     const text = String(msg.text ?? "").trim();
-    const { images, imageNotes, imageRefs, files } = attachmentsFrom(msg.attachments);
+    const { images, imageNotes, files } = attachmentsFrom(msg.attachments);
     if (!text && !images.length && !files.length) return;
     // Title/naming can only see what we have before the session exists; the file
     // notes (with on-disk paths) are added once the workdir is known, below.
@@ -3165,13 +3018,13 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     touchSession(record);
     // Now that the session (and its workdir) exists, write file attachments to
     // disk and fold their path notes into the prompt the agent actually sees.
-    const { note: fileNote, refs: fileRefs } = materializeAttachments(record, files);
+    const { note: fileNote, refs: fileRefs } = materializeAttachments(harnessDirFor(record), files, attachmentStore);
     const promptText =
-      [text, imageNotes.join("\n"), fileNote].filter(Boolean).join("\n\n") ||
+      [text, fileNote].filter(Boolean).join("\n\n") ||
       (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
     // Persist durable attachment refs keyed by the exact text the transcript
     // stores for this user message, so history rehydrates thumbnails by hash.
-    eventLog.appendAttachments(record.id, promptText, [...imageRefs, ...fileRefs]);
+    eventLog.appendAttachments(record.id, promptText, fileRefs);
     const agentPrompt = promptForAgent(record, promptText);
     const cmid = typeof msg.clientMessageId === "string" && msg.clientMessageId ? msg.clientMessageId : undefined;
     // A retry of a prompt we already took: the caller missed our echo (that is
@@ -11490,7 +11343,7 @@ app.post("/api/session/prompt", async (req, res, next) => {
     if (text === "/login" || text.startsWith("/login ")) {
       return res.status(400).json({ error: "Use the Login / API tokens dialog from the phone UI. If it is not visible, refresh this page after updating Bivy." });
     }
-    const { images, imageNotes, imageRefs, files } = attachmentsFrom(req.body?.attachments);
+    const { images, imageNotes, files } = attachmentsFrom(req.body?.attachments);
     if (!text && !images.length && !files.length) return res.status(400).json({ error: "Missing text" });
     // File notes (with on-disk paths) are folded in once the workdir exists; the
     // session title can only reflect what's known before then.
@@ -11517,11 +11370,11 @@ app.post("/api/session/prompt", async (req, res, next) => {
     }
     notePresence(record.id, deviceFrom(req.body?.device), "chat");
     const session = record.session;
-    const { note: fileNote, refs: fileRefs } = materializeAttachments(record, files);
+    const { note: fileNote, refs: fileRefs } = materializeAttachments(harnessDirFor(record), files, attachmentStore);
     const promptText =
-      [text, imageNotes.join("\n"), fileNote].filter(Boolean).join("\n\n") ||
+      [text, fileNote].filter(Boolean).join("\n\n") ||
       (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
-    eventLog.appendAttachments(record.id, promptText, [...imageRefs, ...fileRefs]);
+    eventLog.appendAttachments(record.id, promptText, fileRefs);
     const agentPrompt = promptForAgent(record, promptText);
     const cmid = typeof req.body?.clientMessageId === "string" && req.body.clientMessageId ? req.body.clientMessageId : undefined;
     markSessionWorking(record, { type: "agent_start" });

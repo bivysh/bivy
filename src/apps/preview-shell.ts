@@ -51,8 +51,15 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
 #mic[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
 #voice-status { font-size:var(--text-xs); margin:var(--space-2) 0 0; }
 #voice-status:empty { display:none; }
-/* The panel scrolls on a phone; its actions stay in reach at the bottom. */
-#draft .panel-actions { position:sticky; bottom:calc(-1 * var(--space-3)); margin:var(--space-2) calc(-1 * var(--space-3)) calc(-1 * var(--space-3)); padding:var(--space-2) var(--space-3) var(--space-3); background:var(--surface); border-top:thin solid var(--line); }
+/* The note owns the dock while editing. Only its body scrolls; actions never
+   cover the text field, even when the keyboard leaves little vertical room. */
+#dock { max-height:calc(100% - var(--space-4)); }
+#dock:has(#draft:not([hidden])) nav, #dock:has(#draft:not([hidden])) #pointing { display:none; }
+#draft { display:flex; flex-direction:column; max-height:70dvh; overflow:hidden; padding:0; }
+#draft-body { min-height:0; overflow:auto; padding:var(--space-3); }
+#draft .panel-actions { flex-shrink:0; margin:0; padding:var(--space-2) var(--space-3); border-top:thin solid var(--line); }
+#draft details { margin-top:var(--space-2); }
+#draft summary { color:var(--muted); font-size:var(--text-sm); cursor:pointer; }
 #draft-hint { font-size:var(--text-xs); margin:var(--space-2) 0 var(--space-1); }
 #draft-context { margin:0; padding:var(--space-2); background:var(--surface-2); border-radius:var(--radius-md); font-family:var(--font-mono); font-size:var(--text-xs); white-space:pre-wrap; overflow-wrap:anywhere; color:var(--muted); }
 #show { position:fixed; right:var(--space-3); bottom:calc(var(--space-3) + env(safe-area-inset-bottom)); z-index:var(--z-sticky); border-radius:var(--radius-full); box-shadow:var(--shadow-lg); }
@@ -95,12 +102,14 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
     <button class="btn sm" id="compare-draw" type="button" hidden>Draw on “now”</button>
   </section>
   <section class="panel" id="draft" hidden aria-labelledby="draft-title">
-    <h2 id="draft-title">Draft for the agent</h2>
+    <div id="draft-body">
+    <h2 id="draft-title">Note for the agent</h2>
     <div id="draft-row"><textarea class="field" id="draft-text" aria-label="What should change?" placeholder="What should change?"></textarea>
     <button class="btn" id="mic" type="button" hidden aria-pressed="false" aria-label="Speak" title="Hold to speak, or tap to start and stop"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15.5a3 3 0 003-3V6a3 3 0 10-6 0v6.5a3 3 0 003 3z"/><path d="M6 11.5v1a6 6 0 0012 0v-1M12 18.5V21M9 21h6"/></svg></button></div>
     <p class="muted" id="voice-status" role="status"></p>
-    <p class="muted" id="draft-hint">Sent with this context from the preview. Nothing is sent until you send it in the chat.</p>
-    <pre id="draft-context"></pre>
+    <p class="muted" id="draft-hint">Review in chat before sending.</p>
+    <details id="draft-details"><summary>Preview context</summary><pre id="draft-context"></pre></details>
+    </div>
     <div class="panel-actions"><button class="btn sm ghost" id="draft-cancel">Cancel</button><button class="btn sm primary" id="draft-add">Add to chat</button></div>
   </section>
   <p class="banner inline" data-tone="accent" id="pointing" role="status" hidden>Tap anything in the app to point at it. <span id="pointing-voice" hidden>Hold to point and speak. </span>Press Escape or Point again to stop.</p>
@@ -192,6 +201,7 @@ function draft(context,listen){
   $('draft').hidden=false;
   $('draft-add').textContent=metadata.returnTo?'Add to chat':'Copy';
   $('draft-context').textContent=context;
+  $('draft-details').open=false;
   const box=$('draft-text');box.value='';
   // Speaking right away: don't raise the keyboard over the draft.
   if(listen)startListening();else box.focus();
@@ -228,13 +238,13 @@ function fromBivy(d){
   else if(d.type==='transcript'){setListening(false);if(typeof d.error==='string')sayVoice(d.error.slice(0,200));else addSpoken(d.text);}
   else if(d.type==='listening'&&d.on===false&&listening){setListening(false);if(voiceStatus.textContent.startsWith('Listening'))sayVoice('');}
 }
-$('draft-cancel').onclick=()=>{cancelListening();$('draft').hidden=true;endDraw();};
+$('draft-cancel').onclick=()=>{const target=marks?$('draw'):point;cancelListening();$('draft').hidden=true;endDraw();target.focus();};
 $('draft-add').onclick=async()=>{
   cancelListening();
   const note=$('draft-text').value.trim(),text=(note?note+'\\n\\n':'')+$('draft-context').textContent;
   // Marks go to the Bivy client, which adds a picture made on the machine.
-  if(marks){const mark=marks;endDraw();return toBivy({type:'annotation',text,mark});}
-  if(metadata.returnTo)return toChat(text);
+  if(marks){const mark=marks;$('draft').hidden=true;endDraw();return toBivy({type:'annotation',text,mark});}
+  if(metadata.returnTo){$('draft').hidden=true;return toChat(text);}
   try{await navigator.clipboard.writeText(text);$('draft-add').textContent='Copied';}catch{$('draft-text').select();}
 };
 // Console
@@ -444,7 +454,7 @@ addEventListener('message',e=>{
   }
 });
 ask.onclick=()=>toChat('The app preview "'+metadata.name+'" isn’t loading: nothing is answering on port '+downPort+'. Please find out why the server stopped, restart it, and tell me when it’s back.');
-addEventListener('keydown',e=>{if(e.key==='Escape'){if(listening)cancelListening();else if(draw&&!draw.done)endDraw();else if(point.getAttribute('aria-pressed')==='true')pointing(false);else panels(null);}});
+addEventListener('keydown',e=>{if(e.key==='Escape'){if(listening)cancelListening();else if(!$('draft').hidden)$('draft-cancel').click();else if(draw&&!draw.done)endDraw();else if(point.getAttribute('aria-pressed')==='true')pointing(false);else panels(null);}});
 back.onclick=()=>{if(metadata?.returnTo){window.close();setTimeout(()=>location.replace(metadata.returnTo),100);}else{window.close();status.hidden=false;status.textContent='You can close this tab to return to Bivy.';}};
 reload.onclick=()=>{if(metadata)open(currentPath,'Reloading app…');};
 (async()=>{

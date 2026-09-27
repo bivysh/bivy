@@ -9,6 +9,7 @@ import { AppRegistry } from "../../src/apps/registry.js";
 import { AppGateway } from "../../src/apps/gateway.js";
 import { AppService } from "../../src/apps/service.js";
 import { encodePng } from "../../src/apps/rfb.js";
+import { decodePng } from "../../src/apps/review.js";
 import http from "node:http";
 import { WebSocket, WebSocketServer } from "ws";
 import { RemotePreview } from "../../src/apps/remote-preview.js";
@@ -37,7 +38,7 @@ async function mountPeek(page: Page, webApp: { origin: string; transformIndexHtm
     import '/src/styles.css';
     controller.store.setStatus('online');
     window.drafts = [];
-    controller.prefillComposer = (text, attachments = []) => { window.drafts.push(attachments.length ? { text, attachments: attachments.map(({ data, ...rest }) => ({ ...rest, bytes: data.length })) } : text); return true; };
+    controller.prefillComposer = (text, attachments = []) => { window.drafts.push(attachments.length ? { text, attachments: attachments.map(({ data, ...rest }) => ({ ...rest, data, bytes: data.length })) } : text); return true; };
     ${setup}
     createRoot(document.getElementById('root')).render(React.createElement(PreviewPeek, Object.assign({ url: ${JSON.stringify(shellUrl)}, name: 'Checkout', sessionId: 's', onClose() {}, onOpenInTab() {} }, ${props})));
   </script></body></html>`);
@@ -433,6 +434,15 @@ test("draw on the preview: marks freeze the app, name what's under them, and rea
     expect(draft.text).toMatch(/^Give this more room\n\nIn the app preview "Checkout" \(page \/, viewport \d+×\d+\), marked:\n- #total \("Total \$102"\)\n- #promo \("Promo code"\)\n- #pay \("Pay now"\)\nMarks \(page px\): pen /);
     expect(draft.attachments).toEqual([expect.objectContaining({ kind: "image", mimeType: "image/png", name: "Checkout marked.png", bytes: expect.any(Number) })]);
     expect(draft.text).not.toContain("approximate");
+    // The attachment delivered to the composer contains the actual pen pixels,
+    // not just a filename or the unmarked background screenshot.
+    const marked = decodePng(Buffer.from(draft.attachments[0].data, "base64"));
+    let inkPixels = 0;
+    for (let i = 0; i < marked.pixels.length; i += marked.channels) {
+      if (marked.pixels[i] === 255 && marked.pixels[i + 1] === 45 && marked.pixels[i + 2] === 120) inkPixels++;
+    }
+    expect(inkPixels).toBeGreaterThan(100);
+
 
     // A page holding state a fresh browser won't have: the picture is approximate.
     await frame.getByRole("textbox", { name: "Promo code" }).fill("SPRING");
@@ -505,10 +515,10 @@ test("Compare shows before and after the agent's last change", async ({ page }, 
   try {
     await fs.writeFile(path.join(dir, "index.html"), '<!doctype html><html lang="en"><title>Ledger</title><h1>Ledger</h1></html>');
     const id = registry.publish("s", dir, { version: 1, name: "Ledger", views: [{ kind: "web", name: "Ledger", source: { kind: "static", directory: "." } }] }).views[0]!.id;
-    await page.setContent('<body style="margin:0;background:#c33;width:390px;height:600px"></body>');
-    const before = await page.screenshot({ clip: { x: 0, y: 0, width: 390, height: 600 } });
-    await page.setContent('<body style="margin:0;background:#3a3;width:390px;height:600px"></body>');
-    const after = await page.screenshot({ clip: { x: 0, y: 0, width: 390, height: 600 } });
+    // Solid-colour inputs need no browser capture. Keep Chromium for checking
+    // the real Compare UI below, avoiding screenshot startup races in CI.
+    const before = encodePng(390, 600, Buffer.alloc(390 * 600 * 3, Buffer.from([204, 51, 51])));
+    const after = encodePng(390, 600, Buffer.alloc(390 * 600 * 3, Buffer.from([51, 170, 51])));
     registry.getView(id)!.shots = [{ revision: 0, at: 1, png: before }, { revision: 1, at: 2, png: after }];
     await page.route("https://*.preview.example.net/**", async (route) => {
       const request = route.request(); const url = new URL(request.url());
