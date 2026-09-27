@@ -112,7 +112,9 @@ function oneLine(v: unknown, max = 120): string {
 }
 
 function basename(path: string): string {
-  const trimmed = path.replace(/[/\\]+$/, "");
+  let end = path.length;
+  while (end > 0 && (path[end - 1] === "/" || path[end - 1] === "\\")) end--;
+  const trimmed = path.slice(0, end);
   const idx = Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\"));
   return idx >= 0 ? trimmed.slice(idx + 1) : trimmed;
 }
