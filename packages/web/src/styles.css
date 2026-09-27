@@ -27,13 +27,16 @@
 
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; margin: 0; }
+/* iOS samples the page and fixed shell backgrounds for its status-bar tint.
+   Paint both explicitly so the tint follows theme changes instead of sampling
+   a transparent shell. Include the loading/sign-in shell before App mounts. */
+html, body, .app, .setup { background: var(--bg); }
 /* Lock the shell to the viewport: no whole-page scroll or rubber-band drift on
    iOS (the app's own panes scroll). Without this the page itself scrolls under
    the fixed shell and the layout appears to "move around / off screen". */
 html, body { overflow: hidden; overscroll-behavior: none; }
 body {
   font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  background: var(--bg);
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
 }
