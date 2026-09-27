@@ -159,13 +159,21 @@ await check("nothing long-lived is stored on disk (fetch-on-demand)", () => {
   }
 });
 
-await check("configureRepoCredentialHelper persists helper config, not a token", async () => {
+await check("configureRepoCredentialHelper persists a working helper (repairing old clones), not a token", async () => {
   const repo = path.join(tmp, "clone");
   fs.mkdirSync(repo, { recursive: true });
   await git(["-C", repo, "init", "-q"]);
+  // Seed the layout older daemons wrote: the generic reset lands in a
+  // `[credential]` section AFTER bivy's helper, clearing it, so git found no helper.
+  fs.appendFileSync(
+    path.join(repo, ".git", "config"),
+    `[credential "https://github.com"]\n\tuseHttpPath = true\n\thelper =\n\thelper = /stale/helper.sh\n[credential]\n\thelper =\n`,
+  );
   await configureRepoCredentialHelper((a) => git(a), repo);
-  const helper = (await git(["-C", repo, "config", "--local", "--get", "credential.https://github.com.helper"])).trim();
-  assert.ok(helper.endsWith("credential-helper.sh"), `expected helper path, got: ${helper}`);
+  // Resolve through the repo's OWN config — no daemon `-c` flags — the way agent-run
+  // git and the lazy blob fetch in `git worktree add` do.
+  const out = await git(["-C", repo, "credential", "fill"], "protocol=https\nhost=github.com\npath=bivysh/bivy.git\n\n");
+  assert.match(out, /password=ghs_freshtoken/);
   const cfg = fs.readFileSync(path.join(repo, ".git", "config"), "utf8");
   assert.ok(!/ghs_|gho_|ghp_|x-access-token:/.test(cfg), "no token must be written into .git/config");
 });
