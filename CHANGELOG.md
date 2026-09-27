@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep Codex progress messages visible when reconnecting to a running conversation, and preserve the final transcript updates when a turn finishes.
+- Make app previews fill the available mobile viewport.
+
 ## [0.18.2] - 2026-09-27
 
 ### Fixed
