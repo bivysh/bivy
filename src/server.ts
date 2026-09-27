@@ -7903,8 +7903,9 @@ function attachSessionListeners(record: SessionRecord) {
     transcripts.persistToolActivityFromEvent(record, event);
     // Snapshot the base transcript (prompts + replies) alongside the tool/thinking
     // sidecars. turn_start captures the just-added user prompt (so a crash mid-turn
-    // still keeps it); message_end/turn_end capture the assistant reply.
-    if (event.type === "turn_start" || event.type === "message_end" || event.type === "turn_end") {
+    // still keeps it); item boundaries capture commentary during work, and
+    // message_end/turn_end capture the assistant reply.
+    if (event.type === "turn_start" || event.type === "message_boundary" || event.type === "message_end" || event.type === "turn_end") {
       transcripts.persistTranscriptSnapshot(record);
     }
     // A finalized assistant message may reference a remote image via markdown
