@@ -3,7 +3,7 @@ import { expect, test, themes } from "./fixtures.js";
 import path from "node:path";
 
 for (const theme of themes) {
-  test(`preview fills the mobile viewport (${theme})`, async ({ page, webApp, isMobile }, testInfo) => {
+  test(`preview fills the viewport (${theme})`, async ({ page, webApp, isMobile }, testInfo) => {
     const html = await webApp.transformIndexHtml('/preview-layout', `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module">
       import React from 'react';
       import { createRoot } from 'react-dom/client';
@@ -24,15 +24,11 @@ for (const theme of themes) {
     const body = dialog.locator('.sheet-body');
     await expect(body).toBeVisible();
     const viewport = page.viewportSize()!;
-    if (isMobile) {
-      await expect.poll(() => body.boundingBox()).toEqual({ x: 0, y: 0, ...viewport });
-      const frame = await dialog.locator('iframe').boundingBox();
-      expect(frame!.x).toBe(0);
-      expect(frame!.width).toBe(viewport.width);
-      expect(frame!.y + frame!.height).toBe(viewport.height);
-    } else {
-      expect((await body.boundingBox())!.width).toBeLessThan(viewport.width);
-    }
+    await expect.poll(() => body.boundingBox()).toEqual({ x: 0, y: 0, ...viewport });
+    const frame = await dialog.locator('iframe').boundingBox();
+    expect(frame!.x).toBe(0);
+    expect(frame!.width).toBe(viewport.width);
+    expect(frame!.y + frame!.height).toBe(viewport.height);
     await page.screenshot({ path: testInfo.outputPath(`preview-${theme}.png`) });
     if (isMobile) {
       // viewport.ts publishes visual-viewport dimensions when the keyboard opens.

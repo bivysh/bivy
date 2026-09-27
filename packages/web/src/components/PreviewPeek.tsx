@@ -115,7 +115,7 @@ export function PreviewPeek({ url, name, sessionId, appId, viewId, onClose, onOp
   }, [origin, sessionId, onClose, engine, toShell, capabilities, addMarked]);
 
   const done = () => { setListening(null); toShell({ type: "listening", on: false }); };
-  return <Sheet title={name} ariaLabel={`Preview: ${name}`} onClose={onClose} size="mobile-full" autoFocusSearch={false}
+  return <Sheet title={name} ariaLabel={`Preview: ${name}`} onClose={onClose} size="full" autoFocusSearch={false}
     headExtra={<button className="btn sm ghost" onClick={onOpenInTab}>Open in tab ↗</button>}>
     {blocked
       ? <div className="changes-binary" role="status">This browser doesn’t allow app previews inside Bivy, so previews will open in a tab on this device. <button className="btn sm" onClick={onOpenInTab}>Open in tab ↗</button></div>
