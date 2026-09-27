@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.2] - 2026-09-27
+
 ### Fixed
 
 - Keep live conversations responsive during large file edits by avoiding repeated diff calculations for collapsed tool summaries. Detailed file diffs remain available in the activity inspector.
