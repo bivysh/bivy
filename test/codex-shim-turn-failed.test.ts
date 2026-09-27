@@ -40,7 +40,7 @@ function waitFor(events: RuntimeEvent[], pred: (event: RuntimeEvent) => boolean,
   });
 }
 
-function makeRuntime(mode: "ok" | "fail" | "usage-limit"): ProtocolRuntime {
+function makeRuntime(mode: "ok" | "fail" | "usage-limit" | "echo-input"): ProtocolRuntime {
   return new ProtocolRuntime({
     id: "codex-approvals",
     displayName: "Codex",
@@ -118,4 +118,26 @@ test("a normal Codex turn still completes cleanly (agent_end, reply, no error)",
   assert.equal(session.isStreaming, false, "isStreaming is cleared after a completed turn");
 
   session.dispose();
+});
+
+
+test("Codex receives the original image bytes with the prompt, including an image-only turn", async () => {
+  const runtime = makeRuntime("echo-input");
+  const { session } = await runtime.createSession({ workspace: process.cwd() });
+  const events: RuntimeEvent[] = [];
+  session.subscribe(event => events.push(event));
+  try {
+    const images = [{ type: "image" as const, mimeType: "image/png", data: "cGVuIG1hcmtz" },
+      { type: "image" as const, mimeType: "image/jpeg", data: "cGhvdG8=" }];
+    for (const text of ["Look at the pen marks", ""]) {
+      events.length = 0;
+      await session.prompt(text, { images });
+      await waitFor(events, event => event.type === "agent_end");
+      const reply = session.getMessages().filter(m => m.role === "assistant").at(-1)!;
+      assert.deepEqual(JSON.parse(String(reply.content)), [
+        { type: "text", text },
+        ...images.map(image => ({ type: "image", url: `data:${image.mimeType};base64,${image.data}` })),
+      ]);
+    }
+  } finally { session.dispose(); }
 });

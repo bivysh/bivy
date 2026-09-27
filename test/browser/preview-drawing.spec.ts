@@ -7,7 +7,7 @@ for (const theme of themes) test(`preview drawing captures gestures (${theme})`,
   await page.route(`${origin}/__bivy/tokens.css`, route => route.fulfill({ path: 'packages/ui/tokens.css', contentType: 'text/css' }));
   await page.route(`${origin}/__bivy/styles.css`, route => route.fulfill({ path: 'packages/web/src/styles.css', contentType: 'text/css' }));
   await page.route(`${origin}/shell`, route => route.fulfill({ contentType: 'text/html', body: previewShell('test').replace('<html lang="en">', `<html lang="en" data-theme="${theme}">`) }));
-  await page.route(`${origin}/host`, route => route.fulfill({ contentType: 'text/html', body: `<meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}iframe{border:0;width:100vw;height:100dvh}</style><iframe src="/shell"></iframe><script>addEventListener('message', e => {if(e.data.type==='hello')e.source.postMessage({source:'bivy',type:'draw',available:true},location.origin)})</script>` }));
+  await page.route(`${origin}/host`, route => route.fulfill({ contentType: 'text/html', body: `<meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}iframe{border:0;width:100vw;height:100dvh}</style><iframe src="/shell"></iframe><script>addEventListener('message', e => {if(e.data.type==='annotation')window.annotation=e.data;if(e.data.type==='hello'){e.source.postMessage({source:'bivy',type:'draw',available:true},location.origin);e.source.postMessage({source:'bivy',type:'voice',available:true},location.origin)}})</script>` }));
   await page.route('http://preview.test/**', route => route.request().url().includes('/__bivy/')
     ? route.fulfill({ status: 503 })
     : route.fulfill({ contentType: 'text/html', body: `<style>body{height:3000px;background:linear-gradient(white,lightblue)}</style><h1>Preview app</h1><p>Draw here</p><script>${inspectorScript(origin)}</script>` }));
@@ -61,7 +61,37 @@ for (const theme of themes) test(`preview drawing captures gestures (${theme})`,
   await shell.getByRole('button', { name: 'Done', exact: true }).click();
   await expect(shell.getByRole('textbox', { name: 'What should change?' })).toBeFocused();
   await expect(shell.locator('#draft-context')).toContainText('pen ');
-  await shell.getByRole('button', { name: 'Cancel', exact: true }).click();
+  await expect(shell.locator('nav')).toBeHidden();
+  await expect(shell.locator('#draft-details')).not.toHaveAttribute('open');
+  await shell.getByRole('textbox', { name: 'What should change?' }).fill('Keep these pen marks');
+  const field = (await shell.locator('#draft-text').boundingBox())!;
+  const actions = (await shell.locator('#draft .panel-actions').boundingBox())!;
+  expect(field.y + field.height).toBeLessThanOrEqual(actions.y);
+  await page.screenshot({ path: info.outputPath(`note-${theme}.png`) });
+  if (isMobile) {
+    // Approximate the space left by a software keyboard without a second width matrix.
+    await page.setViewportSize({ width: 390, height: 400 });
+    const shortField = (await shell.locator('#draft-text').boundingBox())!;
+    const shortActions = (await shell.locator('#draft .panel-actions').boundingBox())!;
+    expect(shortField.y).toBeGreaterThanOrEqual(0);
+    expect(shortField.y + shortField.height).toBeLessThanOrEqual(shortActions.y);
+    expect(shortActions.y + shortActions.height).toBeLessThanOrEqual(400);
+    await checkTargets();
+    await page.screenshot({ path: info.outputPath(`note-keyboard-${theme}.png`) });
+    await page.setViewportSize({ width: 390, height: 844 });
+  }
+  await shell.getByRole('button', { name: 'Add to chat', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).annotation?.mark.strokes)).toMatchObject([{ tool: 'pen' }]);
+  expect(await page.evaluate(() => (window as any).annotation.text)).toContain('Keep these pen marks');
+  await expect(ink).toBeHidden();
+  // Reopen a draft to cover cancellation as well as delivery.
+  await shell.getByRole('button', { name: 'Point', exact: true }).click();
+  await expect(shell.frameLocator('#app').locator('html > div[aria-hidden="true"]')).toHaveCount(2);
+  await shell.frameLocator('#app').getByText('Draw here').click({ force: true });
+  await expect(shell.getByRole('textbox', { name: 'What should change?' })).toBeFocused();
+
+  await page.keyboard.press('Escape');
+  await expect(shell.getByRole('button', { name: 'Point', exact: true })).toBeFocused();
   await shell.getByRole('button', { name: 'Draw', exact: true }).click();
   await expect(shell.getByRole('radio', { name: 'Pen', exact: true })).toBeChecked();
   await expect(ink.locator('.mark')).toHaveCount(0);
