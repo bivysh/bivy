@@ -515,10 +515,10 @@ test("Compare shows before and after the agent's last change", async ({ page }, 
   try {
     await fs.writeFile(path.join(dir, "index.html"), '<!doctype html><html lang="en"><title>Ledger</title><h1>Ledger</h1></html>');
     const id = registry.publish("s", dir, { version: 1, name: "Ledger", views: [{ kind: "web", name: "Ledger", source: { kind: "static", directory: "." } }] }).views[0]!.id;
-    await page.setContent('<body style="margin:0;background:#c33;width:390px;height:600px"></body>');
-    const before = await page.screenshot({ clip: { x: 0, y: 0, width: 390, height: 600 } });
-    await page.setContent('<body style="margin:0;background:#3a3;width:390px;height:600px"></body>');
-    const after = await page.screenshot({ clip: { x: 0, y: 0, width: 390, height: 600 } });
+    // Solid-colour inputs need no browser capture. Keep Chromium for checking
+    // the real Compare UI below, avoiding screenshot startup races in CI.
+    const before = encodePng(390, 600, Buffer.alloc(390 * 600 * 3, Buffer.from([204, 51, 51])));
+    const after = encodePng(390, 600, Buffer.alloc(390 * 600 * 3, Buffer.from([51, 170, 51])));
     registry.getView(id)!.shots = [{ revision: 0, at: 1, png: before }, { revision: 1, at: 2, png: after }];
     await page.route("https://*.preview.example.net/**", async (route) => {
       const request = route.request(); const url = new URL(request.url());
