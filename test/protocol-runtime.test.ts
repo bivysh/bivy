@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { ProtocolRuntime, protocolCommandsFromEnv } from "../src/runtime/protocol.js";
 import type { RuntimeEvent, ForkNativePayload } from "../src/runtime/types.js";
 import { test } from "node:test";
+import { mergeBases } from "../src/session/event-log.js";
+import type { RuntimeMessage } from "../src/runtime/types.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const fixture = path.join(__dirname, "fixtures/protocol-agent.mjs");
@@ -46,7 +48,11 @@ assert.deepEqual(runtime.capabilities.commands, [
 ]);
 
 const events: RuntimeEvent[] = [];
-session.subscribe((event) => events.push(event));
+let boundaryHistory: RuntimeMessage[] = [];
+session.subscribe((event) => {
+  events.push(event);
+  if (event.type === "message_boundary") boundaryHistory = structuredClone(session.getMessages());
+});
 await session.prompt("say hello");
 await waitFor(events, (event) => event.type === "agent_end");
 
@@ -70,6 +76,8 @@ assert.equal(
   "the item boundary seals only the prose streamed so far",
 );
 
+assert.match(JSON.stringify(boundaryHistory), /hello /, "reopening during work retains completed commentary before session.done");
+
 // History keeps the whole turn: the user prompt, an assistant message whose
 // content blocks interleave the reply text with the tool_use in the order they
 // actually streamed (the fixture sends "hello " before the tool call and
@@ -80,6 +88,7 @@ assert.equal(
 // its final sentence.
 const history = session.getMessages() as Array<{ role?: string; content?: unknown }>;
 assert.deepEqual(history.map((m) => m.role), ["user", "assistant", "user"]);
+assert.deepEqual(mergeBases(boundaryHistory, session.getMessages()), session.getMessages(), "the final snapshot replaces persisted commentary without duplicating the turn");
 
 const assistantBlocks = history[1].content as Array<Record<string, unknown>>;
 assert.ok(Array.isArray(assistantBlocks));

@@ -305,6 +305,7 @@ class ProtocolSession implements RuntimeSession {
   private readonly resumeRef?: string;
   private started = false;
   private assistantText = "";
+  private turnMessageIndex: number | undefined;
   /** A protocol agent can produce several discrete assistant messages in one
    * turn (Codex commentary items are the common case). After a
    * `message.boundary`, separate the next item's text in the cumulative stream
@@ -647,6 +648,18 @@ class ProtocolSession implements RuntimeSession {
     if (pending) this.turnContent.push({ type: "text", text: pending });
   }
 
+  /** Publish a stable transcript entry at item boundaries, while keeping the
+   * live text cumulative. Replace this entry as the turn grows so reconnects
+   * retain commentary without duplicating it at completion. */
+  private snapshotAssistantTurn(content: unknown): void {
+    if (this.turnMessageIndex === undefined) {
+      this.turnMessageIndex = this.messages.length;
+      this.messages.push({ role: "assistant", content, id: randomUUID(), timestamp: Date.now() });
+    } else {
+      this.messages[this.turnMessageIndex] = { ...this.messages[this.turnMessageIndex]!, content };
+    }
+  }
+
   /**
    * Fold assistant text that arrives after the turn was sealed (session.done)
    * onto the last persisted assistant message — the ACP end_turn race (see the
@@ -752,6 +765,7 @@ class ProtocolSession implements RuntimeSession {
         if (this.turnContent[this.turnContent.length - 1]?.type !== "bivy_message_boundary") {
           this.turnContent.push({ type: "bivy_message_boundary" });
         }
+        this.snapshotAssistantTurn([...this.turnContent]);
         this.emit({ type: "message_boundary", message: { role: "assistant", content: this.assistantText } });
         this.assistantItemBoundary = true;
       }
@@ -793,10 +807,10 @@ class ProtocolSession implements RuntimeSession {
       // what was on screen. A tool-free turn keeps the plain-text form it always used.
       if (hadTools) {
         this.flushPendingTurnText();
-        if (this.turnContent.length) this.messages.push({ role: "assistant", content: this.turnContent, timestamp: Date.now() });
+        if (this.turnContent.length) this.snapshotAssistantTurn([...this.turnContent]);
         if (this.turnToolResults.length) this.messages.push({ role: "user", content: this.turnToolResults, timestamp: Date.now() });
       } else if (this.assistantText) {
-        this.messages.push(message);
+        this.snapshotAssistantTurn(this.assistantText);
       }
       this.emit({ type: "message_end", message });
       this.streaming = false;
@@ -820,10 +834,10 @@ class ProtocolSession implements RuntimeSession {
       const hadTools = this.turnContent.length > 0 || this.turnToolResults.length > 0;
       if (hadTools) {
         this.flushPendingTurnText();
-        if (this.turnContent.length) this.messages.push({ role: "assistant", content: this.turnContent, timestamp: Date.now() });
+        if (this.turnContent.length) this.snapshotAssistantTurn([...this.turnContent]);
         if (this.turnToolResults.length) this.messages.push({ role: "user", content: this.turnToolResults, timestamp: Date.now() });
       } else if (this.assistantText) {
-        this.messages.push({ role: "assistant", content: this.assistantText, timestamp: Date.now() });
+        this.snapshotAssistantTurn(this.assistantText);
       }
       // Append a terminal error marker in the shape store-render + terminalTurnError
       // recognize (stopReason "error" + errorMessage), so the failure itself
@@ -1027,6 +1041,7 @@ class ProtocolSession implements RuntimeSession {
     }
     this.messages.push({ role: "user", content: prompt, timestamp: Date.now() });
     this.streaming = true;
+    this.turnMessageIndex = undefined;
     this.assistantText = "";
     this.assistantItemBoundary = false;
     this.reasoningText = "";

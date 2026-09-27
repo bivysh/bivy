@@ -443,7 +443,9 @@ export class AgentService<H = ReturnType<typeof setTimeout>> {
     // state onto that frame so the mirror is correct even for a runtime that
     // mutates messages/sessionFile exactly at agent_end (no prior message_end
     // delta) — the "set before agent_end" invariant in process.ts.
-    const authoritative = event.type === "agent_end";
+    // Item boundaries can revise an existing transcript entry without changing
+    // its count. Forward that revision before the daemon persists/replays it.
+    const authoritative = event.type === "agent_end" || event.type === "message_boundary" || event.type === "message_end";
     const snapshot = this.snapshotDelta(svc, authoritative);
     const message: EventMessage = snapshot ? { t: "event", event, snapshot } : { t: "event", event };
     conn.send(message);

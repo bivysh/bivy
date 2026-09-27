@@ -55,6 +55,11 @@ class EchoSession implements RuntimeSession {
     this.emitter.emit("event", event);
   }
 
+  commentary(text: string, type = "message_boundary"): void {
+    this.messages = [{ role: "assistant", content: text }];
+    this.emit({ type, message: this.messages[0] });
+  }
+
   async prompt(text: string): Promise<void> {
     this.streaming = true;
     this.messages.push({ role: "user", content: text });
@@ -174,6 +179,25 @@ test("start creates a session and returns an initial snapshot", async () => {
   assert.equal(started.snapshot.warning, "echo warning");
   assert.deepEqual(started.snapshot.capabilities, ECHO_CAPS);
   assert.equal(service.sessionCount, 1);
+});
+
+test("item boundaries forward transcript revisions even when message count is unchanged", async () => {
+  const runtime = new EchoRuntime();
+  const service = new AgentService({ runtimeProvider: () => runtime });
+  const c = fakeConn();
+  service.accept(c.conn);
+  c.feed(startFrame());
+  await flush();
+  runtime.last!.commentary("Checking the files.");
+  runtime.last!.commentary("Checking the files. Running tests.");
+  runtime.last!.commentary("Checking the files. Running tests. Done.", "message_end");
+  const frames = c.events().filter((frame) => frame.event.type === "message_boundary" || frame.event.type === "message_end");
+  assert.deepEqual(frames.map((frame) => frame.snapshot?.messages), [
+    [{ role: "assistant", content: "Checking the files." }],
+    [{ role: "assistant", content: "Checking the files. Running tests." }],
+    [{ role: "assistant", content: "Checking the files. Running tests. Done." }],
+  ], "the daemon receives each completed commentary revision before persisting the boundary");
+  service.disposeAll();
 });
 
 test("a prompt forwards the full event stream with a post-turn snapshot", async () => {
