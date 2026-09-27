@@ -55,9 +55,9 @@ class EchoSession implements RuntimeSession {
     this.emitter.emit("event", event);
   }
 
-  commentary(text: string): void {
+  commentary(text: string, type = "message_boundary"): void {
     this.messages = [{ role: "assistant", content: text }];
-    this.emit({ type: "message_boundary", message: this.messages[0] });
+    this.emit({ type, message: this.messages[0] });
   }
 
   async prompt(text: string): Promise<void> {
@@ -190,10 +190,12 @@ test("item boundaries forward transcript revisions even when message count is un
   await flush();
   runtime.last!.commentary("Checking the files.");
   runtime.last!.commentary("Checking the files. Running tests.");
-  const frames = c.events().filter((frame) => frame.event.type === "message_boundary");
+  runtime.last!.commentary("Checking the files. Running tests. Done.", "message_end");
+  const frames = c.events().filter((frame) => frame.event.type === "message_boundary" || frame.event.type === "message_end");
   assert.deepEqual(frames.map((frame) => frame.snapshot?.messages), [
     [{ role: "assistant", content: "Checking the files." }],
     [{ role: "assistant", content: "Checking the files. Running tests." }],
+    [{ role: "assistant", content: "Checking the files. Running tests. Done." }],
   ], "the daemon receives each completed commentary revision before persisting the boundary");
   service.disposeAll();
 });

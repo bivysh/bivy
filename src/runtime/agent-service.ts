@@ -445,7 +445,7 @@ export class AgentService<H = ReturnType<typeof setTimeout>> {
     // delta) — the "set before agent_end" invariant in process.ts.
     // Item boundaries can revise an existing transcript entry without changing
     // its count. Forward that revision before the daemon persists/replays it.
-    const authoritative = event.type === "agent_end" || event.type === "message_boundary";
+    const authoritative = event.type === "agent_end" || event.type === "message_boundary" || event.type === "message_end";
     const snapshot = this.snapshotDelta(svc, authoritative);
     const message: EventMessage = snapshot ? { t: "event", event, snapshot } : { t: "event", event };
     conn.send(message);
