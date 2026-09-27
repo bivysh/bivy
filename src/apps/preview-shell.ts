@@ -23,7 +23,7 @@ iframe { width:100%; height:100%; border:0; background:var(--bg); }
 #dock > * { pointer-events:auto; }
 /* The hint sits over the app; a tap on it is meant for the app underneath. */
 #dock > #pointing { pointer-events:none; }
-nav, #draw-bar { display:flex; align-items:center; gap:var(--space-1); max-width:100%; padding:var(--space-1); background:var(--surface); border:thin solid var(--line); border-radius:var(--radius-full); box-shadow:var(--shadow-lg); }
+nav, #draw-bar { display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:var(--space-1); max-width:100%; padding:var(--space-1); background:var(--surface); border:thin solid var(--line); border-radius:var(--radius-xl); box-shadow:var(--shadow-lg); }
 nav .btn, #draw-bar .btn { flex-shrink:0; border-radius:var(--radius-full); }
 nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); }
 #name { display:flex; flex-direction:column; min-width:0; padding:0 var(--space-2); }
@@ -47,7 +47,7 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
 #draft-row { display:flex; align-items:flex-start; gap:var(--space-2); }
 #draft-row #draft-text { flex:1; min-width:0; }
 /* Hold to talk: a phone-sized target that never selects text or opens a callout. */
-#mic { flex:none; inline-size:44px; block-size:44px; padding:0; border-radius:var(--radius-full); touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+#mic { flex:none; inline-size:var(--space-7); block-size:var(--space-7); padding:0; border-radius:var(--radius-full); touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
 #mic[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
 #voice-status { font-size:var(--text-xs); margin:var(--space-2) 0 0; }
 #voice-status:empty { display:none; }
@@ -59,14 +59,15 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
 /* Draw: marks over the frozen app (or Compare's "after" shot). The layer takes
    every touch, so nothing reaches the app; two fingers scroll the page. */
 #ink { position:fixed; z-index:var(--z-sticky); touch-action:none; cursor:crosshair; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+/* An HTML hit surface owns gestures even where the SVG has no painted marks. */
+#ink svg { display:block; width:100%; height:100%; pointer-events:none; }
 #ink.frozen { pointer-events:none; cursor:default; }
 #ink .halo { fill:none; stroke:var(--annotate-halo); stroke-width:7; stroke-linecap:round; stroke-linejoin:round; }
 #ink .mark { fill:none; stroke:var(--annotate); stroke-width:4; stroke-linecap:round; stroke-linejoin:round; }
 #dock > #drawing { pointer-events:none; }
 /* Hints float over the app, whose page may be any colour: back them solidly. */
 #dock > .banner.inline[data-tone="accent"] { background:color-mix(in srgb, var(--accent) 14%, var(--surface)); box-shadow:var(--shadow-sm); }
-#draw-bar .btn { min-block-size:44px; }
-#draw-bar .seg-btn { min-block-size:36px; min-inline-size:48px; }
+#dock .btn, #dock .seg-btn, #show, #down .btn { min-block-size:var(--space-7); min-inline-size:var(--space-7); font-size:var(--text-sm); }
 #draw-bar .segmented { flex-shrink:0; }
 #compare-draw { margin-top:var(--space-2); }
 /* Marking a Compare shot: make it big enough to draw on with a thumb. */
@@ -79,7 +80,7 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
 <div class="banner" data-tone="warn" id="down" hidden><span class="banner-text" id="down-text" role="status"></span><span class="banner-actions"><button class="btn sm" id="ask" hidden>Ask agent to fix</button></span></div>
 <p id="status" role="status">Opening app…</p>
 <div id="stage" data-lens="full"><iframe id="app" title="App preview" hidden sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups" referrerpolicy="no-referrer"></iframe></div>
-<svg id="ink" hidden aria-hidden="true"></svg>
+<div id="ink" hidden aria-hidden="true"><svg id="ink-marks"></svg></div>
 <div id="dock">
   <section class="panel" id="console" hidden aria-labelledby="console-title">
     <h2><span id="console-title">Console</span><button class="btn sm ghost" id="clear">Clear</button></h2>
@@ -271,7 +272,7 @@ function picked(d){
 // with that context; Add to chat hands them to the Bivy client, which gets a
 // picture from the machine. Nothing about them goes through this origin's
 // network. Compare's "after" shot can be marked the same way.
-const ink=$('ink'),SVG='http://www.w3.org/2000/svg';
+const ink=$('ink'),inkMarks=$('ink-marks'),SVG='http://www.w3.org/2000/svg';
 let draw=null,marks=null,drawOk=false,nextStroke=0;
 const pos=v=>({x:Number(v?.x)||0,y:Number(v?.y)||0});
 function startDraw(target){
@@ -293,6 +294,7 @@ function startDraw(target){
     current.waiting=d=>{current.waiting=null;current.scroll=pos(d.scroll);current.state={viewport:{width:Math.round(Number(d.viewport?.width))||current.state.viewport.width,height:Math.round(Number(d.viewport?.height))||current.state.viewport.height},dpr:Number(d.dpr)||devicePixelRatio,theme:d.theme==='dark'?'dark':'light',path:safePath(d.path),signals:Object.fromEntries(Object.entries(d.signals||{}).map(([k,v])=>[k,v===true]))};renderInk();};
     frame.contentWindow?.postMessage({type:'bivy:draw'},metadata.origin);
   }
+  for(const b of $('draw-bar').querySelectorAll('[data-tool]'))b.setAttribute('aria-checked',String(b.dataset.tool===draw.tool));
   $('draw-bar').querySelector('[aria-checked="true"]').focus();
   updateDrawBar();renderInk();
 }
@@ -300,7 +302,7 @@ function startDraw(target){
 function placeInk(target){
   const r=(target==='compare'?$('compare-after'):frame).getBoundingClientRect();
   Object.assign(ink.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px'});
-  ink.setAttribute('viewBox','0 0 '+r.width+' '+r.height);
+  inkMarks.setAttribute('viewBox','0 0 '+r.width+' '+r.height);
   return {left:r.left,top:r.top,width:r.width,height:r.height};
 }
 // A rotation or a keyboard moves things: keep the layer on them. (Marks on
@@ -309,7 +311,7 @@ addEventListener('resize',()=>{if(draw&&!draw.done)draw.rect=Object.assign(place
 function endDraw(){
   if(!draw)return;
   delete $('compare').dataset.drawing;
-  draw=null;marks=null;ink.toggleAttribute('hidden',true);ink.replaceChildren();
+  draw=null;marks=null;ink.toggleAttribute('hidden',true);inkMarks.replaceChildren();
   $('drawing').hidden=true;$('draw-bar').hidden=true;document.querySelector('nav').hidden=false;
 }
 function updateDrawBar(){const has=Boolean(draw?.strokes.length);for(const id of ['draw-undo','draw-clear','draw-done'])$(id).disabled=!has;}
@@ -322,7 +324,7 @@ function shape(stroke){
 function renderInk(){
   if(!draw)return;
   const all=[...draw.strokes,...(draw.current?[draw.current]:[])];
-  ink.replaceChildren(...all.flatMap(s=>['halo','mark'].map(c=>{const el=shape(s);el.setAttribute('class',c);return el;})));
+  inkMarks.replaceChildren(...all.flatMap(s=>['halo','mark'].map(c=>{const el=shape(s);el.setAttribute('class',c);return el;})));
 }
 function local(e){const x=e.clientX-draw.rect.left,y=e.clientY-draw.rect.top;return draw.target==='frame'?[Math.round(x+draw.scroll.x),Math.round(y+draw.scroll.y)]:[Math.round(x),Math.round(y)];}
 let scrollAsk=null;
