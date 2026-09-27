@@ -68,6 +68,12 @@ describe("formatTool", () => {
     expect(f.added).toBe(2);
   });
 
+  it("formats paths with long separator runs and trailing separators", () => {
+    const path = `${"/\\".repeat(50_000)}file.ts/\\`;
+    expect(formatTool("Read", { path }).target).toBe("file.ts");
+    expect(formatTool("Read", { path: "/\\" }).target).toBe("");
+  });
+
   it("summarizes an edit's changed lines", () => {
     const f = formatTool("Edit", { path: "x.ts", old_string: "a\nb", new_string: "a\nB" });
     expect(f.verb).toBe("Edited");

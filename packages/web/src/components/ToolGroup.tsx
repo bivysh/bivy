@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useRef, useState } from "react";
-import { formatTool, toHtml, toolGroupSummary, toolRowLabel, type ToolActivity, type ToolFormat, type ToolGlyph } from "@bivy/core";
+import { formatTool, toHtml, toolGroupSummary, toolHasError, toolRowLabel, type ToolActivity, type ToolFormat, type ToolGlyph } from "@bivy/core";
 import { DiffView } from "./DiffView.js";
 import { Sheet } from "./Sheet.js";
 import { ChevronRightIcon } from "./UiIcons.js";
@@ -171,7 +171,7 @@ function ToolDetail({ tool, f, subSteps = 0 }: { tool: ToolActivity; f: ToolForm
 }
 
 function runningSummary(tool: ToolActivity): string {
-  const f = formatTool(tool.name, tool.input, tool.detail);
+  const f = formatTool(tool.name, tool.input, tool.detail, { diffStats: false });
   if (f.verb === "Agent output") return "Reading agent output…";
   if (tool.detail?.kind === "delegation") {
     const agent = tool.detail.label ? `${tool.detail.label} sub-agent` : "Sub-agent";
@@ -250,14 +250,12 @@ export function ToolActivitySheet({ tools, summary, onClose }: { tools: ToolActi
  */
 export const ToolGroup = memo(function ToolGroup({ tools }: { tools: ToolActivity[] }) {
   const [open, setOpen] = useState(false);
-  // Stable identity across re-renders: ChatView rebuilds `tools` (and so
-  // re-renders this component) on every transcript change, not just ones
-  // that touch this group — a fresh inline arrow here would make Sheet's
-  // focus-trap effect (deps=[onClose]) tear down and re-run on each of those,
+  // Stable identity across live updates: a fresh inline arrow here would make
+  // Sheet's focus-trap effect (deps=[onClose]) tear down and re-run each time,
   // yanking focus back to the top of the sheet while a tool call streams.
   const close = useCallback(() => setOpen(false), []);
   const running = tools.some((t) => t.status === "running");
-  const hasError = tools.some((t) => formatTool(t.name, t.input, t.detail).isError);
+  const hasError = tools.some((t) => toolHasError(t.detail));
   const runningDelegations = tools.filter((t) => t.status === "running" && t.detail?.kind === "delegation");
   const summary = runningDelegations.length > 1
     ? `${runningDelegations.length} sub-agents working…`
@@ -280,4 +278,7 @@ export const ToolGroup = memo(function ToolGroup({ tools }: { tools: ToolActivit
       {open && <ToolActivitySheet tools={tools} summary={sheetSummary} onClose={close} />}
     </div>
   );
-});
+// ChatView rebuilds the group array on each token, but the store preserves
+// unchanged tool objects. Skip those groups without comparing large payloads.
+}, (previous, next) => previous.tools.length === next.tools.length
+  && previous.tools.every((tool, index) => tool === next.tools[index]));
