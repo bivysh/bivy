@@ -21,10 +21,16 @@ for (const theme of themes) {
         import '/src/styles.css';
         import { ToolGroup } from '/src/components/ToolGroup.tsx';
         const failed = { callId: 'failed', name: 'bash', input: { command: 'false' }, status: 'done', detail: { kind: 'shell', command: 'false', result: { exitCode: 1 } } };
-        const running = { callId: 'running', name: 'bash', input: { command: 'pnpm test' }, status: 'running' };
+        let running = { callId: 'running', name: 'bash', input: { command: 'pnpm test' }, status: 'running' };
         const done = { callId: 'done', name: 'read', input: { path: 'README.md' }, status: 'done' };
-        createRoot(document.getElementById('root')).render(h('main', { className: 'chat-messages' },
+        const root = createRoot(document.getElementById('root'));
+        const render = () => root.render(h('main', { className: 'chat-messages' },
           ...[[failed], [failed, running], [done], [running]].map((tools, key) => h(ToolGroup, { key, tools }))));
+        render();
+        window.addEventListener('tool-result', () => {
+          running = { ...running, status: 'done', detail: { kind: 'shell', command: 'pnpm test', result: { exitCode: 1 } } };
+          render();
+        });
       </script></body></html>`);
     await page.route(`${origin}/activity-test`, (route) => route.fulfill({ contentType: 'text/html', body: html }));
     await page.goto(`${origin}/activity-test`);
@@ -43,6 +49,13 @@ for (const theme of themes) {
     await expect(page.locator('.activity-detail')).toContainText('Failed · exit 1');
     await page.keyboard.press('Escape');
     await expect(failed).toBeFocused();
+    // A new array of unchanged tools can skip rendering, but an immutable live
+    // result must still update both the collapsed label and its inspector.
+    await page.evaluate(() => window.dispatchEvent(new Event('tool-result')));
+    await expect(page.locator('.tool-group-label')).toHaveText(['Worked', 'Worked', 'Worked', 'Worked']);
+    const updated = page.getByRole('button', { name: /^Worked:.*2 failed.*Open work details$/ });
+    await updated.click();
+    await expect(page.locator('.activity-row .badge')).toHaveCount(2);
   });
 
   // Only the dismissals that touch browser history differ from modal-history's

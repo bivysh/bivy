@@ -242,8 +242,9 @@ function pick(input: any, keys: string[]): string | undefined {
 const OLD_KEYS = ["oldText", "oldString", "old_string", "old", "before"];
 const NEW_KEYS = ["newText", "newString", "new_string", "new", "after"];
 
-/** Normalize an Edit tool input (single pair or array) into diff hunks. */
-export function editHunks(input: any): DiffHunk[] {
+/** Normalize an Edit tool input (single pair or array) into diff hunks.
+ *  Summary callers can skip line counting; added/removed then remain zero. */
+export function editHunks(input: any, diffStats = true): DiffHunk[] {
   const list: any[] = Array.isArray(input?.edits)
     ? input.edits
     : Array.isArray(input?.replacements)
@@ -256,7 +257,7 @@ export function editHunks(input: any): DiffHunk[] {
     const oldText = pick(e, OLD_KEYS) ?? "";
     const newText = pick(e, NEW_KEYS) ?? "";
     if (!oldText && !newText) continue;
-    const { added, removed } = countOps(diffOps(oldText, newText));
+    const { added, removed } = diffStats ? countOps(diffOps(oldText, newText)) : { added: 0, removed: 0 };
     hunks.push({ oldText, newText, added, removed });
   }
   return hunks;
@@ -265,8 +266,10 @@ export function editHunks(input: any): DiffHunk[] {
 /** Full formatted view of a tool call: verb, target, and any diff. `detail`, when
  *  present, is the node's normalized classification and overrides the fields it
  *  covers — so an agent whose input shape formatTool wouldn't recognize (e.g.
- *  Codex `apply_patch`) still renders as a proper edit/command/read. */
-export function formatTool(name: string, input: unknown, detail?: ToolCallDetail): ToolFormat {
+ *  Codex `apply_patch`) still renders as a proper edit/command/read. Labels can
+ *  opt out of diff statistics; added/removed then remain zero. */
+export function formatTool(name: string, input: unknown, detail?: ToolCallDetail, options: { diffStats?: boolean } = {}): ToolFormat {
+  const diffStats = options.diffStats !== false;
   const n = String(name || "").toLowerCase();
   const inp: any = input && typeof input === "object" ? input : {};
   const verb = friendlyVerb(n);
@@ -282,9 +285,9 @@ export function formatTool(name: string, input: unknown, detail?: ToolCallDetail
   let edits: number | undefined;
   if (n.includes("write")) {
     const content = pick(inp, ["content", "text", "contents", "data"]) ?? "";
-    if (content) diffs = [{ oldText: "", newText: content, added: splitLines(content).length, removed: 0, label: "New file" }];
+    if (content) diffs = [{ oldText: "", newText: content, added: diffStats ? splitLines(content).length : 0, removed: 0, label: "New file" }];
   } else if (n.includes("edit")) {
-    const hunks = editHunks(inp);
+    const hunks = editHunks(inp, diffStats);
     diffs = hunks;
     if (hunks.length > 1) edits = hunks.length;
   }
@@ -326,7 +329,7 @@ export function formatTool(name: string, input: unknown, detail?: ToolCallDetail
       if (detail.kind === "edit" && result.diffs.length === 0 && (detail.oldText || detail.newText)) {
         const oldText = detail.oldText ?? "";
         const newText = detail.newText ?? "";
-        const { added: a, removed: r } = countOps(diffOps(oldText, newText));
+        const { added: a, removed: r } = diffStats ? countOps(diffOps(oldText, newText)) : { added: 0, removed: 0 };
         result.diffs = [{ oldText, newText, added: a, removed: r }];
         result.added = a;
         result.removed = r;
@@ -352,12 +355,17 @@ export function formatTool(name: string, input: unknown, detail?: ToolCallDetail
   // failed command should read as failed, not sit identical to a success. This
   // is independent of the call classification above, so it applies to every kind.
   if (detail?.result) {
-    if (detail.result.isError || (typeof detail.result.exitCode === "number" && detail.result.exitCode !== 0)) result.isError = true;
+    if (toolHasError(detail)) result.isError = true;
     if (typeof detail.result.exitCode === "number") result.exitCode = detail.result.exitCode;
     if (detail.result.truncated) result.truncated = true;
   }
 
   return result;
+}
+
+/** Outcome checks must not calculate file diffs just to color a summary. */
+export function toolHasError(detail?: ToolCallDetail): boolean {
+  return Boolean(detail?.result?.isError || (typeof detail?.result?.exitCode === "number" && detail.result.exitCode !== 0));
 }
 
 /** One-line label for a tool row: command, else path/target, else query. */
@@ -374,7 +382,9 @@ export function toolGroupSummary(tools: Array<{ name: string; input: unknown; de
   let delegated = 0;
   let failed = 0;
   for (const t of tools) {
-    const f = formatTool(t.name, t.input, t.detail);
+    // The collapsed label needs classification, not line counts. Computing LCS
+    // here repeats every edit's quadratic diff work on each streaming update.
+    const f = formatTool(t.name, t.input, t.detail, { diffStats: false });
     if (f.isError) failed++;
     if (f.verb === "Agent output") output++;
     else if (f.verb === "Delegated") delegated++;
