@@ -25,8 +25,8 @@ export function Sheet({
   children: ReactNode | ((dismiss: DismissSheet) => ReactNode);
   headExtra?: ReactNode;
   variant?: "default" | "action" | "centered";
-  /** Keep list-heavy pickers predictably roomy even when the composer is tall. */
-  size?: "content" | "large";
+  /** Large keeps pickers roomy; mobile-full fills phones and stays large on desktop. */
+  size?: "content" | "large" | "mobile-full";
   ariaLabel?: string;
   /** Focus the search input on open. Off for list-heavy pickers on mobile,
    *  where popping the keyboard collapses the list to a couple of rows — we'd
