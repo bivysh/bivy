@@ -49,7 +49,7 @@ npm(["install", pkg, "--no-audit", "--no-fund", "--install-links"], project);
 
 // The last one would run `echo INJECTED` if the shim's own parse could see an
 // unescaped quote — agent prompts travel as arguments.
-const tricky = ["plain", "", "a b", 'x"y', "&calc", "a|b", "<in>", "(paren)", "caret^", "bang!", "100%", "semi;colon", "C:\\dir\\", "trail\\\\", 'q"&echo INJECTED&"q'];
+const tricky = ["plain", "", "a b", 'x"y', "&calc", "a|b", "<in>", "(paren)", "caret^", "bang!", "100%", "semi;colon", "C:\\dir\\", "trail\\\\", "a\\\\\"b", 'q"&echo INJECTED&"q'];
 for (const dir of [globalPrefix, path.join(project, "node_modules", ".bin")]) {
   const result = portableSpawnSync("bivy-echo", tricky, { encoding: "utf8", env: { ...process.env, PATH: `${dir};${process.env.PATH}` } });
   assert.equal(result.status, 0, result.stderr);

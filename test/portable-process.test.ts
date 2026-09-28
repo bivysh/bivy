@@ -32,3 +32,10 @@ test("Windows runs a .cmd shim through cmd.exe, escaping for it and for the shim
   assert.deepEqual(options, { windowsVerbatimArguments: true });
   assert.ok(args[3].endsWith(' ^^^"^^^&calc^^^" ^^^"x\\^^^"y^^^""'), args[3]);
 });
+
+test("Windows doubles whole backslash runs before a quote or the argument's end", () => {
+  // Found on a real runner: `trail\\` gained one backslash, escaped its closing
+  // quote and swallowed the next argument.
+  const { args } = portableCommand("agent", ["a\\\\\"b", "trail\\\\"], win);
+  assert.ok(args[3].endsWith(' ^^^"a\\\\\\\\\\^^^"b^^^" ^^^"trail\\\\\\\\^^^""'), args[3]);
+});

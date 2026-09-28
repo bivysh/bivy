@@ -60,11 +60,12 @@ function envValue(env, name) {
 const CMD_META = /([()\][%!^"`<>&|;, *?])/g;
 
 function escapeCmdArgument(arg) {
+  // Windows argv rules: a backslash run is literal unless a quote follows, so
+  // double every run before a quote (then escape the quote) and every trailing
+  // run (it precedes our closing quote).
   const quoted = String(arg)
-    // Double the backslashes before a quote, then escape the quote.
-    .replace(/(?=(\\+?)?)\1"/g, '$1$1\\"')
-    // Double trailing backslashes so they do not escape the closing quote.
-    .replace(/(?=(\\+?)?)\1$/, "$1$1");
+    .replace(/(\\*)"/g, '$1$1\\"')
+    .replace(/(\\+)$/, "$1$1");
   return `"${quoted}"`.replace(CMD_META, "^$1").replace(CMD_META, "^$1");
 }
 
