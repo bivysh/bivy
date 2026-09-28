@@ -23,7 +23,7 @@ async function openSetup(page: Page, theme: string, focus = "github", apps: Gith
     return route.fulfill({ json });
   });
   await page.route("**/nodes", (route) => route.fulfill({ json: [] }));
-  const fixturePath = `/source-test-${theme}-${focus}-${apps.map((entry) => entry.appId).join("-")}-${fail}-${centralConfigured}`;
+  const fixturePath = `/source-test-${theme}-${focus}-${apps.map((entry) => entry.appId).join("-")}-${fail}-${centralConfigured}-${nodeId || "no-node"}`;
   const html = await server.transformIndexHtml(fixturePath, `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module">
     import React from 'react';
     import { createRoot } from 'react-dom/client';
