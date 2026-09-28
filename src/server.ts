@@ -192,6 +192,7 @@ import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type Fork
 import { SecretVault, resolveSecret } from "./secrets.js";
 import { deviceFlowClientId, requestDeviceCode, pollAccessTokenOnce, REPO_CONNECT_SCOPE, type DeviceCode } from "./github-device-auth.js";
 import { InstallationTokenCache, createAppJwt, resolveInstallationId, type GitHubAppConfig } from "./github-app-auth.js";
+import { listGithubAppRepos } from "./github-app-repos.js";
 import {
   loadGitHubAppConfigs,
   orderAppsForOwner,
@@ -4993,6 +4994,7 @@ async function ensureGitHubApps(): Promise<LoadedGitHubApp[]> {
 function invalidateGitHubApps(): void {
   githubApps = undefined;
   installationIdByRepo.clear();
+  invalidateGithubListingCaches();
 }
 
 /**
@@ -10696,12 +10698,18 @@ async function createControlPlaneHook(kind = "github"): Promise<{ url: string; s
 }
 
 // List the GitHub repos the node can reach with its own token (for picking a
-// git workspace). Privacy-preserving: uses only the token stored on this
-// machine (env or `gh`), never the control plane. Returns `authed: false` with
+// git workspace). Uses local App installations when available, otherwise the
+// token stored on this machine (env or `gh`). Returns `authed: false` with
 // an empty list when there's no token so the UI falls back to manual owner/repo.
 async function listAccessibleRepos(): Promise<RepoListing> {
   if (reposCache && Date.now() - reposCache.at < REPO_LIST_TTL_MS) return reposCache.val;
   try {
+    const apps = await ensureGitHubApps();
+    if (apps.length) {
+      const val: RepoListing = { authed: true, repos: await listGithubAppRepos(apps) };
+      reposCache = { at: Date.now(), val };
+      return val;
+    }
     const token = await resolveGitHubToken();
     if (!token) return { authed: false, repos: [], reason: (await ghCliInstalled()) ? "gh-unauthed" : "no-token" };
     const ghRes = await fetch("https://api.github.com/user/repos?sort=updated&per_page=100&affiliation=owner,collaborator,organization_member", {

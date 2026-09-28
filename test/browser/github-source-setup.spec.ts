@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test, themes, type Page, type WebApp } from "./fixtures.js";
 import path from "node:path";
+import type { GithubAppEntry } from "@bivy/core";
 
 const installation = { installationId: "42", githubAccount: "acme", githubAccountType: "Organization", createdAt: "2026-09-01" };
 const hosted = { connected: true, appId: "123", central: true, hosted: true, installed: true, mention: "bivy-hosted", name: "Hosted Bivy App", servedBy: null, installations: [installation] };
@@ -13,7 +14,7 @@ test.beforeAll(async ({ webApp }) => {
   origin = webApp.origin;
 });
 
-async function openSetup(page: Page, theme: string, focus = "github", apps: Array<typeof hosted | typeof custom> = [hosted], fail = false, centralConfigured = true) {
+async function openSetup(page: Page, theme: string, focus = "github", apps: GithubAppEntry[] = [hosted], fail = false, centralConfigured = true, nodeId = "") {
   await page.route("**/account/**", (route) => {
     const pathname = new URL(route.request().url()).pathname;
     const json = pathname === "/account/github-app" ? { connected: apps.length > 0, apps }
@@ -39,7 +40,8 @@ async function openSetup(page: Page, theme: string, focus = "github", apps: Arra
     controller.fetchGithubApp = async () => { ${fail ? 'throw new Error("Connection failed");' : `return ${JSON.stringify({ connected: apps.length > 0, apps })};`} };
     controller.listNodes = async () => [];
     controller.centralGithubApp = async () => ({ configured: ${centralConfigured}, installations: [] });
-    const state = controller.store.getState();
+    const initial = controller.store.getState();
+    const state = { ...initial, connection: { ...initial.connection, currentNodeId: ${JSON.stringify(nodeId)} || null } };
     createRoot(document.getElementById('root')).render(${focus === "automations"
       ? `React.createElement(AutomationsView, { state, section: null, onSectionChange: () => {}, onOpenSession: () => {}, onClose: () => {} })`
       : `React.createElement(WorkQueueSetupSheet, { state, focus: ${JSON.stringify(focus)}, onClose: () => document.getElementById('root').textContent = 'Closed' })`});
@@ -87,6 +89,49 @@ for (const theme of themes) {
       await page.screenshot({ path: testInfo.outputPath(`hosted-management-${theme}-${configured}.png`), fullPage: true });
     });
   }
+}
+
+for (const theme of themes) {
+  test(`existing custom App can connect to a new machine (${theme})`, async ({ page }, testInfo) => {
+    await openSetup(page, theme, "github", [{ ...custom, servedBy: { id: "old-machine", name: "Old machine", online: true } }], false, true, "new-machine");
+    const connect = page.getByRole("button", { name: "Connect key on this machine", exact: true });
+    await expect(connect).toBeVisible();
+    await connect.focus();
+    await expect(connect).toBeFocused();
+    await page.screenshot({ path: testInfo.outputPath(`connect-new-machine-${theme}.png`), fullPage: true });
+    await connect.click();
+    await expect(page.getByText("Choose the private key for App ID 456", { exact: false })).toBeVisible();
+  });
+}
+
+for (const theme of themes) {
+  test(`repository setup opens GitHub settings without a terminal detour (${theme})`, async ({ page }, testInfo) => {
+    const fixture = `/repo-connect-${theme}`;
+    const html = await server.transformIndexHtml(fixture, `<html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module">
+      import React from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { RepoPicker } from '/src/components/Pickers.tsx';
+      import { controller } from '/src/store/controller.ts';
+      import '/@fs/${path.resolve("packages/ui/tokens.css")}';
+      import '/src/styles.css';
+      import '/src/ux-cleanup.css';
+      controller.listRepos = () => {};
+      controller.listBranches = () => {};
+      const initial = controller.store.getState();
+      const state = { ...initial, connection: { ...initial.connection, currentNodeId: 'new-machine' }, catalogs: { ...initial.catalogs, reposLoading: false, reposAuthed: false, reposError: null, githubConnect: { status: 'unconfigured' } } };
+      createRoot(document.getElementById('root')).render(React.createElement(RepoPicker, { state, onClose: () => document.getElementById('root').textContent = 'Closed' }));
+    </script></body></html>`);
+    await page.route(`${origin}${fixture}`, route => route.fulfill({ contentType: "text/html", body: html }));
+    await page.goto(`${origin}${fixture}`);
+    const connect = page.getByRole("button", { name: "Connect GitHub App to this machine", exact: true });
+    await expect(connect).toBeVisible();
+    await connect.focus();
+    await expect(connect).toBeFocused();
+    await page.screenshot({ path: testInfo.outputPath(`repo-connect-${theme}.png`), fullPage: true });
+    await connect.press("Enter");
+    await expect(page).toHaveURL(/\/settings\/github$/);
+    await expect(page.getByText("Closed", { exact: true })).toBeVisible();
+  });
 }
 
 test("unconnected GitHub offers hosted installation, not just custom app creation", async ({ page }) => {

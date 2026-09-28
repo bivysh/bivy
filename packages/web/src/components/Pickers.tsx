@@ -12,7 +12,7 @@ import { ModelAccounts } from "./ModelAccounts.js";
 import { modelAccountChoice, modelAccountProject } from "../modelAccounts.js";
 import { ChevronRightIcon } from "./UiIcons.js";
 import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
-import { writeClipboard } from "../clipboard.js";
+import { openSettings } from "../settingsRoute.js";
 import { agentPickerLabel, filterAndSortAgentRuntimes, isTopAgent } from "../agentPickerCatalog.js";
 
 const agentLabel = agentPickerLabel;
@@ -56,41 +56,10 @@ function previewContractForRuntime(a: RuntimeInfo): SessionContract {
   });
 }
 
-// A small copy-command row (mirrors ConnectRunner's install-command block) for
-// the connect prompt below.
-function ConnectCommand({ cmd, label }: { cmd: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => { if (timer.current) clearTimeout(timer.current); }, []);
-  const copy = async () => {
-    if (!(await writeClipboard(cmd))) return;
-    setCopied(true);
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => setCopied(false), 1800);
-  };
-  return (
-    <div className="repo-connect-command">
-      <code>{cmd}</code>
-      <button
-        type="button"
-        className={`btn sm ghost${copied ? " is-copied" : ""}`}
-        onClick={copy}
-        aria-label={copied ? "Command copied" : label}
-      >
-        {copied ? "Copied" : "Copy"}
-      </button>
-    </div>
-  );
-}
-
-// Actionable empty state for the repo picker when GitHub isn't connected on the
-// node. `gh` is NOT required — the primary path is Bivy's own device flow, run
-// ON THE NODE straight from this button (no terminal): tap Connect → authorize
-// on GitHub → the token lands in the node vault and the list fills in. We only
-// mention `gh auth login` as an extra when the CLI is installed-but-logged-out
-// (reason === "gh-unauthed"). If the node has no device-flow client id
-// (status "unconfigured"), we fall back to the `bivy github:connect` command.
-function RepoConnectPrompt({ state }: { state: AppState }) {
+// App setup is the primary path. Self-hosted deployments can also authorize a
+// personal account through the node's device flow. Neither path sends the user
+// to a CLI command that redirects straight back here.
+function RepoConnectPrompt({ state, onSetup }: { state: AppState; onSetup: () => void }) {
   const gc = state.catalogs.githubConnect;
 
   // While the user authorizes on GitHub, poll the node on the interval it gave
@@ -144,8 +113,8 @@ function RepoConnectPrompt({ state }: { state: AppState }) {
         <p className="repo-connect-sub">Connected — loading your repos…</p>
       ) : gc.status === "unconfigured" ? (
         <>
-          <p className="repo-connect-sub">Run this on the machine your agent runs on:</p>
-          <ConnectCommand cmd="bivy github:connect" label="Copy connect command" />
+          <p className="repo-connect-sub">Already installed the GitHub App? Connect its key to this machine in GitHub settings. No reinstall needed.</p>
+          <button type="button" className="btn primary block" onClick={onSetup}>Connect GitHub App to this machine</button>
           {state.catalogs.reposReason === "gh-unauthed" && (
             <p className="repo-connect-alt">
               The GitHub CLI is installed but signed out — you can also run <code>gh auth login</code>.
@@ -154,14 +123,15 @@ function RepoConnectPrompt({ state }: { state: AppState }) {
         </>
       ) : (
         <>
-          <p className="repo-connect-sub">One tap authorizes Bivy on this machine — no CLI needed.</p>
+          <p className="repo-connect-sub">Connect an existing GitHub App to this machine, or set up a new App.</p>
+          <button type="button" className="btn primary block" onClick={onSetup}>Connect GitHub App to this machine</button>
           <button
             type="button"
-            className="btn primary block"
+            className="btn link"
             disabled={gc.status === "starting"}
             onClick={() => controller.githubConnectStart()}
           >
-            {gc.status === "starting" ? "Starting…" : "Connect GitHub"}
+            {gc.status === "starting" ? "Starting…" : "Use GitHub device login instead"}
           </button>
           {errorText && <p className="repo-connect-alt">{errorText}</p>}
           {state.catalogs.reposReason === "gh-unauthed" && (
@@ -173,7 +143,7 @@ function RepoConnectPrompt({ state }: { state: AppState }) {
       )}
 
       <p className="repo-connect-note muted">
-        You don't need a repo to start — pick <strong>No repo</strong> above to work in the machine's default workspace.
+        You don't need a repo to start — pick <strong>Default workspace</strong> above to work in the machine's default workspace.
       </p>
     </div>
   );
@@ -362,9 +332,21 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
           <HostedRepoConnectPrompt error={state.catalogs.reposError} />
         )}
         {!state.catalogs.reposLoading && !state.catalogs.reposAuthed && !managedDraft && !state.catalogs.reposError && (
-          <RepoConnectPrompt state={state} />
+          <RepoConnectPrompt state={state} onSetup={() => { onClose(); openSettings("github"); }} />
         )}
-        {!state.catalogs.reposLoading && state.catalogs.reposError && !managedDraft && <div className="picker-empty">{state.catalogs.reposError}</div>}
+        {!state.catalogs.reposLoading && state.catalogs.reposError && !managedDraft && (
+          <div className="picker-empty" role="alert">
+            {state.catalogs.reposError}
+            <button type="button" className="btn link" onClick={() => controller.listRepos()}>Retry</button>
+            <button type="button" className="btn link" onClick={() => { onClose(); openSettings("github"); }}>GitHub settings</button>
+          </div>
+        )}
+        {!state.catalogs.reposLoading && state.catalogs.reposAuthed && !state.catalogs.reposError && repos.length === 0 && (
+          <div className="picker-empty">
+            {q ? "No repositories match your search." : "No repositories available. Check the App’s repository access on GitHub."}
+            {!q && <button type="button" className="btn link" onClick={() => { onClose(); openSettings("github"); }}>GitHub settings</button>}
+          </div>
+        )}
         {repos.length > 0 && <div className="picker-section-label">GitHub repositories</div>}
         {repos.map((r) => {
           const picked = r.slug === state.draft.repo;
