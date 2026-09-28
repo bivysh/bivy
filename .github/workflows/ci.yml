@@ -35,7 +35,7 @@ concurrency:
 permissions:
   contents: read
 
-# Two tiers. Both respect the changed-path filters below.
+# Three tiers. Gate and full respect the changed-path filters below.
 #
 #   gate   every PR push AND the merge queue, with identical checks: the queue
 #          only re-validates the PR against the latest main, it never adds a
@@ -43,10 +43,13 @@ permissions:
 #          suite, the web build, the release package, a fresh npm consumer on
 #          Linux, the browser suite when the app changes, and packaging /
 #          installer / remote e2e lanes when their inputs change.
-#   full   nightly, manual, release (force_all), a queued release commit and
-#          any change to this file: everything, including the macOS lanes.
-#          Every job runs and must succeed, so release.yml can reuse a full run
-#          on the same SHA; keep event-specific jobs out of here.
+#   full   nightly, manual, release.yml's force_all fallback and any change to
+#          this file: everything, including the macOS lanes. Every job runs and
+#          must succeed; keep event-specific jobs out of here.
+#   release  a PR or queue entry that only changes manifest versions and
+#          CHANGELOG.md (scripts/release-only-diff.mjs): policy checks and
+#          release-notes validation. The code it ships already passed CI on
+#          main, and release.yml accepts this run as the promotion receipt.
 jobs:
   # Detect which areas a change actually touches so we only run relevant jobs,
   # and which tier this run is. Changing ci.yml itself runs the full tier so CI
@@ -60,12 +63,13 @@ jobs:
     outputs:
       tier: ${{ steps.tier.outputs.tier }}
       consumer_os: ${{ steps.tier.outputs.consumer_os }}
-      root: ${{ steps.filter.outputs.root }}
-      web: ${{ steps.filter.outputs.web }}
-      installer: ${{ steps.filter.outputs.installer }}
-      relay: ${{ steps.filter.outputs.relay }}
-      control_plane: ${{ steps.filter.outputs.control_plane }}
-      e2e: ${{ steps.filter.outputs.e2e }}
+      # A release tier touches only versions and notes, so no area filter fires.
+      root: ${{ steps.tier.outputs.tier != 'release' && steps.filter.outputs.root || 'false' }}
+      web: ${{ steps.tier.outputs.tier != 'release' && steps.filter.outputs.web || 'false' }}
+      installer: ${{ steps.tier.outputs.tier != 'release' && steps.filter.outputs.installer || 'false' }}
+      relay: ${{ steps.tier.outputs.tier != 'release' && steps.filter.outputs.relay || 'false' }}
+      control_plane: ${{ steps.tier.outputs.tier != 'release' && steps.filter.outputs.control_plane || 'false' }}
+      e2e: ${{ steps.tier.outputs.tier != 'release' && steps.filter.outputs.e2e || 'false' }}
       docs: ${{ steps.filter.outputs.docs }}
     steps:
       # Actions execute privileged workflow code; pin them to immutable commits
@@ -155,15 +159,23 @@ jobs:
           INSTALLER_CHANGED: ${{ steps.filter.outputs.installer }}
           QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
-          # A queued release commit (`pnpm release` bumps package.json's version)
-          # runs the full tier: release.yml then reuses this run on the merged
-          # SHA instead of repeating full CI before promotion.
-          release=false
-          if [ "$EVENT" = merge_group ]; then
-            version() { node -e 'console.log(JSON.parse(require("fs").readFileSync(0, "utf8")).version)'; }
-            if [ "$(git show "$QUEUE_BASE:package.json" | version)" != "$(version < package.json)" ]; then release=true; fi
+          # A release (`pnpm release`: manifest versions + CHANGELOG.md only)
+          # ships code main already tested, so it runs the light release tier:
+          # policy checks plus release-notes validation. release.yml accepts
+          # that run on the merged SHA as the promotion receipt.
+          # A PR checks out its test merge, whose first parent is current main.
+          case "$EVENT" in
+            merge_group) base="$QUEUE_BASE" ;;
+            pull_request) base=HEAD^1 ;;
+            *) base= ;;
+          esac
+          release_only=false
+          if [ -n "$base" ] && [ "$FORCE_ALL" != true ]; then
+            release_only="$(node scripts/release-only-diff.mjs "$base" HEAD)"
           fi
-          if [ "$FORCE_ALL" = true ] || [ "$EVENT" = schedule ] || [ "$EVENT" = workflow_dispatch ] || [ "$CI_CHANGED" = true ] || [ "$release" = true ]; then
+          if [ "$release_only" = true ]; then
+            tier=release
+          elif [ "$FORCE_ALL" = true ] || [ "$EVENT" = schedule ] || [ "$EVENT" = workflow_dispatch ] || [ "$CI_CHANGED" = true ]; then
             tier=full
           else
             tier=gate
@@ -194,7 +206,7 @@ jobs:
   # Policy and metadata checks. Seconds of work each, no build needed.
   policy:
     needs: changes
-    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
+    if: needs.changes.outputs.tier != 'gate' || needs.changes.outputs.root == 'true'
     name: Policy checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -216,6 +228,9 @@ jobs:
       - run: pnpm run check:routes
       - run: pnpm run check:design
       - run: pnpm run certification:check
+      # The current version must have release notes; release.yml publishes
+      # this section as the GitHub release body.
+      - run: node scripts/extract-changelog.mjs "$(node -p "require('./package.json').version")" > /dev/null
 
   # ESLint, with its cache restored. A warm run only lints changed files, which
   # takes it from ~24s to ~2s; a cold one is no slower than before.

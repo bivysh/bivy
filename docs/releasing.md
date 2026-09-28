@@ -155,28 +155,37 @@ npm view @bivy/bivy dist-tags        # see what `staging` and `latest` point at
 
 ## Cutting a production release
 
-Add user-facing notes to `CHANGELOG.md`'s `[Unreleased]` section as changes land.
-Then, from any clean checkout:
+Add user-facing notes to `CHANGELOG.md`'s `[Unreleased]` section as changes land,
+or write them to a file outside the checkout and pass it to the release, so the
+notes and the version bump land in one PR. Then, from any clean checkout:
 
 ```bash
-pnpm release --dry-run   # preview the version and release notes
-pnpm release             # patch; or `pnpm release minor|major|X.Y.Z`
+pnpm release --dry-run                      # preview the version and release notes
+pnpm release                                # patch; or `pnpm release minor|major|X.Y.Z`
+pnpm release --notes-file /tmp/notes.md     # append these notes to [Unreleased] first
 ```
 
 That branches from the latest `origin/main`, sets the root, package, and service
 manifests to the new version, dates `[Unreleased]` as `## [X.Y.Z] - YYYY-MM-DD`,
 opens the `chore(release): X.Y.Z` PR and turns on auto-merge. It refuses to run
-with an empty `[Unreleased]`. When the PR merges, the Release run for that commit
-publishes the staging candidate and then waits on the `release` environment —
-**approve it** and the run promotes to `latest`, tags `vX.Y.Z`, and creates the
-GitHub release. That approval is the only manual step after `pnpm release`.
+with empty release notes. When the PR merges, the Release run for that commit
+publishes the staging build and, in parallel, waits on the `release`
+environment. **Approve it** and the run promotes to `latest`, tags `vX.Y.Z`, and
+creates the GitHub release. That approval is the only manual step after
+`pnpm release`.
 
-Full CI must pass on the exact release commit. The merge queue already runs every
-CI job on it (a release commit touches every manifest), so promotion reuses that
-run instead of repeating it. A commit without such a run — pushed past branch
+A release commit changes only manifest versions and `CHANGELOG.md`
+(`scripts/release-only-diff.mjs` decides). The code it ships already passed CI on
+`main`, so its PR and merge-queue runs use CI's light **release** tier: policy
+checks plus release-notes validation, well under a minute. Promotion accepts that
+successful run on the exact merged SHA. Any other promoted commit needs a CI run
+on its SHA that passed every job. A commit without one — pushed past branch
 protection, say — gets the canonical CI workflow with `force_all: true` before
 the production job can publish. A successful staging publish alone is not
 evidence that tests passed.
+
+Core service images are built natively for each architecture in the merge queue,
+so they are normally published before the release commit reaches `main`.
 
 To promote by hand (for example after rejecting the approval), dispatch the
 workflow from `main` and type the version:

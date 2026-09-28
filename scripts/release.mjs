@@ -7,9 +7,11 @@
  *   pnpm release            # patch (default)
  *   pnpm release minor      # or major, or an exact X.Y.Z
  *   pnpm release --dry-run  # print the version and release notes, change nothing
+ *   pnpm release --notes-file notes.md  # add these notes to [Unreleased] first
  *
  * Branches from the latest origin/main, sets every manifest to the new version,
- * dates CHANGELOG.md's [Unreleased] section, opens the release PR and enables
+ * dates CHANGELOG.md's [Unreleased] section (after adding any --notes-file
+ * notes, so notes and version land in one PR), opens the release PR and enables
  * auto-merge. When that commit lands on main, release.yml notices the unreleased
  * package.json version and promotes it to npm `latest` on its own (still behind
  * the `release` environment approval). See docs/releasing.md.
@@ -44,6 +46,18 @@ function nextVersion(current, bump) {
   return parts.map((n, i) => (i < level ? n : i === level ? n + 1 : 0)).join(".");
 }
 
+/** Append `notes` to the end of the [Unreleased] section. */
+function addUnreleasedNotes(changelog, notes) {
+  const match = UNRELEASED.exec(changelog);
+  if (!match) throw new Error("CHANGELOG.md has no `## [Unreleased]` heading.");
+  const bodyStart = match.index + match[0].length;
+  const next = changelog.slice(bodyStart).search(/^## /m);
+  const end = next === -1 ? changelog.length : bodyStart + next;
+  const body = changelog.slice(bodyStart, end).trim();
+  const merged = [body, notes.trim()].filter(Boolean).join("\n\n");
+  return `${changelog.slice(0, bodyStart)}\n${merged}\n${next === -1 ? "" : "\n"}${changelog.slice(end)}`;
+}
+
 /** Move [Unreleased] under a dated `## [version]` heading, leaving a fresh [Unreleased]. */
 function rotateChangelog(changelog, version, date) {
   const match = UNRELEASED.exec(changelog);
@@ -62,18 +76,21 @@ function sh(command, args, options = {}) {
 function main() {
   const args = process.argv.slice(2).filter((arg) => arg !== "--");
   const dryRun = args.includes("--dry-run");
-  const positional = args.filter((arg) => !arg.startsWith("--"));
-  if (positional.length > 1) {
-    console.error("Usage: pnpm release [patch|minor|major|X.Y.Z] [--dry-run]");
+  const notesAt = args.indexOf("--notes-file");
+  const notesFile = notesAt === -1 ? null : args[notesAt + 1];
+  const positional = args.filter((arg, i) => !arg.startsWith("--") && (notesAt === -1 || i !== notesAt + 1));
+  if (positional.length > 1 || (notesAt !== -1 && !notesFile)) {
+    console.error("Usage: pnpm release [patch|minor|major|X.Y.Z] [--notes-file notes.md] [--dry-run]");
     process.exit(2);
   }
+  const notes = notesFile ? fs.readFileSync(path.resolve(notesFile), "utf8") : "";
 
   sh("git", ["fetch", "--quiet", "origin", "main"]);
   const readMain = (file) => sh("git", ["show", `origin/main:${file}`]);
   const current = JSON.parse(readMain("package.json")).version;
   const version = nextVersion(current, positional[0] ?? "patch");
   const date = new Date().toISOString().slice(0, 10);
-  const changelog = rotateChangelog(readMain("CHANGELOG.md"), version, date);
+  const changelog = rotateChangelog(addUnreleasedNotes(readMain("CHANGELOG.md"), notes), version, date);
 
   if (dryRun) {
     console.log(`Would release ${current} -> ${version}\n\n${extractChangelogSection(changelog, version)}`);
@@ -94,6 +111,10 @@ function main() {
       "",
       "Merging this lands the version bump on `main`; the Release workflow then publishes the staging",
       "candidate and promotes it to npm `latest` automatically once the `release` environment is approved.",
+      "",
+      "## Release notes",
+      "",
+      extractChangelogSection(changelog, version),
     ].join("\n");
     const url = sh("gh", ["pr", "create", "--base", "main", "--head", branch, "--title", `chore(release): ${version}`, "--body", body]);
     sh("gh", ["pr", "merge", url, "--auto", "--squash"]);
@@ -112,4 +133,4 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   }
 }
 
-export { nextVersion, rotateChangelog };
+export { addUnreleasedNotes, nextVersion, rotateChangelog };
