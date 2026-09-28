@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useCallback, useEffect, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { controller, useAppState } from "../store/useStore.js";
 import { seedSessionDraft } from "../shareTarget.js";
 import { Sheet } from "./Sheet.js";
 import { Dictation, dictationEngine, NO_DICTATION } from "./Dictation.js";
 import { Spinner } from "./Spinner.js";
+import { MoreIcon } from "./UiIcons.js";
 import type { PromptAttachment } from "@bivy/core";
 
 /** Marks drawn in the preview, as the shell hands them over (see apps.annotate). */
@@ -37,10 +38,11 @@ function rememberBlocked(): void {
  *  origin: audio goes to the node over the encrypted session channel (or
  *  stays in the browser's own dictation), and only the transcript goes back
  *  to the shell's draft box, where it stays editable. */
-export function PreviewPeek({ url, name, sessionId, appId, viewId, onClose, onOpenInTab }: {
+export function PreviewPeek({ url, name, sessionId, appId, viewId, onClose, onOpenInTab, access, onManage, revoked }: {
   url: string; name: string; sessionId: string; onClose: () => void; onOpenInTab: () => void;
   /** The view shown: Draw asks the machine for a picture of it. */
   appId?: string; viewId?: string;
+  access?: ReactNode; onManage?: () => void; revoked?: boolean;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [blocked, setBlocked] = useState(false);
@@ -116,8 +118,12 @@ export function PreviewPeek({ url, name, sessionId, appId, viewId, onClose, onOp
 
   const done = () => { setListening(null); toShell({ type: "listening", on: false }); };
   return <Sheet title={name} ariaLabel={`Preview: ${name}`} onClose={onClose} size="full" autoFocusSearch={false}
-    headExtra={<button className="btn sm ghost" onClick={onOpenInTab}>Open in tab ↗</button>}>
-    {blocked
+    headExtra={<div className="preview-head-actions">
+      <button className="btn ghost icon" onClick={onOpenInTab} aria-label="Open in tab ↗" title="Open in tab · Only you"><span aria-hidden>↗</span></button>
+      {access}
+      {onManage && <button className="btn ghost icon" onClick={onManage} aria-label="App options" title="App options"><MoreIcon size={18} /></button>}
+    </div>}>
+    {revoked ? <div className="changes-binary" role="status">Access revoked. Open a new preview to continue.</div> : blocked
       ? <div className="changes-binary" role="status">This browser doesn’t allow app previews inside Bivy, so previews will open in a tab on this device. <button className="btn sm" onClick={onOpenInTab}>Open in tab ↗</button></div>
       : <div className="preview-peek-stage">
           {listening && engine && <div className="preview-voice">

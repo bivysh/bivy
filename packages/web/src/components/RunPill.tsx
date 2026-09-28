@@ -241,7 +241,7 @@ export function RunPill({
         id={anchorId}
         className={`run-pill src-${source.kind} ${statusClass}`}
         onClick={() => setOpen(true)}
-        title={[source.label, statusLabel, filesLabel, serversLabel].filter(Boolean).join(" · ")}
+        title={[source.label, statusLabel, filesLabel, appsLabel, serversLabel].filter(Boolean).join(" · ")}
       >
         {/* A hand-opened session is the default, so only an automation trigger
             names itself here; the full source always heads the sheet. */}
@@ -249,6 +249,7 @@ export function RunPill({
         <span className="run-pill-stat"><StatusDot status={statusClass} />{statusLabel}</span>
         <PrBadge prs={gh.prs} />
         {filesLabel && <span className="run-pill-files">{filesLabel}</span>}
+        {appsLabel && <span className="run-pill-files">{appsLabel} published</span>}
         {serversLabel && <span className="run-pill-files">{serversLabel}</span>}
       </button>
       {open && (

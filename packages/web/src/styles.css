@@ -3062,8 +3062,8 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
 .review-banner { margin: 0 var(--space-3); }
 .review-note { margin: var(--space-3) var(--space-3) 0; padding-inline-start: var(--space-3); border-inline-start: 2px solid var(--line-strong); color: var(--ink); font-size: var(--text-sm); white-space: pre-wrap; }
 .review-status { margin: var(--space-2) var(--space-3) 0; color: var(--muted); font-size: var(--text-sm); }
-.review-actions { display: flex; padding: var(--space-3); }
-.review-actions .btn { flex: 1; min-block-size: 44px; }
+.review-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-3); }
+.review-actions .btn { min-block-size: var(--space-7); }
 
 /* Apps sheet (AppsSheet.tsx): one card per app, its views nested, one primary
    action per view; secondary tools as quiet icon buttons; rare or destructive
@@ -3080,8 +3080,6 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
 .apps-more { position: relative; }
 .apps-view-tools .apps-more { margin-inline-start: auto; }
 .apps-more-menu { position: absolute; right: 0; top: calc(100% + var(--space-1)); z-index: var(--z-dropdown); }
-.apps-notice { display: flex; align-items: flex-start; gap: var(--space-2); margin: 0 var(--space-3) var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--ok) 12%, transparent); font-size: var(--text-sm); }
-.apps-notice > svg { flex: none; margin-top: 1px; color: var(--ok); }
 .apps-notes { display: flex; flex-direction: column; gap: var(--space-2); margin: 0 var(--space-3) var(--space-3); padding-top: var(--space-3); border-top: 1px dashed var(--line); }
 .apps-notes-head { display: flex; align-items: center; gap: var(--space-2); color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); letter-spacing: 0.04em; text-transform: uppercase; }
 .apps-count { min-inline-size: 18px; padding: 0 6px; border-radius: var(--radius-full); background: var(--surface-3); color: var(--ink); text-align: center; letter-spacing: 0; }
@@ -3105,6 +3103,8 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
 .share-dest { display: block; inline-size: 100%; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface); color: inherit; font: inherit; text-align: start; cursor: pointer; }
 .share-dest:hover { background: var(--surface-2); }
 .share-dest .app-row { min-block-size: 44px; }
+.preview-head-actions { display: flex; flex: none; align-items: center; gap: var(--space-1); }
+.preview-head-actions .btn { min-block-size: var(--space-7); }
 .preview-peek-stage { position: relative; block-size: 100%; }
 /* Point and speak: the recording bar floats over the top of the preview while
    the finger stays on the shell's mic, so nothing under it moves. */
