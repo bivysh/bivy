@@ -105,6 +105,9 @@
   --space-1: 4px;  --space-2: 8px;  --space-3: 12px; --space-4: 16px;
   --space-5: 24px; --space-6: 32px; --space-7: 48px; --space-8: 64px;
 
+  /* Stable review thumbnail footprint, including while its bytes load. */
+  --review-shot-height: min(300px, 40vh);
+
   /* ---- Radius ---- */
   --radius: 8px;        /* app default — same value as --radius-md */
   --radius-sm: 6px;

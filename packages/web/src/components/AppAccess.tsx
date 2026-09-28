@@ -50,7 +50,7 @@ export function AppAccess({ sessionId, appId, viewId, name, nodeId, address, dis
   });
   return <>
     <button className="btn sm ghost" disabled={disabled} onClick={() => setOpen(true)} aria-label={`Share ${name}`}><LinkIcon size={15} />Share</button>
-    {open && <Sheet title={`Share ${name}`} onClose={() => { if (!busy) { setOpen(false); setCopied(false); setNotice(""); setError(""); setManual(""); } }} autoFocusSearch={false}
+    {open && <Sheet title={`Share ${name}`} onClose={() => { setOpen(false); setCopied(false); setNotice(""); setError(""); setManual(""); }} autoFocusSearch={false}
       headExtra={<MoreMenu label="Sharing options" items={[
         { label: "Copy personal address", disabled: busy || (!address && !online), onSelect: () => void copyAddress() },
         { label: "Revoke access…", danger: true, separated: true, disabled: busy || !online || disabled, onSelect: () => setConfirm(true) },

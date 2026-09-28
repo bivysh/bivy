@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 
 interface HistoryLayer {
+  id: number;
+  returnKey?: string;
   onBack: () => void;
   closing: boolean;
   disposed: boolean;
@@ -12,6 +14,16 @@ export interface ModalHistoryHandle {
   dispose(): void;
 }
 
+// Unlike history.back(), a keyed traversal skips joint-history entries owned
+// by preview iframes (which do not emit popstate on the parent window).
+function navigationHistory() {
+  return (window as unknown as { navigation?: {
+    currentEntry?: { key: string };
+    traverseTo(key: string): unknown;
+  } }).navigation;
+}
+
+let nextLayerId = 0;
 const historyLayers: HistoryLayer[] = [];
 const waitingHistoryLayers: HistoryLayer[] = [];
 let traversing: HistoryLayer | undefined;
@@ -39,12 +51,15 @@ function drainModalHistory(): void {
   const top = historyLayers.at(-1);
   if (top?.closing) {
     traversing = top;
-    history.back();
+    const navigation = navigationHistory();
+    if (top.returnKey && navigation) navigation.traverseTo(top.returnKey);
+    else history.back();
     return;
   }
   for (const layer of waitingHistoryLayers.splice(0)) {
     if (layer.disposed) continue;
-    history.pushState({ __bivyModal: true }, "", location.href);
+    layer.returnKey = navigationHistory()?.currentEntry?.key;
+    history.pushState({ ...history.state, __bivyModal: layer.id }, "", location.href);
     historyLayers.push(layer);
   }
   if (historyLayers.at(-1)?.closing) drainModalHistory();
@@ -55,6 +70,17 @@ function drainModalHistory(): void {
 // popstate listeners run in registration order; capture does not reorder them.
 if (typeof window !== "undefined") {
   window.addEventListener("popstate", (event) => {
+    // Iframe navigations share the top-level Back stack. A traversal within
+    // a preview still has this sheet's sentinel: don't consume its ownership
+    // or let the router interpret it as session navigation. Closing drains
+    // those entries before consuming the actual sentinel.
+    const top = historyLayers.at(-1);
+    if (top && event.state?.__bivyModal === top.id) {
+      event.stopImmediatePropagation();
+      traversing = undefined;
+      queueMicrotask(drainModalHistory);
+      return;
+    }
     const layer = historyLayers.pop();
     traversing = undefined;
     if (!layer) return;
@@ -69,7 +95,7 @@ if (typeof window !== "undefined") {
 }
 
 export function pushModalHistory(onBack: () => void): ModalHistoryHandle {
-  const layer: HistoryLayer = { onBack, closing: false, disposed: false };
+  const layer: HistoryLayer = { id: ++nextLayerId, onBack, closing: false, disposed: false };
   // StrictMode's simulated first mount is disposed before it mutates history.
   queueMicrotask(() => {
     if (layer.disposed) return;

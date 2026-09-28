@@ -105,6 +105,8 @@ for (const theme of themes) {
     expect(await page.evaluate(() => (window as any).commands.filter((c: any) => c.kind === "apps.share" || c.kind === "apps.revoke").map((c: any) => [c.kind, c.viewId]))).toEqual([["apps.share", "web"], ["apps.revoke", "web"]]);
     await page.keyboard.press("Escape");
     await expect(page.getByRole("button", { name: /^Share Interactive/ })).toHaveCount(0);
+    // Wait for dismissal: the lower sheet is inert during the closing motion.
+    await expect(page.getByRole("button", { name: "Copy share link", exact: true })).toHaveCount(0);
     // Web views peek in a drawer over the chat by default.
     await page.getByRole("button", { name: "Open preview" }).focus();
     await page.keyboard.press("Enter");

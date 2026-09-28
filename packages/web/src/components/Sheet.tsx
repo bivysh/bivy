@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useModalBack, useModalEscape } from "../modalStack.js";
 import { CheckIcon, CloseIcon } from "./UiIcons.js";
 
-const FOCUSABLE = 'a[href],button:not(:disabled),textarea:not(:disabled),input:not(:disabled),select:not(:disabled),[tabindex]:not([tabindex="-1"])';
+import { useModalFocus } from "../useModalFocus.js";
 
 export type DismissSheet = (afterClose?: () => void) => void;
 
@@ -33,6 +33,7 @@ export function Sheet({
    *  rather show the list and let the user tap the field to search. */
   autoFocusSearch?: boolean;
 }) {
+  const titleId = useId();
   const bodyRef = useRef<HTMLDivElement>(null);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const afterCloseRef = useRef<(() => void) | null>(null);
@@ -45,7 +46,7 @@ export function Sheet({
   // This makes taps, backdrop clicks, Escape, and swipe dismissal feel like the
   // same native interaction instead of disappearing synchronously.
   const requestClose = () => {
-    if (isClosing) return;
+    if (closeTimer.current) return;
     setIsClosing(true);
     dragYRef.current = 0;
     setDragY(0);
@@ -90,46 +91,15 @@ export function Sheet({
   // than this sheet closing out from under it).
   useModalEscape(closeWithBack);
 
-  // Modal focus management: move focus into the sheet on open, keep Tab inside
-  // it, and restore focus to the opener on close so keyboard / screen-reader
-  // users aren't left behind the backdrop.
+  // Share the modal boundary with nested sheets/dialogs: only the top layer
+  // may trap Tab, and background controls must not remain clickable.
+  const initialFocus = useRef<HTMLElement | null>(null);
   useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    const body = bodyRef.current;
-    const focusables = () => (body ? Array.from(body.querySelectorAll<HTMLElement>(FOCUSABLE)) : []);
-    // Prefer the search input if the sheet has one, else the first control. When
-    // auto-focus is off, focus the dialog container itself (tabindex=-1) instead:
-    // focus stays trapped in the sheet (Tab/restore-on-close still work) but no
-    // soft keyboard opens, so the full list is visible.
-    const first = autoFocusSearch
-      ? (body?.querySelector<HTMLElement>('input, textarea') ?? focusables()[0])
-      : body;
-    first?.focus();
-
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Tab") return;
-      const items = focusables();
-      if (items.length === 0) return;
-      const firstEl = items[0]!;
-      const lastEl = items[items.length - 1]!;
-      const activeEl = document.activeElement;
-      if (e.shiftKey && activeEl === firstEl) {
-        e.preventDefault();
-        lastEl.focus();
-      } else if (!e.shiftKey && activeEl === lastEl) {
-        e.preventDefault();
-        firstEl.focus();
-      } else if (body && activeEl instanceof Node && !body.contains(activeEl)) {
-        e.preventDefault();
-        firstEl.focus();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => {
-      window.removeEventListener("keydown", onKey);
-      opener?.focus?.();
-    };
+    initialFocus.current = autoFocusSearch
+      ? bodyRef.current?.querySelector<HTMLElement>('input, textarea') ?? null
+      : bodyRef.current;
   }, [autoFocusSearch]);
+  useModalFocus(bodyRef, initialFocus);
 
   // Portal to <body>. The sheet is `position: fixed`, but it's rendered from
   // deep inside the `.chat` scroll container (overflow-y:auto +
@@ -140,7 +110,7 @@ export function Sheet({
   // whenever new content pinned the chat to the bottom. At <body> it is truly
   // viewport-fixed and independent of the transcript's scroll and windowing.
   return createPortal(
-    <div className={`sheet${isClosing ? " is-closing" : ""}`} data-variant={variant} data-size={size} role="dialog" aria-modal="true" aria-label={ariaLabel}>
+    <div className={`sheet${isClosing ? " is-closing" : ""}`} data-variant={variant} data-size={size} role="dialog" aria-modal="true" aria-label={ariaLabel} aria-labelledby={ariaLabel ? undefined : titleId}>
       <div
         className="sheet-backdrop"
         onClick={closeWithBack}
@@ -171,7 +141,7 @@ export function Sheet({
           onPointerUp={onHandlePointerUp}
           onPointerCancel={onHandlePointerUp}
         >
-          <span className="sheet-title">{title}</span>
+          <span id={titleId} className="sheet-title">{title}</span>
           {headExtra}
           <button className="sheet-close" onClick={closeWithBack} aria-label="Close">
             <CloseIcon />

@@ -32,6 +32,7 @@ async function openFixture(page: Page, theme = "light") {
     window.pops = [];
     function App() {
       const [open, setOpen] = useState(false);
+      const [frame, setFrame] = useState(false);
       const [confirming, setConfirming] = useState(false);
       const [selected, setSelected] = useState('Pi');
       const [replacement, setReplacement] = useState(false);
@@ -42,6 +43,8 @@ async function openFixture(page: Page, theme = "light") {
         replacement && React.createElement(Sheet, { title: 'Model', ariaLabel: 'Model', onClose: () => setReplacement(false) }, 'Choose a model'),
         open && React.createElement(Sheet, { title: 'Agent', ariaLabel: 'Agent', onClose: () => setOpen(false) },
           React.createElement('button', { className: 'btn', onClick: () => setConfirming(true) }, 'Claude Code'),
+          React.createElement('button', { onClick: () => setFrame(true) }, 'Open preview'),
+          frame && React.createElement('iframe', { title: 'Preview', src: '/preview-frame' }),
           confirming && React.createElement(ConfirmDialog, {
             title: 'Check how Claude Code runs', message: 'Confirm this agent choice.', confirmLabel: 'Use Claude Code',
             onCancel: () => setConfirming(false),
@@ -54,6 +57,7 @@ async function openFixture(page: Page, theme = "light") {
     }
     createRoot(document.getElementById('root')).render(React.createElement(StrictMode, null, React.createElement(App)));
   </script></body></html>`);
+  await page.route(`${origin}/preview-frame`, (route) => route.fulfill({ contentType: "text/html", body: '<a href="#next">Next page</a>' }));
   await page.route(`${origin}/modal-history-test`, (route) => route.fulfill({ contentType: "text/html", body: html }));
   await page.goto(`${origin}/modal-history-test`);
   await page.getByRole("button", { name: "Choose agent" }).click();
@@ -125,6 +129,22 @@ test("repeated close requests before popstate do not queue extra Back traversals
   });
   await expect(page.getByRole("dialog", { name: "Agent", exact: true })).toBeVisible();
   await expectStillInApp(page, 1);
+});
+
+test("preview navigation does not consume sheet history or strand later sheets", async ({ page }) => {
+  await openFixture(page);
+  await page.getByRole("button", { name: "Open preview", exact: true }).click();
+  await page.frameLocator('iframe[title="Preview"]').getByRole("link", { name: "Next page" }).click();
+  await expect.poll(() => page.evaluate(() => history.length)).toBe(5);
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expectStillInApp(page, 1);
+  await page.getByRole("button", { name: "Choose agent" }).click();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expectStillInApp(page, 2);
+  await page.evaluate(() => history.back());
+  await expect(page).toHaveURL(`${origin}/auth/github/start`);
 });
 
 test("a replacement overlay waits for old sentinels to drain", async ({ page }) => {

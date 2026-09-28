@@ -3056,7 +3056,7 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
 .review-card { margin-block: var(--space-2); max-inline-size: 440px; }
 .review-stage { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); margin: 0 var(--space-3); padding: var(--space-3); border-radius: var(--radius-md); background: var(--surface-2); }
 .review-shot { display: grid; place-items: center; padding: 0; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--bg); overflow: hidden; cursor: zoom-in; box-shadow: var(--shadow-sm); }
-.review-shot img { display: block; inline-size: auto; block-size: auto; max-inline-size: 100%; max-block-size: min(300px, 40vh); }
+.review-shot img { display: block; inline-size: auto; block-size: auto; max-inline-size: 100%; max-block-size: var(--review-shot-height); }
 .review-loading { display: grid; place-items: center; inline-size: 139px; block-size: min(300px, 40vh); max-inline-size: 100%; }
 .review-gone { margin: 0; padding: var(--space-6) var(--space-3); color: var(--muted); font-size: var(--text-sm); text-align: center; }
 .review-side .seg-btn { min-block-size: 44px; min-inline-size: 72px; }
