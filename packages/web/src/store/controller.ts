@@ -275,6 +275,7 @@ export class AppController {
    *  dedupes by requestId, so the retry adopts the same session rather than
    *  creating a duplicate. See retryPendingSessionNew / maybeFlushPendingPrompt. */
   private transportGeneration = 0;
+  private syncingActivationCredentials = false;
   private pendingLaunchRestoration: Promise<void> = Promise.resolve();
   private pendingPrompt: { text: string; requestId: string; clientMessageId: string; attachments?: PromptAttachment[]; frame: Command; provisionalId?: string } | null = null;
   /** Ephemeral cold starts outlive the pane that launched them. Each first
@@ -825,6 +826,7 @@ export class AppController {
           this.store.markLaunchFirstResponse(activeAfter.activeSessionId);
         }
         this.observeActivationMilestones(before, appliedEvent);
+        if (appliedEvent.type === "providers.list" && !this.syncingActivationCredentials) this.send({ kind: "activation.readiness" });
         if (appliedEvent.type === "credentials.records") {
           void this.maybeGrantManagedCredential();
           if (this.isCloudModelDraft()) this.listModels();
@@ -893,9 +895,8 @@ export class AppController {
   }
 
   /** One ok/failed product-metric pair per readiness-led first-run step,
-   *  keyed by the activation check it tracks. `agent_answered` and
-   *  `account_signed_in` are excluded: the former already has its own
-   *  dedicated `first_useful_response` milestone below, and the latter is
+   *  keyed by the activation check it tracks. First responses have their own
+   *  dedicated `first_useful_response` milestone below. `account_signed_in` is
    *  always resolved by the time this model runs (see activation.ts) so a
    *  transition into it is never observed. */
   private static readonly FIRST_RUN_STEP_EVENTS: Partial<Record<ActivationCheckId, { ok: ProductMetricEvent; failed: ProductMetricEvent }>> = {
@@ -913,17 +914,11 @@ export class AppController {
       signedIn: state.connection.signedIn,
       status: state.connection.status,
       runtimes: state.catalogs.runtimes,
-      providers: state.catalogs.providers,
-      reposAuthed: state.catalogs.reposAuthed,
-      transcript: state.activeSession.transcript,
+      readiness: state.catalogs.activationReadiness,
     });
     const beforeActivation = activationFromState(activationInput(before));
     const afterActivation = activationFromState(activationInput(after));
-    // Every check but the final agent-answered one — robust to the chain
-    // growing (e.g. the leading sign-in step) without re-deriving the cutoff.
-    const readyBefore = beforeActivation.checks.slice(0, -1).every((check) => check.state === "passed");
-    const readyAfter = afterActivation.checks.slice(0, -1).every((check) => check.state === "passed");
-    if (!readyBefore && readyAfter) this.recordProductMilestone("activation_ready", true);
+    if (!beforeActivation.activated && afterActivation.activated) this.recordProductMilestone("activation_ready", true);
 
     for (const [id, events] of Object.entries(AppController.FIRST_RUN_STEP_EVENTS) as Array<[ActivationCheckId, { ok: ProductMetricEvent; failed: ProductMetricEvent }]>) {
       const b = beforeActivation.checks.find((c) => c.id === id)?.state;
@@ -2206,7 +2201,6 @@ export class AppController {
    * turn that streamed during the outage appears and any stuck "working" clears.
    */
   private onReconnected(): void {
-    this.send({ kind: "activation.readiness" });
     let openedAfterNodeSwitch = false;
     if (this.pendingCrossNodeOpen) {
       const pending = this.pendingCrossNodeOpen;
@@ -2218,7 +2212,14 @@ export class AppController {
     // Converge account API keys in both directions. This also handles the
     // node-less-first flow: keys added in the PWA are installed when the user's
     // first persistent or ephemeral node appears.
-    void this.syncAccountCredentialsWithNode();
+    this.store.clearActivationReadiness();
+    this.syncingActivationCredentials = true;
+    const generation = this.transportGeneration;
+    void this.syncAccountCredentialsWithNode().finally(() => {
+      if (generation !== this.transportGeneration) return;
+      this.syncingActivationCredentials = false;
+      this.send({ kind: "activation.readiness" });
+    });
     // A scheduled message may have delivered while this device was offline —
     // drop its queue row so it stops showing as "scheduled" (see the method doc).
     void this.resyncScheduledFollowups();

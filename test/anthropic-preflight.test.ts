@@ -119,6 +119,9 @@ await acheck("probe: non-API-key credentials (OAuth/CLI) are not probed", async 
   const r = await probeAnthropicAccess("oauth-subscription-token", { fetch: spy });
   assert.equal(called, false, "must not send a request for a non-sk- credential");
   assert.deepEqual({ probed: r.probed, ok: r.ok }, { probed: false, ok: true });
+  const subscription = await probeAnthropicAccess("sk-ant-oat01-test", { fetch: spy });
+  assert.equal(subscription.probed, false);
+  assert.equal(called, false, "subscription tokens must not be sent as API keys");
   const empty = await probeAnthropicAccess(undefined, { fetch: spy });
   assert.equal(empty.probed, false);
 });

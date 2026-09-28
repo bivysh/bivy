@@ -16,6 +16,7 @@ const singleViewport = [
 // Specs whose layout, touch targets or visual baselines differ on a phone.
 // Everything else asserts behavior that the desktop viewport already covers.
 const mobileSpecs = [
+  "**/browser-first-setup.spec.ts",
   "**/preview-drawing.spec.ts",
   "**/preview-peek.spec.ts",
   "**/screenshots.spec.ts",

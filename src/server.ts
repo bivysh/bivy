@@ -52,6 +52,7 @@ import { passWebhookFilter } from "./automation-filter-gate.js";
 import { isModelAuthError, authProviderForSession, classifyModelAuthError } from "./runtime/auth-errors.js";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
 import { probeAnthropicAccess } from "./runtime/anthropic-preflight.js";
+import { credentialReadiness } from "./runtime/activation-readiness.js";
 import { provisionAgentRun } from "./runtime/credential-provisioning.js";
 import { ingestAgentCredentials } from "./runtime/credential-ingest.js";
 import { createSessionNamer, fallbackSessionName } from "./session/session-namer.js";
@@ -11236,32 +11237,26 @@ app.get("/api/repos", async (_req, res) => {
 // live. Inconclusive provider/network failures remain "unknown" instead of
 // falsely blocking activation.
 async function activationReadinessSnapshot() {
-  const vault = createCredentialVault(credsDir, piDir);
-  const configured = await vault.list();
-  const anthropic = configured.some((entry) => entry.providerId === "anthropic")
-    ? await vault.read("anthropic")
-    : undefined;
-  const anthropicProbe = anthropic?.type === "api_key"
-    ? await probeAnthropicAccess(typeof anthropic.key === "string" ? anthropic.key : undefined)
-    : undefined;
-  const repos = await listAccessibleRepos();
-  const repositoryChosen = Boolean(await gitRepoRoot(defaultWorkspace));
+  const [credential, repositoryChosen, workspaceReady] = await Promise.all([
+    listProviders(credsDir, piDir).then((providers) => credentialReadiness(providers, async (provider) => {
+      if (provider !== "anthropic") return { probed: false, ok: true };
+      const credential = await createCredentialVault(credsDir, piDir).read(provider);
+      if (credential?.type === "oauth") return { probed: false, ok: true };
+      return probeAnthropicAccess(credential?.type === "api_key" && typeof credential.key === "string"
+        ? credential.key : process.env.ANTHROPIC_API_KEY);
+    })),
+    gitRepoRoot(defaultWorkspace).then(Boolean),
+    fs.promises.access(defaultWorkspace, fs.constants.R_OK | fs.constants.W_OK).then(() => true, () => false),
+  ]);
   return {
-    credential: {
-      configured: configured.length > 0,
-      providers: configured.map((entry) => entry.providerId),
-      probed: Boolean(anthropicProbe?.probed),
-      ok: configured.length > 0 && anthropicProbe?.ok !== false,
-      ...(anthropicProbe?.reason ? { reason: anthropicProbe.reason } : {}),
-    },
+    credential,
     repository: {
       chosen: repositoryChosen,
       probed: true,
-      // GitHub login proves that repositories can be listed, not that a target
-      // repository has been selected or cloned for the first task.
-      ok: repositoryChosen,
-      authed: repos.authed,
-      ...(repos.error ? { reason: repos.error } : {}),
+      // A first message can run in the default workspace without a Git repo.
+      // Listing remote repositories is unrelated and can take tens of seconds.
+      ok: workspaceReady,
+      authed: false,
     },
   };
 }

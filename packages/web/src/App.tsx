@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { deriveActivation, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionSummary } from "@bivy/core";
+import { activationFromState, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionSummary } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -298,21 +298,19 @@ export function App() {
   useEffect(() => { if (online) clearQueuedPrompts(); }, [online]);
   const queuedFollowupCount = Object.values(state.sessionIndex.followupsBySession).reduce((total, items) => total + items.length, 0);
   useEffect(() => setFollowupQueuedPrompts(queuedFollowupCount), [queuedFollowupCount]);
-  const activation = useMemo(() => deriveActivation({
-    accountSignedIn: controller.direct ? true : state.connection.signedIn,
-    machineOnline: state.connection.status === "online" ? true : state.connection.status === "offline" ? false : undefined,
-    agentInstalled: state.catalogs.runtimes.length
-      ? state.catalogs.runtimes.some((runtime) => String(runtime.status ?? "available") === "available" && runtime.supportTier === "supported")
-      : undefined,
-    credentialValid: state.catalogs.activationReadiness ? state.catalogs.activationReadiness.credential.ok : undefined,
-    repositoryReady: state.catalogs.activationReadiness ? state.catalogs.activationReadiness.repository.ok : undefined,
-    agentAnswered: state.activeSession.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool) ? true : undefined,
-  }), [state.catalogs.activationReadiness, state.catalogs.runtimes, state.connection.signedIn, state.connection.status, state.activeSession.transcript]);
+  const activation = useMemo(() => activationFromState({
+    direct: controller.direct,
+    signedIn: state.connection.signedIn,
+    status: state.connection.status,
+    runtimes: state.catalogs.runtimes,
+    readiness: state.catalogs.activationReadiness,
+  }), [state.catalogs.activationReadiness, state.catalogs.runtimes, state.connection.signedIn, state.connection.status]);
+  const agentAnswered = state.activeSession.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool);
   useEffect(() => {
-    if (!activation.activated || !state.activeSession.activeSessionId || automationNextStepDismissed) return;
+    if (!agentAnswered || !state.activeSession.activeSessionId || automationNextStepDismissed) return;
     localStorage.setItem("bivy:automation-next-step", "done");
     setAutomationNextStepDismissed(true);
-  }, [activation.activated, state.activeSession.activeSessionId, automationNextStepDismissed]);
+  }, [agentAnswered, state.activeSession.activeSessionId, automationNextStepDismissed]);
   // Latch: has this client ever had a live connection this run? Once true, we
   // treat the WHOLE transient reconnect window as still-composable — not just the
   // brief "reconnecting" beat, but the redial's "connecting" and any re-pair
@@ -933,7 +931,6 @@ export function App() {
                 install_agent: () => (document.querySelector(".agent-pill") as HTMLButtonElement | null)?.click(),
                 authenticate_credential: () => (document.querySelector(".model-pill") as HTMLButtonElement | null)?.click(),
                 grant_repository: () => (document.querySelector(".repo-pill") as HTMLButtonElement | null)?.click(),
-                run_starter_task: () => (document.querySelector(".composer-input") as HTMLTextAreaElement | null)?.focus(),
               }}
             />
           </Suspense>
@@ -1054,7 +1051,7 @@ export function App() {
               }
             />
 
-            {activation.activated && activeSession && !automationNextStepDismissed && (
+            {agentAnswered && activeSession && !automationNextStepDismissed && (
               <section className="card automation-next-step" aria-label="Next step">
                 <div>
                   <strong>Make this repeatable</strong>

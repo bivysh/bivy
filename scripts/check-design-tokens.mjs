@@ -48,6 +48,7 @@ const declRe = new RegExp(`--(${PALETTE_TOKENS.join("|")})\\s*:`, "g");
 const hexRe = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/g;
 const rawZIndexRe = /z-index\s*:\s*-?\d/;
 const RETIRED_CLASSES = [
+  "composer-starter",
   "autom-new-btn", "autom-save-btn", "autom-empty-new-btn", "pill",
   "picker-action", "repo-connect-copy", "connect-copy", "connect-refresh",
   "autom-notice", "autom-banner", "autom-success", "routing-readiness",

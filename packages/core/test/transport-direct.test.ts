@@ -90,6 +90,25 @@ describe("DirectTransport", () => {
     expect(statuses).toContain("online");
   });
 
+  it("fetches setup readiness in direct mode and emits the result", async () => {
+    const calls: string[] = [];
+    const events: ServerEvent[] = [];
+    const readiness = { credential: { configured: true, probed: true, ok: true }, repository: { chosen: false, probed: true, ok: true, authed: false } };
+    const transport = new DirectTransport({
+      origin: "http://node.local",
+      tokenStore: mem({ bivy_local_token: "token" }),
+      fetchImpl: (async (url) => {
+        calls.push(String(url));
+        return { ok: true, json: async () => readiness } as Response;
+      }) as typeof fetch,
+      webSocketImpl: FakeWS as unknown as typeof WebSocket,
+      handlers: { onEvent: (event) => events.push(event), onStatus: () => {} },
+    });
+    await transport.send({ kind: "activation.readiness" });
+    expect(calls).toEqual(["http://node.local/api/activation/readiness"]);
+    expect(events).toContainEqual({ type: "activation.readiness", ...readiness });
+  });
+
   it("forwards the models.list runtime hint as a query param", async () => {
     FakeWS.instances.length = 0;
     const fetchCalls: string[] = [];
