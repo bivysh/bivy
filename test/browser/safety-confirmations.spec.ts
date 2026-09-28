@@ -32,6 +32,25 @@ async function render(page: Page, name: string, script: string) {
 }
 const calls = (page: Page) => page.evaluate(() => (window as unknown as { calls: unknown[] }).calls);
 
+test("settings navigation sign out requires confirmation", async ({ page }) => {
+  await render(page, "settings-sign-out", `
+    const { Settings } = await import('/src/components/Settings.tsx');
+    controller.direct = false;
+    controller.signOut = async () => window.calls.push('sign-out');
+    root.render(h(Settings, { state: controller.store.getState(), view: 'appearance', onViewChange: () => {}, onClose: () => {} }));
+  `);
+  const signOut = page.locator('.settings-nav').getByRole('button', { name: 'Sign out', exact: true });
+  await signOut.click();
+  const confirm = page.getByRole('dialog', { name: 'Sign out?', exact: true });
+  await expect(confirm).toBeVisible();
+  expect(await calls(page)).toEqual([]);
+  await confirm.getByRole('button', { name: 'Cancel' }).click();
+  expect(await calls(page)).toEqual([]);
+  await signOut.click();
+  await confirm.getByRole('button', { name: 'Sign out', exact: true }).click();
+  expect(await calls(page)).toEqual(['sign-out']);
+});
+
 test("full computer access needs a second, informed selection", async ({ page }) => {
   await render(page, "sandbox-picker", `
     const { SandboxPicker } = await import('/src/components/Pickers.tsx');

@@ -350,8 +350,7 @@ export function App() {
   // The open session's runtime can hand itself to its native interactive TUI on
   // the node (capability `interactiveTui`, online). Prefer the live session's
   // runtime identity; older/remote summaries may omit runtimeId, so fall back to
-  // the active-session projection. Shared by the Chat | Terminal toggle below and
-  // the SessionMenu "Continue in terminal" action.
+  // the active-session projection. Used by the Chat | Terminal toggle below.
   const activeSession = state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId);
   const activeRuntimeId = activeSession?.runtimeId ?? state.activeSession.activeRuntimeId;
   const activeRuntimeCaps = state.catalogs.runtimes.find((r) => r.id === activeRuntimeId)?.capabilities as
@@ -600,7 +599,7 @@ export function App() {
   // interactive-TUI mode. The overlay sends `terminal.open.tui`, which resumes
   // this same conversation in the runtime's native CLI — the reverse of the
   // terminal's "continue in chat" (takeover). Gated on the session runtime's
-  // `interactiveTui` capability at the call site (SessionMenu).
+  // `interactiveTui` capability at the Chat | Terminal toggle.
   const continueInTerminal = useCallback(() => {
     setTerminalTarget(null);
     setTerminalStandalone(false);
@@ -874,7 +873,6 @@ export function App() {
             {state.activeSession.activeSessionId && (
               <SessionMenu
                 sessionId={state.activeSession.activeSessionId}
-                hasApps={(liveApps.published ?? 0) > 0}
                 name={state.activeSession.activeTitle}
                 isRepo={isRepoSession}
                 node={activeSessionNodeLabel}
@@ -885,7 +883,6 @@ export function App() {
                 sessionFile={activeSession?.path}
                 auditHealth={activeSession?.auditHealth}
                 eventLogHealth={activeSession?.eventLogHealth}
-                onContinueInTerminal={canContinueInTerminal ? continueInTerminal : undefined}
               />
             )}
           </div>
@@ -981,7 +978,7 @@ export function App() {
             />
           </Suspense>
         ) : activeTuiLocked ? (
-          // Locked by a TUI opened elsewhere (another device, or SessionMenu) while
+          // Locked by a TUI opened elsewhere (another device) while
           // this view is on Chat: offer to jump to it or take the session back.
           <TuiLockedView
             sessionId={state.activeSession.activeSessionId ?? undefined}
