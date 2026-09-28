@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.5] - 2026-09-28
+
 ### Added
 
 - Expose self-hosted service metrics on host-local ports for private monitoring.
