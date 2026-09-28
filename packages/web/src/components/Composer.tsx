@@ -14,7 +14,7 @@ import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { Spinner } from "./Spinner.js";
 import { Dictation, dictationEngine, NO_DICTATION, type DictationEngine } from "./Dictation.js";
 import { controller } from "../store/useStore.js";
-import { clearComposerDraft, composerDraftKey, readComposerDraft, writeComposerDraft, type PendingAttachmentMetadata } from "../composerDraft.js";
+import { clearComposerDraft, composerDraftKey, holdComposerAttachments, restoreComposerDraft, writeComposerDraft, type PendingAttachmentMetadata } from "../composerDraft.js";
 import { setComposerLifecycle } from "../pwaLifecycle.js";
 
 type Picker = "repo" | "agent" | "model" | "sandbox" | null;
@@ -160,12 +160,12 @@ export function Composer({
   onAbort: () => void;
   onError?: (message: string) => void;
 }) {
-  const initialDraft = useRef<ReturnType<typeof readComposerDraft> | null>(null);
-  if (!initialDraft.current) initialDraft.current = readComposerDraft(localStorage, state.activeSession.activeSessionId);
+  const initialDraft = useRef<ReturnType<typeof restoreComposerDraft> | null>(null);
+  if (!initialDraft.current) initialDraft.current = restoreComposerDraft(localStorage, state.activeSession.activeSessionId);
   const [text, setText] = useState(() => initialDraft.current?.text ?? "");
   const [picker, setPicker] = useState<Picker>(null);
-  const [attachments, setAttachments] = useState<PromptAttachment[]>([]);
-  const [recoveredAttachments, setRecoveredAttachments] = useState<PendingAttachmentMetadata[]>(() => initialDraft.current?.attachments ?? []);
+  const [attachments, setAttachments] = useState<PromptAttachment[]>(() => initialDraft.current?.attachments ?? []);
+  const [recoveredAttachments, setRecoveredAttachments] = useState<PendingAttachmentMetadata[]>(() => initialDraft.current?.recovered ?? []);
   const [menuIndex, setMenuIndex] = useState(0);
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [recording, setRecording] = useState<null | DictationEngine>(null);
@@ -254,8 +254,8 @@ export function Composer({
   useEffect(() => { recoveredRef.current = recoveredAttachments; }, [recoveredAttachments]);
 
   // Persist text plus byte-less attachment metadata per Session. File bytes and
-  // extracted text deliberately stay in memory; after reload the user sees what
-  // was pending and must re-select the files before sending.
+  // extracted text deliberately stay in page memory (held across navigation);
+  // after reload the user sees what was pending and must re-select the files.
   useEffect(() => {
     const nextKey = composerDraftKey(state.activeSession.activeSessionId);
     if (activeDraftKey.current === nextKey) return;
@@ -263,10 +263,11 @@ export function Composer({
       ...attachmentsRef.current,
       ...recoveredRef.current as PromptAttachment[],
     ]);
-    const saved = readComposerDraft(localStorage, state.activeSession.activeSessionId);
+    holdComposerAttachments(activeDraftSession.current, attachmentsRef.current);
+    const saved = restoreComposerDraft(localStorage, state.activeSession.activeSessionId);
     setText(saved.text);
-    setAttachments([]);
-    setRecoveredAttachments(saved.attachments);
+    setAttachments(saved.attachments);
+    setRecoveredAttachments(saved.recovered);
     setMenuDismissed(false);
     setMenuIndex(0);
     requestAnimationFrame(autosize);
@@ -279,6 +280,7 @@ export function Composer({
       ...attachments,
       ...recoveredAttachments as PromptAttachment[],
     ]);
+    holdComposerAttachments(activeDraftSession.current, attachments);
     setComposerLifecycle({
       hasDraft: Boolean(text.trim()),
       pendingAttachments: attachments.length + recoveredAttachments.length,

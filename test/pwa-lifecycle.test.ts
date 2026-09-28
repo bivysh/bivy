@@ -5,7 +5,9 @@ import {
   composerDraftKey,
   composerMetadataKey,
   composerSnapshotKey,
+  holdComposerAttachments,
   readComposerDraft,
+  restoreComposerDraft,
   writeComposerDraft,
   type DraftStorage,
 } from "../packages/web/src/composerDraft.js";
@@ -73,6 +75,19 @@ clearComposerDraft(storage, "session-1");
 assert.equal(storage.getItem(composerDraftKey("session-1")), null);
 assert.equal(storage.getItem(composerMetadataKey("session-1")), null);
 assert.equal(storage.getItem(composerSnapshotKey("session-1")), null);
+
+// Leaving the composer (Settings, another screen) keeps held attachment bytes
+// ready to send; only ones not held in memory (after a reload) need re-selecting.
+const lost: PromptAttachment = { kind: "file", name: "lost.txt", size: 4, mimeType: "text/plain", text: "gone" };
+writeComposerDraft(storage, "held", "with files", [attachment, lost]);
+holdComposerAttachments("held", [attachment]);
+assert.deepEqual(restoreComposerDraft(storage, "held"), {
+  text: "with files",
+  attachments: [attachment],
+  recovered: [{ kind: "file", name: "lost.txt", size: 4, mimeType: "text/plain" }],
+});
+clearComposerDraft(storage, "held");
+assert.deepEqual(restoreComposerDraft(storage, "held"), { text: "", attachments: [], recovered: [] });
 
 const unavailable: DraftStorage = {
   getItem() { throw new Error("storage denied"); },
