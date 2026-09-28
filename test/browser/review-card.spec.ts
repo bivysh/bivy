@@ -71,8 +71,7 @@ for (const theme of themes) {
       document.execCommand = () => false;
     });
     await card.getByRole("button", { name: "Share Site" }).click();
-    await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished)));
-    await page.screenshot({ path: testInfo.outputPath(`review-share-initial-${theme}.png`), fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath(`review-share-initial-${theme}.png`), fullPage: true, animations: "disabled" });
     const options = page.getByRole("button", { name: "Sharing options" });
     await options.click();
     await page.keyboard.press("Escape");
@@ -93,8 +92,7 @@ for (const theme of themes) {
     await card.getByRole("button", { name: "Open preview", exact: true }).click();
     const preview = page.getByRole("dialog", { name: "Preview: Storefront" });
     await expect(preview.frameLocator("iframe").getByRole("heading")).toHaveText("Storefront preview");
-    await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished)));
-    await page.screenshot({ path: testInfo.outputPath(`review-preview-${theme}.png`), fullPage: true });
+    await page.screenshot({ path: testInfo.outputPath(`review-preview-${theme}.png`), fullPage: true, animations: "disabled" });
     await preview.getByRole("button", { name: "Share Site" }).click();
     await page.getByRole("button", { name: "Sharing options" }).click();
     await page.getByRole("menuitem", { name: "Revoke access…", exact: true }).click();
@@ -183,8 +181,7 @@ for (const theme of themes) test(`reviewer notes and pictures only become a draf
   await page.getByRole("menuitem", { name: "App options", exact: true }).click();
   const apps = page.getByRole("dialog", { name: "Session apps" });
   await expect(apps.getByText('“Total is cut off”')).toBeVisible();
-  await page.evaluate(() => Promise.all(document.getAnimations().map(animation => animation.finished)));
-  await page.screenshot({ path: testInfo.outputPath(`reviewer-notes-owner-${theme}.png`), fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath(`reviewer-notes-owner-${theme}.png`), fullPage: true, animations: "disabled" });
   await apps.getByRole("button", { name: "View approximate picture" }).click();
   await expect(page.getByRole("dialog", { name: /Image/ })).toBeVisible();
   await expect(page.locator('.image-viewer img')).toBeVisible();

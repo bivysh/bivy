@@ -572,9 +572,7 @@ export function WorkQueueSetupSheet({
                         ) : entry.servedBy === null ? (
                           <p className="schedule-hint warn">
                             No online machine holds this app&apos;s key — queue items won&apos;t be claimed.{" "}
-                            <button type="button" className="btn link" onClick={() => openReconnect(entry)}>
-                              Connect key on this machine →
-                            </button>
+
                           </p>
                         ) : entry.servedBy && (
                           <span className="settings-hint">
@@ -582,7 +580,15 @@ export function WorkQueueSetupSheet({
                             {entry.servedBy.online ? "" : " (offline)"}.
                           </span>
                         )}
+                        {!entry.central && state.connection.currentNodeId && (
+                          <span className="settings-hint">Using a new machine? Connect the existing App’s private key below — no reinstall on GitHub needed.</span>
+                        )}
                         {!entry.central && <div className="row-actions" style={{ marginTop: 6 }}>
+                          {state.connection.currentNodeId && (
+                            <button type="button" className="btn sm" onClick={() => openReconnect(entry)}>
+                              Connect key on this machine
+                            </button>
+                          )}
                           <button
                             type="button"
                             className="btn sm danger-ghost"
