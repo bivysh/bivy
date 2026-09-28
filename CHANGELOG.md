@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Leave Point, Pen, and Box feedback on newly shared public app previews. Owners can review the notes and add them to a message; pictures are included only when screenshots are enabled, and public feedback never starts an agent run.
+
+### Changed
+
+- Simplify app discovery and sharing with published app counts, a shared Copy link dialog, and confirmation before revoking access.
+- Refresh the app with a minimal black-and-white theme and warm accents, tidy settings and session actions, and improve image viewer controls.
+
+### Fixed
+
+- Improve preview drawing on touch screens, screenshot delivery, annotation notes, and fullscreen previews on desktop.
+- Keep the iOS PWA status-bar background aligned with the selected theme.
+- Complete signup when the machine, agent, credentials, and workspace are ready, without requiring a first message. Check credentials after syncing and accept usable alternative providers.
+- Support sign-in approval in the original window for separately hosted app previews configured to use device sign-in.
+- Keep repository credential resets before Bivy's Git credential helper so authenticated Git operations can use it reliably.
+
 ## [0.18.3] - 2026-09-27
 
 ### Fixed
