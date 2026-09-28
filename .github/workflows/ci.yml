@@ -12,22 +12,14 @@ on:
   # every PR still run against main once a day.
   schedule:
     - cron: '17 3 * * *'
+  # Also how release.yml runs the full suite on a release tag that has no CI
+  # receipt, instead of a hand-rolled subset that can drift from what a PR
+  # actually has to pass.
   workflow_dispatch:
-  # Lets other workflows call this one to run the exact same gate rather than
-  # re-implementing it. Used by release.yml so a production promotion runs the
-  # full suite before publishing, instead of a hand-rolled subset that can drift
-  # from what a PR actually has to pass.
-  workflow_call:
-    inputs:
-      force_all:
-        description: Run every gated job regardless of changed-path filters (release tags).
-        required: false
-        type: boolean
-        default: false
 
 # Cancel superseded runs: a new push to the same PR aborts the previous,
 # still-running CI so runners are not occupied by a commit that has already been
-# replaced. Reusable release calls are grouped by their ref.
+# replaced. Dispatched runs are grouped by their ref.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
@@ -43,7 +35,7 @@ permissions:
 #          suite, the web build, the release package, a fresh npm consumer on
 #          Linux, the browser suite when the app changes, and packaging /
 #          installer / remote e2e lanes when their inputs change.
-#   full   nightly, manual, release.yml's force_all fallback and any change to
+#   full   nightly, manual (including release.yml's fallback) and any change to
 #          this file: everything, including the macOS lanes. Every job runs and
 #          must succeed; keep event-specific jobs out of here.
 #   release  a PR or queue entry that only changes manifest versions and
@@ -153,7 +145,6 @@ jobs:
               - 'scripts/check-links.mjs'
       - id: tier
         env:
-          FORCE_ALL: ${{ inputs.force_all }}
           EVENT: ${{ github.event_name }}
           CI_CHANGED: ${{ steps.filter.outputs.common }}
           INSTALLER_CHANGED: ${{ steps.filter.outputs.installer }}
@@ -169,12 +160,12 @@ jobs:
             *) base= ;;
           esac
           release_only=false
-          if [ -n "$base" ] && [ "$FORCE_ALL" != true ]; then
+          if [ -n "$base" ]; then
             release_only="$(node scripts/release-only-diff.mjs "$base" HEAD)"
           fi
           if [ "$release_only" = true ]; then
             tier=release
-          elif [ "$FORCE_ALL" = true ] || [ "$EVENT" = schedule ] || [ "$EVENT" = workflow_dispatch ] || [ "$CI_CHANGED" = true ]; then
+          elif [ "$EVENT" = schedule ] || [ "$EVENT" = workflow_dispatch ] || [ "$CI_CHANGED" = true ]; then
             tier=full
           else
             tier=gate

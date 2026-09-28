@@ -173,9 +173,9 @@ The tag push starts the Release workflow on that commit. It checks that the tag
 matches `package.json`, that the commit is on `main`, and that CI passed on that
 exact SHA — main only advances through the merge queue, so its successful
 `merge_group` run is the receipt. A commit without one (pushed past branch
-protection, say) gets the canonical CI workflow with `force_all: true` before
-anything publishes. A successful staging publish alone is not evidence that
-tests passed. It then requires the public service images for the SHA (built in
+protection, say) gets the canonical CI workflow's full tier, dispatched on the
+tag, before anything publishes. A successful staging publish alone is not
+evidence that tests passed. It then requires the public service images for the SHA (built in
 the merge queue, so normally already there), publishes the stable build to
 `latest` via Trusted Publishing, aliases the images to `X.Y.Z`, `vX.Y.Z` and
 `latest`, and creates the GitHub release — last, so its existence means npm and
