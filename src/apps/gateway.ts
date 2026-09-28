@@ -14,6 +14,11 @@ import { displayViewer, DISPLAY_MENU_PATH, DISPLAY_SOCKET_PATH, DISPLAY_STATS_PA
 import { pressMenu, readMenuPath, readMenus } from "./menu.js";
 import { inspectorScript } from "./inspector.js";
 import type { AppRegistry, RegisteredView } from "./registry.js";
+import type { AppService } from "./service.js";
+import type { ReviewShot } from "./types.js";
+import { readStrokes } from "./annotate.js";
+
+export type NoteCapture = (entry: RegisteredView, mark: Parameters<AppService["annotate"]>[1]) => Promise<ReviewShot | undefined>;
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
@@ -194,11 +199,13 @@ export class AppGateway {
    *  `embedded`: it runs framed inside a Bivy client (a third-party frame). */
   private readonly sessions = new Map<string, { appId: string; expires: number; reviewer?: boolean; embedded?: boolean }>();
   private readonly sockets = new Map<string, Set<Duplex>>();
+  private captureAfter = 0;
+  private capturing = false;
   private readonly displays = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024, perMessageDeflate: false });
 
   /** `signIn` sends a signed-out visit to a view's stable address back
    * through Bivy, which re-opens it for a signed-in device. */
-  constructor(private readonly registry: AppRegistry, originTemplate: string, private readonly returnOrigins: () => readonly string[] = () => [], private readonly signIn?: (view: RegisteredView, path: string) => string | undefined) {
+  constructor(private readonly registry: AppRegistry, originTemplate: string, private readonly returnOrigins: () => readonly string[] = () => [], private readonly signIn?: (view: RegisteredView, path: string) => string | undefined, private readonly captureNote?: NoteCapture) {
     this.template = previewOriginTemplate(originTemplate);
     this.server = http.createServer((req, res) => { void this.handle(req, res).catch(() => { if (!res.headersSent) res.writeHead(502); res.end("Preview request failed."); }); });
     this.server.maxConnections = 256;
@@ -233,12 +240,12 @@ export class AppGateway {
     this.requireWeb(id);
     return `${this.origin(id)}${OPEN_PATH}#${this.grant({ appId: id, expires: Date.now() + 60_000 })}`;
   }
-  /** A reusable link straight to the app origin (no shell frame), so it opens
-   * in any browser and can be inspected. Valid until revoked or SHARE_TTL. */
+  /** Public reviewers use the same isolated controls as the owner, but can
+   * only submit notes. Valid until revoked or SHARE_TTL. */
   share(id: string): { url: string; expiresAt: number } {
     this.requireWeb(id);
     const expiresAt = Date.now() + SHARE_TTL;
-    return { url: `${this.origin(id)}${OPEN_PATH}#${this.grant({ appId: id, expires: expiresAt, reusable: true })}`, expiresAt };
+    return { url: `${this.shellOrigin(id)}${OPEN_PATH}#${this.grant({ appId: id, expires: expiresAt, reusable: true })}`, expiresAt };
   }
   revoke(id: string): void {
     for (const map of [this.tickets, this.sessions]) for (const [key, grant] of map) if (grant.appId === id) map.delete(key);
@@ -311,7 +318,7 @@ export class AppGateway {
       const entry = this.registry.getView(id);
       if (!grant || grant.appId !== id || !entry) { res.writeHead(401); res.end(); return; }
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ name: entry.app.name, origin: this.origin(id), returnTo: grant.returnTo, ...(entry.target.kind === "display" ? { inspect: false } : {}) })); return;
+      res.end(JSON.stringify({ name: entry.app.name, origin: this.origin(id), returnTo: grant.returnTo, ...(grant.reusable ? { reviewer: true } : {}), ...(entry.target.kind === "display" ? { inspect: false } : {}) })); return;
     }
     res.writeHead(404); res.end("Preview shell route not found.");
   }
@@ -503,19 +510,51 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
    * ever turned into a draft by the owner. Same-origin POSTs only (checked above). */
   private async note(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): Promise<void> {
     let body = "";
-    for await (const chunk of req) { body += chunk.toString(); if (body.length > 4096) { res.writeHead(413); res.end(); return; } }
+    for await (const chunk of req) { body += chunk.toString(); if (body.length > 256_000) { res.writeHead(413); res.end(); return; } }
     let input: Record<string, unknown>;
     try { input = JSON.parse(body); } catch { res.writeHead(400); res.end(); return; }
     const text = (value: unknown, max: number) => typeof value === "string" ? value.trim().slice(0, max) : "";
+    if (!input || typeof input !== "object" || Array.isArray(input)) { res.writeHead(400); res.end(); return; }
+    if (input.mark === undefined && input.context === undefined && body.length > 4096) { res.writeHead(413); res.end(); return; }
     const note = text(input.note, 1000);
     if (!note) { res.writeHead(400); res.end("A note needs some text."); return; }
     const viewport = input.viewport as { width?: unknown; height?: unknown } | undefined;
     const path = text(input.path, 2048);
+    let shot: ReviewShot | undefined;
+    if (input.mark !== undefined) {
+      // Public input cannot choose a session, app, Compare image, or capture
+      // dimensions beyond a modest viewport. No agent commands are exposed.
+      if (!this.session(req, entry.view.id)?.reviewer) { res.writeHead(403); res.end(); return; }
+      let mark: Parameters<AppService["annotate"]>[1];
+      try {
+        const raw = input.mark as Parameters<AppService["annotate"]>[1];
+        const strokes = readStrokes(raw?.strokes);
+        const v = raw.viewport;
+        if (!Number.isFinite(v?.width) || !Number.isFinite(v?.height) || v.width < 40 || v.width > 4000 || v.height < 40 || v.height > 4000 || v.width * v.height > 4_000_000) throw Error();
+        const scroll = raw.scroll;
+        if (scroll && (![scroll.x, scroll.y].every(n => Number.isFinite(n) && n >= 0 && n <= 100_000))) throw Error();
+        if (strokes.some(s => s.points.some(([x, y]) => x < 0 || y < 0 || x > 104_000 || y > 104_000))) throw Error();
+        // Bound raster work as well as JSON size (long off-screen paths can
+        // otherwise consume CPU even though they paint no visible pixels).
+        const distance = strokes.reduce((total, s) => total + s.points.reduce((length, p, i) => i ? length + Math.hypot(p[0] - s.points[i - 1][0], p[1] - s.points[i - 1][1]) : length, 0), 0);
+        if (distance > 50_000) throw Error();
+        mark = { appId: entry.app.id, viewId: entry.view.id, strokes, viewport: v, path: text(raw.path, 2048), scroll, dpr: 1, theme: raw.theme === "dark" ? "dark" : "light", signals: { unknown: true } };
+      } catch { res.writeHead(400); res.end("Invalid or oversized annotation. Try fewer marks or a narrower preview."); return; }
+      if (this.capturing || Date.now() < this.captureAfter) { res.writeHead(429); res.end("Please wait a moment before sending another picture."); return; }
+      this.capturing = true;
+      this.captureAfter = Date.now() + 10_000;
+      try { shot = await this.captureNote?.(entry, mark); }
+      catch { res.writeHead(502); res.end("Could not take the picture. Your note has not been sent; please retry."); return; }
+      finally { this.capturing = false; }
+      if (!this.session(req, entry.view.id) || this.registry.getView(entry.view.id) !== entry) { res.writeHead(401); res.end(); return; }
+    }
     this.registry.addNote(entry.view.id, {
+      ...(shot ? { shot } : {}),
+      ...(input.context ? { context: text(input.context, 8000) } : {}),
       id: randomBytes(8).toString("hex"), at: Date.now(), note, selector: text(input.selector, 300), text: text(input.text, 200),
       path: path.startsWith("/") ? path : "/", viewport: { width: Number(viewport?.width) || 0, height: Number(viewport?.height) || 0 },
     });
-    res.writeHead(204); res.end();
+    res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ screenshot: Boolean(shot) }));
   }
   /** Compare shots for the shell: the list, or one PNG by index. */
   private compare(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): void {

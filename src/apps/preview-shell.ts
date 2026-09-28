@@ -49,8 +49,8 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
 /* Hold to talk: a phone-sized target that never selects text or opens a callout. */
 #mic { flex:none; inline-size:var(--space-7); block-size:var(--space-7); padding:0; border-radius:var(--radius-full); touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
 #mic[aria-pressed="true"] { background:var(--accent); border-color:var(--accent); color:var(--accent-contrast); }
-#voice-status { font-size:var(--text-xs); margin:var(--space-2) 0 0; }
-#voice-status:empty { display:none; }
+#voice-status, #note-status { font-size:var(--text-xs); margin:var(--space-2) 0 0; }
+#voice-status:empty, #note-status:empty { display:none; }
 /* The note owns the dock while editing. Only its body scrolls; actions never
    cover the text field, even when the keyboard leaves little vertical room. */
 #dock { max-height:calc(100% - var(--space-4)); }
@@ -108,6 +108,7 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
     <button class="btn" id="mic" type="button" hidden aria-pressed="false" aria-label="Speak" title="Hold to speak, or tap to start and stop"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15.5a3 3 0 003-3V6a3 3 0 10-6 0v6.5a3 3 0 003 3z"/><path d="M6 11.5v1a6 6 0 0012 0v-1M12 18.5V21M9 21h6"/></svg></button></div>
     <p class="muted" id="voice-status" role="status"></p>
     <p class="muted" id="draft-hint">Review in chat before sending.</p>
+    <p class="muted" id="note-status" role="status"></p>
     <details id="draft-details"><summary>Preview context</summary><pre id="draft-context"></pre></details>
     </div>
     <div class="panel-actions"><button class="btn sm ghost" id="draft-cancel">Cancel</button><button class="btn sm primary" id="draft-add">Add to chat</button></div>
@@ -147,9 +148,16 @@ const embedded=parent!==window;
 const toBivy=m=>parent.postMessage(Object.assign({source:'bivy-preview'},m),location.ancestorOrigins?.[0]||new URL(metadata.returnTo).origin);
 const storageKey='bivy-preview';
 const safePath=p=>typeof p==='string'&&p.startsWith('/')&&!p.startsWith('//')&&p.length<=2048?p:'/';
-const open=(path,message)=>{status.hidden=false;status.textContent=message;resetConsole();frame.src=metadata.origin+safePath(path);};
+const reviewerTools=ready=>{if(metadata?.reviewer)for(const id of ['point','draw','errors'])$(id).disabled=!ready;};
+const open=(path,message)=>{status.hidden=false;status.textContent=message;resetConsole();reviewerTools(false);frame.src=metadata.origin+safePath(path);};
 function show(data,launch){
   metadata=data;
+  if(data.reviewer){
+    drawOk=data.inspect!==false;$('draw').hidden=!drawOk;back.hidden=true;
+    $('draft-title').textContent='Note for the app’s owner';
+    $('draft-text').maxLength=1000;
+    $('send-errors').textContent='Leave a note…';
+  }
   $('title').textContent=data.name;
   $('title').title=data.name;
   document.title='Bivy · '+data.name;
@@ -162,8 +170,9 @@ function show(data,launch){
   for(const b of [$('point'),$('errors')])b.hidden=data.inspect===false;
   if(data.inspect===false)frame.allow='clipboard-read; clipboard-write';
   frame.src=data.origin+(launch?'/__bivy/open#'+(embedded?'e:':'')+launch+(startPage?'~'+startPage:''):'/');
-  back.hidden=embedded&&Boolean(data.returnTo);
+  back.hidden=Boolean(data.reviewer)||(embedded&&Boolean(data.returnTo));
   for(const b of [reload,$('point'),$('errors')])b.disabled=false;
+  reviewerTools(false);
   status.textContent='Loading app…';
   frame.onload=()=>{status.hidden=true;void loadCompare();if(revision===null){revision=-1;watch();}else if(wake)wake();};
   // A Bivy client framing the shell says whether it can take dictation.
@@ -190,16 +199,21 @@ async function watch(){
     revision=d.revision;retry=0;setTimeout(watch,0);
   }catch{retry=Math.min(30000,(retry||1000)*2);const t=setTimeout(watch,retry);wake=()=>{clearTimeout(t);watch();};}
 }
-// Drafts go to the session's composer; nothing is ever sent from here.
+// Owner drafts go to the session's composer. Reviewer drafts use only the
+// bounded notes endpoint, never the owner's command channel.
 function toChat(text){
   if(embedded)return toBivy({type:'draft',text});
   const to=new URL(metadata.returnTo),session=to.pathname.split('/').pop();
   location.assign(to.origin+'/share?session='+encodeURIComponent(session)+'&text='+encodeURIComponent(text));
 }
+let noteMark=null,pendingNote=null,noteSequence=0;
 function draft(context,listen){
-  panels(null);
+  panels(null);noteMark=null;
+  $('draft-add').disabled=false;
+  $('note-status').textContent='';
+  $('draft-hint').textContent=metadata.reviewer?'Feedback only — no agent runs. Pictures are approximate; if screenshots are off, we save text and mark details.':'Review in chat before sending.';
   $('draft').hidden=false;
-  $('draft-add').textContent=metadata.returnTo?'Add to chat':'Copy';
+  $('draft-add').textContent=metadata.reviewer?'Send note':metadata.returnTo?'Add to chat':'Copy';
   $('draft-context').textContent=context;
   $('draft-details').open=false;
   const box=$('draft-text');box.value='';
@@ -241,12 +255,34 @@ function fromBivy(d){
 $('draft-cancel').onclick=()=>{const target=marks?$('draw'):point;cancelListening();$('draft').hidden=true;endDraw();target.focus();};
 $('draft-add').onclick=async()=>{
   cancelListening();
-  const note=$('draft-text').value.trim(),text=(note?note+'\\n\\n':'')+$('draft-context').textContent;
+  const note=$('draft-text').value.trim();
+  if(metadata.reviewer){
+    if(!note){$('note-status').textContent='Write a note before sending.';$('draft-text').focus();return;}
+    const mark=marks||noteMark,id=++noteSequence;
+    $('draft-add').disabled=true;$('draft-cancel').disabled=true;$('draft-text').disabled=true;
+    $('note-status').textContent='Sending note…';$('draft-add').textContent='Sending…';
+    const timer=setTimeout(()=>finishNote({id,error:'No reply yet. Your note may have arrived; check the connection before retrying.'}),60000);
+    pendingNote={id,timer};
+    frame.contentWindow?.postMessage({type:'bivy:note',id,note:{note,context:$('draft-context').textContent,selector:mark?.selector||'',text:mark?.text||'',path:mark?.path||currentPath,viewport:mark?.viewport||{width:frame.clientWidth,height:frame.clientHeight},...(mark?{mark}:{})}},metadata.origin);
+    return;
+  }
+  const text=(note?note+'\\n\\n':'')+$('draft-context').textContent;
   // Marks go to the Bivy client, which adds a picture made on the machine.
   if(marks){const mark=marks;$('draft').hidden=true;endDraw();return toBivy({type:'annotation',text,mark});}
   if(metadata.returnTo){$('draft').hidden=true;return toChat(text);}
   try{await navigator.clipboard.writeText(text);$('draft-add').textContent='Copied';}catch{$('draft-text').select();}
 };
+$('draft-text').addEventListener('input',()=>{if(!pendingNote)$('note-status').textContent='';});
+function finishNote(d){
+  if(!pendingNote||d.id!==pendingNote.id)return;
+  clearTimeout(pendingNote.timer);pendingNote=null;
+  $('draft-cancel').disabled=false;$('draft-add').disabled=false;$('draft-text').disabled=false;$('draft-add').textContent='Send note';
+  if(d.error){$('note-status').textContent=String(d.error).slice(0,200);return;}
+  $('draft').hidden=true;endDraw();noteMark=null;
+  $('stamp').textContent=d.screenshot?'Note and approximate picture sent':'Note sent without a picture';
+  status.hidden=false;status.textContent=$('stamp').textContent+'. The app’s owner will see it.';
+  point.focus();
+}
 // Console
 let entries=[];
 function resetConsole(){entries=[];renderConsole();}
@@ -275,13 +311,15 @@ function picked(d){
   draft('In the app preview "'+metadata.name+'" (page '+safePath(d.path)+', viewport '+v.width+'×'+v.height+'):\\n'
     +'Element: '+String(d.selector).slice(0,300)+(d.text?' ("'+String(d.text).slice(0,200)+'")':'')+', '+r.width+'×'+r.height+' at '+r.x+','+r.y
     +(errors.length?'\\nRecent errors:\\n'+errors.map(e=>'- '+e.text).join('\\n'):''),d.hold===true&&voice);
+  if(metadata.reviewer){const s=pos(d.scroll);noteMark={path:safePath(d.path),viewport:v,scroll:s,theme:d.theme,selector:String(d.selector).slice(0,300),text:String(d.text||'').slice(0,200),strokes:[{tool:'box',points:[[r.x+s.x,r.y+s.y],[r.x+r.width+s.x,r.y+r.height+s.y]]}]};}
 }
 // Draw: freeze the app and mark what's wrong. Marks are kept in page
 // coordinates (so they stay on the content while two fingers scroll), and
 // the app reports what's under each one. On Done they go into the draft box
 // with that context; Add to chat hands them to the Bivy client, which gets a
-// picture from the machine. Nothing about them goes through this origin's
-// network. Compare's "after" shot can be marked the same way.
+// picture from the machine. Reviewers instead submit marks with their note;
+// pictures stay on the machine for the owner. Compare's "after" shot can be
+// marked the same way by the owner.
 const ink=$('ink'),inkMarks=$('ink-marks'),SVG='http://www.w3.org/2000/svg';
 let draw=null,marks=null,drawOk=false,nextStroke=0;
 const pos=v=>({x:Number(v?.x)||0,y:Number(v?.y)||0});
@@ -402,6 +440,7 @@ $('draw-done').onclick=()=>{
 // Compare: screenshots around the agent's last change (agent screenshots on).
 const compareBtn=$('compare-btn');let shots=[],urls=[],compareAfter=-1;
 async function loadCompare(){
+  if(metadata.reviewer)return;
   try{const r=await fetch(metadata.origin+'/__bivy/compare',{credentials:'include',cache:'no-store'});if(!r.ok)return;shots=(await r.json()).shots||[];compareBtn.hidden=shots.length<2;}catch{}
 }
 function panels(open){if(listening)cancelListening();if(draw&&!(open==='compare'&&draw.target==='compare'))endDraw();for(const [id,btn] of [['console','errors'],['compare','compare-btn']]){$(id).hidden=id!==open;$(btn).setAttribute('aria-pressed',String(id===open));}$('draft').hidden=true;}
@@ -444,7 +483,8 @@ addEventListener('message',e=>{
     downText.textContent='Nothing is answering on port '+downPort+'.';
     ask.hidden=!metadata.returnTo;
   }else if(d.source==='bivy-inspector'){
-    if(d.type==='route')currentPath=safePath(d.path);
+    if(d.type==='note-sent'&&metadata.reviewer)finishNote(d);
+    else if(d.type==='route'){currentPath=safePath(d.path);reviewerTools(true);}
     else if(d.type==='console'&&(d.level==='error'||d.level==='warn')){entries.push({level:d.level,text:String(d.text).slice(0,500)});if(entries.length>50)entries.shift();renderConsole();}
     else if(d.type==='picked')picked(d);
     else if(d.type==='release'&&heldAt){heldAt=0;stopListening();}

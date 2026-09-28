@@ -25,7 +25,9 @@ const isNote = (value: unknown): value is ReviewerNote => {
   const note = value as Partial<ReviewerNote> | undefined;
   return !!note && typeof note.id === "string" && typeof note.at === "number" && typeof note.note === "string" && note.note.length <= 1000
     && typeof note.selector === "string" && typeof note.text === "string" && typeof note.path === "string"
-    && typeof note.viewport?.width === "number" && typeof note.viewport?.height === "number";
+    && typeof note.viewport?.width === "number" && typeof note.viewport?.height === "number"
+    && (note.context === undefined || (typeof note.context === "string" && note.context.length <= 8000))
+    && (note.shot === undefined || (typeof note.shot?.hash === "string" && /^[a-f0-9]{64}$/.test(note.shot.hash) && Number.isFinite(note.shot.size) && Number.isFinite(note.shot.width) && Number.isFinite(note.shot.height)));
 };
 export interface RegisteredView {
   app: SessionApp; view: AppView; target: AppTarget;
@@ -261,6 +263,10 @@ export class AppRegistry extends EventEmitter {
     this.save();
   }
   agentNotes(id: string): boolean { return this.apps.get(id)?.agentNotes === true; }
+  /** Includes persisted apps not restored yet; unread pictures survive GC. */
+  notePictureHashes(): string[] {
+    return [...this.persisted.values()].flatMap(record => Object.values(record.notes ?? {}).flatMap(notes => Array.isArray(notes) ? notes.filter(isNote).flatMap(note => note.shot ? [note.shot.hash] : []) : []));
+  }
   /** A reviewer's note: kept bounded, saved with the app, announced (`notes`). */
   addNote(viewId: string, note: ReviewerNote): void {
     const entry = this.views.get(viewId);
