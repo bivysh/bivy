@@ -61,7 +61,7 @@ export function foldActiveSessionEvent(input: ActiveLifecycleInput, event: Serve
         ? `No credentials for ${structured.provider}`
         : humanizeError(String(e.error || e.errorMessage || "error"));
       const entry = { kind: "entry" as const, role: "error" as const, text: message, ...(modelAuth ? { actions: [`connect-provider:${structured.provider}`] } : {}) };
-      return { handled: true, patch: { working: false, opening: false }, commands: e.sessionId ? [entry] : [{ kind: "global-error", message }] };
+      return { handled: true, patch: { ...(String(e.code || "").startsWith("delivery_") ? {} : { working: false }), opening: false }, commands: e.sessionId ? [entry] : [{ kind: "global-error", message }] };
     }
     case "session.closed": return { handled: true, patch: sid === input.activeSessionId ? { working: false, workingLabel: "", opening: false } : undefined, commands: sid ? [{ kind: "row", sessionId: sid, patch: { status: "saved", needsAction: false } }] : [] };
     case "session.failed": return { handled: true, commands: sid ? [{ kind: "row", sessionId: sid, patch: { status: "failed", needsAction: false, failedAt: Number(e.failedAt) || now, updatedAt: now } }] : [] };

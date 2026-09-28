@@ -5,7 +5,7 @@
 import type { PromptAttachment, ServerEvent } from "./protocol.js";
 import { toHtml } from "./markdown.js";
 import { eventKind, toolCallId, toolDetail, toolInput, toolName, toolParentId } from "./tool-activity.js";
-import { contentThinking, contentToText, toolEntriesFromContent } from "./store-render.js";
+import { contentThinking, contentToText, toolEntriesFromContent, embeddedAttachments } from "./store-render.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
 import { isAppReference, isAppReview, type AppReference, type AppReview } from "./apps.js";
 
@@ -234,6 +234,13 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
     case "turn_end": setWorking(value, "Planning next step…"); break;
     case "agent_end": finishDrafts(value); closeTools(value); Object.assign(value.draft, { pendingText: "", committedText: "", committedThinking: "" }); value.working = false; value.workingLabel = ""; commands.push({ kind: "turn-settled" }); break;
     default: return { handled: false, value: input, commands: [] };
+  }
+  if (kind === "result" || kind === "message_end" || kind === "message_boundary") {
+    const attachments = embeddedAttachments(event.result ?? event.message ?? event.output).filter(ref => !hasAttachment(value.transcript, ref.hash!));
+    if (attachments.length) {
+      append(value, { role: "assistant", text: "", attachments });
+      commands.push({ kind: "remember-agent-attachments" });
+    }
   }
   return { handled: true, value, commands };
 }

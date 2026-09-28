@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+import { EventTransferReceiver } from "./remote/event-transfer-receiver.js";
 //
 // Relay-tunnelled attach bridge for `bivy run --node <account-node>`.
 //
@@ -192,6 +193,16 @@ async function main(): Promise<void> {
     process.exit(code);
   };
 
+  const transfers = new EventTransferReceiver({
+    send: async command => {
+      if (!cipher || rly.readyState !== WebSocket.OPEN) throw new Error("Relay disconnected");
+      for (const frame of frameMessages(cipher.seal(command))) rly.send(frame);
+    },
+    emit: event => { if (local?.readyState === WebSocket.OPEN) local.send(JSON.stringify(event)); },
+    fault: message => fail(message),
+  });
+  rly.on("close", () => { transfers.reset(); reassembler.reset(); });
+
   const pairTimer = setTimeout(() => {
     if (!paired) fail(`Node "${args.nodeName}" did not respond to pairing — it may be offline.`, 1);
   }, 20_000);
@@ -274,7 +285,7 @@ async function main(): Promise<void> {
         return; // undecryptable frame — ignore
       }
       // Forward the bare terminal.* event to the local attach socket verbatim.
-      if (local && local.readyState === WebSocket.OPEN) local.send(JSON.stringify(event));
+      transfers.accept(event as { type: string });
     }
   });
 
@@ -304,8 +315,8 @@ async function main(): Promise<void> {
           for (const frame of frameMessages(cipher.seal(command))) {
             if (rly.readyState === WebSocket.OPEN) rly.send(frame);
           }
-        } catch {
-          /* seal/send failure — the relay close handler will surface it */
+        } catch (error) {
+          sock.send(JSON.stringify({ type: "session.error", code: "delivery_failed", error: (error as Error).message }));
         }
       });
       sock.on("close", () => {

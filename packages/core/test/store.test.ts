@@ -198,6 +198,26 @@ describe("SessionStore", () => {
     expect(toHtml(s.activeSession.transcript[1]!.text)).toContain("<strong>hi</strong>");
   });
 
+  it("keeps original uploaded files when runtime history contains projected vision images", () => {
+    const store = new SessionStore();
+    const image = { hash: "original-image", kind: "image", name: "screenshot.png", mimeType: "image/png", size: 100 };
+    const file = { hash: "original-file", kind: "file", name: "report.pdf", mimeType: "application/pdf", size: 200 };
+    store.apply({
+      type: "session.history", requestId: "r1", sessionId: "s1",
+      attachmentRefs: [["review", [image, file]]],
+      messages: [{ role: "user", content: [{ type: "text", text: "review" }, { type: "bivy_attachment", ref: { ...image, hash: "resized-vision-copy" } }] }],
+    });
+    expect(store.getState().activeSession.transcript[0]?.attachments?.map(ref => ref.hash)).toEqual(["original-image", "original-file"]);
+  });
+
+  it("a transcript delivery error does not claim the agent has stopped", () => {
+    const store = new SessionStore();
+    store.apply({ type: "session.history", requestId: "r", sessionId: "s", isStreaming: true, messages: [] });
+    store.apply({ type: "session.error", sessionId: "s", code: "delivery_failed", error: "Transcript delivery failed. Retry." });
+    expect(store.getState().activeSession.working).toBe(true);
+    expect(store.getState().activeSession.transcript.at(-1)?.text).toContain("Transcript delivery failed");
+  });
+
   it("stores a session's advertised commands per session (not on the runtime row)", () => {
     const store = new SessionStore();
     // Catalog list (as from /api/runtimes) — no agent commands yet.

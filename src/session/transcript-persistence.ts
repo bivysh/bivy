@@ -14,6 +14,7 @@
 // AttachmentStore singletons stay server-owned (GC, delete, replication use them)
 // and are injected.
 
+import { createClientProjection } from "./client-projection.js";
 import { randomBytes } from "node:crypto";
 import type { EventLog } from "./event-log.js";
 import { mergeBases } from "./event-log.js";
@@ -139,6 +140,7 @@ const INLINE_IMAGE_RETRY_COOLDOWN_MS = 10 * 60 * 1000;
 
 export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): TranscriptPersistence {
   const { eventLog, attachmentStore } = deps;
+  const project = createClientProjection(attachmentStore, eventLog);
   const liveIntermediateBySession = new Map<string, IntermediateMessage>();
   const lastPersistedIntermediateText = new Map<string, string>();
   // In-flight dedupe + failure cooldown so a repeated remote image URL only ever
@@ -265,7 +267,8 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
   }
 
   function buildHistoryEvent(opts: BuildHistoryEventOptions): Record<string, unknown> {
-    const delta = historyDelta(opts.messages, opts.cursor);
+    const messages = opts.sessionId ? project(opts.sessionId, opts.messages) as unknown[] : opts.messages;
+    const delta = historyDelta(messages, opts.cursor);
     const record = opts.sessionId ? deps.getOpenSession(opts.sessionId) : undefined;
     const bSess = record ? deps.bivySessionEnvelope(record) : undefined;
     return {
@@ -306,7 +309,7 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
       epoch: deps.streamEpoch,
       mode: outcome.mode,
       head: outcome.head,
-      events: outcome.mode === "replay" ? outcome.events : [],
+      events: outcome.mode === "replay" ? project(sessionId, outcome.events) : [],
     };
   }
 

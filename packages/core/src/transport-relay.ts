@@ -8,6 +8,8 @@
 // sealed into an E2E frame and delivered to the node over the relay, which
 // stays blind. The node executes it and streams events back as sealed frames.
 
+import { MAX_REASSEMBLY_BYTES } from "./wire-format.js";
+import { EventTransferReceiver } from "./event-transfer.js";
 import { importRoomKey, open as openMsg, seal, createReplayGuard, type RoomKey } from "./crypto.js";
 import { b64, unb64, unb64url, b64url } from "./base64.js";
 import { frameMessages, createFrameReassembler } from "./relay-frame.js";
@@ -88,8 +90,13 @@ export class RelayTransport implements Transport {
   private curKey: RoomKey | null = null;
   private devicePromise: Promise<DeviceKeypair> | null = null;
   private readonly sendQueue: string[] = [];
-  private readonly reassemble = createFrameReassembler();
+  private readonly reassemble = createFrameReassembler({ onReject: message => {
+    this.handlers.onError?.(message); this.ws?.close();
+  } });
   private readonly acceptFrame = createReplayGuard();
+  private readonly transfers: EventTransferReceiver;
+  private receiveChain: Promise<void> = Promise.resolve();
+  private decryptBytes = 0;
 
   constructor(opts: RelayTransportOptions) {
     this.store = opts.store;
@@ -99,6 +106,11 @@ export class RelayTransport implements Transport {
     this.WS = opts.webSocketImpl ?? ((globalThis as unknown as { WebSocket: typeof WebSocket }).WebSocket);
     this.initialBackoff = opts.initialBackoffMs ?? 1000;
     this.backoff = this.initialBackoff;
+    this.transfers = new EventTransferReceiver({
+      send: command => this.send(command),
+      emit: event => this.handlers.onEvent(event),
+      fault: message => { this.handlers.onError?.(message); this.ws?.close(); },
+    });
   }
 
   private cpBase(): string {
@@ -252,18 +264,32 @@ export class RelayTransport implements Transport {
         if (!this.curKey) return;
         const full = this.reassemble(env);
         if (full === null) return;
-        try {
-          const frame = JSON.parse(await openMsg(this.curKey, full)) as { data: ServerEvent } & Record<string, unknown>;
-          if (!this.acceptFrame(frame)) return; // stale/replayed
-          this.handlers.onEvent(frame.data);
-        } catch {
-          /* decrypt failed */
+        if (this.decryptBytes + full.length > MAX_REASSEMBLY_BYTES) {
+          this.handlers.onError?.("Response decoding fell behind. Reconnecting to synchronize.");
+          ws.close();
+          return;
         }
+        this.decryptBytes += full.length;
+        const key = this.curKey;
+        // WebCrypto resolves asynchronously; serialize decryptions so page
+        // manifests cannot be overtaken by later live events.
+        this.receiveChain = this.receiveChain.then(async () => {
+          if (!isCurrent() || ws.readyState !== 1) return;
+          const frame = JSON.parse(await openMsg(key, full)) as { data: ServerEvent } & Record<string, unknown>;
+          if (!isCurrent() || ws.readyState !== 1 || !this.acceptFrame(frame)) return;
+          this.transfers.accept(frame.data);
+        }).catch(() => {
+          if (isCurrent() && ws.readyState === 1) {
+            this.handlers.onError?.("Could not decode the machine response. Reconnecting to synchronize."); ws.close();
+          }
+        }).finally(() => { this.decryptBytes -= full.length; });
       }
     };
     ws.onclose = () => {
       if (!isCurrent() || this.closedByUs) return;
       this.connected = false;
+      this.transfers.reset();
+      this.reassemble.reset();
       this.scheduleReconnect();
     };
     ws.onerror = () => {};
@@ -474,10 +500,18 @@ export class RelayTransport implements Transport {
     if (!this.curKey) return;
     const wrapped = { v: 1, ts: Date.now(), nonce: freshNonce(), data: command };
     const sealed = await seal(this.curKey, JSON.stringify(wrapped));
+    if (sealed.length > MAX_REASSEMBLY_BYTES) {
+      const message = "This request is too large to send. Reduce the attachments and retry.";
+      this.handlers.onError?.(message);
+      this.handlers.onEvent({ type: "session.error", code: "delivery_too_large", sessionId: typeof command.sessionId === "string" ? command.sessionId : undefined, requestId: command.requestId, error: message });
+      return;
+    }
     for (const frame of frameMessages(sealed, freshNonce)) this.rawSend(frame);
   }
 
   close(): void {
+    this.transfers.reset();
+    this.reassemble.reset();
     this.closedByUs = true;
     this.connected = false;
     if (this.reconnectTimer) {
@@ -504,6 +538,8 @@ export class RelayTransport implements Transport {
    * so the UI never flashes the "Not connected" state a plain close() would.
    */
   reconnect(): void {
+    this.transfers.reset();
+    this.reassemble.reset();
     const stale = this.ws;
     this.ws = null;
     this.connected = false;
