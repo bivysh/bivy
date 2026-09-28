@@ -55,6 +55,18 @@ for (const theme of themes) {
   });
 }
 
+test("a pending attachment survives navigating away and back, and still sends", async ({ page }) => {
+  await page.evaluate(() => (window as any).c.prefillComposer("Look at this", [{ kind: "image", name: "Checkout marked.png", mimeType: "image/png", data: "iVBORw0KGgo=", size: 8 }]));
+  await expect(page.getByRole("button", { name: "View Checkout marked.png" })).toBeVisible();
+  await page.evaluate(() => (window as any).c.newSession());
+  await expect(page.getByRole("button", { name: "View Checkout marked.png" })).toHaveCount(0);
+  await page.evaluate(() => (window as any).c.openSession("s"));
+  await expect(page.getByRole("button", { name: "View Checkout marked.png" })).toBeVisible();
+  await expect(page.locator(".attachment-recovery")).toHaveCount(0);
+  await page.getByRole("button", { name: /^Send/ }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).sent.find((c: any) => c.kind === "prompt")?.attachments?.map((a: any) => a.name))).toEqual(["Checkout marked.png"]);
+});
+
 test("the attachment can be removed, keeping the words", async ({ page }) => {
   await page.evaluate(() => (window as any).c.prefillComposer("Look at this", [{ kind: "image", name: "Checkout marked.png", mimeType: "image/png", data: "iVBORw0KGgo=", size: 8 }]));
   await page.getByRole("button", { name: "Remove Checkout marked.png" }).click();

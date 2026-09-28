@@ -116,7 +116,38 @@ export function writeComposerDraft(
   } catch { /* the v2 snapshot above is already complete */ }
 }
 
+/**
+ * Attachment bytes held in page memory per Session, so leaving the composer
+ * (Settings, another screen) and coming back keeps them without ever writing
+ * file contents to browser storage. A reload still drops them to metadata.
+ */
+const heldAttachments = new Map<string, PromptAttachment[]>();
+
+export function holdComposerAttachments(sessionId: string | null | undefined, attachments: PromptAttachment[]): void {
+  const key = composerDraftKey(sessionId);
+  if (attachments.length) heldAttachments.set(key, attachments);
+  else heldAttachments.delete(key);
+}
+
+export interface RestoredComposerDraft {
+  text: string;
+  /** Attachments still held in memory, ready to send. */
+  attachments: PromptAttachment[];
+  /** Metadata for attachments whose bytes were lost (reload); must be re-selected. */
+  recovered: PendingAttachmentMetadata[];
+}
+
+/** Stored text plus whichever attachments survive: bytes from memory, else metadata. */
+export function restoreComposerDraft(storage: DraftStorage, sessionId?: string | null): RestoredComposerDraft {
+  const saved = readComposerDraft(storage, sessionId);
+  const attachments = heldAttachments.get(composerDraftKey(sessionId)) ?? [];
+  const recovered = saved.attachments.filter((metadata) =>
+    !attachments.some((attachment) => attachment.name === metadata.name && attachment.size === metadata.size));
+  return { text: saved.text, attachments, recovered };
+}
+
 export function clearComposerDraft(storage: DraftStorage, sessionId?: string | null): void {
+  heldAttachments.delete(composerDraftKey(sessionId));
   try { storage.removeItem(composerSnapshotKey(sessionId)); } catch {}
   try { storage.removeItem(composerDraftKey(sessionId)); } catch {}
   try { storage.removeItem(composerMetadataKey(sessionId)); } catch {}
