@@ -88,7 +88,9 @@ export class RuntimeHost {
     // from the picker, still runnable" contract; parity with makeRuntime).
     const info = this.list(canonical).find((candidate) => candidate.id === canonical);
     if (!info) throw new Error(`Unknown agent: ${wantId}`);
-    if (info.status !== "available") throw new Error(`${info.displayName} is not available on this node yet.`);
+    if (info.status !== "available") {
+      throw new Error(`${info.displayName} is not available on this node. ${info.notes || "Install this agent on the node before starting a session."}`);
+    }
     return canonical;
   }
 

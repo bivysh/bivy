@@ -194,6 +194,9 @@ function commandPath(extraPath = "") {
     path.join(os.homedir(), ".local", "bin"),
     extraPath,
     process.env.PATH || "",
+    // npm global executables normally live beside the Node binary (including
+    // nvm/fnm installs). Services need this even without shell initialization.
+    path.dirname(process.execPath),
   ].filter(Boolean);
   return [...new Set(parts.flatMap((part) => String(part).split(path.delimiter)).filter(Boolean))].join(path.delimiter);
 }
