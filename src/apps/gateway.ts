@@ -16,7 +16,7 @@ import { inspectorScript } from "./inspector.js";
 import type { AppRegistry, RegisteredView } from "./registry.js";
 import type { AppService } from "./service.js";
 import type { ReviewShot } from "./types.js";
-import { readStrokes } from "./annotate.js";
+import { readStrokes, readElementScrolls } from "./annotate.js";
 
 export type NoteCapture = (entry: RegisteredView, mark: Parameters<AppService["annotate"]>[1]) => Promise<ReviewShot | undefined>;
 
@@ -529,6 +529,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
       try {
         const raw = input.mark as Parameters<AppService["annotate"]>[1];
         const strokes = readStrokes(raw?.strokes);
+        const elementScrolls = readElementScrolls(raw?.elementScrolls);
         const v = raw.viewport;
         if (!Number.isFinite(v?.width) || !Number.isFinite(v?.height) || v.width < 40 || v.width > 4000 || v.height < 40 || v.height > 4000 || v.width * v.height > 4_000_000) throw Error();
         const scroll = raw.scroll;
@@ -538,7 +539,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
         // otherwise consume CPU even though they paint no visible pixels).
         const distance = strokes.reduce((total, s) => total + s.points.reduce((length, p, i) => i ? length + Math.hypot(p[0] - s.points[i - 1][0], p[1] - s.points[i - 1][1]) : length, 0), 0);
         if (distance > 50_000) throw Error();
-        mark = { appId: entry.app.id, viewId: entry.view.id, strokes, viewport: v, path: text(raw.path, 2048), scroll, dpr: 1, theme: raw.theme === "dark" ? "dark" : "light", signals: { unknown: true } };
+        mark = { appId: entry.app.id, viewId: entry.view.id, strokes, viewport: v, path: text(raw.path, 2048), scroll, elementScrolls, dpr: 1, theme: raw.theme === "dark" ? "dark" : "light", signals: { unknown: true } };
       } catch { res.writeHead(400); res.end("Invalid or oversized annotation. Try fewer marks or a narrower preview."); return; }
       if (this.capturing || Date.now() < this.captureAfter) { res.writeHead(429); res.end("Please wait a moment before sending another picture."); return; }
       this.capturing = true;

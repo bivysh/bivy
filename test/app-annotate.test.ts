@@ -5,9 +5,10 @@ import { test } from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { approximate, composite, readStrokes } from "../src/apps/annotate.js";
+import { approximate, composite, readStrokes, readElementScrolls } from "../src/apps/annotate.js";
 import { decodePng } from "../src/apps/review.js";
 import { encodePng } from "../src/apps/rfb.js";
+import { findChrome } from "../src/apps/screenshot.js";
 import { AppRegistry } from "../src/apps/registry.js";
 import { AppService } from "../src/apps/service.js";
 
@@ -69,5 +70,30 @@ test("drawing on a preview: a retake with the page's state is labelled approxima
 
     enabled = false;
     assert.deepEqual(await service.annotate("s", base), { approximate: false, screenshotsOff: true });
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test("annotated screenshots restore app panel scrolling beneath the marks", { skip: !findChrome() && "no Chrome/Chromium on this machine" }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-panel-annotation-"));
+  try {
+    fs.writeFileSync(path.join(dir, "index.html"), `<!doctype html><style>
+      body { margin:0; } #panel { position:absolute; left:200px; top:100px; width:600px; height:400px; overflow:auto; }
+      #content { position:relative; height:2000px; } #target { position:absolute; left:100px; top:700px; width:100px; height:100px; background:blue; }
+      </style><div id="panel"><div id="content"><div id="target"></div></div></div>`);
+    const registry = new AppRegistry();
+    const service = new AppService(registry, undefined, { start: async () => "t", has: () => true, close: () => {} }, { screenshots: { enabled: () => true } });
+    const app = service.publish("s", dir, { version: 1, name: "Panel", views: [{ kind: "web", name: "App", source: { kind: "static", directory: "." } }] });
+    const input = { appId: app.id, viewId: app.views[0]!.id, viewport: { width: 1280, height: 800 }, dpr: 1,
+      elementScrolls: [{ selector: "#panel", x: 0, y: 600 }], strokes: [{ tool: "box", points: [[300, 200], [400, 300]] }] };
+    const result = await service.annotate("s", input);
+    const png = Buffer.from(result.image!.data, "base64");
+    assert.deepEqual(pixel(png, 350, 250), [0, 0, 255], "the marked content is at the same viewport position");
+    assert.deepEqual(pixel(png, 350, 200), INK, "the box surrounds that content");
+    assert.equal(result.approximate, false);
+    const missing = await service.annotate("s", { ...input, elementScrolls: [{ selector: "#gone", x: 0, y: 600 }] });
+    assert.equal(missing.approximate, true, "a missing scroll container must not claim to match");
+    assert.throws(() => readElementScrolls([{ selector: "#panel", x: 0, y: Infinity }]), /Invalid scroll/);
+    assert.throws(() => readElementScrolls(Array(51).fill(input.elementScrolls[0])), /Invalid scroll/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

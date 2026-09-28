@@ -10,7 +10,7 @@ for (const theme of themes) test(`preview drawing captures gestures (${theme})`,
   await page.route(`${origin}/host`, route => route.fulfill({ contentType: 'text/html', body: `<meta name="viewport" content="width=device-width,initial-scale=1"><style>body{margin:0}iframe{border:0;width:100vw;height:100dvh}</style><iframe src="/shell"></iframe><script>addEventListener('message', e => {if(e.data.type==='annotation')window.annotation=e.data;if(e.data.type==='hello'){e.source.postMessage({source:'bivy',type:'draw',available:true},location.origin);e.source.postMessage({source:'bivy',type:'voice',available:true},location.origin)}})</script>` }));
   await page.route('http://preview.test/**', route => route.request().url().includes('/__bivy/')
     ? route.fulfill({ status: 503 })
-    : route.fulfill({ contentType: 'text/html', body: `<style>body{height:3000px;background:linear-gradient(white,lightblue)}</style><h1>Preview app</h1><p>Draw here</p><script>${inspectorScript(origin)}</script>` }));
+    : route.fulfill({ contentType: 'text/html', body: `<style>body{height:3000px;background:linear-gradient(white,lightblue)}</style><h1>Preview app</h1><p>Draw here</p><div id="panel" style="position:absolute;left:210px;top:80px;width:100px;height:60px;overflow:auto"><div style="height:600px">Scrollable app panel</div></div><script>${inspectorScript(origin)}</script>` }));
   await context.addInitScript(({ origin }) => sessionStorage.setItem('bivy-preview', JSON.stringify({ name: 'Website preview', origin: 'http://preview.test', returnTo: origin + '/chat' })), { origin });
   await page.goto(`${origin}/host`);
   const shell = page.frameLocator('iframe');
@@ -26,6 +26,7 @@ for (const theme of themes) test(`preview drawing captures gestures (${theme})`,
   };
   await checkTargets();
   await page.screenshot({ path: info.outputPath(`controls-${theme}.png`) });
+  await shell.frameLocator('#app').locator('#panel').evaluate(el => { el.scrollTop = 220; });
   await shell.getByRole('button', { name: 'Draw', exact: true }).click();
   await expect(shell.getByRole('radio', { name: 'Pen', exact: true })).toBeFocused();
   await expect(shell.getByRole('button', { name: 'Done', exact: true })).toBeDisabled();
@@ -82,6 +83,7 @@ for (const theme of themes) test(`preview drawing captures gestures (${theme})`,
   }
   await shell.getByRole('button', { name: 'Add to chat', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).annotation?.mark.strokes)).toMatchObject([{ tool: 'pen' }]);
+  expect(await page.evaluate(() => (window as any).annotation.mark.elementScrolls)).toEqual([{ selector: '#panel', x: 0, y: 220 }]);
   expect(await page.evaluate(() => (window as any).annotation.text)).toContain('Keep these pen marks');
   await expect(ink).toBeHidden();
   // Reopen a draft to cover cancellation as well as delivery.

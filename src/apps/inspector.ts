@@ -93,8 +93,13 @@ const signals=()=>{
   const open=Boolean(document.querySelector('dialog[open],details[open],[aria-expanded="true"],[aria-modal="true"]'));
   return {storage,cookies:Boolean(document.cookie),interacted,open,edited};
 };
+// Use a unique DOM path: repeated class names must not restore another panel.
+const elementScrolls=()=>[...document.querySelectorAll('*')].filter(el=>el!==document.scrollingElement&&(el.scrollLeft||el.scrollTop)).slice(0,50).map(el=>{
+  const parts=[];for(let n=el;n&&n.nodeType===1;n=n.parentElement){if(n.id){parts.unshift('#'+CSS.escape(n.id));break;}parts.unshift(n.localName+':nth-child('+([...n.parentNode.children].indexOf(n)+1)+')');}
+  return {selector:parts.join(' > '),x:el.scrollLeft,y:el.scrollTop};
+});
 const drawState=()=>({type:'draw-state',scroll:{x:Math.round(scrollX),y:Math.round(scrollY)},viewport:{width:innerWidth,height:innerHeight},dpr:devicePixelRatio,
-  theme:matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light',path:location.pathname+location.search+location.hash,signals:signals()});
+  theme:matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light',path:location.pathname+location.search+location.hash,elementScrolls:elementScrolls(),signals:signals()});
 /** Elements inside a mark (viewport rect): a grid sample, then the largest
  * element under each hit that sits mostly inside the mark — circling a
  * button names the button, not the bar it's in. A line through something

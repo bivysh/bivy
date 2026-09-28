@@ -7,6 +7,17 @@ import { encodePng } from "./rfb.js";
 /** A mark drawn over a preview, in page CSS pixels (or the image's, on a
  * Compare screenshot). A box uses its first and last points as corners. */
 export interface Stroke { tool: "pen" | "box"; points: [number, number][] }
+export interface ElementScroll { selector: string; x: number; y: number }
+/** Scroll containers are page data, never executable capture instructions. */
+export function readElementScrolls(input: unknown): ElementScroll[] {
+  if (input === undefined) return [];
+  if (!Array.isArray(input) || input.length > 50) throw new Error("Invalid scroll containers.");
+  return input.map((raw) => {
+    if (!raw || typeof raw.selector !== "string" || !raw.selector.length || raw.selector.length > 2048
+      || ![raw.x, raw.y].every(n => typeof n === "number" && Number.isFinite(n) && Math.abs(n) <= 100_000)) throw new Error("Invalid scroll container.");
+    return { selector: raw.selector, x: raw.x, y: raw.y };
+  });
+}
 /** What the page said about state a fresh browser on the machine can't have. */
 export interface PageSignals { storage?: boolean; cookies?: boolean; interacted?: boolean; open?: boolean; edited?: boolean;
   /** The page couldn't say (no inspector): assume it may differ. */

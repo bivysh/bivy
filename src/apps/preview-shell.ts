@@ -339,7 +339,7 @@ function startDraw(target){
   if(target==='frame'&&metadata.inspect!==false){
     const current=draw;
     current.state.signals={unknown:true};
-    current.waiting=d=>{current.waiting=null;current.scroll=pos(d.scroll);current.state={viewport:{width:Math.round(Number(d.viewport?.width))||current.state.viewport.width,height:Math.round(Number(d.viewport?.height))||current.state.viewport.height},dpr:Number(d.dpr)||devicePixelRatio,theme:d.theme==='dark'?'dark':'light',path:safePath(d.path),signals:Object.fromEntries(Object.entries(d.signals||{}).map(([k,v])=>[k,v===true]))};renderInk();};
+    current.waiting=d=>{current.waiting=null;current.scroll=pos(d.scroll);current.state={viewport:{width:Math.round(Number(d.viewport?.width))||current.state.viewport.width,height:Math.round(Number(d.viewport?.height))||current.state.viewport.height},dpr:Number(d.dpr)||devicePixelRatio,theme:d.theme==='dark'?'dark':'light',path:safePath(d.path),elementScrolls:d.elementScrolls,signals:Object.fromEntries(Object.entries(d.signals||{}).map(([k,v])=>[k,v===true]))};renderInk();};
     frame.contentWindow?.postMessage({type:'bivy:draw'},metadata.origin);
   }
   for(const b of $('draw-bar').querySelectorAll('[data-tool]'))b.setAttribute('aria-checked',String(b.dataset.tool===draw.tool));
@@ -429,7 +429,7 @@ $('draw-done').onclick=()=>{
     +(els.length?els.map(el=>'- '+String(el.selector).slice(0,300)+(el.text?' ("'+String(el.text).slice(0,120)+'")':'')).join('\\n')+'\\n':'')
     +'Marks ('+(d.target==='compare'?'screenshot':'page')+' px): '+d.strokes.map(bounds).join('; ');
   const mark=Object.assign({path:st.path,viewport:st.viewport,dpr:st.dpr,strokes:d.strokes.map(s=>({tool:s.tool,points:s.points})),signals:st.signals},
-    d.target==='frame'?{scroll:d.scroll,theme:st.theme}:{compare:compareAfter});
+    d.target==='frame'?{scroll:d.scroll,elementScrolls:st.elementScrolls,theme:st.theme}:{compare:compareAfter});
   // The marks stay on screen, frozen, while you add your words.
   d.done=true;draw=null;
   draft(context,false);
