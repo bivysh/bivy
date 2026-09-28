@@ -1360,7 +1360,10 @@ export class SessionStore {
     if (this.attachmentsByText.size === 0) return transcript;
     let changed = false;
     const next = transcript.map((e) => {
-      if (e.role !== "user" || e.attachments || !e.text) return e;
+      // Composer refs retain original filenames and non-image files; projected
+      // runtime images may be resized vision copies of those same uploads.
+      // Prefer the original attachment set when it is available.
+      if (e.role !== "user" || !e.text) return e;
       const attachments = this.attachmentsByText.get(e.text);
       if (!attachments) return e;
       changed = true;

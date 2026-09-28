@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import fs from "node:fs";
+import { EventTransferStore } from "./event-transfer.js";
 import path from "node:path";
 import { WebSocket } from "ws";
 import { seal, sealFrame, openFrame, ReplayGuard } from "../e2e.js";
@@ -161,7 +162,11 @@ export class RelayConnector {
   // explains why instead of silently showing "configured".
   private lastErrorMessage?: string;
   private readonly replay = new ReplayGuard();
-  private readonly reassembler = new FrameReassembler();
+  private readonly transfers = new EventTransferStore();
+  private readonly reassembler = new FrameReassembler({ onReject: message => {
+    console.warn(`[relay] ${message}`);
+    this.sendEvent({ type: "session.error", code: "delivery_failed", error: message });
+  } });
   private readonly pairing: PairingStore;
   private readonly onWorkAvailable?: (hint: { id?: string; label?: string }) => void;
 
@@ -210,6 +215,8 @@ export class RelayConnector {
   }
 
   stop() {
+    this.transfers.clear();
+    this.reassembler.reset();
     this.options.previews?.disconnect();
     this.closed = true;
     this.ready = false;
@@ -282,7 +289,8 @@ export class RelayConnector {
   /** Push a local session event to remote clients (encrypted). */
   sendEvent(event: unknown) {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
-    const payload = sealFrame(this.roomKey(), event);
+    const offered = (event as { type?: string })?.type === "transfer.part" ? null : this.transfers.offer(event);
+    const payload = sealFrame(this.roomKey(), offered ?? event);
     // Large events (big file reads, long diffs, image attachments) are split
     // into multiple relay frames so none exceeds the relay's max-frame limit;
     // the client reassembles them before decrypting.
@@ -464,7 +472,9 @@ export class RelayConnector {
             console.warn("[relay] dropped stale or replayed client frame");
             return;
           }
-          this.onClientMessage(frame.data as ClientMessage);
+          const command = frame.data as ClientMessage;
+          if (command.kind === "transfer.read") this.sendEvent(this.transfers.read(command));
+          else this.onClientMessage(command);
         } catch {
           console.warn("[relay] failed to decrypt client frame");
         }
@@ -493,6 +503,7 @@ export class RelayConnector {
 
     ws.on("close", () => {
       if (this.ws !== ws) return;
+      this.reassembler.reset();
       this.options.previews?.disconnect();
       this.ready = false;
       this.remoteClients = 0;

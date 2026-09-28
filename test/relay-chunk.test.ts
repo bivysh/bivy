@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { frameMessages, FrameReassembler, FRAME_CHUNK_BYTES } from "../src/relay-chunk.js";
+import { createFrameReassembler } from "../packages/core/src/relay-frame.js";
+import { test as asyncTest } from "node:test";
 
 /**
  * Unit test for relay frame chunking: large sealed payloads must split into
@@ -62,3 +64,32 @@ test("duplicate chunk index is ignored (not double-counted)", () => {
 });
 
 console.log(`\nAll ${passed} relay-chunk checks passed.`);
+
+for (const stack of ["node", "browser"] as const) {
+  asyncTest(`${stack}: receive failures are explicit, bounded, and released on reset`, async () => {
+    const errors: string[] = [];
+    const options = { maxBytes: 10, timeoutMs: 15, onReject: (reason: string) => errors.push(reason) };
+    const node = stack === "node" ? new FrameReassembler(options) : undefined;
+    const browser = stack === "browser" ? createFrameReassembler(options) : undefined;
+    const accept = (frame: { fc?: string; fi?: number; fn?: number; p: string }) => node ? node.accept(frame) : browser!(frame);
+    accept({ fc: "a", fi: 0, fn: 2, p: "123456" });
+    accept({ fc: "b", fi: 0, fn: 2, p: "123456" });
+    assert.match(errors.pop()!, /memory/);
+    accept({ fc: "b", fi: 1, fn: 2, p: "x" });
+    assert.equal(errors.length, 0, "rejected groups cannot be revived by their remaining chunks");
+    accept({ fc: "a", fi: 1, fn: 3, p: "x" });
+    assert.match(errors.pop()!, /Inconsistent/);
+    accept({ p: "x".repeat(11) });
+    assert.match(errors.pop()!, /limit/);
+    accept({ fc: "timeout", fi: 0, fn: 2, p: "x" });
+    await new Promise(resolve => setTimeout(resolve, 35));
+    assert.match(errors.pop()!, /timed out/);
+    accept({ fc: "complete", fi: 0, fn: 2, p: "a" });
+    assert.equal(accept({ fc: "complete", fi: 1, fn: 2, p: "b" }), "ab");
+    accept({ fc: "complete", fi: 1, fn: 2, p: "b" });
+    accept({ fc: "reset", fi: 0, fn: 2, p: "x" });
+    if (node) node.reset(); else browser!.reset();
+    await new Promise(resolve => setTimeout(resolve, 35));
+    assert.deepEqual(errors, [], "reset and late completed-group duplicates must not leave timeout callbacks");
+  });
+}

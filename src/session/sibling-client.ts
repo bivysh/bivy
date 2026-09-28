@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+import { EventTransferReceiver } from "../remote/event-transfer-receiver.js";
 //
 // A NODE acting as a relay CLIENT of a sibling node it co-owns — the transport
 // that lets an owner daemon stream replication frames to its standby
@@ -60,7 +61,12 @@ export class SiblingClient {
   private ws?: WebSocket;
   private cipher?: RoomCipher;
   private readonly keypair: PairingKeypair = newDeviceKeypair();
-  private readonly reassembler = new FrameReassembler();
+  private readonly reassembler = new FrameReassembler({ onReject: () => this.ws?.close() });
+  private readonly transfers = new EventTransferReceiver({
+    send: async command => this.sendSealed(command),
+    emit: event => this.dispatchEvent(event),
+    fault: () => this.ws?.close(),
+  });
   private readonly pending = new Map<string, Pending>();
   private paired?: Promise<void>;
   private resolvePaired?: () => void;
@@ -129,7 +135,7 @@ export class SiblingClient {
       if (!full) return;
       try {
         const frame = this.cipher.open(full);
-        this.dispatchEvent(frame.data as Record<string, unknown>);
+        this.transfers.accept(frame.data as { type: string });
       } catch {
         /* undecryptable frame — ignore */
       }
@@ -206,6 +212,8 @@ export class SiblingClient {
   }
 
   private handleClose(): void {
+    this.transfers.reset();
+    this.reassembler.reset();
     if (this.closed) return;
     for (const [, waiter] of this.pending) {
       clearTimeout(waiter.timer);
@@ -217,6 +225,8 @@ export class SiblingClient {
   }
 
   close(): void {
+    this.transfers.reset();
+    this.reassembler.reset();
     this.closed = true;
     try {
       this.ws?.close();

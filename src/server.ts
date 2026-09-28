@@ -59,6 +59,7 @@ import { createSessionNamer, fallbackSessionName } from "./session/session-namer
 import { createBranchPublish } from "./session/branch-publish.js";
 import { createForkStandUp } from "./session/fork-standup.js";
 import { createForkRetire } from "./session/fork-retire.js";
+import { createClientProjection } from "./session/client-projection.js";
 import { createTranscriptPersistence } from "./session/transcript-persistence.js";
 import { createRunTerminals } from "./session/run-terminal.js";
 import { createRunLogStore } from "./session/run-log-store.js";
@@ -1659,7 +1660,11 @@ const commands: MeshCommand[] = [
 // network, background tab); used by both broadcast paths below.
 const CLIENT_BACKPRESSURE_BYTES = 8 * 1024 * 1024;
 
+let projectClientMessage: ReturnType<typeof createClientProjection> | undefined;
+
 function broadcast(payload: unknown) {
+  const p = payload as { type?: string; sessionId?: string };
+  if (p?.type === "session.event" && p.sessionId && projectClientMessage) payload = projectClientMessage(p.sessionId, payload);
   const data = JSON.stringify(payload);
   for (const client of clients) {
     if (client.readyState !== WebSocket.OPEN) continue;
@@ -1687,6 +1692,8 @@ function broadcast(payload: unknown) {
 // out as broadcast(), but skips any local client that is backed up: dropping a
 // superseded update is lossless because a newer one always follows.
 function broadcastCoalesced(payload: unknown) {
+  const p = payload as { type?: string; sessionId?: string };
+  if (p?.type === "session.event" && p.sessionId && projectClientMessage) payload = projectClientMessage(p.sessionId, payload);
   const data = JSON.stringify(payload);
   for (const client of clients) {
     if (client.readyState !== WebSocket.OPEN) continue;
@@ -1838,6 +1845,7 @@ const attachmentStore = new AttachmentStore(path.join(appDir, "attachments"), {
   maxStoreBytes: positiveEnvNumber("BIVY_ATTACHMENT_STORE_MAX_BYTES", 2 * 1024 * 1024 * 1024),
   retentionMs: positiveEnvNumber("BIVY_ATTACHMENT_RETENTION_MS", 30 * 24 * 60 * 60 * 1000),
 });
+projectClientMessage = createClientProjection(attachmentStore, eventLog);
 let attachmentGcStats = attachmentStore.stats();
 
 function referencedAttachmentHashes(): Set<string> | null {

@@ -79,3 +79,7 @@ export const FRAME_CHUNK_BYTES = 192 * 1024;
 export const MAX_REASSEMBLY_BYTES = 32 * 1024 * 1024;
 export const MAX_FRAME_CHUNKS = 4096;
 export const MAX_REASSEMBLY_GROUPS = 16;
+
+/** Independently sealed large-response pages and maximum logical JSON size. */
+export const TRANSFER_PAGE_BYTES = 384 * 1024;
+export const MAX_TRANSFER_BYTES = 64 * 1024 * 1024;

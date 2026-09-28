@@ -193,6 +193,21 @@ function toolEntryFromToolResultMessage(msg: any): ToolActivity | null {
   };
 }
 
+/** References may be nested inside SDK tool-result envelopes. */
+export function embeddedAttachments(value: unknown): PromptAttachment[] {
+  const refs = new Map<string, PromptAttachment>();
+  function visit(value: unknown): void {
+    if (!value || typeof value !== "object") return;
+    if (isAgentAttachmentBlock(value)) { refs.set(value.ref.hash, attachmentFromRef(value.ref)); return; }
+    if (Array.isArray(value)) { value.forEach(visit); return; }
+    const record = value as Record<string, unknown>;
+    // Content envelopes only; don't interpret tool arguments as attachments.
+    if (record.content) visit(record.content);
+  }
+  visit(value);
+  return [...refs.values()];
+}
+
 /** Build a fresh transcript from a node `messages[]` array (session.history).
  *
  *  Entries carry only raw `text`; the markdown `html` is left unset for the
@@ -204,6 +219,7 @@ function toolEntryFromToolResultMessage(msg: any): ToolActivity | null {
  *  as it drafts, so an in-flight turn paints without a per-entry render.) */
 export function renderHistory(messages: any[]): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
+  const toolImages = new Set<string>();
   for (const msg of messages || []) {
     const role = String(msg?.role || "assistant").toLowerCase();
     const content = msg?.content;
@@ -222,7 +238,8 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
           }
         }
       }
-      if (text && !isMetaText(text)) entries.push({ id: nextId(), role: "user", text });
+      const attachments = embeddedAttachments(content);
+      if ((text && !isMetaText(text)) || attachments.length) entries.push({ id: nextId(), role: "user", text, ...(attachments.length ? { attachments } : {}) });
     } else if (role === "system") {
       if (text && !isMetaText(text)) entries.push({ id: nextId(), role: "system", text });
     } else if (role === "toolresult" || role === "tool_result") {
@@ -304,6 +321,22 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
       // gap. Render it as an inline error so history matches the live view.
       if (msg?.stopReason === "error" && typeof msg?.errorMessage === "string" && msg.errorMessage.trim()) {
         entries.push({ id: nextId(), role: "error", text: humanizeError(msg.errorMessage) });
+      }
+    }
+    // Raw tool results and their Bivy overlays can contain the same image.
+    // Show one lazy attachment per call/hash, adjacent to the tool's result.
+    if (role !== "user" && role !== "system") {
+      const candidates = role === "toolresult" || role === "tool_result"
+        ? [{ id: msg.toolCallId || msg.toolUseId || msg.tool_use_id || msg.id, content }]
+        : (Array.isArray(content) ? content.filter(isToolResultBlock).map(block => ({ id: toolCallId(block), content: block.content })) : []);
+      for (const candidate of candidates) {
+        const attachments = embeddedAttachments(candidate.content).filter(ref => {
+          const key = `${candidate.id || ""}:${ref.hash}`;
+          if (toolImages.has(key)) return false;
+          toolImages.add(key);
+          return true;
+        });
+        if (attachments.length) entries.push({ id: nextId(), role: "assistant", text: "", attachments });
       }
     }
   }

@@ -36,6 +36,7 @@ export interface CommandBase {
 export interface Command extends CommandBase {
   kind:
     | "ping"
+    | "transfer.read"
     | "history"
     | "sessions.list"
     | "session.open"
