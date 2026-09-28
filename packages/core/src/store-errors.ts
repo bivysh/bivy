@@ -49,3 +49,43 @@ export function looksLikeAgentError(text: string): boolean {
   if (!t) return false;
   return /^Failed to authenticate\b/i.test(t) || /^API Error:\s*\d{3}\b/i.test(t) || /^WebSocket closed 1006\b/i.test(t);
 }
+
+/**
+ * True when a failure is about the model credential rather than the work — a
+ * 401/403, a missing or invalid key, or an OAuth session that expired and could
+ * not be refreshed. Callers use it to offer a "fix your sign-in" affordance next
+ * to the error instead of leaving the user to guess where credentials live.
+ * Only ever applied to text already classified as an error, so a broad match is
+ * safe; it must not be used to classify ordinary prose.
+ */
+export function looksLikeAuthFailure(text: string): boolean {
+  const t = String(text ?? "");
+  if (!t.trim()) return false;
+  return /\b401\b|\b403\b|unauthori[sz]ed|authenticat|oauth|subscription|invalid x-api-key|(missing|no|expired|invalid)[\s\S]*(bearer|api[\s_-]?key|token|credential)/i.test(t);
+}
+
+/** Agent family → the credential provider its sign-in targets. Matched by id
+ *  prefix so versioned/variant ids (claude-code-sdk, codex-approvals) need no
+ *  row of their own. Agents that are not tied to one provider (pi, opencode,
+ *  generic CLIs) are absent on purpose — they resolve through the model's own
+ *  provider instead. */
+const RUNTIME_AUTH_PROVIDERS: ReadonlyArray<readonly [prefix: string, provider: string]> = [
+  ["codex", "openai-codex"],
+  ["claude", "anthropic"],
+  ["grok", "xai"],
+  ["gemini", "google"],
+];
+
+/**
+ * Which credential provider the user must (re)authenticate for, given the agent
+ * that failed and, when known, the provider behind its current model. Returns
+ * undefined when neither names a provider we can open a sign-in for — the caller
+ * should then fall back to the provider settings as a whole.
+ */
+export function authProviderForRuntime(runtimeId?: string | null, modelProvider?: string | null): string | undefined {
+  const id = String(runtimeId ?? "").trim().toLowerCase();
+  const family = RUNTIME_AUTH_PROVIDERS.find(([prefix]) => id.startsWith(prefix));
+  if (family) return family[1];
+  const provider = String(modelProvider ?? "").trim().toLowerCase();
+  return provider || undefined;
+}

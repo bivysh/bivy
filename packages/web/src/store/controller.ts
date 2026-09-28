@@ -286,6 +286,9 @@ export class AppController {
    *  exists; these heartbeats make the otherwise silent cloud-init wait visible. */
   private bootProgressTimers = new Map<string, ReturnType<typeof setTimeout>[]>();
   private bootstrapPhaseByNode = new Map<string, string>();
+  /** The agent a running install was started for, so its completion finishes the
+   *  pick the user made in the picker. See installAgent. */
+  private pendingAgentPick: string | null = null;
   /** Further prompts sent by the user *while* that session is still being
    *  created — queued instead of firing their own `session.new`, then drained
    *  into the one real session by maybeFlushPendingPrompt. See sendPrompt. */
@@ -835,6 +838,7 @@ export class AppController {
         this.maybeFlushPendingPrompt(appliedEvent);
         this.followupCoordinator.confirm(appliedEvent);
         this.maybeRestoreDraftAgent(appliedEvent);
+        this.maybeSelectInstalledAgent(appliedEvent);
         this.maybeRefreshModelsForRuntime(appliedEvent);
         this.reconcileSessionList(appliedEvent);
       },
@@ -3309,9 +3313,37 @@ export class AppController {
     this.send({ kind: "runtime.select", id: rt.id });
   }
 
+  /** Install an agent the node offers but doesn't have yet. Every caller is the
+   *  agent picker, where installing IS choosing: the user tapped that agent (or
+   *  its Install button) meaning to work with it. Remember that so the finished
+   *  install completes the pick instead of dropping it — otherwise the composer
+   *  sits on the previous agent as if the tap did nothing (see
+   *  maybeSelectInstalledAgent). */
   installAgent(id: string): void {
+    this.pendingAgentPick = id;
     this.store.setInstalling(id);
     this.send({ kind: "runtime.install", id });
+  }
+
+  /**
+   * Finish the agent pick an install interrupted. Only ever selects the agent
+   * the user actually asked for, and only on a draft: on a conversation,
+   * chooseAgent is a fork, and a fork must stay a deliberate tap rather than
+   * something an install completion triggers minutes later.
+   */
+  private maybeSelectInstalledAgent(event: { type?: string; id?: string }): void {
+    if (event.type === "runtime.install.error" && event.id === this.pendingAgentPick) {
+      this.pendingAgentPick = null;
+      return;
+    }
+    if (event.type !== "runtime.install.done" || !this.pendingAgentPick || event.id !== this.pendingAgentPick) return;
+    this.pendingAgentPick = null;
+    const state = this.store.getState();
+    if (state.activeSession.transcript.some((entry) => entry.role === "user")) return;
+    const installed = state.catalogs.runtimes.find((runtime) => runtime.id === event.id);
+    if (installed && String((installed as { status?: string }).status || "available") === "available") {
+      this.chooseAgent(installed);
+    }
   }
 
   // --- Settings: providers, credentials and custom models -----------------

@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createCredentialStore, buildAgentCredentialEnv } from "../src/runtime/credentials.js";
 import { exportProviderAuth, importProviderAuth } from "../src/credentials/api.js";
+import { NodeCredentialResolver } from "../src/credentials/resolver.js";
 
 // A shared node sign-in should reach *any* selected agent, not just the Pi agent
 // that owns auth.json. buildAgentCredentialEnv is the seam that maps the vault's
@@ -55,6 +56,34 @@ fs.writeFileSync(
 const codexEnv = await buildAgentCredentialEnv(createCredentialStore(codexDir));
 assert.equal(codexEnv.OPENAI_API_KEY, undefined, "Codex subscription is not emitted as an OpenAI API key");
 assert.equal(codexEnv.OPENAI_CODEX_API_KEY, undefined, "Codex subscription is not emitted under a made-up var");
+
+// A spent OAuth token must not be handed to an agent. Bivy's injected env var
+// outranks the agent's own login, so returning a token we know is dead shadows a
+// working `claude`/`codex` session on this machine — the user sees "OAuth
+// session expired and could not be refreshed" while their local login is fine.
+// Refresh commonly fails exactly here: the provider's CLI rotated the refresh
+// token out from under Bivy's copy.
+{
+  const spentDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-cred-spent-"));
+  await importProviderAuth(spentDir, {
+    anthropic: { type: "oauth", access: "dead-token", refresh: "r", expires: Date.now() - 60_000 },
+  });
+  const failing = { refresh: async () => { throw new Error("invalid_grant"); } };
+  const spent = new NodeCredentialResolver(spentDir, { resolve: async () => undefined }, failing);
+  assert.equal(await spent.getCredential("anthropic"), undefined, "an expired token whose refresh fails yields no credential");
+
+  // A token still inside its lifetime refreshes early (the skew window) but must
+  // survive a transient refresh failure — it works for another minute.
+  const liveDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-cred-live-"));
+  await importProviderAuth(liveDir, {
+    anthropic: { type: "oauth", access: "still-good", refresh: "r", expires: Date.now() + 30_000 },
+  });
+  const live = new NodeCredentialResolver(liveDir, { resolve: async () => undefined }, failing);
+  assert.equal((await live.getCredential("anthropic"))?.token, "still-good", "a live token survives a failed early refresh");
+
+  fs.rmSync(spentDir, { recursive: true, force: true });
+  fs.rmSync(liveDir, { recursive: true, force: true });
+}
 
 // An empty vault yields no env (agent falls back to its own auth) and never throws.
 const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-cred-empty-"));

@@ -9,6 +9,7 @@
 
 import type { AccountAutomationRun, GithubQueueItem } from "./account.js";
 import { deriveRunOutcome, type RunOutcome } from "./outcome.js";
+import { authProviderForRuntime, looksLikeAuthFailure } from "./store-errors.js";
 
 /** Which legacy record backed this projection. Diagnostic-only; never a primary
  *  customer label. */
@@ -204,11 +205,8 @@ function durationOf(t: RunTimestamps): number | undefined {
 }
 
 function authProviderForFailure(runtimeId: string | undefined, failure: string | undefined): string | undefined {
-  if (!failure || !/\b401\b|\b403\b|unauthori[sz]ed|authenticat|invalid x-api-key|(missing|no|invalid)[\s\S]*(bearer|api[\s_-]?key|token)/i.test(failure)) return undefined;
-  const runtime = String(runtimeId || "").trim().toLowerCase();
-  if (runtime.startsWith("codex")) return "openai-codex";
-  if (runtime.startsWith("claude")) return "anthropic";
-  return undefined;
+  if (!failure || !looksLikeAuthFailure(failure)) return undefined;
+  return authProviderForRuntime(runtimeId);
 }
 
 const MILESTONE_STAGE = new Set<RunMilestoneStage>([
