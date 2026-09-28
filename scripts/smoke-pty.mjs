@@ -37,3 +37,6 @@ await new Promise((resolve, reject) => {
   });
 });
 console.log("Installed native PTY: passed (spawn, output, exit)");
+// node-pty's ConPTY output pipe keeps the event loop alive on Windows after
+// the terminal has exited, so the check would never return.
+process.exit(0);
