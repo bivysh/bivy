@@ -4,29 +4,34 @@
 /**
  * Cut a production release with one command:
  *
- *   pnpm release            # patch (default)
- *   pnpm release minor      # or major, or an exact X.Y.Z
+ *   pnpm release            # release the version main's package.json names
+ *   pnpm release minor      # or major, patch, or an exact X.Y.Z above the last
+ *                           # release; retargets main first when it differs
  *   pnpm release --dry-run  # print the version and release notes, change nothing
- *   pnpm release --notes-file notes.md  # add these notes to [Unreleased] first
+ *   pnpm release --notes-file notes.md  # add these notes to the release
+ *   pnpm release --no-ship  # skip dispatching the Cloud deploy
  *
- * Branches from the latest origin/main, sets every manifest to the new version,
- * dates CHANGELOG.md's [Unreleased] section (after adding any --notes-file
- * notes, so notes and version land in one PR), opens the release PR and enables
- * auto-merge. When that commit lands on main, release.yml notices the unreleased
- * package.json version and promotes it to npm `latest` on its own (still behind
- * the `release` environment approval). See docs/releasing.md.
+ * package.json on main holds the version main will release next. A release is
+ * a `vX.Y.Z` tag on the current origin/main, which already passed the merge
+ * queue and has published staging builds and service images. Pushing the tag
+ * starts release.yml (npm `latest`, image aliases, GitHub release), and this
+ * script dispatches Cloud's Ship workflow at the same moment so its deploy
+ * setup overlaps the publish. A follow-up PR then dates the notes in
+ * CHANGELOG.md and moves main to the next patch. See docs/releasing.md.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { extractChangelogSection } from "./extract-changelog.mjs";
 import { setReleaseVersion } from "./set-release-version.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const BUMPS = { major: [1, 0, 0], minor: [0, 1, 0], patch: [0, 0, 1] };
 const UNRELEASED = /^## \[Unreleased\][^\n]*\n/m;
+/** The deployment that follows a release. `--no-ship` skips it. */
+const SHIP = { repo: "bivysh/bivy-cloud", workflow: "ship.yml" };
 
 /** `current` bumped by `major|minor|patch`, or an explicit stable version above it. */
 function nextVersion(current, bump) {
@@ -46,82 +51,158 @@ function nextVersion(current, bump) {
   return parts.map((n, i) => (i < level ? n : i === level ? n + 1 : 0)).join(".");
 }
 
-/** Append `notes` to the end of the [Unreleased] section. */
-function addUnreleasedNotes(changelog, notes) {
+function unreleasedSection(changelog) {
   const match = UNRELEASED.exec(changelog);
   if (!match) throw new Error("CHANGELOG.md has no `## [Unreleased]` heading.");
   const bodyStart = match.index + match[0].length;
   const next = changelog.slice(bodyStart).search(/^## /m);
   const end = next === -1 ? changelog.length : bodyStart + next;
-  const body = changelog.slice(bodyStart, end).trim();
-  const merged = [body, notes.trim()].filter(Boolean).join("\n\n");
-  return `${changelog.slice(0, bodyStart)}\n${merged}\n${next === -1 ? "" : "\n"}${changelog.slice(end)}`;
+  return { bodyStart, end, body: changelog.slice(bodyStart, end).trim() };
 }
 
-/** Move [Unreleased] under a dated `## [version]` heading, leaving a fresh [Unreleased]. */
-function rotateChangelog(changelog, version, date) {
-  const match = UNRELEASED.exec(changelog);
-  if (!match) throw new Error("CHANGELOG.md has no `## [Unreleased]` heading.");
-  const bodyStart = match.index + match[0].length;
-  const next = changelog.slice(bodyStart).search(/^## /m);
-  const body = changelog.slice(bodyStart, next === -1 ? undefined : bodyStart + next).trim();
-  if (!body) throw new Error("CHANGELOG.md's [Unreleased] section is empty; there is nothing to release.");
-  return `${changelog.slice(0, bodyStart)}\n## [${version}] - ${date}\n${changelog.slice(bodyStart)}`;
+/** Drop `###` headings left with no entries, and collapse blank runs. */
+function tidy(lines) {
+  const kept = lines.filter((line, i) => {
+    if (!/^#{3,} /.test(line)) return true;
+    const rest = lines.slice(i + 1);
+    const nextHeading = rest.findIndex((l) => /^#{3,} /.test(l));
+    return rest.slice(0, nextHeading === -1 ? undefined : nextHeading).some((l) => l.trim());
+  });
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
+/**
+ * Record a published release: date `notes` under `## [version]` and remove
+ * those entries from [Unreleased]. Entries that landed after the release was
+ * tagged stay under [Unreleased] for the next one.
+ */
+function recordRelease(changelog, version, date, notes) {
+  const { bodyStart, end, body } = unreleasedSection(changelog);
+  const released = new Set(notes.split("\n").filter((line) => line.trim() && !line.startsWith("#")));
+  const remaining = tidy(body.split("\n").filter((line) => !released.has(line)));
+  const section = `## [${version}] - ${date}\n\n${notes.trim()}\n`;
+  const after = changelog.slice(end);
+  return `${changelog.slice(0, bodyStart)}\n${remaining ? `${remaining}\n\n` : ""}${section}${after ? `\n${after}` : ""}`;
+}
+
+/** Release notes: [Unreleased] at the released commit plus any --notes-file notes. */
+function releaseNotes(changelog, extra) {
+  return [unreleasedSection(changelog).body, extra.trim()].filter(Boolean).join("\n\n");
 }
 
 function sh(command, args, options = {}) {
   return execFileSync(command, args, { cwd: repoRoot, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"], ...options }).trim();
 }
 
-function main() {
-  const args = process.argv.slice(2).filter((arg) => arg !== "--");
-  const dryRun = args.includes("--dry-run");
+/** The highest released `vX.Y.Z` tag, or null. */
+function latestRelease() {
+  const tags = sh("git", ["tag", "--list", "v*", "--sort=-v:refname"]).split("\n");
+  return tags.map((tag) => tag.slice(1)).find((version) => STABLE_SEMVER.test(version)) ?? null;
+}
+
+/**
+ * Commit `change(worktree)` on top of origin/main in a throwaway worktree, open
+ * a PR with auto-merge and return its URL. The caller's checkout is untouched.
+ */
+function openPullRequest(branch, title, body, change) {
+  const worktree = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-release-"));
+  try {
+    sh("git", ["worktree", "add", "--quiet", "-b", branch, worktree, "origin/main"]);
+    change(worktree);
+    sh("git", ["-C", worktree, "commit", "--quiet", "-am", title]);
+    sh("git", ["-C", worktree, "push", "--quiet", "-u", "origin", branch]);
+    const url = sh("gh", ["pr", "create", "--base", "main", "--head", branch, "--title", title, "--body", body]);
+    sh("gh", ["pr", "merge", url, "--auto", "--squash"]);
+    return url;
+  } finally {
+    sh("git", ["worktree", "remove", "--force", worktree]);
+  }
+}
+
+/** Wait for a PR to merge and return its merge commit. */
+function awaitMerge(url) {
+  for (;;) {
+    const { state, mergeCommit } = JSON.parse(sh("gh", ["pr", "view", url, "--json", "state,mergeCommit"]));
+    if (state === "MERGED") return mergeCommit.oid;
+    if (state === "CLOSED") throw new Error(`${url} was closed without merging.`);
+    execFileSync("sleep", ["10"]);
+  }
+}
+
+function parseArgs(argv) {
+  const args = argv.filter((arg) => arg !== "--");
   const notesAt = args.indexOf("--notes-file");
   const notesFile = notesAt === -1 ? null : args[notesAt + 1];
   const positional = args.filter((arg, i) => !arg.startsWith("--") && (notesAt === -1 || i !== notesAt + 1));
   if (positional.length > 1 || (notesAt !== -1 && !notesFile)) {
-    console.error("Usage: pnpm release [patch|minor|major|X.Y.Z] [--notes-file notes.md] [--dry-run]");
-    process.exit(2);
+    throw new Error("Usage: pnpm release [minor|major|X.Y.Z] [--notes-file notes.md] [--dry-run] [--no-ship]");
   }
-  const notes = notesFile ? fs.readFileSync(path.resolve(notesFile), "utf8") : "";
+  return {
+    bump: positional[0] ?? null,
+    dryRun: args.includes("--dry-run"),
+    ship: !args.includes("--no-ship"),
+    notes: notesFile ? fs.readFileSync(path.resolve(notesFile), "utf8") : "",
+  };
+}
 
-  sh("git", ["fetch", "--quiet", "origin", "main"]);
-  const readMain = (file) => sh("git", ["show", `origin/main:${file}`]);
-  const current = JSON.parse(readMain("package.json")).version;
-  const version = nextVersion(current, positional[0] ?? "patch");
-  const date = new Date().toISOString().slice(0, 10);
-  const changelog = rotateChangelog(addUnreleasedNotes(readMain("CHANGELOG.md"), notes), version, date);
+function main() {
+  const { bump, dryRun, ship, notes: extraNotes } = parseArgs(process.argv.slice(2));
+  const started = Date.now();
+  const elapsed = () => `${Math.round((Date.now() - started) / 1000)}s`;
+
+  sh("git", ["fetch", "--quiet", "--tags", "origin", "main"]);
+  let sha = sh("git", ["rev-parse", "origin/main"]);
+  const readAt = (commit, file) => sh("git", ["show", `${commit}:${file}`]);
+  const target = JSON.parse(readAt(sha, "package.json")).version;
+  const released = latestRelease();
+  const version = bump ? nextVersion(released ?? target, bump) : target;
+  if (sh("git", ["tag", "--list", `v${version}`])) {
+    throw new Error(`v${version} is already released. Merge the follow-up version bump PR, then release again.`);
+  }
+  if (released) nextVersion(released, version); // throws unless newer
+  const notes = releaseNotes(readAt(sha, "CHANGELOG.md"), extraNotes);
+  if (!notes) throw new Error("There is nothing to release: CHANGELOG.md's [Unreleased] section is empty and no --notes-file was given.");
 
   if (dryRun) {
-    console.log(`Would release ${current} -> ${version}\n\n${extractChangelogSection(changelog, version)}`);
+    const retarget = version === target ? "" : ` after retargeting main from ${target}`;
+    console.log(`Would tag ${sha.slice(0, 12)} (origin/main) as v${version}${retarget}${ship ? ` and dispatch ${SHIP.repo} ${SHIP.workflow}` : ""}.\n\n${notes}`);
     return;
   }
 
-  if (sh("git", ["status", "--porcelain"])) throw new Error("Working tree is not clean; commit or set aside your changes first.");
-  const branch = `release/v${version}`;
-  const returnTo = sh("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
-  sh("git", ["switch", "--quiet", "-c", branch, "origin/main"]);
-  try {
-    setReleaseVersion(version);
-    fs.writeFileSync(path.join(repoRoot, "CHANGELOG.md"), changelog);
-    sh("git", ["commit", "--quiet", "-am", `chore(release): ${version}`]);
-    sh("git", ["push", "--quiet", "-u", "origin", branch]);
-    const body = [
-      `Releases \`${version}\` (previously \`${current}\`).`,
-      "",
-      "Merging this lands the version bump on `main`; the Release workflow then publishes the staging",
-      "candidate and promotes it to npm `latest` automatically once the `release` environment is approved.",
-      "",
-      "## Release notes",
-      "",
-      extractChangelogSection(changelog, version),
-    ].join("\n");
-    const url = sh("gh", ["pr", "create", "--base", "main", "--head", branch, "--title", `chore(release): ${version}`, "--body", body]);
-    sh("gh", ["pr", "merge", url, "--auto", "--squash"]);
-    console.log(`Release PR for ${version}: ${url}\nAuto-merge is on; approve the \`release\` environment when the Release run asks.`);
-  } finally {
-    if (returnTo !== "HEAD") sh("git", ["switch", "--quiet", returnTo]);
+  // Main names a different version (minor/major/exact): land that first. It is
+  // a version-only change, so it runs CI's light release tier.
+  if (version !== target) {
+    const url = openPullRequest(`release/target-v${version}`, `chore(release): target ${version}`, `Retargets main from \`${target}\` to \`${version}\` so \`pnpm release\` can tag it.`, (worktree) => setReleaseVersion(version, worktree));
+    console.log(`Retargeting main to ${version}: ${url}\nWaiting for the merge queue...`);
+    sha = awaitMerge(url);
+    sh("git", ["fetch", "--quiet", "origin", "main"]);
   }
+
+  // The tag is the release. Its message carries --notes-file notes so the
+  // workflow can publish them without another commit on main.
+  const message = [`Bivy ${version}`, extraNotes.trim()].filter(Boolean);
+  sh("git", ["tag", "-a", `v${version}`, sha, ...message.flatMap((m) => ["-m", m])]);
+  sh("git", ["push", "--quiet", "origin", `refs/tags/v${version}`]);
+  console.log(`[${elapsed()}] Tagged ${sha.slice(0, 12)} as v${version}; release.yml is publishing it.`);
+
+  if (ship) {
+    try {
+      sh("gh", ["workflow", "run", SHIP.workflow, "--repo", SHIP.repo, "--ref", "main", "-f", `version=v${version}`, "-f", "confirm=production"]);
+      console.log(`[${elapsed()}] Dispatched ${SHIP.repo} ${SHIP.workflow}; it deploys once the GitHub release exists.`);
+    } catch {
+      console.warn(`Could not dispatch ${SHIP.repo} ${SHIP.workflow}; deploy by hand if you run that deployment.`);
+    }
+  }
+
+  // Off the critical path: date the notes and move main to the next patch.
+  const next = nextVersion(version, "patch");
+  const date = new Date().toISOString().slice(0, 10);
+  const url = openPullRequest(`release/after-v${version}`, `chore(release): record ${version}, target ${next}`, `Records the \`v${version}\` release notes in CHANGELOG.md and moves main to \`${next}\`.`, (worktree) => {
+    setReleaseVersion(next, worktree);
+    const file = path.join(worktree, "CHANGELOG.md");
+    fs.writeFileSync(file, recordRelease(fs.readFileSync(file, "utf8"), version, date, notes));
+  });
+  console.log(`[${elapsed()}] Follow-up version bump: ${url}\n\n${notes}`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
@@ -133,4 +214,4 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   }
 }
 
-export { addUnreleasedNotes, nextVersion, rotateChangelog };
+export { nextVersion, recordRelease, releaseNotes };

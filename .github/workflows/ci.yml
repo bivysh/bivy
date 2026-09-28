@@ -47,9 +47,9 @@ permissions:
 #          this file: everything, including the macOS lanes. Every job runs and
 #          must succeed; keep event-specific jobs out of here.
 #   release  a PR or queue entry that only changes manifest versions and
-#          CHANGELOG.md (scripts/release-only-diff.mjs): policy checks and
-#          release-notes validation. The code it ships already passed CI on
-#          main, and release.yml accepts this run as the promotion receipt.
+#          CHANGELOG.md (scripts/release-only-diff.mjs), such as the version
+#          bump after a release: policy checks and release-notes validation.
+#          The code it carries already passed CI on main.
 jobs:
   # Detect which areas a change actually touches so we only run relevant jobs,
   # and which tier this run is. Changing ci.yml itself runs the full tier so CI
@@ -159,10 +159,9 @@ jobs:
           INSTALLER_CHANGED: ${{ steps.filter.outputs.installer }}
           QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
-          # A release (`pnpm release`: manifest versions + CHANGELOG.md only)
-          # ships code main already tested, so it runs the light release tier:
-          # policy checks plus release-notes validation. release.yml accepts
-          # that run on the merged SHA as the promotion receipt.
+          # A version bump (manifest versions + CHANGELOG.md only) carries code
+          # main already tested, so it runs the light release tier: policy
+          # checks plus release-notes validation.
           # A PR checks out its test merge, whose first parent is current main.
           case "$EVENT" in
             merge_group) base="$QUEUE_BASE" ;;
@@ -228,9 +227,9 @@ jobs:
       - run: pnpm run check:routes
       - run: pnpm run check:design
       - run: pnpm run certification:check
-      # The current version must have release notes; release.yml publishes
-      # this section as the GitHub release body.
-      - run: node scripts/extract-changelog.mjs "$(node -p "require('./package.json').version")" > /dev/null
+      # Release notes collect under [Unreleased] until `pnpm release` tags
+      # main; release.yml publishes that section as the GitHub release body.
+      - run: grep -q '^## \[Unreleased\]' CHANGELOG.md || { echo "::error::CHANGELOG.md needs a '## [Unreleased]' section."; exit 1; }
 
   # ESLint, with its cache restored. A warm run only lints changed files, which
   # takes it from ~24s to ~2s; a cold one is no slower than before.

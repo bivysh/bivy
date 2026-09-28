@@ -35,7 +35,7 @@ both published from CI via the single `release.yml` workflow:
 
 | Channel | dist-tag | Version shape | When it publishes | Install |
 |---|---|---|---|---|
-| **Production** | `latest` | `X.Y.Z` | when a `pnpm release` commit lands, after approval | `npm i -g @bivy/bivy` (default) |
+| **Production** | `latest` | `X.Y.Z` | when `pnpm release` pushes a `vX.Y.Z` tag | `npm i -g @bivy/bivy` (default) |
 | **Staging** | `staging` | `X.Y.Z-staging.N` | automatically on every merge to `main` | `BIVY_CHANNEL=staging` / `npm i -g @bivy/bivy@staging` |
 
 The flow is trunk-based: every change lands on `main` through a PR, and each merge
@@ -45,12 +45,13 @@ maintainer releases (see "Cutting a production release"). Staging versions are
 semver prereleases, so they never satisfy a plain `@bivy/bivy` install and never
 consume a stable `X.Y.Z`.
 
-`package.json` on `main` holds the **last released** version (`X.Y.Z`, no
-prerelease suffix). Staging builds target the next patch after it
-(`X.Y.(Z+1)-staging.N`), so they always sort above `latest`; no version-bump PR
-is needed after a release. A commit that sets an **unreleased** version — the one
-`pnpm release` produces — is the release: its staging build is the release
-candidate and the same Release run promotes it.
+`package.json` on `main` holds the version `main` will **release next**
+(`X.Y.Z`, no prerelease suffix). Staging builds are prereleases of it
+(`X.Y.Z-staging.N`), so they always sort above `latest`. A release is a `vX.Y.Z`
+tag on a `main` commit: the build you tag is one the dev fleet already ran on
+`staging`. `pnpm release` then opens a small follow-up PR that dates the notes
+and moves `main` to the next patch. Until it merges, staging targets that next
+patch on its own.
 
 ## Why npm rather than a signed tarball
 
@@ -114,15 +115,11 @@ page on npmjs.com (requires the package to already exist — see
 
 **Leave the Environment field blank.** One workflow file (`release.yml`) is the
 single trusted publisher npm permits per package, and it publishes *both*
-channels. The automatic **staging** job runs in no GitHub environment, so pinning
-an environment in npm's trust policy would reject every staging publish. The
-**production** job still self-gates on the `release` GitHub environment for
-approval — that is a GitHub-side control and does not need to be (and must not be)
-part of npm's trust policy.
+channels. Neither job runs in a GitHub environment.
 
-Create the GitHub `release` environment and require a maintainer review under
-**Settings → Environments → release**. This gates only the production/promote
-path; staging is unaffected.
+Production has no approval step: pushing the `vX.Y.Z` tag is the decision. The
+`release-tags` ruleset lets only repository admins create `v*` tags and nobody
+move or delete them, so a tag binds its version to one commit for good.
 
 npm's CLI needs to be `>= 11.5.1` to speak the trusted-publishing protocol;
 `release.yml` upgrades it explicitly (`npm install -g npm@^11`) rather than
@@ -156,65 +153,51 @@ npm view @bivy/bivy dist-tags        # see what `staging` and `latest` point at
 ## Cutting a production release
 
 Add user-facing notes to `CHANGELOG.md`'s `[Unreleased]` section as changes land,
-or write them to a file outside the checkout and pass it to the release, so the
-notes and the version bump land in one PR. Then, from any clean checkout:
+or write them to a file outside the checkout and pass it to the release. Then,
+from any checkout (it is not modified):
 
 ```bash
-pnpm release --dry-run                      # preview the version and release notes
-pnpm release                                # patch; or `pnpm release minor|major|X.Y.Z`
-pnpm release --notes-file /tmp/notes.md     # append these notes to [Unreleased] first
+pnpm release --dry-run                      # preview the version, commit and notes
+pnpm release                                # release main's package.json version
+pnpm release --notes-file /tmp/notes.md     # add these notes to the release
+pnpm release minor                          # or major / X.Y.Z: retarget main first
 ```
 
-That branches from the latest `origin/main`, sets the root, package, and service
-manifests to the new version, dates `[Unreleased]` as `## [X.Y.Z] - YYYY-MM-DD`,
-opens the `chore(release): X.Y.Z` PR and turns on auto-merge. It refuses to run
-with empty release notes. When the PR merges, the Release run for that commit
-publishes the staging build and, in parallel, waits on the `release`
-environment. **Approve it** and the run promotes to `latest`, tags `vX.Y.Z`, and
-creates the GitHub release. That approval is the only manual step after
-`pnpm release`.
+That tags the current `origin/main` as `vX.Y.Z` (the version its `package.json`
+names) and pushes the tag. It refuses to run with empty release notes, and
+`--notes-file` notes travel in the tag message, so no commit has to land first.
+`pnpm release minor|major|X.Y.Z` first lands a version-only PR retargeting `main`
+(CI's light release tier), waits for the merge queue, and tags that commit.
 
-A release commit changes only manifest versions and `CHANGELOG.md`
-(`scripts/release-only-diff.mjs` decides). The code it ships already passed CI on
-`main`, so its PR and merge-queue runs use CI's light **release** tier: policy
-checks plus release-notes validation, well under a minute. Promotion accepts that
-successful run on the exact merged SHA. Any other promoted commit needs a CI run
-on its SHA that passed every job. A commit without one — pushed past branch
-protection, say — gets the canonical CI workflow with `force_all: true` before
-the production job can publish. A successful staging publish alone is not
-evidence that tests passed.
+The tag push starts the Release workflow on that commit. It checks that the tag
+matches `package.json`, that the commit is on `main`, and that CI passed on that
+exact SHA — main only advances through the merge queue, so its successful
+`merge_group` run is the receipt. A commit without one (pushed past branch
+protection, say) gets the canonical CI workflow with `force_all: true` before
+anything publishes. A successful staging publish alone is not evidence that
+tests passed. It then requires the public service images for the SHA (built in
+the merge queue, so normally already there), publishes the stable build to
+`latest` via Trusted Publishing, aliases the images to `X.Y.Z`, `vX.Y.Z` and
+`latest`, and creates the GitHub release — last, so its existence means npm and
+the images are live. The release body is `[Unreleased]` at the tagged commit
+plus the tag message.
 
-Core service images are built natively for each architecture in the merge queue,
-so they are normally published before the release commit reaches `main`.
+At the same moment, `pnpm release` dispatches Bivy Cloud's `Ship` workflow
+(skip with `--no-ship`), which prepares the deploy while the release publishes
+and cuts over once the GitHub release exists. Finally it opens the follow-up PR
+that records the notes under `## [X.Y.Z] - YYYY-MM-DD` and moves `main` to the
+next patch; entries that landed after the tag stay under `[Unreleased]`. Merge
+it before the next release.
 
-To promote by hand (for example after rejecting the approval), dispatch the
-workflow from `main` and type the version:
+To retry a failed promotion, dispatch the workflow from the tag:
 
 ```bash
-gh workflow run release.yml --ref main -f confirm_version=X.Y.Z
+gh workflow run release.yml --ref vX.Y.Z
 ```
 
-Before publishing, promotion creates the durable tag
-`release-intent-vX.Y.Z`, binding that version to the exact commit. The tag is
-kept after a successful release. If a run fails after creating the intent,
-resume from that ref—not from a newer `main`:
-
-```bash
-gh workflow run release.yml --ref release-intent-vX.Y.Z \
-  -f confirm_version=X.Y.Z
-```
-
-The workflow accepts an existing npm version only when the intent points to its
-current commit and npm's `latest` tag already names that version. Image aliases,
-the final `vX.Y.Z` tag, and the GitHub release are idempotent, so this recovery
-cannot mix artifacts from different commits.
-
-Promotion also verifies the commit's staging publish, validates the version and
-workspace agreement, requires the public service images for the SHA, and
-publishes the stable build to `latest` via Trusted Publishing (automatic
-provenance). The GitHub release body is the matching CHANGELOG section
-(`scripts/extract-changelog.mjs`). A manual dispatch clicked while staging is
-still running waits for up to ten minutes.
+npm versions are immutable, so a retry accepts an existing npm version only when
+npm's `latest` already names it; the image aliases and the GitHub release are
+idempotent. The protected tag keeps a retry on the original commit.
 
 ### Publishing by hand (discouraged)
 
