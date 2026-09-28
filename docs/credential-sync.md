@@ -24,7 +24,10 @@ Current model:
 - Removing a node that received a wrapped model-auth key flags the vault for
   rotation. One surviving node atomically publishes a fresh encrypted generation;
   old wraps are discarded and the new key is wrapped only to nodes that remain
-  enrolled. A peer that cached the prior key discards it and requests the new wrap.
+  enrolled. A peer that cached the prior key first tries the available peer wrap,
+  validating it against the ciphertext before caching it. If that wrap also fails,
+  the node rejects that exact wrap and requests a replacement. The control plane
+  removes only the rejected value, so a delayed retry cannot delete a newer wrap.
 - Provider sign-out is represented by a timestamped tombstone in the encrypted
   envelope. Tombstones remove older credentials on every node and prevent a stale
   snapshot from resurrecting them; signing in again later supersedes the tombstone.
@@ -163,3 +166,9 @@ login and require signing in again. This command does not eliminate that limitat
 
 - If a key may have been exposed, rotate it at the provider — never paste a provider key into a support channel.
 - If a second node cannot use a model, check the table above to see whether that runtime uses Bivy-managed auth (which syncs) or agent-native auth (which needs a per-node login).
+- Repeated `[auth-sync] cached vault key is stale` warnings can indicate an old
+  wrapped key is blocking recovery. Recovery requires both the daemon and control
+  plane to support rejecting stale wraps, and an online peer that can decrypt the
+  current vault. After updating both, the normal sync poll requests a fresh wrap;
+  do not delete credential or key files. This repairs key delivery, not a vault
+  whose decryption key has been lost on every node.

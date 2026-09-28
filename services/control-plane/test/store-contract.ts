@@ -222,6 +222,24 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(await store.requestModelAuthWrappedKey(acct.id, node.id, "pub-v2"), true, "a changed node key requires a fresh peer wake");
   });
 
+  await test("model auth key recovery: reject only the stale wrap and wake a peer once", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-model-auth-recovery@example.com");
+    const { node: source } = await store.enrollNode(acct.id, "node-recovery-source", "Source");
+    const { node: target } = await store.enrollNode(acct.id, "node-recovery-target", "Target");
+    await store.setModelAuthWrappedKey(acct.id, target.id, source.id, "source-pub", "stale-wrap");
+    assert.equal(await store.requestModelAuthWrappedKey(acct.id, target.id, "target-pub"), false, "ordinary retries keep existing wraps");
+
+    assert.equal(await store.requestModelAuthWrappedKey(acct.id, target.id, "target-pub", "stale-wrap"), true);
+    assert.equal(await store.getModelAuthWrappedKey(acct.id, target.id), undefined);
+    assert.deepEqual((await store.listModelAuthKeyRequests(acct.id, source.id)).map((r) => r.nodeId), [target.id]);
+    assert.equal(await store.requestModelAuthWrappedKey(acct.id, target.id, "target-pub", "stale-wrap"), false, "retries do not create a wake storm");
+
+    await store.setModelAuthWrappedKey(acct.id, target.id, source.id, "source-pub", "fresh-wrap");
+    assert.equal(await store.requestModelAuthWrappedKey(acct.id, target.id, "target-pub", "stale-wrap"), false, "a delayed rejection cannot delete the replacement");
+    assert.equal((await store.getModelAuthWrappedKey(acct.id, target.id))?.wrappedKey, "fresh-wrap");
+    assert.deepEqual(await store.listModelAuthKeyRequests(acct.id, source.id), []);
+  });
+
   // --- GitHub App private-key vault (issue #88) -------------------------------
   await test("github app vault: push, request, and wrap round-trip per app", async (store) => {
     const acct = await store.findOrCreateAccount("contract-ghvault@example.com");
