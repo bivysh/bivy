@@ -46,9 +46,10 @@ for (const theme of themes) {
     await page.route(`${origin}/run-pill-apps`, (route) => route.fulfill({ contentType: "text/html", body: html }));
     await page.goto(`${origin}/run-pill-apps`);
 
-    // A detected server shows on the pill; the apps row lives one tap deeper.
+    // Published apps and detected servers are discoverable without opening the sheet.
     const pill = page.locator("#attention-s1");
     await expect(pill).toContainText("Server on :3000");
+    await expect(pill).toContainText("2 apps published");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`run-pill-${theme}.png`) });
     await pill.click();

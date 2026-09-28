@@ -6,6 +6,8 @@ export interface ClientConfiguration {
   platform: "browser" | "native";
   controlPlaneOrigin: string | null;
   connectionMode: "auto" | "account";
+  /** Device polling keeps sign-in in this window when callbacks use another origin. */
+  signInFlow: "auto" | "device";
   authenticationMethods: readonly ("password" | "github" | "email")[];
   accountExtension: "visible" | "facts" | "hidden";
   signInDescription?: string;
@@ -18,7 +20,7 @@ export function parseClientConfiguration(raw?: string): ClientConfiguration {
   const value: unknown = raw ? JSON.parse(raw) : {};
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Client configuration must be an object");
   const input = value as Record<string, unknown>;
-  const fields = new Set(["version", "platform", "controlPlaneOrigin", "connectionMode", "authenticationMethods", "accountExtension", "signInDescription", "unavailableSignInMessage", "accountUnavailableMessage", "accountDeletionMessage", "accountMessageRules"]);
+  const fields = new Set(["version", "platform", "controlPlaneOrigin", "connectionMode", "signInFlow", "authenticationMethods", "accountExtension", "signInDescription", "unavailableSignInMessage", "accountUnavailableMessage", "accountDeletionMessage", "accountMessageRules"]);
   for (const key of Object.keys(input)) if (!fields.has(key)) throw new Error(`Unknown client configuration field: ${key}`);
   const choice = <T extends string>(key: string, allowed: readonly T[], fallback: T): T => {
     const result = input[key] === undefined ? fallback : input[key];
@@ -52,6 +54,7 @@ export function parseClientConfiguration(raw?: string): ClientConfiguration {
   return {
     version: 1, platform, controlPlaneOrigin: origin,
     connectionMode: choice("connectionMode", ["auto", "account"], "auto"),
+    signInFlow: choice("signInFlow", ["auto", "device"], "auto"),
     authenticationMethods: methods as ClientConfiguration["authenticationMethods"],
     accountExtension: choice("accountExtension", ["visible", "facts", "hidden"], "visible"),
     signInDescription: text("signInDescription"), unavailableSignInMessage: text("unavailableSignInMessage"),

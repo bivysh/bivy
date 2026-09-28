@@ -28,6 +28,7 @@ client together rather than accidentally falling back to browser storage.
 | `platform` | `browser` | `native` explicitly requires the secure platform bridge; disables browser SW/install/Web Push paths |
 | `controlPlaneOrigin` | unset/null | Optional HTTPS origin, without credentials/path/query/fragment; selects account/discovery/share API origin, not authentication or billing policy |
 | `connectionMode` | `auto` | `account` forces account/relay routing and disallows direct/solo/hash-token/pasted account overrides; independent of platform |
+| `signInFlow` | `auto` | `device` completes GitHub/email sign-in by polling in the original window. Use for separately hosted browser previews whose callback returns to the account server, not the preview. No redirect allowlist or authentication bypass is needed. |
 | `authenticationMethods` | `password`, `github`, `email` | Intersected with server-advertised methods; cannot enable a method the server disables |
 | `accountExtension` | `visible` | `facts` shows read-only extension facts (e.g. plan/usage) but suppresses and blocks actions; facts matching `accountMessageRules` are omitted. `hidden` suppresses all extension presentation/actions and blocks their dispatch |
 | `signInDescription` | ordinary client copy | Optional deployment-owned sign-in description |

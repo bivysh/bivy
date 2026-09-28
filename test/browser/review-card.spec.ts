@@ -31,7 +31,12 @@ test.beforeEach(async ({ page }) => {
     };
     c.appCommand = async (kind: string, sessionId: string, fields: Record<string, unknown> = {}) => {
       w.commands.push({ kind, sessionId, ...fields });
-      if (kind === "apps.list") return { apps: [{ id: "a".repeat(32), sessionId: "s", name: "Storefront", createdAt: 0, reviewMode: w.mode, views: [] }], previewAvailable: true };
+      if (kind === "apps.list") return { apps: [{ id: "a".repeat(32), sessionId: "s", name: "Storefront", createdAt: 0, reviewMode: w.mode, views: [{ id: "v".repeat(32), kind: "web", name: "Site", source: "static", address: "https://preview.example.net/app/site" }] }], previewAvailable: true };
+      if (kind === "apps.open") return { kind: "web", url: "https://preview.example.net/__bivy/open#private" };
+      if (kind === "apps.share") {
+        if (w.shareError) throw Error("Machine unavailable. Try again.");
+        return { url: "https://preview.example.net/__bivy/open#shared", expiresAt: Date.now() + 86400000 };
+      }
       if (kind === "apps.reviewMode") w.mode = fields.mode;
       return { ok: true };
     };
@@ -59,6 +64,48 @@ for (const theme of themes) {
     await expect(card.getByRole("img", { name: /before this run/ })).toBeVisible();
     await card.getByRole("radio", { name: "Now" }).click();
     await page.screenshot({ path: testInfo.outputPath(`review-card-${theme}.png`), fullPage: true });
+
+    // Address copies never grant access, even when the clipboard is unavailable.
+    await page.evaluate(() => {
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async () => { throw Error("Denied"); } } });
+      document.execCommand = () => false;
+    });
+    await card.getByRole("button", { name: "Share Site" }).click();
+    await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished)));
+    await page.screenshot({ path: testInfo.outputPath(`review-share-initial-${theme}.png`), fullPage: true });
+    const options = page.getByRole("button", { name: "Sharing options" });
+    await options.click();
+    await page.keyboard.press("Escape");
+    await expect(options).toBeFocused();
+    await options.click();
+    await page.getByRole("menuitem", { name: "Copy personal address" }).click();
+    await expect(page.getByRole("textbox", { name: "Link to Site" })).toHaveValue("https://preview.example.net/app/site");
+    expect(await page.evaluate(() => (window as any).commands.some((c: any) => c.kind === "apps.share"))).toBe(false);
+    await page.evaluate(() => { (window as any).shareError = true; });
+    await page.getByRole("button", { name: "Copy share link" }).click();
+    await expect(page.getByRole("alert")).toContainText("Machine unavailable");
+    await page.evaluate(() => { (window as any).shareError = false; });
+    await page.getByRole("button", { name: "Copy share link" }).click();
+    await expect(page.getByRole("textbox", { name: "Link to Site" })).toHaveValue("https://preview.example.net/__bivy/open#shared");
+    await page.screenshot({ path: testInfo.outputPath(`review-share-${theme}.png`), fullPage: true });
+    await page.keyboard.press("Escape");
+    await page.route("https://preview.example.net/**", (route) => route.fulfill({ contentType: "text/html", body: "<h1>Storefront preview</h1>" }));
+    await card.getByRole("button", { name: "Open preview", exact: true }).click();
+    const preview = page.getByRole("dialog", { name: "Preview: Storefront" });
+    await expect(preview.frameLocator("iframe").getByRole("heading")).toHaveText("Storefront preview");
+    await page.evaluate(() => Promise.all(document.getAnimations().map((animation) => animation.finished)));
+    await page.screenshot({ path: testInfo.outputPath(`review-preview-${theme}.png`), fullPage: true });
+    await preview.getByRole("button", { name: "Share Site" }).click();
+    await page.getByRole("button", { name: "Sharing options" }).click();
+    await page.getByRole("menuitem", { name: "Revoke access…", exact: true }).click();
+    await page.getByRole("button", { name: "Revoke access", exact: true }).click();
+    await expect(page.getByRole("status").filter({ hasText: /^Access revoked\.$/ })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(preview.locator("iframe")).toHaveCount(0);
+    await expect(preview.getByRole("status")).toContainText("Access revoked");
+    await preview.getByRole("button", { name: "App options" }).click();
+    await expect(page.getByRole("dialog", { name: "Session apps" })).toBeVisible();
+    await page.keyboard.press("Escape");
 
     // The agent presents the same run's card again: still one card, updated.
     await send({ shot: shot("c"), trigger: "present", note: "Moved the button up 24px" });

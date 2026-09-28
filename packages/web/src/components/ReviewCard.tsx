@@ -3,10 +3,12 @@
 import { useEffect, useState } from "react";
 import type { AppReview, ReviewCardMode, ReviewShot, SessionAppsResult } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
-import { AppsSheet, MoreMenu, REVIEW_MODE_LABELS, notesDraft } from "./AppsSheet.js";
+import { AppsSheet, REVIEW_MODE_LABELS, notesDraft } from "./AppsSheet.js";
 import { seedSessionDraft } from "../shareTarget.js";
 import { AppRow, appInitial } from "./AppRow.js";
 import { Spinner } from "./Spinner.js";
+import { AppAccess } from "./AppAccess.js";
+import { MoreMenu } from "./MoreMenu.js";
 
 /** What made the card, as its one line of detail. */
 const TRIGGER_LABELS: Record<AppReview["trigger"], string> = {
@@ -99,6 +101,7 @@ export function ReviewCard({ review }: { review: AppReview }) {
     <section className="apps-card review-card" aria-label={`${review.name}: ${TRIGGER_LABELS[review.trigger].toLowerCase()}`}>
       <AppRow tile={appInitial(review.name)} name={label} meta={meta}
         action={<MoreMenu label={`Preview card options for ${review.name}`} onOpen={loadMode} items={[
+          { label: "App options", onSelect: () => setSheet("apps") },
           { heading: "Preview cards" },
           ...(["ready", "every", "off"] as const).map((item) => ({ label: REVIEW_MODE_LABELS[item], checked: mode ? mode === item : undefined, disabled: busy || !online || !mode, onSelect: () => void chooseMode(item) })),
           ...(working ? [{ label: "Mute for this run", disabled: busy || !online, separated: true, onSelect: () => void run("mute", () => controller.appCommand("apps.mute", review.sessionId), "Muted until the agent’s next run.") }] : []),
@@ -132,6 +135,7 @@ export function ReviewCard({ review }: { review: AppReview }) {
       {status && <p className="review-status" role="status">{status}</p>}
       <div className="review-actions">
         <button className={`btn${review.trigger === "notes" ? "" : " primary"}`} disabled={!online} onClick={() => setSheet("preview")}>Open preview</button>
+        <AppAccess sessionId={review.sessionId} appId={review.appId} viewId={review.viewId} name={review.view || review.name} disabled={!online} />
       </div>
     </section>
     {sheet && <AppsSheet sessionId={review.sessionId} appId={review.appId} openView={sheet === "preview" ? { viewId: review.viewId, path: review.path } : undefined} onClose={() => setSheet(false)} />}

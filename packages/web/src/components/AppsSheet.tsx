@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import type { AppOffer, AppView, OpenAppViewResult, ReviewCardMode, ReviewerNote, SessionApp, SessionAppOffersResult, SessionAppsResult, ShareAppViewResult } from "@bivy/core";
+import type { AppOffer, AppView, OpenAppViewResult, ReviewCardMode, ReviewerNote, SessionApp, SessionAppOffersResult, SessionAppsResult } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
 import { Sheet } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { accountOrigin } from "../packaged-client.js";
-import { writeClipboard } from "../clipboard.js";
+import { AppAccess } from "./AppAccess.js";
 import { PreviewPeek, peekBlocked } from "./PreviewPeek.js";
 import { seedSessionDraft } from "../shareTarget.js";
-import { useModalEscape } from "../modalStack.js";
+import { MoreMenu } from "./MoreMenu.js";
 import { relTime } from "./SessionList.js";
 import { Spinner } from "./Spinner.js";
 import { AppRow, appInitial } from "./AppRow.js";
-import { CheckIcon, DisplayIcon, GlobeIcon, HomeIcon, LinkIcon, LogsIcon, MoreIcon, RefreshIcon, TerminalIcon } from "./UiIcons.js";
+import { DisplayIcon, GlobeIcon, LogsIcon, RefreshIcon, TerminalIcon } from "./UiIcons.js";
 const TerminalOverlay = lazy(() => import("./Terminal.js").then((module) => ({ default: module.TerminalOverlay })));
 /** What each kind of view is, in the list. */
 const VIEW_LABELS = {
@@ -50,10 +50,8 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
   const [refresh, setRefresh] = useState(0);
   const [terminal, setTerminal] = useState<string | null>(null);
   const [peek, setPeek] = useState<{ url: string; app: SessionApp; view: AppView } | null>(null);
+  const [previewRevoked, setPreviewRevoked] = useState(false);
   const [link, setLink] = useState<{ viewId: string; url: string } | null>(null);
-  // Per-view outcome of Copy link / Revoke access. `url` is set only when the
-  // clipboard refused, so the link can be copied by hand.
-  const [notice, setNotice] = useState<{ viewId: string; text: string; url?: string } | null>(null);
   const [confirm, setConfirm] = useState<{ app: SessionApp; view?: AppView } | null>(null);
   const generation = useRef(0);
   // Another machine's reachability shows up as a request error instead.
@@ -65,7 +63,7 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
 
   useEffect(() => {
     const current = ++generation.current;
-    setBusy(true); setError(""); setResult(null); setLink(null); setNotice(null); setConfirm(null);
+    setBusy(true); setError(""); setResult(null); setLink(null); setConfirm(null);
     const offered = controller.appCommand("apps.offers", sessionId, {}, nodeId).then((event) => (event as unknown as SessionAppOffersResult).offers ?? [], () => []);
     void Promise.all([controller.appCommand("apps.list", sessionId, {}, nodeId), offered]).then(([event, found]) => {
       if (generation.current !== current) return;
@@ -82,10 +80,10 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
   useEffect(() => controller.onAppsChanged((changed) => {
     if (changed !== sessionId) return;
     const current = generation.current;
-    void controller.appCommand("apps.list", sessionId).then((event) => {
+    void controller.appCommand("apps.list", sessionId, {}, nodeId).then((event) => {
       if (generation.current === current) setResult(event as unknown as SessionAppsResult);
     }, () => {});
-  }), [sessionId]);
+  }), [sessionId, nodeId]);
 
   // One-use links expire after a minute; remove stale links rather than invite
   // a failed launch. Opening in a top-level tab works with mobile cookie policy.
@@ -131,7 +129,7 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
       if (response.kind === "terminal") setTerminal(response.termId);
       else if (response.kind === "web") {
         const url = previewUrl(response.url);
-        if (!inTab) { setPeek({ url, app, view }); }
+        if (!inTab) { setPreviewRevoked(false); setPeek({ url, app, view }); }
         else if (popup && !popup.closed) { popup.location.replace(url); onClose(); }
         else setLink({ viewId: view.id, url });
       } else throw new Error("This app view is not supported by this client.");
@@ -170,19 +168,6 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
     } catch (e) { if (generation.current === current) setError(e instanceof Error ? e.message : "Could not open the server logs."); }
     finally { if (generation.current === current) setBusy(false); }
   };
-  const share = async (app: SessionApp, view: AppView) => {
-    const current = generation.current;
-    setBusy(true); setError(""); setNotice(null);
-    try {
-      const response = await controller.appCommand("apps.share", sessionId, { appId: app.id, viewId: view.id }, nodeId) as unknown as ShareAppViewResult;
-      if (generation.current !== current) return;
-      const url = previewUrl(response.url);
-      const hours = Math.round((response.expiresAt - Date.now()) / 3_600_000);
-      const validity = `Anyone with it can open ${view.name} in any browser for ${hours} hours, or until you revoke access.`;
-      setNotice(await writeClipboard(url) ? { viewId: view.id, text: `Link copied. ${validity}` } : { viewId: view.id, text: `Copy this link. ${validity}`, url });
-    } catch (e) { if (generation.current === current) setError(e instanceof Error ? e.message : "Could not create a link."); }
-    finally { if (generation.current === current) setBusy(false); }
-  };
   /** Reviewer notes are untrusted text: they only ever become a draft. */
   const notesToMessage = (view: AppView & { kind: "web" }) => {
     const text = notesDraft(view.name, view.notes ?? []);
@@ -204,21 +189,6 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
     catch (e) { if (generation.current === current) setError(e instanceof Error ? e.message : "Could not clear notes."); }
     finally { if (generation.current === current) setBusy(false); }
   };
-  /** The stable address grants nothing by itself, so it can go on a home screen. */
-  const copyAddress = async (view: AppView & { kind: "web" }) => {
-    if (!view.address) return;
-    const text = "Add it to your home screen: it always opens the latest version, on devices signed in to your Bivy account.";
-    setNotice(await writeClipboard(view.address) ? { viewId: view.id, text: `Address copied. ${text}` } : { viewId: view.id, text: `Copy this address. ${text}`, url: view.address });
-  };
-  const revoke = async (app: SessionApp, view: AppView) => {
-    const current = generation.current;
-    setBusy(true); setError(""); setNotice(null); setLink(null);
-    try {
-      await controller.appCommand("apps.revoke", sessionId, { appId: app.id, viewId: view.id }, nodeId);
-      if (generation.current === current) setNotice({ viewId: view.id, text: `Access revoked. Copied links and open previews of ${view.name} stopped working.` });
-    } catch (e) { if (generation.current === current) setError(e instanceof Error ? e.message : "Could not revoke access."); }
-    finally { if (generation.current === current) setBusy(false); }
-  };
   const remove = async (app: SessionApp) => {
     const current = generation.current;
     setBusy(true); setError(""); setConfirm(null);
@@ -230,6 +200,9 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
   };
 
   if (peek) return <PreviewPeek url={peek.url} name={peek.app.name} sessionId={sessionId} appId={peek.app.id} viewId={peek.view.id} onClose={onClose}
+    access={<AppAccess sessionId={sessionId} appId={peek.app.id} viewId={peek.view.id} name={peek.view.name} nodeId={nodeId} disabled={!online || !result?.previewAvailable} onRevoked={() => setPreviewRevoked(true)} />}
+    revoked={previewRevoked}
+    onManage={() => setPeek(null)}
     onOpenInTab={() => { const { app, view } = peek; setPeek(null); void open({ app, view }, "tab"); }} />;
   if (terminal) return <Suspense fallback={<Sheet title="App terminal" onClose={() => setTerminal(null)}><p role="status">Loading terminal…</p></Sheet>}>
     <TerminalOverlay sessionId={sessionId} attachTermId={terminal} attachOnly onClose={() => setTerminal(null)} />
@@ -283,17 +256,8 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
                   </button>} />
             {view.kind === "terminal" && <code className="apps-cmd">{formatCommand(view.command, view.args)}</code>}
             {view.kind === "web" && <div className="apps-view-tools">
-              <button className="btn sm ghost" disabled={busy || !online || !previewOk} onClick={() => void share(app, view)} aria-label={`Copy link to ${view.name}`}><LinkIcon size={15} />Copy link</button>
-              {view.address && <button className="btn sm ghost" disabled={busy} onClick={() => void copyAddress(view)} aria-label={`Copy address of ${view.name}`}><HomeIcon size={15} />Address</button>}
+              <AppAccess sessionId={sessionId} appId={app.id} viewId={view.id} name={view.name} nodeId={nodeId} address={view.address} disabled={busy || !online || !previewOk} onRevoked={() => setLink(null)} />
               {view.managed && !remote && <button className="btn sm ghost" disabled={busy || !online} onClick={() => void logs(app, view)} aria-label={`${view.source === "display" ? "App" : "Server"} logs for ${view.name}`}><LogsIcon size={15} />Logs</button>}
-              <MoreMenu label={`More actions for ${view.name}`} items={[{ label: "Revoke access", danger: true, disabled: busy || !online || !previewOk, onSelect: () => void revoke(app, view) }]} />
-            </div>}
-            {notice?.viewId === view.id && <div className="apps-notice" role="status">
-              <CheckIcon size={16} aria-hidden />
-              <div className="app-row-text">
-                <span>{notice.text}</span>
-                {notice.url && <input className="field" readOnly value={notice.url} aria-label={`Link to ${view.name}`} autoFocus onFocus={(e) => e.currentTarget.select()} />}
-              </div>
             </div>}
             {view.kind === "web" && view.notes?.length ? <div className="apps-notes" role="group" aria-label={`Reviewer notes on ${view.name}`}>
               <div className="apps-notes-head">
@@ -312,7 +276,7 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
         })}
       </section>)}
 
-      {(shown.length > 0 || offers.length > 0) && <p className="apps-foot">Web views open over the chat. Apps stay available while this machine runs; removing one closes its terminals and revokes preview access, but leaves project files and servers you started yourself.</p>}
+      {(shown.length > 0 || offers.length > 0) && <p className="apps-foot">Apps stay available while this machine runs. Removing an app keeps your project files.</p>}
     </div>
     {confirm && <ConfirmDialog
       title={confirm.view ? `Open ${confirm.view.name}?` : `Remove ${confirm.app.name}?`}
@@ -328,37 +292,4 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
 /** Commands read like a shell line: plain words as-is, anything else quoted. */
 export function formatCommand(command: string, args: readonly string[] = []): string {
   return [command, ...args].map((word) => /^[\w@%+=:,./-]+$/.test(word) ? word : JSON.stringify(word)).join(" ");
-}
-
-export type MoreItem = { heading: string } | { label: string; danger?: boolean; disabled?: boolean; onSelect: () => void;
-  /** A choice among the items after the last heading (menuitemradio), or with `toggle` an on/off switch (menuitemcheckbox). */
-  checked?: boolean;
-  toggle?: boolean;
-  /** A rule above it, to set it apart from the choices before. */
-  separated?: boolean };
-/** Rare or destructive actions, and settings, behind a ⋯ button (the canonical .menu). */
-export function MoreMenu({ label, items, onOpen }: { label: string; items: MoreItem[]; onOpen?: () => void }) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-  useModalEscape(() => setOpen(false), open);
-  useEffect(() => {
-    if (!open) return;
-    ref.current?.querySelector<HTMLButtonElement>("[role^=menuitem]:not(:disabled)")?.focus();
-    const onDoc = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("click", onDoc);
-    return () => document.removeEventListener("click", onDoc);
-  }, [open]);
-  return <div className="apps-more" ref={ref}>
-    <button type="button" className="btn ghost icon" aria-label={label} title="More" aria-haspopup="menu" aria-expanded={open}
-      onClick={(e) => { e.stopPropagation(); if (!open) onOpen?.(); setOpen((v) => !v); }}><MoreIcon size={18} /></button>
-    {open && <div className="menu apps-more-menu" role="menu" aria-label={label}>
-      {items.map((item) => "heading" in item
-        ? <div key={item.heading} className="menu-heading" role="presentation">{item.heading}</div>
-        : <button key={item.label} type="button" role={item.checked === undefined ? "menuitem" : item.toggle ? "menuitemcheckbox" : "menuitemradio"} aria-checked={item.checked}
-            className={`menu-item${item.danger ? " danger" : ""}${item.separated ? " separated" : ""}`} disabled={item.disabled}
-            onClick={() => { setOpen(false); item.onSelect(); }}>
-            <span className="menu-item-label">{item.label}</span>{item.checked && <CheckIcon size={15} aria-hidden />}
-          </button>)}
-    </div>}
-  </div>;
 }
