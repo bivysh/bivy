@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.4] - 2026-09-28
+
 ### Added
 
 - Leave Point, Pen, and Box feedback on newly shared public app previews. Owners can review the notes and add them to a message; pictures are included only when screenshots are enabled, and public feedback never starts an agent run.
