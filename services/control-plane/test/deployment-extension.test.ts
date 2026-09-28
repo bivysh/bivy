@@ -46,6 +46,17 @@ test("lifecycle events use the authenticated neutral extension contract", async 
   assert.deepEqual(request, { url: "https://policy.example/v1/events", body: { subject: { accountId: "a" }, event } });
 });
 
+test("published app IDs are forwarded only when there are any", async () => {
+  const requests: Array<{ url: string; body: unknown }> = [];
+  const extension = new DeploymentExtension("https://policy.example", "secret", async (url, init) => {
+    requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  });
+  await extension.publishApps("a", []);
+  await extension.publishApps("a", ["app1"]);
+  assert.deepEqual(requests, [{ url: "https://policy.example/v1/apps/publish", body: { subject: { accountId: "a" }, appIds: ["app1"] } }]);
+});
+
 test("account presentation remains opaque to Core", async () => {
   const extension = new DeploymentExtension("https://policy.example", "secret", async () => new Response(JSON.stringify({
     presentation: { title: "Managed account", facts: [{ id: "tier", label: "Tier", value: "Example" }], actions: [] },

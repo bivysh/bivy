@@ -196,7 +196,7 @@ export class AppRegistry extends EventEmitter {
     for (const entry of entries) this.views.set(entry.view.id, entry);
     this.persisted.set(app.id, { sessionId, workspace, manifest: structuredClone(input), id: app.id, viewIds: app.views.map((v) => v.id), createdAt: app.createdAt, ...(app.reviewMode ? { reviewMode: app.reviewMode } : {}), ...(app.agentNotes ? { agentNotes: true } : {}) });
     this.persistNotes(app.id);
-    if (!restore) this.save();
+    if (!restore) { this.save(); this.emit("published", app.id); }
     return structuredClone(app);
   }
 

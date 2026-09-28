@@ -104,6 +104,19 @@ test("apps survive a restart with their IDs, except services Bivy doesn't run", 
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("new publications announce their app ID", () => {
+  const dir = workspace();
+  try {
+    const registry = new AppRegistry([4317]);
+    const published: string[] = [];
+    registry.on("published", (id: string) => published.push(id));
+    const app = registry.publish("s", dir, staticManifest);
+    assert.throws(() => registry.publish("s", dir, { ...staticManifest, views: [] }));
+    assert.deepEqual(published, [app.id]);
+    assert.match(app.id, /^[a-f0-9]{32}$/);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("managed servers start on first open, restart when they exit, and stop backing off a crash loop", async () => {
   const dir = workspace();
   let live = new Set<string>(); const started: string[] = []; const closed: string[] = [];
