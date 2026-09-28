@@ -12,6 +12,7 @@ test("ordinary OSS defaults do not select deployment policy", () => {
   assert.equal(config.platform, "browser");
   assert.equal(config.controlPlaneOrigin, null);
   assert.equal(config.connectionMode, "auto");
+  assert.equal(config.signInFlow, "auto");
   assert.deepEqual(configuredAuthentication(methods, config), methods);
   assert.equal(showAccountExtension(config), true);
   assert.equal(accountPresentationMessage("Upgrade at https://example.invalid", config), "Upgrade at https://example.invalid");
@@ -50,7 +51,7 @@ test("facts mode shows read-only extension facts without actions", () => {
 });
 
 test("malformed and misspelled configuration fails closed", () => {
-  for (const value of [null, [], { version: 2 }, { platfrom: "native" }, { platform: "ios" }, { platform: "native" }, { connectionMode: "cloud" }, { accountExtension: "hide" }, { authenticationMethods: ["unknown"] }, { authenticationMethods: null }, { accountMessageRules: null }, { accountMessageRules: [{ terms: [""], replacement: "x" }] }]) assert.throws(() => parse(value));
+  for (const value of [null, [], { version: 2 }, { platfrom: "native" }, { platform: "ios" }, { platform: "native" }, { connectionMode: "cloud" }, { signInFlow: "redirect-anywhere" }, { accountExtension: "hide" }, { authenticationMethods: ["unknown"] }, { authenticationMethods: null }, { accountMessageRules: null }, { accountMessageRules: [{ terms: [""], replacement: "x" }] }]) assert.throws(() => parse(value));
   for (const origin of ["http://localhost", "capacitor://localhost", "https://user:secret@cp.example", "https://cp.example/path", "https://cp.example?token=secret", "https://cp.example/#payload", "not a URL"]) assert.throws(() => parse({ controlPlaneOrigin: origin }));
 });
 

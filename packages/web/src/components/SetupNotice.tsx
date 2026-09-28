@@ -64,7 +64,9 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
   // would finish in that browser tab and never return here. Detect standalone so
   // both GitHub and email sign-in fall back to the device-poll flow, which keeps
   // the app window put and completes in place. See isStandaloneDisplay().
-  const standalone = isPackagedClient || isStandaloneDisplay();
+  // Separately hosted browser clients cannot receive the server's redirect
+  // either. Deployment config can opt them into the same device-poll flow.
+  const standalone = clientConfiguration.signInFlow === "device" || isPackagedClient || isStandaloneDisplay();
   const [email, setEmail] = useState("");
   const [note, setNote] = useState<{ text: string; href?: string } | null>(null);
   const [sending, setSending] = useState(false);
