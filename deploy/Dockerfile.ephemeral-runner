@@ -29,9 +29,7 @@ COPY bin/ ./bin/
 COPY public/qr.js ./public/qr.js
 COPY scripts/ ./scripts/
 COPY README.md LICENSE ./
-# This stage only type-checks and packs; install scripts were skipped above
-# (notably node-pty's node-gyp build, which needs a toolchain the slim image
-# lacks). The runtime stage below compiles node-pty for real.
+# This stage only type-checks and packs; install scripts were skipped above.
 # The context has no .git, so the packed manifest's `commit` comes from this
 # build-arg (the workflow passes the pushed SHA); it is empty for local builds.
 ARG GITHUB_SHA=
@@ -44,23 +42,20 @@ RUN apt-get update -qq \
   && apt-get install -y -qq --no-install-recommends ca-certificates curl git openssh-client tini \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/bivy-latest.tar.gz /tmp/bivy.tar.gz
-# Maintained agents bundled as Bivy dependencies expose their CLIs here. npm
-# does not promote transitive bins into /usr/local/bin when installing Bivy
-# globally, so include the package-local bin directory for every such agent
-# rather than adding one bespoke symlink per integration.
-ENV PATH="/usr/local/lib/node_modules/@bivy/bivy/node_modules/.bin:${PATH}"
-# Install the common Bivy layer once for every runtime-specific image. node-pty
-# compiles from source (same toolchain install.sh requires on Debian/Ubuntu), so
-# install and purge the compiler in one layer rather than shipping it.
-RUN apt-get update -qq \
-  && apt-get install -y -qq --no-install-recommends python3 make g++ \
-  && npm install -g /tmp/bivy.tar.gz \
+# Agent SDK bridges install outside the Bivy package and outside the node's
+# state dir, so they are baked into the image once. Their CLIs (Pi's `pi`) are
+# exposed from the bridge directory's bin rather than one symlink per agent.
+ENV BIVY_BRIDGES_DIR=/usr/local/lib/bivy-bridges
+ENV PATH="/usr/local/lib/bivy-bridges/node_modules/.bin:${PATH}"
+# Install the common Bivy layer once for every runtime-specific image. The
+# terminal addon is prebuilt, so no compiler toolchain is needed.
+RUN npm install -g /tmp/bivy.tar.gz \
   && rm /tmp/bivy.tar.gz \
-  && apt-get purge -y -qq --auto-remove python3 make g++ \
-  && rm -rf /var/lib/apt/lists/* /root/.npm \
+  && bivy agents:install --bridges \
+  && rm -rf /root/.npm \
   && command -v bivy \
   && command -v pi \
-  && node -e "require('/usr/local/lib/node_modules/@bivy/bivy/node_modules/node-pty')"
+  && node -e "require('/usr/local/lib/node_modules/@bivy/bivy/node_modules/@lydell/node-pty')"
 # `all` is the compatibility/auth image. Interactive sessions can use the much
 # smaller `claude`, `codex`, or `pi` variants selected by the requested runtime,
 # avoiding a cold pull of unrelated agent binaries.

@@ -14,7 +14,6 @@
 //     dependency: a Bivy install only needs it when this runtime is selected.
 
 import { withSessionCredentials, credentialEnvFallback } from "../../credentials/session.js";
-import { createRequire } from "node:module";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type {
@@ -56,6 +55,7 @@ import { anthropicCredentialPreflight, describeAnthropicError, isAnthropicAuthEr
 import { toModelInfo as sharedToModelInfo } from "../../runtime/normalize.js";
 import { hasLiveProcessForCwd } from "../../runtime/native-process-scan.js";
 import { bivySessionEnv } from "../../runtime/session-env.js";
+import { bridgeInstalled, enableBridgeResolution } from "../../agent-bridges.mjs";
 
 /** Binary names a live Claude Code process could be running under (see
  *  native-process-scan.ts's best-effort cwd match). */
@@ -264,20 +264,16 @@ export function claudeRuntimeFromEnv(): ClaudeCodeRuntimeOptions {
 
 /** True when `@anthropic-ai/claude-agent-sdk` is resolvable in this install. */
 export function claudeSdkInstalled(): boolean {
-  try {
-    createRequire(import.meta.url).resolve(SDK_PACKAGE);
-    return true;
-  } catch {
-    return false;
-  }
+  return bridgeInstalled(SDK_PACKAGE);
 }
 
 async function loadSdk(): Promise<any> {
+  enableBridgeResolution();
   try {
     return await import(SDK_PACKAGE);
   } catch {
     throw new Error(
-      `The claude-code-sdk runtime requires the "${SDK_PACKAGE}" package. Install it with: npm install ${SDK_PACKAGE}`,
+      `The claude-code-sdk runtime requires the "${SDK_PACKAGE}" bridge. Install it with: bivy agents:install --bridges`,
     );
   }
 }

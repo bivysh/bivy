@@ -15,6 +15,7 @@
 
 import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import { createPiModelRuntime } from "./pi-oauth.js";
+import { enableBridgeResolution } from "../agent-bridges.mjs";
 
 function cleanSessionName(value: string): string {
   return value
@@ -64,6 +65,7 @@ export async function suggestNameFromSelectedModel(opts: {
   if (!prompt) return undefined;
 
   try {
+    enableBridgeResolution();
     const [{ completeSimple }, { ModelRegistry }] = await Promise.all([
       import("@earendil-works/pi-ai/compat"),
       import("@earendil-works/pi-coding-agent"),

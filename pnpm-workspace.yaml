@@ -50,9 +50,6 @@ overrides:
 # dependency that wants to build fails the install with ERR_PNPM_IGNORED_BUILDS
 # instead of being silently skipped, which is the behaviour we want.
 allowBuilds:
-  # Native PTY addon — `node scripts/prebuild.js || node-gyp rebuild`. Bivy has
-  # no terminal without it.
-  node-pty: true
   # `node install.js` fetches/validates the platform binary. Vite cannot build
   # the PWA without it.
   esbuild: true

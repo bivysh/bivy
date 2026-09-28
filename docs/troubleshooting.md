@@ -46,9 +46,8 @@ command -v git
   to install an unverified archive. Re-run; if you are deliberately installing a
   private or local artifact, that is what `BIVY_MANIFEST_URL` and
   `BIVY_RELEASE_VERIFY_KEY_PEM` are for.
-- Native module build failure (`node-pty`, `node-gyp`): see
-  [macOS: xcode-select](#macos-xcode-select-command-line-tools) and
-  [Linux build tools](#linux-build-tools-missing) below.
+- Terminals unavailable after install: see
+  [Interactive terminals unavailable](#interactive-terminals-unavailable) below.
 
 ## `bivy` not on PATH
 
@@ -89,35 +88,30 @@ background service inherits also resolves to the new Node — the service record
 an absolute `node` path when it is installed, so re-run `bivy service install`
 after upgrading Node.
 
-## macOS: xcode-select Command Line Tools
+## Interactive terminals unavailable
 
-**Symptom.** Dependency install fails building `node-pty` with a `node-gyp` or
-compiler error on macOS.
+**Symptom.** `bivy doctor` reports the terminal PTY as not loadable, or
+`bivy run` says PTY support is unavailable.
 
-```bash
-xcode-select -p
-```
+The terminal addon (`@lydell/node-pty`) ships one prebuilt binary per platform
+as an optional dependency: macOS, Windows, and glibc Linux, on x64 and arm64.
+Nothing compiles at install time, so there are no build tools to install.
 
-**Fix.**
+**Fix.** Reinstall without `--omit=optional` (npm drops the platform binary
+with it). Alpine/musl and 32-bit ARM have no prebuilt binary: Bivy runs there,
+but interactive terminals are unavailable. Governed chat and exec sessions
+still work.
 
-```bash
-xcode-select --install
-```
+## Agent bridge missing or failed to install
 
-Then re-run the installer, or `bivy setup` if Bivy is already installed.
+**Symptom.** A Claude Code or Pi session fails with "requires the … bridge", or
+`bivy doctor` lists a bridge as not installed.
 
-## Linux: build tools missing
-
-**Symptom.** `Build tools are missing.` or a `node-gyp` failure on Linux.
-
-```bash
-command -v make; command -v g++; command -v python3
-```
-
-**Fix (Debian/Ubuntu).**
+Bridges install into `bridges/` in the node's data dir the first time you use
+the agent, which needs npm registry access. Install them by hand with:
 
 ```bash
-sudo apt-get update && sudo apt-get install -y build-essential python3
+bivy agents:install --bridges
 ```
 
 ## Daemon won't start

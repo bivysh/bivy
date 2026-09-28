@@ -47,11 +47,8 @@ The CLI-only path below does not require an account.
   supports launchd (macOS) and `systemd --user` (Linux) only. Windows is not
   supported.
 - **git** — recommended. Repo-backed sessions, worktrees, and `--clone` need it.
-- **Build tools** are needed when the required `node-pty` terminal dependency
-  has no matching prebuilt binary. On macOS, run `xcode-select --install`.
-  On Debian/Ubuntu, the installer installs missing `build-essential` and
-  `python3` packages for you. Other Linux distributions need `make`, a C++
-  compiler, and Python 3.
+- **No build tools.** The terminal dependency ships prebuilt binaries for
+  macOS and glibc Linux (x64 and arm64), so nothing compiles at install time.
 
 On Debian/Ubuntu the installer can install Node.js 22 for you if it is missing.
 

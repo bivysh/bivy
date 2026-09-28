@@ -40,12 +40,10 @@ The installer:
 1. checks for Node.js 20+ and installs it if missing — on Debian/Ubuntu via
    NodeSource's setup script; on other Linux/macOS by downloading the official
    Node 22 tarball from nodejs.org and installing it under `/usr/local` with
-   `sudo`. On Debian/Ubuntu it also installs missing build tools for terminal
-   support (`build-essential` and `python3`). Existing Node and build tools
-   skip these steps. Package setup is noninteractive so prompts cannot consume
-   the piped installer,
-2. runs `npm install -g @bivy/bivy --omit=optional` (never under `sudo` — see
-   below), then installs only the agent bridge/CLI you choose in setup. If that
+   `sudo`. An existing Node skips this step. Package setup is noninteractive so
+   prompts cannot consume the piped installer. No compiler toolchain is needed,
+2. runs `npm install -g @bivy/bivy` (never under `sudo` — see below), then
+   installs only the agent CLI and SDK bridge you choose in setup. If that
    agent is already on `PATH`, setup prints the path and uses the existing CLI,
    login, and configuration rather than replacing it,
 3. migrates state from a previous tarball install, if it finds one (see below),
@@ -75,9 +73,6 @@ BIVY_NPM_PREFIX=~/.local bash install.sh
 # Preinstall every known upstream agent rather than just your default.
 BIVY_INSTALL_ALL_AGENTS=1 bash install.sh
 
-# Install Bivy's optional agent bridges up front (terminal support is required).
-BIVY_INSTALL_OPTIONAL_DEPS=1 bash install.sh
-
 # Don't touch ~/.bashrc or ~/.zshrc; just print the PATH line to add yourself.
 BIVY_NO_RC_UPDATE=1 bash install.sh
 ```
@@ -94,12 +89,24 @@ open a new terminal (or `source` the rc file) afterwards to pick it up. Set
 `BIVY_NO_RC_UPDATE=1` to skip this and just get the `export PATH=...` line
 printed for you to run manually.
 
-Interactive terminals use the required `node-pty` dependency. If no prebuilt
-binary matches your machine, it must compile locally; a failed build now fails
-the install rather than silently leaving `bivy run` broken. On macOS, install
-the Xcode Command Line Tools (`xcode-select --install`); on Debian/Ubuntu, the
-installer installs missing build tools using sudo when needed. For other Linux
-distributions, provide `make`, a C++ compiler, and Python 3, then re-run.
+Interactive terminals use `@lydell/node-pty`, which ships a prebuilt binary per
+platform: macOS, Windows, and glibc Linux, each on x64 and arm64. Nothing is
+compiled at install time. On other platforms (Alpine/musl, 32-bit ARM), Bivy
+still runs, but `bivy doctor` reports interactive terminals as unavailable.
+
+### Agent bridges
+
+Bivy drives Claude Code and Pi through their SDKs (the Claude Agent SDK and
+Pi's coding-agent library). These are large, and a node usually needs one, so
+they are not installed with Bivy. The first session with an agent installs its
+bridge into `bridges/` in the node's data dir (override with
+`BIVY_BRIDGES_DIR`), where it survives `bivy update`. At startup the node also
+installs bridges for agent CLIs already on `PATH`, and moves installed bridges
+to the versions the running Bivy pins. To install them ahead of time:
+
+```bash
+bivy agents:install --bridges
+```
 
 A headless install prints `bivy setup` as the next step. With an interactive
 terminal, a failed setup returns a nonzero installer exit code instead of being

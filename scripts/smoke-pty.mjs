@@ -8,7 +8,7 @@ import path from "node:path";
 
 if (!process.argv[2]) throw new Error("Usage: node scripts/smoke-pty.mjs <installed-package-dir>");
 const require = createRequire(path.resolve(process.argv[2], "package.json"));
-const pty = require("node-pty");
+const pty = require("@lydell/node-pty");
 await new Promise((resolve, reject) => {
   let output = "";
   const terminal = pty.spawn("/bin/sh", ["-c", "printf bivy-pty-ok"], {

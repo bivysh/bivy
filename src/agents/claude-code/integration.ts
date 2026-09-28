@@ -63,7 +63,7 @@ export function claudeCodeIntegration(origin: AgentIntegrationOrigin) {
         notes: installed
           ? "Uses the Claude Code executable already on this node, including its native auth, configuration, and sessions. Set BIVY_CLAUDE_MODEL to pick a default model."
           : agentInstalled
-            ? "The Claude Code agent is installed, but this Bivy distribution is missing its SDK bridge dependency."
+            ? "The Claude Code agent is installed; Bivy installs its SDK bridge when you start the first Claude session (or run 'bivy agents:install --bridges')."
             : "Install and sign in to Claude Code on this node; Bivy will connect to that existing agent.",
         install: installed || agentInstalled ? undefined : {
           label: "Install Claude Code",

@@ -12,6 +12,8 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import { rateLimit } from "express-rate-limit";
 import { WebSocketServer, WebSocket } from "ws";
+import { bridgesToSync, installBridges, missingBridges } from "./agent-bridges.mjs";
+import { resolveExecutable } from "./executable.js";
 import { listRuntimes, catalogRuntimes, agentInstallSpec, canonicalAgentId, invalidateCliProbeCache, pluginAgentConflictDiagnostics, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor } from "./runtime/index.js";
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
@@ -879,12 +881,43 @@ function runInstallCommand(spec: RuntimeInstallSpec): Promise<{ output: string }
 }
 
 /**
+ * Install the SDK bridge packages `id` loads in-process, if any are missing
+ * (see src/agent-bridges.mjs). Bridges are not shipped with Bivy; the first
+ * session with an agent installs its bridge, announced like an agent install.
+ */
+async function ensureAgentBridges(id: string): Promise<void> {
+  const missing = missingBridges(id);
+  if (!missing.length) return;
+  broadcast({ type: "runtime.install.start", id, command: `npm install ${missing.join(" ")}` });
+  await installBridges(missing);
+  invalidateCliProbeCache();
+}
+
+/**
+ * At startup, bring bridges up to Bivy's pinned versions, and install them for
+ * agents whose CLI is on PATH, so the first session doesn't wait on npm. This
+ * is also how a node updated from a release that bundled bridges gets them
+ * back. A no-op without network access when nothing changed.
+ */
+async function syncAgentBridges(): Promise<void> {
+  const names = bridgesToSync({ commandExists: (command) => resolveExecutable(command) !== null });
+  if (!names.length) return;
+  console.log(`[bridges] Installing agent bridges: ${names.join(", ")}`);
+  await installBridges(names);
+  invalidateCliProbeCache();
+  const runtimes = runtimeList(active?.runtimeId ?? defaultRuntimeId);
+  broadcast({ type: "runtime.updated", current: runtimeSummary(getRuntime(defaultRuntimeId)), runtimes });
+}
+
+/**
  * Return an available runtime, auto-installing allowlisted optional adapters when
  * a normal session/select path asks for them. The explicit /api/runtimes/install
  * endpoint remains useful for manual install buttons, but users should not have
  * to press it before starting a regular managed session.
  */
 async function ensureRuntimeAvailable(requested?: string, sandbox?: SandboxTier): Promise<AgentRuntime> {
+  const bridgeAgent = canonicalAgentId(requested ?? defaultRuntimeId);
+  if (bridgeAgent) await ensureAgentBridges(bridgeAgent);
   try {
     return getRuntime(requested, sandbox);
   } catch (error) {
@@ -2737,6 +2770,9 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       return;
     }
     try {
+      // A missing bridge also reads as "not available"; install it first so an
+      // agent whose CLI is already here isn't reinstalled for nothing.
+      await ensureAgentBridges(spec.id);
       const before = runtimeList().find((runtime) => runtime.id === spec.id);
       if (before?.status !== "available") await runInstallCommand(spec);
       // The just-installed binary changes what the CLI probes would report, so drop
@@ -11617,6 +11653,7 @@ const server = app.listen(port, host, async () => {
   console.log(`Agent data dir: ${piDir}`);
   console.log(`Workspace: ${defaultWorkspace}`);
   startRelayIfConfigured();
+  void syncAgentBridges().catch((error) => console.warn("[bridges] Could not install agent bridges; they will install on first use:", error instanceof Error ? error.message : error));
   if (appGateway) {
     appGateway.server.on("error", (error) => { console.error("[apps] Preview gateway could not start:", error); shutdown("preview gateway failure"); });
     appGateway.server.listen(appPreviewPort, "127.0.0.1", () => console.log(`[apps] Preview gateway listening on 127.0.0.1:${appPreviewPort}`));

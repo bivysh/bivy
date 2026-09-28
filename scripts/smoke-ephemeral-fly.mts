@@ -40,7 +40,7 @@ try {
     const state = await flyProvider.status({exec, token, machine});
     if (state === 'gone') throw new Error('Machine disappeared before health check');
     if (state === 'running') {
-      const js = "require('/usr/local/lib/node_modules/@bivy/bivy/node_modules/node-pty');fetch('http://127.0.0.1:4317/healthz').then(r=>{if(!r.ok)process.exit(1);console.log('BIVY_CERT_HEALTHY')}).catch(()=>process.exit(1))";
+      const js = "require('/usr/local/lib/node_modules/@bivy/bivy/node_modules/@lydell/node-pty');fetch('http://127.0.0.1:4317/healthz').then(r=>{if(!r.ok)process.exit(1);console.log('BIVY_CERT_HEALTHY')}).catch(()=>process.exit(1))";
       const r = await api('/machines/' + machine.id + '/exec', 'POST', {cmd: 'node -e ' + "'" + js.replaceAll("'", "'\\''") + "'", timeout: 10});
       if (r.status < 300 && r.body?.exit_code === 0 && String(r.body.stdout).includes('BIVY_CERT_HEALTHY')) {
         healthy = true;

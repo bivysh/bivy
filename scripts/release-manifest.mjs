@@ -10,7 +10,7 @@
 // pure function so it can be unit-tested without running the full release build.
 
 /** Scripts meaningful in a packaged install — they invoke only shipped bin/ + dist/. */
-export const KEEP_SCRIPTS = ["setup", "bivy", "start", "dev", "relay:setup", "postinstall"];
+export const KEEP_SCRIPTS = ["setup", "bivy", "start", "dev", "relay:setup"];
 
 /** dependencies present only for the monorepo's mobile app; the node doesn't need them. */
 export const DROP_DEPENDENCIES = ["expo", "react", "react-native"];
@@ -55,6 +55,13 @@ export function curateManifest(pkg, readme) {
   // Mobile-only runtime deps from the monorepo.
   out.dependencies = { ...pkg.dependencies };
   for (const dep of DROP_DEPENDENCIES) delete out.dependencies[dep];
+
+  // The repo's optionalDependencies are agent bridges (see src/agent-bridges.mjs).
+  // npm ignores --omit=optional for global installs, so shipping them as optional
+  // made every install download all of them (~500 MB). Publish the pins under a
+  // field npm does not install; Bivy installs the one an agent needs on first use.
+  delete out.optionalDependencies;
+  if (pkg.optionalDependencies) out.agentBridges = { ...pkg.optionalDependencies };
 
   // Allowlist scripts, then repoint the runtime entry points at the compiled dist
   // (the source `dev`/`start` run `tsx src/server.ts`, which does not ship).

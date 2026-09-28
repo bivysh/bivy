@@ -77,9 +77,9 @@ check("runtime dependencies are retained", () => {
 });
 
 check("terminal support cannot be omitted or silently discarded on a failed native build", () => {
-  assert.equal(staged.dependencies?.["node-pty"], rootPkg.dependencies["node-pty"]);
-  assert.ok(staged.dependencies?.["node-pty"], "node-pty must be a required runtime dependency");
-  assert.ok(!staged.optionalDependencies?.["node-pty"], "--omit=optional must retain terminal support");
+  assert.equal(staged.dependencies?.["@lydell/node-pty"], rootPkg.dependencies["@lydell/node-pty"]);
+  assert.ok(staged.dependencies?.["@lydell/node-pty"], "the PTY addon must be a required runtime dependency");
+  assert.ok(!staged.optionalDependencies?.["@lydell/node-pty"], "--omit=optional must retain terminal support");
 });
 
 check("workspaces field is dropped", () => {
@@ -98,6 +98,11 @@ check("packageManager does not leak into the published manifest", () => {
 // they must survive curation even though pnpm reads its own copy elsewhere.
 check("security overrides are retained for the npm-resolved artifact", () => {
   assert.deepEqual(staged.overrides, rootPkg.overrides, "staged manifest must keep the npm overrides");
+});
+
+check("agent bridges ship as pins, not as dependencies npm would install", () => {
+  assert.ok(!("optionalDependencies" in staged), "npm -g ignores --omit=optional, so optional agent SDKs would always install");
+  assert.deepEqual(staged.agentBridges, rootPkg.optionalDependencies);
 });
 
 check("staged manifest is publishable and does not bundle an agent", () => {
