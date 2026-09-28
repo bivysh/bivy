@@ -27,8 +27,6 @@ cat > "$WORK/apt-stdin"
 [ "${DEBIAN_FRONTEND:-}" = noninteractive ] || exit 1
 case "$*" in
   *nodejs*) touch "$WORK/node-ready" ;;
-  *build-essential*)
-    for tool in make g++ python3; do ln -sf /bin/true "$WORK/bin/$tool"; done ;;
 esac
 STUB
 cat > "$WORK/bin/curl" <<'STUB'
@@ -81,19 +79,20 @@ fail() { echo "FAIL: $*"; cat "$WORK/output.log"; exit 1; }
 run_install || fail 'fresh piped install failed'
 [ -x "$WORK/prefix/bin/bivy" ] || fail 'exit 0 without a Bivy executable'
 grep -q 'Installer finished' "$WORK/output.log" || fail 'remaining script was swallowed'
-grep -q 'build-essential python3 frontend=noninteractive' "$WORK/apt.log" || fail 'build tools not provisioned'
+grep -q 'nodejs frontend=noninteractive' "$WORK/apt.log" || fail 'Node.js not provisioned'
+! grep -q 'build-essential' "$WORK/apt.log" || fail 'installer still provisions a compiler toolchain'
 [ ! -s "$WORK/npm-stdin" ] || fail 'npm consumed installer source'
-echo '  ok  fresh pipe installs Node, build tools, and Bivy without consuming shell source'
+echo '  ok  fresh pipe installs Node and Bivy, without a compiler toolchain or consuming shell source'
 
 # sudo must preserve the explicit noninteractive policy, not ambient variables.
-rm -f "$WORK/node-ready" "$WORK/bin/make" "$WORK/bin/g++" "$WORK/bin/python3"
+rm -f "$WORK/node-ready"
 FAKE_UID=1000 run_install || fail 'non-root bootstrap failed'
 echo '  ok  prerequisite setup remains noninteractive through sudo'
 
 rm -f "$WORK/apt.log"
-run_install || fail 'supported Node/build-tools fast path failed'
+run_install || fail 'supported Node fast path failed'
 [ ! -e "$WORK/apt.log" ] || fail 'fast path ran apt unnecessarily'
-echo '  ok  existing Node and build tools skip apt'
+echo '  ok  existing Node skips apt'
 
 if FAIL_NPM=1 run_install; then fail 'npm failure returned success'; fi
 grep -q 'npm could not install' "$WORK/output.log" || fail 'npm failure was hidden'

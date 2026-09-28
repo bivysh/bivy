@@ -28,7 +28,7 @@
 #                                 dist-tag (every merge to main); default `latest`
 #   BIVY_NPM_PREFIX=~/.local      install into a user-owned npm prefix (no sudo)
 #   BIVY_NPM_LOGLEVEL=warn        reduce npm's live install output (default: info)
-#   BIVY_INSTALL_ALL_AGENTS=1     preinstall every bundled agent runtime
+#   BIVY_INSTALL_ALL_AGENTS=1     preinstall every known agent and its SDK bridge
 #   BIVY_NO_TARBALL_FALLBACK=1    fail instead of falling back to the tarball
 #   BIVY_NO_RC_UPDATE=1           don't add BIN_DIR to ~/.bashrc or ~/.zshrc;
 #                                 just print the manual `export PATH=...` line
@@ -74,17 +74,6 @@ run_apt() {
   # Set this after sudo (which normally strips environment overrides), and never
   # let debconf/maintainer scripts read the curl stream. sudo can still use /dev/tty.
   run_sudo env DEBIAN_FRONTEND=noninteractive apt-get "$@" </dev/null
-}
-
-install_ubuntu_prereqs() {
-  command -v apt-get >/dev/null 2>&1 || return 0
-  if command -v curl >/dev/null 2>&1 && command -v make >/dev/null 2>&1 \
-     && command -v g++ >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
-    return 0
-  fi
-  info "Installing build prerequisites"
-  run_apt update || return 1
-  run_apt install -y curl ca-certificates build-essential python3
 }
 
 install_ubuntu_node22() {
@@ -179,17 +168,8 @@ fi
 command -v npm >/dev/null 2>&1 || die "npm is required (it ships with Node.js)."
 info "Node $(node -v) and npm $(npm -v) ready"
 
-if command -v apt-get >/dev/null 2>&1 && { ! command -v make >/dev/null 2>&1 || ! command -v g++ >/dev/null 2>&1 || ! command -v python3 >/dev/null 2>&1; }; then
-  install_ubuntu_prereqs || warn "Could not install build tools. If the terminal dependency cannot use a prebuilt binary, install them and re-run: sudo apt-get update && sudo apt-get install -y build-essential python3"
-fi
-
-# macOS: node-pty may need to compile, which requires the Xcode Command Line
-# Tools. Warn early with the exact fix rather than letting npm fail with a
-# node-gyp backtrace. A matching prebuilt binary may avoid compilation entirely,
-# so this is a warning, not a hard stop.
-if [ "$(uname -s)" = "Darwin" ] && ! xcode-select -p >/dev/null 2>&1; then
-  warn "Xcode Command Line Tools not detected. If the install below fails building node-pty, run 'xcode-select --install' and re-run."
-fi
+# No compiler toolchain is needed: the terminal addon ships prebuilt binaries
+# for every supported platform, and agent bridges install on first use.
 
 # ------------------------------------------------------------------ install
 
@@ -263,11 +243,9 @@ install_from_tarball() {
   chmod +x "$staged/bin/bivy.mjs"
 
   info "Installing production dependencies"
-  local omit_flags=(--omit=dev)
-  if [ "${BIVY_INSTALL_OPTIONAL_DEPS:-}" != "1" ]; then
-    omit_flags+=(--omit=optional)
-  fi
-  if ! ( cd "$staged" && if [ -f package-lock.json ]; then npm ci "${omit_flags[@]}" --no-audit --no-fund; else npm install "${omit_flags[@]}" --no-audit --no-fund; fi ); then
+  # Keep optional dependencies: the terminal addon's prebuilt binary for this
+  # platform is one. Agent SDK bridges are not dependencies; they install on first use.
+  if ! ( cd "$staged" && if [ -f package-lock.json ]; then npm ci --omit=dev --no-audit --no-fund; else npm install --omit=dev --no-audit --no-fund; fi ); then
     rm -rf "$stage"
     die "Could not install Bivy's dependencies. Your current install was left untouched."
   fi
@@ -342,9 +320,6 @@ run_npm_install() {
 
 install_globally() {
   local args=(install -g "${NPM_PACKAGE}@${PKG_VERSION}" --no-audit --no-fund --loglevel="${BIVY_NPM_LOGLEVEL:-info}")
-  if [ "${BIVY_INSTALL_OPTIONAL_DEPS:-}" != "1" ]; then
-    args+=(--omit=optional)
-  fi
   if [ -n "${BIVY_NPM_PREFIX:-}" ]; then
     info "Installing ${NPM_PACKAGE}@${PKG_VERSION} into ${BIVY_NPM_PREFIX}"
     clear_stale_npm_temp "$BIVY_NPM_PREFIX"

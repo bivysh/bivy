@@ -1,29 +1,29 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import { resolveExecutable } from "./executable.js";
 import { createRequire } from "node:module";
-import path from "node:path";
 import { depCacheEnv } from "./harness/dep-cache.js";
 
-type NodePty = typeof import("node-pty");
-type PtyProcess = import("node-pty").IPty;
+// @lydell/node-pty is node-pty with one prebuilt binary package per platform,
+// so installs never compile a native addon or need build tools.
+type NodePty = typeof import("@lydell/node-pty");
+type PtyProcess = import("@lydell/node-pty").IPty;
 
 let ptyModule: NodePty | null | undefined;
 
 export function loadPty(): NodePty {
   if (ptyModule) return ptyModule;
   if (ptyModule === null) {
-    throw new Error("PTY support is unavailable because the node-pty dependency is not installed. Reinstall Bivy after installing build tools, or use governed chat/exec sessions instead of interactive terminals.");
+    throw new Error("PTY support is unavailable because the node-pty dependency is not installed. Reinstall Bivy, or use governed chat/exec sessions instead of interactive terminals.");
   }
   try {
-    ptyModule = createRequire(import.meta.url)("node-pty") as NodePty;
+    ptyModule = createRequire(import.meta.url)("@lydell/node-pty") as NodePty;
     return ptyModule;
   } catch (error) {
     ptyModule = null;
     const detail = error instanceof Error && error.message ? ` (${error.message.split("\n")[0]})` : "";
-    throw new Error(`PTY support is unavailable because the node-pty dependency could not be loaded${detail}. Reinstall Bivy after installing build tools, or use governed chat/exec sessions instead of interactive terminals.`);
+    throw new Error(`PTY support is unavailable because the node-pty dependency could not be loaded${detail}. Prebuilt terminals cover macOS, Windows and glibc Linux on x64/arm64; reinstall Bivy, or use governed chat/exec sessions instead of interactive terminals.`);
   }
 }
 
@@ -231,54 +231,6 @@ function defaultShell(): string {
  */
 export { resolveExecutable } from "./executable.js";
 
-/**
- * Restore the execute bit on node-pty's bundled `spawn-helper` binary.
- *
- * On macOS/Linux, node-pty launches every PTY by exec'ing this helper. Its
- * prebuilds ship without the execute bit (mode 0664), and a fresh `npm install`
- * — exactly what `bivy update` runs — resets the bit. node-pty does not surface
- * this: its spawn prints the cryptic "posix_spawnp failed." into the terminal and
- * exits, so `bivy run <agent>` dies before the agent starts and keeps breaking
- * after every update until someone runs `chmod +x` by hand.
- *
- * Fix it once, up front, so runs survive updates and reinstalls automatically.
- * Best-effort and idempotent: if node-pty can't be resolved or the helper is
- * already executable, this is a no-op and node-pty reports its own errors.
- */
-let spawnHelperEnsured = false;
-function ensureSpawnHelperExecutable(): void {
-  if (spawnHelperEnsured) return;
-  spawnHelperEnsured = true;
-  if (process.platform === "win32") return; // Windows has no spawn-helper.
-
-  const makeExecutable = (file: string): void => {
-    try {
-      const st = fs.statSync(file);
-      if (!st.isFile() || (st.mode & 0o111) !== 0) return; // missing or already +x
-      fs.chmodSync(file, st.mode | 0o755);
-    } catch {
-      // Missing candidate or read-only install — best-effort.
-    }
-  };
-
-  try {
-    const require = createRequire(import.meta.url);
-    const root = path.dirname(require.resolve("node-pty/package.json"));
-    // Cover both a from-source build and the prebuilt binaries node-pty ships.
-    makeExecutable(path.join(root, "build", "Release", "spawn-helper"));
-    const prebuilds = path.join(root, "prebuilds");
-    try {
-      for (const dir of fs.readdirSync(prebuilds)) {
-        makeExecutable(path.join(prebuilds, dir, "spawn-helper"));
-      }
-    } catch {
-      // No prebuilds directory — fine.
-    }
-  } catch {
-    // Couldn't resolve node-pty; leave it to node-pty to report.
-  }
-}
-
 export class TerminalManager {
   private terminals = new Map<string, TerminalEntry>();
 
@@ -319,11 +271,6 @@ export class TerminalManager {
           : `Cannot start a terminal: no usable shell found (tried "${shell}"). Set the SHELL environment variable.`,
       );
     }
-
-    // node-pty exec's a bundled `spawn-helper` whose execute bit a fresh install
-    // (e.g. `bivy update`) strips — restore it before spawning or this fails with
-    // "posix_spawnp failed." See ensureSpawnHelperExecutable().
-    ensureSpawnHelperExecutable();
 
     const pty = loadPty();
     const proc = pty.spawn(resolved, shellArgs, {

@@ -160,6 +160,7 @@ const relaySetupEntry = path.join(repoRoot, packaged ? "dist/relay-setup.js" : "
 // artifact (src/ is not packaged), so resolve it the same packaged-aware way as
 // the runtime entries and import it dynamically at call time.
 const hostedEndpointsEntry = path.join(repoRoot, packaged ? "dist/hosted-endpoints.mjs" : "src/hosted-endpoints.mjs");
+const agentBridgesEntry = path.join(repoRoot, packaged ? "dist/agent-bridges.mjs" : "src/agent-bridges.mjs");
 const githubConnectEntry = path.join(repoRoot, packaged ? "dist/github-connect-repo.js" : "src/github-connect-repo.ts");
 const githubAppConnectEntry = path.join(repoRoot, packaged ? "dist/github-app-connect.js" : "src/github-app-connect.ts");
 const githubAppSyncEntry = path.join(repoRoot, packaged ? "dist/github-app-sync-cli.js" : "src/github-app-sync-cli.ts");
@@ -183,6 +184,27 @@ async function getHostedEndpoints() {
     ({ hostedEndpoints: _hostedEndpoints } = await import(pathToFileURL(hostedEndpointsEntry).href));
   }
   return _hostedEndpoints();
+}
+
+// Agent SDK bridges (Claude, Pi) install on demand into the data dir, not with
+// Bivy — the daemon and this CLI share src/agent-bridges.mjs for it.
+function loadAgentBridges() {
+  return import(pathToFileURL(agentBridgesEntry).href);
+}
+
+/** Install any bridge packages the given agents need. True when all are present. */
+async function ensureAgentBridges(agentIds) {
+  const bridges = await loadAgentBridges();
+  const missing = [...new Set(agentIds.flatMap((id) => bridges.missingBridges(id)))];
+  if (!missing.length) return true;
+  console.log(c.dim(`Installing agent bridge ${missing.join(", ")} into ${bridges.bridgesDir()}…`));
+  try {
+    await bridges.installBridges(missing, { stdio: "inherit" });
+    return true;
+  } catch (error) {
+    console.error(c.red(error instanceof Error ? error.message : String(error)));
+    return false;
+  }
 }
 
 const SERVICE_LABEL = "dev.bivy";
@@ -587,14 +609,10 @@ async function ensureDeps() {
     ));
     return false;
   }
-  if (process.platform === "linux" && (!commandExists("make") || !commandExists("g++") || !commandExists("python3"))) {
-    console.error(c.yellow("Build tools are missing. On Ubuntu/Debian run: sudo apt-get update && sudo apt-get install -y build-essential python3"));
-    console.error(c.dim("The node-pty terminal dependency needs these tools if no prebuilt binary matches this machine."));
-  }
   console.log(c.dim(`Installing dependencies (${cmd} ${args.join(" ")})…`));
   const code = await run(cmd, args, { cwd: repoRoot });
   if (code !== 0 || !fs.existsSync(dependencyMarker)) {
-    console.error(c.red(`${cmd} install failed. Install Node.js 20+ and, if native dependencies failed, build tools (make/g++/python3), then try again.`));
+    console.error(c.red(`${cmd} install failed. Install Node.js 20+, then try again.`));
     return false;
   }
   return true;
@@ -626,28 +644,6 @@ function nodePackageInstalled(packageName) {
 
 function nodePackageLoadable(packageName) {
   return runQuiet(nodeBin, ["-e", "require(require.resolve(process.argv[1], { paths: [process.argv[2]] }))", packageName, repoRoot]).code === 0;
-}
-
-async function ensureNodePackage(packageName) {
-  if (nodePackageInstalled(packageName)) {
-    console.log(c.green(`  ✓ Found Bivy bridge package ${packageName}`));
-    return true;
-  }
-  // Add with the package manager that owns this tree. Running `npm install` in a
-  // pnpm workspace would write a competing package-lock.json and a hoisted
-  // node_modules over pnpm's symlink layout, leaving the checkout in a state
-  // neither tool resolves correctly.
-  const usesPnpm = fs.existsSync(path.join(repoRoot, "pnpm-lock.yaml"));
-  const [cmd, baseArgs] = usesPnpm
-    ? [commandExists("pnpm") ? "pnpm" : "corepack", commandExists("pnpm") ? ["add"] : ["pnpm", "add"]]
-    : ["npm", ["install", "--no-audit", "--no-fund"]];
-  if (!commandExists(cmd)) {
-    console.error(c.red(`${cmd} is required to install ${packageName}.`));
-    return false;
-  }
-  console.log(c.dim(`Installing Bivy bridge package ${packageName}…`));
-  const code = await run(cmd, [...baseArgs, packageName], { cwd: repoRoot });
-  return code === 0 && nodePackageInstalled(packageName);
 }
 
 const userLocalPrefix = process.env.BIVY_NPM_GLOBAL_PREFIX || path.join(os.homedir(), ".local");
@@ -689,10 +685,13 @@ const KNOWN_AGENT_INSTALLS = [
   { command: "gemini", npmPackage: "@google/gemini-cli", label: "Gemini CLI" },
 ];
 
-async function ensureKnownAgents() {
+async function ensureKnownAgents({ bridgesOnly = false } = {}) {
   if (process.env.BIVY_SKIP_AGENT_PREINSTALL === "1") return true;
+  const { AGENT_BRIDGES } = await loadAgentBridges();
+  const bridges = await ensureAgentBridges(Object.keys(AGENT_BRIDGES));
+  if (bridgesOnly) return bridges;
   console.log(c.dim("Ensuring known agent integrations are installed…"));
-  const results = [await ensureNodePackage("@anthropic-ai/claude-agent-sdk")];
+  const results = [bridges];
   for (const agent of KNOWN_AGENT_INSTALLS) {
     results.push(
       agent.pythonPackage
@@ -707,11 +706,15 @@ async function ensureKnownAgents() {
 
 async function ensureSetupAgent(choice) {
   if (!choice) return true;
-  if (choice.runtimeId === "pi") return ensureNpmCommand("pi", "@earendil-works/pi-coding-agent", "Pi");
+  if (choice.runtimeId === "pi") {
+    const bridge = await ensureAgentBridges(["pi"]);
+    const cli = await ensureNpmCommand("pi", "@earendil-works/pi-coding-agent", "Pi");
+    return bridge && cli;
+  }
   if (choice.runtimeId === "claude-code-sdk") {
-    const sdk = await ensureNodePackage("@anthropic-ai/claude-agent-sdk");
+    const bridge = await ensureAgentBridges(["claude-code-sdk"]);
     const cli = await ensureNpmCommand("claude", "@anthropic-ai/claude-code", "Claude Code");
-    return sdk && cli;
+    return bridge && cli;
   }
   if (choice.runtimeId === "codex-approvals") return ensureNpmCommand("codex", "@openai/codex", "Codex");
   if (choice.runtimeId === "opencode") return ensureNpmCommand("opencode", "opencode-ai/opencode", "OpenCode");
@@ -4462,12 +4465,13 @@ async function cmdDoctor(args = []) {
 
   console.log(c.bold("\n  Bivy doctor\n"));
   console.log(`  ${mark(hasSupportedNode())} Node ${process.version}${hasSupportedNode() ? "" : c.dim("  (needs >= 20.0.0)")}`);
-  const ptyInstalled = nodePackageInstalled("node-pty");
-  const ptyUsable = ptyInstalled && nodePackageLoadable("node-pty");
-  console.log(`  ${mark(ptyUsable, true)} terminal PTY ${ptyUsable ? c.green("available") : ptyInstalled ? c.yellow("installed but not loadable — reinstall after installing build tools") : c.yellow("dependency missing — reinstall Bivy; interactive terminals unavailable")}`);
-  const claudeBridge = nodePackageInstalled("@anthropic-ai/claude-agent-sdk");
+  const ptyInstalled = nodePackageInstalled("@lydell/node-pty");
+  const ptyUsable = ptyInstalled && nodePackageLoadable("@lydell/node-pty");
+  console.log(`  ${mark(ptyUsable, true)} terminal PTY ${ptyUsable ? c.green("available") : ptyInstalled ? c.yellow(`installed but not loadable — no prebuilt binary for ${process.platform}-${process.arch}, or npm ran with --omit=optional`) : c.yellow("dependency missing — reinstall Bivy; interactive terminals unavailable")}`);
+  const { bridgeInstalled } = await loadAgentBridges();
+  const claudeBridge = bridgeInstalled("@anthropic-ai/claude-agent-sdk");
   console.log(`  ${mark(claudeBridge, true)} Claude bridge ${claudeBridge ? c.green("installed") : c.dim("optional — installed on first Claude setup/use")}`);
-  const piBridge = nodePackageInstalled("@earendil-works/pi-coding-agent");
+  const piBridge = bridgeInstalled("@earendil-works/pi-coding-agent");
   const piNodeOk = nodeAtLeast(22, 19);
   console.log(`  ${mark(piBridge && piNodeOk, true)} Pi bridge ${piBridge ? (piNodeOk ? c.green("installed") : c.yellow("installed but needs Node >=22.19")) : c.dim("optional — installed only if you choose Pi")}`);
   console.log(`  ${mark(commandExists("git"), true)} git${commandExists("git") ? "" : c.dim("  (recommended for repo-backed sessions)")}`);
@@ -5549,11 +5553,11 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
     case "agents:install":
     case "runtimes:install":
       if (args.includes("-h") || args.includes("--help")) {
-        console.log(`Usage: bivy agents:install\n\nInstall known agent integrations (${KNOWN_AGENT_INSTALLS.map((a) => a.label).join(", ")}).`);
+        console.log(`Usage: bivy agents:install [--bridges]\n\nInstall known agent integrations (${KNOWN_AGENT_INSTALLS.map((a) => a.label).join(", ")}).\n\n  --bridges   only install the SDK bridges Bivy loads for Claude Code and Pi\n              (they otherwise install on first use)`);
         break;
       }
       if (!(await ensureDeps())) process.exit(1);
-      await ensureKnownAgents();
+      if (!(await ensureKnownAgents({ bridgesOnly: args.includes("--bridges") })) && args.includes("--bridges")) process.exit(1);
       break;
     case "open": {
       if (args.includes("-h") || args.includes("--help")) {

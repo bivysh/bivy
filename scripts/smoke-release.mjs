@@ -118,8 +118,8 @@ try {
   if (staged.readmeFilename !== "README.md" || !staged.readme?.includes("# Bivy")) {
     throw new Error("staged npm registry metadata is missing the README");
   }
-  if (staged.bundledDependencies?.includes("@earendil-works/pi-coding-agent")) {
-    throw new Error("Pi must be installed as an ordinary agent dependency, not embedded in the Bivy package");
+  if (staged.optionalDependencies || !staged.agentBridges?.["@earendil-works/pi-coding-agent"]) {
+    throw new Error("agent bridges must ship as `agentBridges` pins, not dependencies npm installs with Bivy");
   }
 
   const packedJson = run("npm", ["pack", app, "--pack-destination", packs, "--json"], { capture: true });
@@ -128,53 +128,56 @@ try {
   fs.writeFileSync(path.join(consumer, "package.json"), `${JSON.stringify({ name: "bivy-release-smoke", private: true }, null, 2)}\n`);
   const tarball = path.join(packs, packed.filename);
 
-  // install.sh uses npm's global layout. A project-local install can hoist an
-  // embedded dependency and conceal missing files in its transitive packages,
-  // which is how the broken thin Pi bundle escaped the original smoke test.
-  // The layouts are independent, so exercise both concurrently rather than
-  // putting two registry installs in CI's critical path one after the other.
+  // install.sh uses npm's global layout; a project-local install hoists
+  // differently. The layouts are independent, so exercise both concurrently
+  // rather than putting two registry installs in CI's critical path in a row.
   const installs = await Promise.allSettled([
-    runAsync("npm", ["install", "--global", tarball, "--prefix", globalPrefix, "--omit=optional", "--no-audit", "--no-fund", "--prefer-offline"]),
+    runAsync("npm", ["install", "--global", tarball, "--prefix", globalPrefix, "--no-audit", "--no-fund", "--prefer-offline"]),
     runAsync("npm", ["install", tarball, "--no-fund", "--prefer-offline"], { cwd: consumer }),
   ]);
   const failedInstall = installs.find((result) => result.status === "rejected");
   if (failedInstall?.status === "rejected") throw failedInstall.reason;
 
   const globalBivy = path.join(globalPrefix, "bin", "bivy");
+  const globalRoot = path.join(globalPrefix, "lib", "node_modules", "@bivy", "bivy");
   const globalVersion = run(globalBivy, ["--version"], { capture: true }).trim();
   if (globalVersion !== staged.version) throw new Error(`global CLI version ${globalVersion} != package ${staged.version}`);
-  // Match install.sh's default omission of optional agents. Terminal support
-  // must still be present and actually work, not just pass require.resolve().
-  run(process.execPath, [path.join(root, "scripts/smoke-pty.mjs"), path.join(globalPrefix, "lib", "node_modules", "@bivy", "bivy")]);
+  // Terminal support must be present and actually work from its prebuilt
+  // binary, not just pass require.resolve().
+  run(process.execPath, [path.join(root, "scripts/smoke-pty.mjs"), globalRoot]);
+  // npm -g ignores --omit=optional, which is how every install used to pull in
+  // every agent SDK. Nothing agent-specific may land in Bivy's own tree.
+  for (const scope of ["@anthropic-ai", "@earendil-works"]) {
+    if (fs.existsSync(path.join(globalRoot, "node_modules", scope))) throw new Error(`global install pulled in ${scope} packages`);
+  }
 
   const bivy = path.join(consumer, "node_modules", ".bin", "bivy");
   const version = run(bivy, ["--version"], { cwd: consumer, capture: true }).trim();
   if (version !== staged.version) throw new Error(`CLI version ${version} != package ${staged.version}`);
-  // Running a local bin directly (rather than through `npm exec`) does not add
-  // sibling bins to PATH. Model a real npm-script/npx consumer so Bivy can see
-  // the Pi executable installed from its optional dependency. Previously the
-  // repo-level pnpm setup supplied an unrelated Pi binary and masked this.
-  const consumerEnv = {
+
+  // Bridges install on demand into the node's data dir. Install them the way
+  // the runner image does and check the packaged CLI finds Pi through them.
+  const dataDir = path.join(tmp, "data");
+  const bridges = path.join(dataDir, "bridges");
+  const bridgeEnv = {
     ...process.env,
-    PATH: `${path.dirname(bivy)}${path.delimiter}${process.env.PATH ?? ""}`,
+    BIVY_DATA_DIR: dataDir,
+    PATH: `${path.join(bridges, "node_modules", ".bin")}${path.delimiter}${process.env.PATH ?? ""}`,
   };
-  const agents = run(bivy, ["agents", "--json"], { cwd: consumer, capture: true, env: consumerEnv });
+  run(globalBivy, ["agents:install", "--bridges"], { env: bridgeEnv });
+  const agents = run(globalBivy, ["agents", "--json"], { capture: true, env: bridgeEnv });
   if (!agents.includes('"id": "pi"') || !agents.includes('"installed": true')) {
-    throw new Error("packaged CLI did not discover its built-in Pi runtime");
+    throw new Error("packaged CLI did not discover Pi through its installed bridge");
+  }
+  // Bridges drive the operator's own agent CLI, so the Claude SDK's bundled
+  // per-platform binary (~200 MB) must not be installed.
+  const anthropic = fs.readdirSync(path.join(bridges, "node_modules", "@anthropic-ai"));
+  if (anthropic.some((name) => name.startsWith("claude-agent-sdk-"))) {
+    throw new Error(`bridge install pulled in the Claude SDK's bundled binary: ${anthropic.join(", ")}`);
   }
 
-  const bivyRoot = path.join(consumer, "node_modules", "@bivy", "bivy");
-  let dependencyRoot = bivyRoot;
-  let piManifest;
-  while (dependencyRoot !== path.dirname(dependencyRoot)) {
-    const candidate = path.join(dependencyRoot, "node_modules", "@earendil-works", "pi-coding-agent", "package.json");
-    if (fs.existsSync(candidate)) {
-      piManifest = candidate;
-      break;
-    }
-    dependencyRoot = path.dirname(dependencyRoot);
-  }
-  if (!piManifest) throw new Error("local install did not resolve Pi as an ordinary dependency");
+  const piManifest = path.join(bridges, "node_modules", "@earendil-works", "pi-coding-agent", "package.json");
+  if (!fs.existsSync(piManifest)) throw new Error("bridge install did not install Pi");
   const requireFromPi = createRequire(piManifest);
   function resolvedPackageVersion(name) {
     let dir = path.dirname(requireFromPi.resolve(name));
@@ -195,10 +198,10 @@ try {
   }
 
   // Pi's published shrinkwrap makes npm audit report its original transitive
-  // versions even after Bivy's postinstall replaces the vulnerable files.
+  // versions even after the bridge install replaces the vulnerable files.
   // Check the installed bytes above; root-security separately gates all other
   // high/critical advisories through scripts/audit-prod.mjs.
-  console.log(`release smoke passed on ${process.platform}: @bivy/bivy@${version}, patched Pi installed as an ordinary agent dependency`);
+  console.log(`release smoke passed on ${process.platform}: @bivy/bivy@${version}, no agent SDKs in the package, patched Pi bridge installed on demand`);
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true });
 }

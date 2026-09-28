@@ -7,6 +7,7 @@ import { defineAgentIntegration, type AgentIntegrationOrigin } from "../definiti
 import type { AgentInfo, AgentInstallCommand, AgentSessionOptions } from "../types.js";
 import type { AgentRuntime, OpenSessionOptions, OpenSessionResult, SessionSummary, ForkNativePayload, ForkImportContext, ForkHistoryMessage, DiscoveredNativeSession, CatalogProvider } from "../../runtime/types.js";
 import { PI_CAPABILITIES } from "./capabilities.js";
+import { bridgeInstalled, enableBridgeResolution } from "../../agent-bridges.mjs";
 
 export const PI_TESTED_VERSION = "0.87.1";
 
@@ -24,6 +25,7 @@ export function piCommand(): string {
  * PI_CODING_AGENT_DIR (normally ~/.pi/agent). Takeover discovery must inspect
  * that native store rather than only the governed one. */
 export async function listNativePiSessions(): Promise<SessionSummary[]> {
+  enableBridgeResolution();
   const { SessionManager } = await import("@earendil-works/pi-coding-agent");
   // Do not pass the sessions root here. Pi's default store is split into one
   // encoded subdirectory per cwd, and SessionManager.listAll(customDir) scans
@@ -48,12 +50,7 @@ export function piCommandAvailable(): boolean {
 }
 
 export function piBridgeInstalled(): boolean {
-  try {
-    import.meta.resolve("@earendil-works/pi-coding-agent");
-    return true;
-  } catch {
-    return false;
-  }
+  return bridgeInstalled("@earendil-works/pi-coding-agent");
 }
 
 type PiRuntimeOptions = AgentSessionOptions & { piDir: string; credentialOwner: "agent" | "bivy" };
@@ -77,6 +74,7 @@ export class LazyPiRuntime implements AgentRuntime {
 
   private async runtime(): Promise<AgentRuntime> {
     if (!nodeSupportsPi()) throw new Error(unsupportedNodeMessage());
+    enableBridgeResolution();
     this.inner ??= import("./runtime.js").then(({ PiRuntime }) => new PiRuntime(this.options));
     return this.inner;
   }

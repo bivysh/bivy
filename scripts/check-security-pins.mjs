@@ -8,11 +8,11 @@
 // Background: @earendil-works/pi-coding-agent publishes an npm-shrinkwrap that
 // pins vulnerable copies of brace-expansion and undici below its own
 // node_modules. npm honours that shrinkwrap, so a published Bivy install needs
-// both the `overrides` in package.json AND the bin/patch-pi-dependencies.mjs
-// postinstall to physically replace the nested copies. pnpm ignores a
-// dependency's shrinkwrap and resolves everything through its own lockfile, so
-// in the dev install the bad copies are never created at all and the postinstall
-// is a no-op. CI used to assert the patched nested paths existed, which is now
+// both the `overrides` in package.json AND the nested-override step in
+// src/agent-bridges.mjs (run after a bridge install) to physically replace the
+// nested copies. pnpm ignores a dependency's shrinkwrap and resolves everything
+// through its own lockfile, so in the dev install the bad copies are never
+// created at all. CI used to assert the patched nested paths existed, which is now
 // npm-only and would fail here.
 //
 // This checks the invariant that actually matters under either layout: no copy

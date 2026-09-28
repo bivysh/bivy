@@ -450,6 +450,7 @@ Off by default and inert — the in-process path is unchanged when it is off.
 | Variable | Type | Default | Status | Notes |
 | --- | --- | --- | --- | --- |
 | `BIVY_NPM_GLOBAL_PREFIX` | path | `~/.local` | Supported | Prefix for user-scoped global agent installs. `<prefix>/bin` is prepended to `PATH` for every agent and terminal child |
+| `BIVY_BRIDGES_DIR` | path | `$BIVY_DATA_DIR/bridges` | Supported | Where agent SDK bridges (Claude Agent SDK, Pi) install on first use. Survives `bivy update` |
 | `BIVY_SKIP_AGENT_PREINSTALL` | `1` | unset | Supported | Skip installing known upstream agents during setup/update. Useful in CI or offline |
 | `BIVY_UPDATE_WAIT_TIMEOUT_MS` | integer ms | `1800000` (30 min) | Supported | How long `bivy update`/`bivy restart` waits for busy sessions. `0` skips waiting |
 | `BIVY_SHIM_DISABLE` | `1`, or an agent name | unset | Supported | Bypass an installed agent shim for one invocation: `BIVY_SHIM_DISABLE=1 claude` |
