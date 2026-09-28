@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { createHash, randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 
 // A logical event is immutable while clients pull its pages. Pages are encoded
 // independently, so neither history nor an individual attachment must fit in a
@@ -13,7 +13,7 @@ const INLINE_EVENT_BYTES = 4 * 1024 * 1024;
 const MAX_LIFETIME_MS = 10 * 60_000;
 
 export class EventTransferStore {
-  private entries = new Map<string, { body: Buffer; expires: number; deadline: number; hash: string }>();
+  private entries = new Map<string, { body: Buffer; expires: number; deadline: number; mac: string }>();
   private bytes = 0;
   private timer?: ReturnType<typeof setTimeout>;
   constructor(private now: () => number = Date.now, private inlineBytes = INLINE_EVENT_BYTES) {}
@@ -35,8 +35,7 @@ export class EventTransferStore {
       type: "session.error", ...context, code: "delivery_too_large",
       error: "This response exceeds the machine's 64 MiB delivery limit. The original data is retained on the machine.",
     };
-    const hash = createHash("sha256").update(body).digest("hex");
-    let id = [...this.entries].find(([, entry]) => entry.hash === hash)?.[0];
+    let id = [...this.entries].find(([, entry]) => entry.body.equals(body))?.[0];
     if (!id) {
       // Never evict an active snapshot to admit another: all existing clients
       // must either complete that exact revision or receive an explicit expiry.
@@ -44,7 +43,8 @@ export class EventTransferStore {
         type: "session.error", ...context, code: "delivery_busy", error: "The machine is serving large responses. Please retry shortly.",
       };
       id = randomBytes(24).toString("hex");
-      this.entries.set(id, { body, hash, expires: this.now() + TTL_MS, deadline: this.now() + MAX_LIFETIME_MS });
+      const mac = createHmac("sha256", id).update(body).digest("hex");
+      this.entries.set(id, { body, mac, expires: this.now() + TTL_MS, deadline: this.now() + MAX_LIFETIME_MS });
       this.bytes += body.length;
       if (!this.timer) {
         this.timer = setInterval(() => this.prune(), TTL_MS);
@@ -55,7 +55,7 @@ export class EventTransferStore {
     // transfer before the reducer sees this compatibility envelope.
     return { type: "session.notice", ...context, code: "transfer_required",
       message: "Update the Bivy app to load this large response.",
-      transfer: { id, bytes: body.length, sha256: hash, pageBytes: TRANSFER_PAGE_BYTES } };
+      transfer: { id, bytes: body.length, mac: this.entries.get(id)!.mac, pageBytes: TRANSFER_PAGE_BYTES } };
   }
 
   read(command: Record<string, unknown>): Record<string, unknown> {

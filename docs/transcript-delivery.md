@@ -20,13 +20,13 @@ events use an immutable snapshot and authenticated pull requests:
 
 1. The sender retains the serialized event and sends a small `session.notice`
    with `code: "transfer_required"`, the original session/request identity, and
-   `transfer: { id, bytes, sha256, pageBytes }`.
+   `transfer: { id, bytes, mac, pageBytes }`.
 2. The receiver sends `transfer.read` with a random request ID, transfer ID, and
    byte offset. Only one page is in flight. The node answers `transfer.part`
    with the same identifiers and base64 bytes. Each page is independently
    encrypted and fits well below the existing relay reassembly cap.
 3. Missing pages retry twice. Offsets and lengths are checked and the completed
-   response's SHA-256 is verified before decoding JSON.
+   response's HMAC-SHA-256 is verified before decoding JSON.
 4. The receiver emits the original event only when complete. Later events wait
    behind it, so a history cursor/sequence baseline cannot advance from partial
    history, and later live output cannot be overwritten by that snapshot.
@@ -55,7 +55,8 @@ its existing response format and uses the same image projection.
 The relay stays blind to content and protocol semantics. Transfer commands are
 processed only after room-key authentication and replay checks. No new HTTP
 endpoint or public blob URL is added. Random transfer IDs are carried only
-inside encrypted frames. Node transfer data is held in memory and reclaimed;
+inside encrypted frames. The random transfer ID keys the MAC, binding all pages
+to the authenticated offer. Node transfer data is held in memory and reclaimed;
 it is not written to another transcript file.
 
 Transfer errors preserve cached transcript text and do not change the agent's

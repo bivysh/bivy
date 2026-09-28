@@ -1607,7 +1607,7 @@ export class AppController {
       // A queued request must not be sent to a different machine after switching.
       if (!remote && scope !== this.sessionCacheKey()) return null;
       const command = { kind: "attachment.fetch", hash };
-      const ev = (await (remote ? this.machineRequest(remote, command) : this.awaitAck(command, 120000))) as { data?: unknown; mimeType?: unknown };
+      const ev = (await (remote ? this.machineRequest(remote, command, 600_000) : this.awaitAck(command, 600_000))) as { data?: unknown; mimeType?: unknown };
       if (!ev || typeof ev.data !== "string") return null;
       const value = { mimeType: String(ev.mimeType || "application/octet-stream"), data: ev.data };
       this.attachmentDiskCache.put(scope, hash, value);

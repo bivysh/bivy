@@ -177,7 +177,7 @@ async function main(): Promise<void> {
 
   // 3. open the relay /client socket in the target's room and pair.
   const rly = new WebSocket(`${relayBase}/client?ticket=${encodeURIComponent(ticket)}&nodeId=${encodeURIComponent(args.nodeId)}`);
-  const reassembler = new FrameReassembler();
+  const reassembler = new FrameReassembler({ onReject: message => fail(message) });
   let cipher: RoomCipher | null = null;
   let local: WebSocket | null = null;
   let paired = false;

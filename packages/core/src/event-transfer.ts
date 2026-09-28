@@ -7,7 +7,7 @@ import { TRANSFER_PAGE_BYTES, MAX_TRANSFER_BYTES } from "./wire-format.js";
 export { TRANSFER_PAGE_BYTES, MAX_TRANSFER_BYTES };
 const MAX_QUEUED_BYTES = 8 * 1024 * 1024;
 
-interface Offer { id: string; bytes: number; sha256: string; pageBytes: number }
+interface Offer { id: string; bytes: number; mac: string; pageBytes: number }
 interface Pending {
   offer: Offer;
   envelope: ServerEvent;
@@ -52,7 +52,7 @@ export class EventTransferReceiver {
   private deliver(event: ServerEvent): void {
     if (event.code !== "transfer_required") { this.deps.emit(event); return; }
     const offer = event.transfer as Offer | undefined;
-    if (!offer || !/^[a-f0-9]{48}$/.test(offer.id) || !/^[a-f0-9]{64}$/.test(offer.sha256) ||
+    if (!offer || !/^[a-f0-9]{48}$/.test(offer.id) || !/^[a-f0-9]{64}$/.test(offer.mac) ||
         !Number.isSafeInteger(offer.bytes) || offer.bytes <= 0 || offer.bytes > MAX_TRANSFER_BYTES || offer.pageBytes !== TRANSFER_PAGE_BYTES) {
       this.deps.emit({ type: "session.error", code: "delivery_invalid", sessionId: event.sessionId, requestId: event.requestId, error: "Invalid large-response transfer. Update the app and retry." });
       return;
@@ -89,13 +89,14 @@ export class EventTransferReceiver {
       pending.offset += bytes.length;
       pending.retries = 0;
       if (pending.offset < pending.offer.bytes) { this.request(); return; }
-      // Reject duplicate final pages while the digest is asynchronous.
+      // Reject duplicate final pages while the MAC verification is asynchronous.
       pending.requestId = "";
       const generation = this.generation;
-      const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", pending.bytes));
+      const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pending.offer.id), { name: "HMAC", hash: "SHA-256" }, false, ["verify"]);
+      const mac = Uint8Array.from(pending.offer.mac.match(/../g)!, pair => parseInt(pair, 16));
+      const valid = await crypto.subtle.verify("HMAC", key, mac, pending.bytes);
       if (generation !== this.generation || this.pending !== pending) return;
-      const hash = Array.from(digest, byte => byte.toString(16).padStart(2, "0")).join("");
-      if (hash !== pending.offer.sha256) throw new Error("Response integrity check failed.");
+      if (!valid) throw new Error("Response integrity check failed.");
       const complete = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(pending.bytes)) as ServerEvent;
       if (!complete || typeof complete.type !== "string" || complete.code === "transfer_required" || complete.type === "transfer.part") throw new Error("Invalid response envelope.");
       this.pending = undefined;
