@@ -17,13 +17,12 @@ test("production cannot publish without canonical full CI on the release commit"
   assert.equal(gate.permissions["pull-requests"], "read");
 
   const production = release.jobs.production;
-  assert.deepEqual(production.needs, ["plan", "staging", "production-ci"]);
+  assert.deepEqual(production.needs, ["plan", "production-ci"]);
   // No bare always(): failed/cancelled dependencies must skip publication, and
   // a skipped CI gate is only acceptable when the plan proved it redundant.
   assert.doesNotMatch(production.if, /always\(\)/);
   assert.match(production.if, /^!cancelled\(\)/);
   assert.match(production.if, /needs\.plan\.outputs\.release == 'true'/);
-  assert.match(production.if, /needs\.staging\.result == 'success'/);
   assert.match(
     production.if,
     /needs\.production-ci\.result == 'success'\s*\|\| \(needs\.production-ci\.result == 'skipped' && needs\.plan\.outputs\.tested == 'true'\)/,

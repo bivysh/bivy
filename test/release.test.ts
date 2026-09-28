@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { extractChangelogSection } from "../scripts/extract-changelog.mjs";
-import { nextVersion, rotateChangelog } from "../scripts/release.mjs";
+import { addUnreleasedNotes, nextVersion, rotateChangelog } from "../scripts/release.mjs";
 
 test("nextVersion bumps by level and resets lower parts", () => {
   assert.equal(nextVersion("0.17.3", "patch"), "0.17.4");
@@ -43,4 +43,14 @@ test("rotateChangelog dates the unreleased notes and leaves a fresh [Unreleased]
 test("rotateChangelog refuses an empty or missing [Unreleased]", () => {
   assert.throws(() => rotateChangelog("## [Unreleased]\n\n## [0.1.0]\n- x\n", "0.1.1", "2026-09-26"), /empty/);
   assert.throws(() => rotateChangelog("# Changelog\n", "0.1.1", "2026-09-26"), /no `## \[Unreleased\]`/);
+});
+
+test("addUnreleasedNotes lets notes and the version bump land in one release", () => {
+  const withNotes = addUnreleasedNotes(CHANGELOG, "### Added\n\n- a feature\n");
+  const rotated = rotateChangelog(withNotes, "0.17.1", "2026-09-26");
+  assert.equal(extractChangelogSection(rotated, "0.17.1"), "### Fixed\n\n- a fix\n\n### Added\n\n- a feature");
+  assert.equal(extractChangelogSection(rotated, "0.17.0"), "- older");
+
+  const empty = rotateChangelog(addUnreleasedNotes("## [Unreleased]\n\n## [0.1.0]\n- x\n", "- new"), "0.1.1", "2026-09-26");
+  assert.equal(extractChangelogSection(empty, "0.1.1"), "- new");
 });

@@ -17,9 +17,12 @@ name: Release
 #   workflow_dispatch  -> PRODUCTION (manual). The same promotion, for a retry or
 #                         a release-intent recovery ref.
 #
-# Full CI gates the exact promoted commit: a CI run on this SHA that already
-# passed every job (the merge queue's, for a release commit) is reused;
-# otherwise the canonical CI workflow runs here with force_all.
+# CI gates the exact promoted commit. A release commit that only changes
+# versions and CHANGELOG.md on top of main (scripts/release-only-diff.mjs) is
+# covered by the merge queue's successful release-tier run on this SHA: the
+# code it ships already passed CI on main. Any other commit needs a CI run on
+# this SHA that passed every job; otherwise the canonical CI workflow runs here
+# with force_all.
 #
 # Both jobs authenticate to npm with the job's GitHub Actions OIDC identity
 # (`id-token: write`) against the ONE trusted publisher configured for
@@ -115,13 +118,14 @@ jobs:
         run: pnpm run publish:npm -- --tag staging
 
   # --------------------------------------------------------------- PRODUCTION --
-  # Decide whether this run promotes, and whether full CI already covered it.
+  # Decide whether this run promotes, and whether CI already covered it.
   #   release: a dispatch always promotes; a push promotes when it lands a
   #            package.json version that npm does not have yet (the commit
   #            `pnpm release` produces).
-  #   tested:  a successful CI run on this exact SHA ran every job (the merge
-  #            queue does this for a release commit, which touches every
-  #            manifest). Otherwise production-ci runs the full suite here.
+  #   tested:  a successful CI run on this exact SHA either ran every job, or
+  #            is the release tier for a commit that changes only versions and
+  #            notes relative to its parent. Otherwise production-ci runs the
+  #            full suite here.
   plan:
     name: Plan production promotion
     runs-on: ubuntu-latest
@@ -133,6 +137,8 @@ jobs:
       tested: ${{ steps.plan.outputs.tested }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 2
       - id: plan
         env:
           GH_TOKEN: ${{ github.token }}
@@ -151,8 +157,14 @@ jobs:
             release=false
           fi
           tested=false
+          release_only="$(node scripts/release-only-diff.mjs HEAD^ HEAD 2>/dev/null || echo false)"
           if [ "$release" = true ]; then
             for run in $(gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=success" --jq '.workflow_runs[].id'); do
+              if [ "$release_only" = true ]; then
+                tested=true
+                echo "CI run $run passed on $GITHUB_SHA, which only changes versions and notes; the shipped code already passed CI on main."
+                break
+              fi
               if [ "$(gh api --paginate "/repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs" --jq '.jobs[] | select(.conclusion != "success") | .name' | wc -l)" -eq 0 ]; then
                 tested=true
                 echo "CI run $run already passed every job on $GITHUB_SHA; not re-running it."
@@ -179,14 +191,15 @@ jobs:
 
   production:
     # Explicit results rather than always(): a failed or cancelled dependency
-    # skips publication. On a push, this run's own staging publish must succeed.
+    # skips publication. It runs alongside this push's staging publish rather
+    # than after it: packaging is not a CI receipt, and the production job
+    # builds and publishes the same package itself.
     if: >-
       !cancelled()
       && needs.plan.outputs.release == 'true'
-      && (github.event_name == 'workflow_dispatch' || needs.staging.result == 'success')
       && (needs.production-ci.result == 'success'
           || (needs.production-ci.result == 'skipped' && needs.plan.outputs.tested == 'true'))
-    needs: [plan, staging, production-ci]
+    needs: [plan, production-ci]
     name: Promote to npm `latest` + tag + GitHub release
     runs-on: ubuntu-latest
     # Approval gate: a dispatch alone cannot publish to production.
@@ -197,10 +210,10 @@ jobs:
       packages: write # add stable tags to the already-built Core service images
       id-token: write # OIDC: trusted publish + provenance
     steps:
-      # Full CI passed in production-ci. Also require the automatic staging
-      # publication for the exact main SHA; packaging alone is not a CI receipt.
+      # A manual promotion also requires the automatic staging publication for
+      # the exact main SHA, proving the commit landed through the normal path.
       # Wait briefly when Promote is clicked immediately after merge. A push
-      # promotion already `needs` this run's own staging job.
+      # promotion is that normal path, and publishes alongside its staging job.
       - name: Require a successful staging publish for this commit
         if: github.event_name == 'workflow_dispatch'
         env:
