@@ -194,6 +194,7 @@ import { SecretVault, resolveSecret } from "./secrets.js";
 import { deviceFlowClientId, requestDeviceCode, pollAccessTokenOnce, REPO_CONNECT_SCOPE, type DeviceCode } from "./github-device-auth.js";
 import { InstallationTokenCache, createAppJwt, resolveInstallationId, type GitHubAppConfig } from "./github-app-auth.js";
 import { listGithubAppRepos } from "./github-app-repos.js";
+import { discoverGithubRepos, listGithubUserRepos, type RepoListing } from "./github-repos.js";
 import {
   loadGitHubAppConfigs,
   orderAppsForOwner,
@@ -10647,17 +10648,6 @@ app.post("/api/github/issues/:number/pickup", async (req, res, next) => {
   }
 });
 
-type RepoListing = {
-  authed: boolean;
-  repos: { slug: string; description: string; private: boolean; pushedAt?: string; defaultBranch?: string }[];
-  error?: string;
-  // Why the list is empty, so the picker can show an ACTIONABLE prompt instead of
-  // a dead-end string. Only set when authed:false (no usable token):
-  //   "no-token"    — nothing connected; steer to `bivy github:connect`.
-  //   "gh-unauthed" — the `gh` CLI is installed but logged out; also offer `gh auth login`.
-  reason?: "no-token" | "gh-unauthed";
-};
-
 type BranchListing = {
   repo: string;
   branches: { name: string }[];
@@ -10717,42 +10707,23 @@ async function createControlPlaneHook(kind = "github"): Promise<{ url: string; s
   return data;
 }
 
-// List the GitHub repos the node can reach with its own token (for picking a
-// git workspace). Uses local App installations when available, otherwise the
-// token stored on this machine (env or `gh`). Returns `authed: false` with
-// an empty list when there's no token so the UI falls back to manual owner/repo.
+// Combine local App access with the configured user token or gh login, matching
+// the credentials available to clone/fetch. Cache only complete, successful lists.
 async function listAccessibleRepos(): Promise<RepoListing> {
   if (reposCache && Date.now() - reposCache.at < REPO_LIST_TTL_MS) return reposCache.val;
-  try {
-    const apps = await ensureGitHubApps();
-    if (apps.length) {
-      const val: RepoListing = { authed: true, repos: await listGithubAppRepos(apps) };
-      reposCache = { at: Date.now(), val };
-      return val;
-    }
-    const token = await resolveGitHubToken();
-    if (!token) return { authed: false, repos: [], reason: (await ghCliInstalled()) ? "gh-unauthed" : "no-token" };
-    const ghRes = await fetch("https://api.github.com/user/repos?sort=updated&per_page=100&affiliation=owner,collaborator,organization_member", {
-      headers: { authorization: `Bearer ${token}`, accept: "application/vnd.github+json", "user-agent": "bivy" },
-    });
-    if (!ghRes.ok) return { authed: true, repos: [], error: `GitHub responded ${ghRes.status}` };
-    const raw = (await ghRes.json().catch(() => [])) as Array<Record<string, unknown>>;
-    const repos = (Array.isArray(raw) ? raw : []).map((r) => ({
-      slug: String(r.full_name ?? ""),
-      description: typeof r.description === "string" ? r.description : "",
-      private: Boolean(r.private),
-      pushedAt: typeof r.pushed_at === "string" ? r.pushed_at : undefined,
-      // GitHub already hands us each repo's default branch here, so the branch
-      // picker can label "Default branch (main)" instantly from the cached repo
-      // list — no separate /repos/{owner}/{repo} round trip when it opens.
-      defaultBranch: typeof r.default_branch === "string" ? r.default_branch : undefined,
-    })).filter((r) => r.slug);
-    const val: RepoListing = { authed: true, repos };
-    reposCache = { at: Date.now(), val };
-    return val;
-  } catch (error) {
-    return { authed: false, repos: [], error: error instanceof Error ? error.message : String(error) };
-  }
+  const val = await discoverGithubRepos({
+    appRepos: async () => {
+      const apps = await ensureGitHubApps();
+      return apps.length ? listGithubAppRepos(apps) : undefined;
+    },
+    userRepos: async () => {
+      const token = await resolveGitHubToken();
+      return token ? listGithubUserRepos(token) : undefined;
+    },
+    ghInstalled: ghCliInstalled,
+  });
+  if (val.authed && !val.error) reposCache = { at: Date.now(), val };
+  return val;
 }
 
 // --- Web-driven "Connect GitHub" (repo-scope device flow) ------------------
