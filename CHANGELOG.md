@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.6] - 2026-09-28
+
 ### Fixed
 
 - Keep preview annotations aligned with the content beneath them when app panels are scrolled.
