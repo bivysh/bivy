@@ -15,7 +15,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 // npm and the installed `bivy` are .cmd shims on Windows.
-import { npmPrefixBin, portableSpawn, portableSpawnSync } from "../src/portable-process.mjs";
+import { killProcessTree, npmPrefixBin, portableSpawn, portableSpawnSync } from "../src/portable-process.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const artifactIndex = process.argv.indexOf("--artifact");
@@ -79,12 +79,9 @@ function runAsync(command, args, options = {}) {
       else finish(new Error(`${command} ${args.join(" ")} failed (${code ?? signal ?? "unknown"})`));
     });
     const timer = setTimeout(() => {
-      try {
-        if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
-        else child.kill("SIGKILL");
-      } catch {
-        // The process exited between the timeout and kill.
-      }
+      // The whole tree: on Windows npm is cmd.exe → node.exe, and a surviving
+      // node.exe would keep the temp directory locked.
+      if (!killProcessTree(child.pid, "SIGKILL")) try { child.kill("SIGKILL"); } catch { /* already exited */ }
       finish(new Error(`${command} ${args.join(" ")} timed out after ${timeout}ms`));
     }, timeout);
   });
@@ -134,10 +131,18 @@ try {
   // install.sh uses npm's global layout; a project-local install hoists
   // differently. The layouts are independent, so exercise both concurrently
   // rather than putting two registry installs in CI's critical path in a row.
-  const installs = await Promise.allSettled([
-    runAsync("npm", ["install", "--global", tarball, "--prefix", globalPrefix, "--no-audit", "--no-fund", "--prefer-offline"]),
-    runAsync("npm", ["install", tarball, "--no-fund", "--prefer-offline"], { cwd: consumer }),
-  ]);
+  // Windows runs them one at a time: concurrent npm installs contend for its cache there.
+  const timed = (label, install) => async () => {
+    const started = Date.now();
+    try { return await install(); } finally { console.log(`${label} install: ${((Date.now() - started) / 1000).toFixed(0)}s`); }
+  };
+  const steps = [
+    timed("global", () => runAsync("npm", ["install", "--global", tarball, "--prefix", globalPrefix, "--no-audit", "--no-fund", "--prefer-offline"])),
+    timed("local", () => runAsync("npm", ["install", tarball, "--no-fund", "--prefer-offline"], { cwd: consumer })),
+  ];
+  const installs = [];
+  if (process.platform === "win32") for (const step of steps) installs.push(...(await Promise.allSettled([step()])));
+  else installs.push(...(await Promise.allSettled(steps.map((step) => step()))));
   const failedInstall = installs.find((result) => result.status === "rejected");
   if (failedInstall?.status === "rejected") throw failedInstall.reason;
 
@@ -209,5 +214,7 @@ try {
   // high/critical advisories through scripts/audit-prod.mjs.
   console.log(`release smoke passed on ${process.platform}: @bivy/bivy@${version}, no agent SDKs in the package, patched Pi bridge installed on demand`);
 } finally {
-  fs.rmSync(tmp, { recursive: true, force: true });
+  // Best effort: a cleanup failure must not replace the error that ended the run.
+  try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }); }
+  catch (error) { console.warn(`could not remove ${tmp}: ${error.message}`); }
 }
