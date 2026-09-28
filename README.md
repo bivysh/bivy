@@ -4,17 +4,22 @@
 [![license: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-2b6cb0)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-2b6cb0)](https://nodejs.org)
 
-**Run coding agents on your machines and use them from anywhere — from a phone,
-browser, terminal, GitHub issue, Slack message, schedule, or webhook.**
+**Build, try, and review apps from your phone. Your coding agent and dev
+environment stay on your own machines.**
 
-Bivy is an open-source workspace for coding-agent work. Turn prompts, GitHub
-issues, CI failures, Slack messages, and schedules into live sessions on your
-machines. Choose the agent and model, sync supported API keys and OAuth logins,
-and steer and review the work from your browser, phone, or terminal.
+Bivy is an open-source remote development environment built around coding
+agents. Ask for a change, try the running app, and point to or draw on what
+needs fixing. Send that feedback to the agent and try again—all in the same
+session, without going back to your computer.
+
+Live previews bring your app to your phone or browser without deploying it to
+Render, building a Docker image, or setting up a separate preview server.
+Share a preview link so someone else can try it and leave notes, too.
 
 Keep Claude Code, Codex, Pi, OpenCode, or another supported agent. Keep your
-repos, tools, and development environment. Bivy connects them into a workflow
-that doesn't end when you leave your desk.
+repos, tools, databases, and development environment. Bivy connects them to
+chat, a terminal, app previews, and code review wherever you are. Start work
+yourself, or let an issue, CI failure, message, schedule, or webhook start it.
 
 **[Start free on Bivy Cloud](https://app.bivy.sh)** ·
 **[Quickstart](docs/quickstart.md)** ·
@@ -47,11 +52,41 @@ entire remote-access stack.
 > sandboxing depend on the runtime. See the
 > [runtime support matrix](docs/runtime-support-matrix.md).
 
-## More than remote access
+## Build → preview → mark up → iterate
 
-Remote access lets you reach an agent. Bivy also connects **what starts the
-work, where it runs, which agent and credentials it uses, and how you review
-what happened**.
+Remote chat lets you ask an agent for a change. Bivy also lets you **use what
+it built and show it what to fix**, without a separate deployment step.
+
+1. **Ask for a change.** The agent works in your repo with your existing tools
+   and local services.
+2. **Try the app.** Open a live preview from the session. Use the running app,
+   not just a screenshot of what the agent says it finished. Bivy can discover
+   dev servers running in the session workspace; tap **Preview** to open one.
+3. **Mark up what needs work.** Point at an element or circle and draw on the
+   preview. Add a note, then send the draft to the agent with the element and
+   page context. Marked-up screenshots and before/after comparison are available
+   when agent screenshots are enabled.
+4. **Iterate and review.** Try the next version, inspect the diff, review checks,
+   and decide when the work is ready—not just when the agent stops.
+5. **Bring someone else into the review.** Copy a public preview link so they
+   can use the app without a Bivy account and leave notes on specific elements.
+   Bring their notes into the session when you're ready to act on them.
+
+On Bivy Cloud, preview delivery is built in: no per-app domains, certificates,
+public ports, or tunnels to configure. Self-hosters configure preview delivery
+once for their Bivy deployment, not for every app. The app still needs its normal
+build or dev-server setup, and **the machine serving it must stay awake and
+online**. These are development previews, not production hosting.
+
+**Share deliberately:** anyone with a preview link can use that app, including
+its live backend. Links expire after 24 hours and can be revoked sooner.
+Reviewer notes aren't sent to the agent automatically; you send them or explicitly
+allow agent access. Preview traffic uses HTTPS through the preview relay, not
+session end-to-end encryption; the relay operator can see it.
+
+[App previews, visual feedback, and sharing →](docs/apps.md)
+
+## Your agents and machines, one workspace
 
 | Capability | What it means for you |
 |---|---|
@@ -59,8 +94,10 @@ what happened**.
 | **Your machines and environment** | Work beside your existing repos, dev servers, databases, private networks, toolchains, and GPUs. |
 | **Automations and triggers** | Let issues, failed CI, messages, schedules, and webhooks start work instead of copying requests into a chat. |
 | **Encrypted key and OAuth sync** | Reuse Bivy-managed provider credentials across enrolled machines and compatible runtimes, with less repeated setup. |
-| **Live sessions from anywhere** | Start at your desk, answer a question or approve an action from your phone, then return to the terminal. |
-| **Reviewable results** | See changes, declared checks, artifacts, and pull requests—not just an agent's claim that it finished. |
+| **Live sessions from anywhere** | Build and review from your phone, browser, or terminal; answer questions and approve supported actions in the same session. |
+| **Live app previews** | Try the running app without deploying it to a separate hosting service. |
+| **Visual feedback and sharing** | Point, draw, and send specific feedback to the agent; share a preview link for outside review. |
+| **Reviewable results** | Inspect the app, changes, declared checks, artifacts, and pull requests—not just an agent's claim that it finished. |
 | **Hosted convenience or self-hosting** | Use Bivy Cloud for managed remote access, or run the same open-source core yourself. |
 
 ## One workflow, from trigger to review
@@ -77,7 +114,13 @@ Prompt · GitHub issue · CI failure · Linear · Slack · Schedule · Webhook
                      Join · steer · approve · stop
                                  │
                                  ▼
-                    Changes · checks · artifacts · PR
+                  Try app · inspect changes · checks
+                                 │
+                                 ▼
+                  Mark up · send feedback · iterate
+                                 │
+                                 ▼
+                      Share preview · review PR
 ```
 
 A **Machine** is a computer or server you connect. A **Session** is live agent
@@ -206,10 +249,9 @@ answer questions, approve supported tool calls, or stop the agent.
 
 - Send screenshots, images, logs, and other files from your phone.
 - Download reports and artifacts the agent creates.
-- Publish [session apps](docs/apps.md) with web and CLI/TUI views using
-  `bivy app publish bivy.app.json`. Linked machines automatically discover web
-  preview delivery through Bivy's relay—no per-machine domains, certificates or
-  public ports. Terminal views use the existing connection.
+- Open [session apps](docs/apps.md) from chat or the **Apps** menu: live web
+  previews, desktop app views, and CLI/TUI tools. Agents can publish views with
+  `bivy app publish bivy.app.json` and create share links with `bivy app share`.
 - Use voice input and read-aloud where supported; provider-backed voice may
   send audio or text to the selected provider.
 - Keep a native terminal workflow or use structured chat, depending on the agent.
@@ -259,8 +301,13 @@ bivy run claude
 bivy open
 ```
 
-Open that same session on your phone while it runs. Once that works, connect
-another machine or add your first automation.
+Open that same session on your phone while it runs. For a web app, ask the agent
+to start its dev server, then open **Apps → Running in this workspace → Preview**.
+Try a page, point to something you'd change, and send the feedback back to the
+agent. No separate preview deployment needed.
+
+Once that works, share a preview for review, connect another machine, or add
+your first automation.
 
 **Local-only works too.** `bivy run`, `bivy resume`, and `bivy sessions` need no
 account or server. Choose **local only for now** during setup; use `bivy login`
@@ -327,9 +374,14 @@ Your machine                         Hosted or self-hosted
 
 - **Execution stays on your machine.** Bivy Cloud does not run your agents.
   Your model provider still sees whatever the agent sends it.
-- **Interactive traffic is end-to-end encrypted** between the node and paired
-  devices. The relay forwards opaque frames; your node dials out, so no inbound
-  public port is required.
+- **Interactive session traffic is end-to-end encrypted** between the node and
+  paired devices. The relay forwards opaque session frames; your node dials out,
+  so no inbound public port is required.
+- **App previews have a separate security boundary.** Preview traffic uses HTTPS
+  and an outbound tunnel, not session E2E encryption. The preview ingress/relay
+  operator can see it. Public preview links grant anyone holding them access to
+  that view and its live backend until expiry or revocation. See
+  [preview security and sharing](docs/apps.md#runtime-and-security-boundaries).
 - **Ordinary credential sync uploads ciphertext, not plaintext keys.**
   Supported credentials and recovery limits are documented separately.
 - **Encryption is not universal across integrations.** Slack commands and
