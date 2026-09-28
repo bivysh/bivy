@@ -182,9 +182,10 @@ the merge queue, so normally already there), publishes the stable build to
 the images are live. The release body is `[Unreleased]` at the tagged commit
 plus the tag message.
 
-At the same moment, `pnpm release` dispatches Bivy Cloud's `Ship` workflow
-(skip with `--no-ship`), which prepares the deploy while the release publishes
-and cuts over once the GitHub release exists. Finally it opens the follow-up PR
+If `BIVY_RELEASE_DEPLOY_WORKFLOW` is set to `owner/repo/workflow.yml`,
+`pnpm release` dispatches that workflow at the same moment with
+`version=vX.Y.Z`, so a deployment can prepare while the release publishes and
+cut over once the GitHub release exists. Finally it opens the follow-up PR
 that records the notes under `## [X.Y.Z] - YYYY-MM-DD` and moves `main` to the
 next patch; entries that landed after the tag stay under `[Unreleased]`. Merge
 it before the next release.

@@ -299,7 +299,7 @@ jobs:
         run: node scripts/build-self-host.mjs self-host-release
 
       # The GitHub release is the last step on purpose: its existence is the
-      # signal that npm and the images are live (Cloud's Ship waits for it).
+      # signal that npm and the images are live, for any deployment waiting on it.
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

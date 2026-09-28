@@ -9,15 +9,16 @@
  *                           # release; retargets main first when it differs
  *   pnpm release --dry-run  # print the version and release notes, change nothing
  *   pnpm release --notes-file notes.md  # add these notes to the release
- *   pnpm release --no-ship  # skip dispatching the Cloud deploy
  *
  * package.json on main holds the version main will release next. A release is
  * a `vX.Y.Z` tag on the current origin/main, which already passed the merge
  * queue and has published staging builds and service images. Pushing the tag
- * starts release.yml (npm `latest`, image aliases, GitHub release), and this
- * script dispatches Cloud's Ship workflow at the same moment so its deploy
- * setup overlaps the publish. A follow-up PR then dates the notes in
- * CHANGELOG.md and moves main to the next patch. See docs/releasing.md.
+ * starts release.yml (npm `latest`, image aliases, GitHub release). If
+ * BIVY_RELEASE_DEPLOY_WORKFLOW names a deployment workflow
+ * (`owner/repo/workflow.yml`), it is dispatched at the same moment with
+ * `version=vX.Y.Z`, so the deploy can prepare while the release publishes. A
+ * follow-up PR then dates the notes in CHANGELOG.md and moves main to the next
+ * patch. See docs/releasing.md.
  */
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
@@ -30,8 +31,14 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 const STABLE_SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const BUMPS = { major: [1, 0, 0], minor: [0, 1, 0], patch: [0, 0, 1] };
 const UNRELEASED = /^## \[Unreleased\][^\n]*\n/m;
-/** The deployment that follows a release. `--no-ship` skips it. */
-const SHIP = { repo: "bivysh/bivy-cloud", workflow: "ship.yml" };
+
+/** An optional deployment to dispatch with each release, as `[repo, workflow]`. */
+function deployWorkflow(value = process.env.BIVY_RELEASE_DEPLOY_WORKFLOW) {
+  if (!value) return null;
+  const match = value.match(/^([\w.-]+\/[\w.-]+)\/([\w.-]+\.ya?ml)$/);
+  if (!match) throw new Error("BIVY_RELEASE_DEPLOY_WORKFLOW must look like owner/repo/workflow.yml.");
+  return match.slice(1);
+}
 
 /** `current` bumped by `major|minor|patch`, or an explicit stable version above it. */
 function nextVersion(current, bump) {
@@ -135,18 +142,18 @@ function parseArgs(argv) {
   const notesFile = notesAt === -1 ? null : args[notesAt + 1];
   const positional = args.filter((arg, i) => !arg.startsWith("--") && (notesAt === -1 || i !== notesAt + 1));
   if (positional.length > 1 || (notesAt !== -1 && !notesFile)) {
-    throw new Error("Usage: pnpm release [minor|major|X.Y.Z] [--notes-file notes.md] [--dry-run] [--no-ship]");
+    throw new Error("Usage: pnpm release [minor|major|X.Y.Z] [--notes-file notes.md] [--dry-run]");
   }
   return {
     bump: positional[0] ?? null,
     dryRun: args.includes("--dry-run"),
-    ship: !args.includes("--no-ship"),
     notes: notesFile ? fs.readFileSync(path.resolve(notesFile), "utf8") : "",
   };
 }
 
 function main() {
-  const { bump, dryRun, ship, notes: extraNotes } = parseArgs(process.argv.slice(2));
+  const { bump, dryRun, notes: extraNotes } = parseArgs(process.argv.slice(2));
+  const deploy = deployWorkflow();
   const started = Date.now();
   const elapsed = () => `${Math.round((Date.now() - started) / 1000)}s`;
 
@@ -165,7 +172,7 @@ function main() {
 
   if (dryRun) {
     const retarget = version === target ? "" : ` after retargeting main from ${target}`;
-    console.log(`Would tag ${sha.slice(0, 12)} (origin/main) as v${version}${retarget}${ship ? ` and dispatch ${SHIP.repo} ${SHIP.workflow}` : ""}.\n\n${notes}`);
+    console.log(`Would tag ${sha.slice(0, 12)} (origin/main) as v${version}${retarget}${deploy ? ` and dispatch ${deploy.join("/")}` : ""}.\n\n${notes}`);
     return;
   }
 
@@ -185,12 +192,13 @@ function main() {
   sh("git", ["push", "--quiet", "origin", `refs/tags/v${version}`]);
   console.log(`[${elapsed()}] Tagged ${sha.slice(0, 12)} as v${version}; release.yml is publishing it.`);
 
-  if (ship) {
+  if (deploy) {
+    const [repo, workflow] = deploy;
     try {
-      sh("gh", ["workflow", "run", SHIP.workflow, "--repo", SHIP.repo, "--ref", "main", "-f", `version=v${version}`, "-f", "confirm=production"]);
-      console.log(`[${elapsed()}] Dispatched ${SHIP.repo} ${SHIP.workflow}; it deploys once the GitHub release exists.`);
+      sh("gh", ["workflow", "run", workflow, "--repo", repo, "-f", `version=v${version}`]);
+      console.log(`[${elapsed()}] Dispatched ${repo} ${workflow} for v${version}.`);
     } catch {
-      console.warn(`Could not dispatch ${SHIP.repo} ${SHIP.workflow}; deploy by hand if you run that deployment.`);
+      console.warn(`Could not dispatch ${repo} ${workflow}; deploy v${version} by hand.`);
     }
   }
 
