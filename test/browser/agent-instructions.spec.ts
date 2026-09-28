@@ -49,7 +49,7 @@ for (const theme of themes) {
     const save = page.getByRole("button", { name: "Save" });
     await expect(editor).toHaveValue("- Prefer pnpm.");
     await expect(save).toBeDisabled();
-    await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
+    await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {}))));
     await page.screenshot({ path: testInfo.outputPath("agent-instructions.png"), fullPage: true });
 
     // Save sends the edit with the version it was based on, then follows the node's echo.
@@ -66,12 +66,13 @@ for (const theme of themes) {
     await expect(editor).toHaveValue("my draft");
     await expect(page.getByRole("status")).toContainText("changed on another device");
     await expect(save).toBeDisabled();
-    await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
+    await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {}))));
     await page.screenshot({ path: testInfo.outputPath("agent-instructions-conflict.png"), fullPage: true });
     // Keep mine: the draft now saves over the newer copy.
     await page.getByRole("button", { name: "Keep mine" }).click();
     await expect(page.getByRole("status")).toHaveCount(0);
     await save.click();
+    await expect(page.getByRole("button", { name: "Saved" })).toBeVisible();
     expect(await page.evaluate(() => (window as any).saves.at(-1))).toEqual({ agentInstructions: "my draft", agentInstructionsBaseUpdatedAt: 9000 });
     // Load latest discards the draft; a save the node rejects is reported.
     await editor.fill("another draft");
