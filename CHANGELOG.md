@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Expose self-hosted service metrics on host-local ports for private monitoring.
+
+### Fixed
+
+- Load large conversations reliably with bounded, verified transcript transfers.
+- Improve app-heavy session loading and navigation between preview sheets.
+- Discover newly installed agent executables in running nodes without requiring a restart.
+- Recover credential sync when a machine holds a stale wrapped vault key.
+- Fix GitHub App connection loops on new machines and show repositories available through both GitHub App installations and user credentials.
+
 ## [0.18.4] - 2026-09-28
 
 ### Added
