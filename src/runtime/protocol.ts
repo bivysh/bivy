@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { killProcessTree, portableSpawn } from "../portable-process.mjs";
 import { buildAgentCredentialEnv } from "./credentials.js";
 import { withSessionCredentials, credentialEnvFallback } from "../credentials/session.js";
 import { bivySessionEnv, withSessionInstructions } from "./session-env.js";
@@ -488,7 +489,7 @@ class ProtocolSession implements RuntimeSession {
     this.prepareEnv = this.runtimeOptions.prepare
       ? (await Promise.resolve(this.runtimeOptions.prepare({ ...process.env, ...this.runtimeOptions.env, ...credentialEnv })).catch(() => undefined)) ?? {}
       : {};
-    const child = spawn(this.runtimeOptions.command, this.runtimeOptions.args ?? [], {
+    const child = portableSpawn(this.runtimeOptions.command, this.runtimeOptions.args ?? [], {
       cwd: this.cwd,
       // bivySessionEnv() lets the agent's own shell resolve its session for
       // `bivy attach <path>` (see session-env.ts); spread last so it can never
@@ -1096,8 +1097,12 @@ class ProtocolSession implements RuntimeSession {
       try { await this.command("session.abort", { sessionId: this.id }, 5_000); }
       catch { /* child gone or shim wedged — the force-kill below is authoritative */ }
     }
-    try { child.kill("SIGTERM"); } catch { /* already exited */ }
-    setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* already exited */ } }, 2_000).unref?.();
+    // A Windows `.cmd` agent is cmd.exe → node.exe; only a tree kill reaches it.
+    const kill = (signal: NodeJS.Signals) => {
+      if (!killProcessTree(child.pid, signal)) try { child.kill(signal); } catch { /* already exited */ }
+    };
+    kill("SIGTERM");
+    setTimeout(() => kill("SIGKILL"), 2_000).unref?.();
   }
 
   dispose(): void {

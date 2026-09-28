@@ -4,7 +4,7 @@
 // This is the seam where additional runtimes (Claude Agent SDK, generic RPC,
 // …) are registered without touching the daemon.
 
-import { spawnSync } from "node:child_process";
+import { portableSpawnSync } from "../portable-process.mjs";
 import { resolveExecutable as resolveCommandPath } from "../executable.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -475,7 +475,7 @@ function probeHelpText(command: string): string | null {
   if (HELP_PROBE_CACHE.has(key)) return HELP_PROBE_CACHE.get(key) ?? null;
   let text: string | null;
   try {
-    const res = spawnSync(command, ["--help"], { encoding: "utf8", timeout: 4000 });
+    const res = portableSpawnSync(command, ["--help"], { encoding: "utf8", timeout: 4000 });
     const out = `${res.stdout ?? ""}\n${res.stderr ?? ""}`.trim();
     text = out.length > 20 ? out.toLowerCase() : null; // too-short output = not real help
   } catch {

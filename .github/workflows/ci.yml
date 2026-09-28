@@ -97,6 +97,7 @@ jobs:
               - 'scripts/smoke-installer.sh'
               - 'scripts/installer-smoke-guest.sh'
               - 'scripts/wait-release-artifact.sh'
+              - 'src/portable-process.mjs'
               - 'test/installer*'
               - 'test/ci-installer-gate.test.ts'
             root:
@@ -170,10 +171,10 @@ jobs:
           else
             tier=gate
           fi
-          # The npm consumer runs on Linux for every app change; macOS joins in
-          # the full tier and whenever packaging inputs change.
+          # The npm consumer runs on Linux for every app change; macOS and
+          # Windows join in the full tier and whenever packaging inputs change.
           if [ "$tier" = full ] || [ "$INSTALLER_CHANGED" = true ]; then
-            consumer_os='["ubuntu-latest","macos-latest"]'
+            consumer_os='["ubuntu-latest","macos-latest","windows-latest"]'
           else
             consumer_os='["ubuntu-latest"]'
           fi
@@ -399,10 +400,11 @@ jobs:
       - run: pnpm run certification:check
       - run: pnpm exec tsx test/agent-certification.test.ts
 
-  # Install the exact curated npm tarball into a fresh consumer project on both
-  # supported desktop OS families. This catches release-only dependency/audit,
+  # Install the exact curated npm tarball into a fresh consumer project on every
+  # supported desktop OS. This catches release-only dependency/audit,
   # native-module, README metadata, and built-in Pi discovery regressions, which
-  # ordinary source changes cause too, so Linux runs for every app change.
+  # ordinary source changes cause too, so Linux runs for every app change. On
+  # Windows it also runs scripts/smoke-windows.mjs (shims, tree kill, service).
   release-consumer:
     # Prepare the consumer while root-release builds. The bounded artifact
     # wait below replaces the whole-job dependency; ci-ok still gates both jobs.
@@ -432,6 +434,8 @@ jobs:
           key: consumer-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package.json', 'pnpm-lock.yaml') }}
           restore-keys: consumer-downloads-${{ runner.os }}-${{ runner.arch }}-
       - name: Wait for this run's release package
+        # Git Bash on Windows; a bare `bash` there can resolve to WSL.
+        shell: bash
         run: bash scripts/wait-release-artifact.sh
         env:
           GH_TOKEN: ${{ github.token }}

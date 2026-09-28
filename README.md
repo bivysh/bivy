@@ -292,6 +292,10 @@ npm install -g @bivy/bivy
 bivy setup
 ```
 
+On **Windows 10/11** (preview), install the same way from PowerShell; the
+service is a per-user logon task. See [Windows](docs/install.md#windows) for
+what differs.
+
 Then try one small task:
 
 ```bash

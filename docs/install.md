@@ -228,6 +228,40 @@ bivy service uninstall
 On Linux, run `loginctl enable-linger $USER` once so the node keeps running
 after you log out.
 
+## Windows
+
+Windows 10 and 11 are supported as a preview. Install Node.js 20+ (for example
+`winget install OpenJS.NodeJS.LTS`), then from PowerShell or Windows Terminal:
+
+```powershell
+npm install -g @bivy/bivy
+bivy setup
+```
+
+`install.sh` is a bash installer and does not apply here. State lives in
+`%USERPROFILE%\.bivy`, which Windows already restricts to your account.
+
+`bivy service install` registers a Task Scheduler task named `Bivy` that starts
+at logon under your own account (no administrator rights needed). The task runs
+`bivy service run`, which starts the node hidden, restarts it if it exits, and
+writes its output to `%USERPROFILE%\.bivy\node.log` (`bivy logs -f` follows it).
+`bivy stop`, `bivy restart`, `bivy status` and `bivy service uninstall` work as
+on other platforms.
+
+Agent CLIs installed with npm (Claude Code, Codex, Gemini, Qwen, OpenCode, …)
+and MCP servers started with `npx` work as they do elsewhere. Differences:
+
+- Run `bivy update` from a regular terminal. Windows stops the node by ending
+  its whole process tree, so the in-app update button and a Bivy web terminal
+  cannot update the node they run inside; `bivy update` stops the service
+  before npm replaces files the running node holds open.
+- Stopping an agent ends its process tree immediately; Windows has no
+  equivalent of a graceful `SIGTERM` for console programs.
+- Agents whose installer is a shell script (`curl … | sh`) must be installed
+  by hand, following that agent's own Windows instructions.
+- Not available yet: `bivy shim`, app display previews, and the per-process
+  memory/CPU table in node stats.
+
 ## Uninstall (one command)
 
 To remove Bivy and all of its data from a machine:

@@ -71,7 +71,7 @@ Steps, in order:
    only skips enrollment; run `bivy login` later for a browser or phone.
 5. Offers the agent's model login if it is not signed in yet.
 6. Installs the background service (launchd on macOS, systemd `--user` on
-   Linux) and starts it.
+   Linux, a logon scheduled task on Windows) and starts it.
 7. Opens the remote web app in a browser if one is available and remote access
    is configured.
 
@@ -801,12 +801,15 @@ bivy github:connect acme/api
 
 ## Service management
 
-The background service is a launchd user agent (`dev.bivy`, macOS) or a systemd
-user unit (`bivy.service`, Linux). Windows is not supported — use `bivy start`.
+The background service is a launchd user agent (`dev.bivy`, macOS), a systemd
+user unit (`bivy.service`, Linux), or a logon scheduled task (`Bivy`, Windows)
+that runs `bivy service run` to supervise the node.
 
 The unit is generated from `cli.json` at install time and bakes in `PORT`,
 `BIVY_WORKSPACE`, `BIVY_DATA_DIR`, everything in `cli.json`'s `env` block, and a
-`PATH`. Secret references in `env` are resolved before the process starts.
+`PATH`. Secret references in `env` are resolved before the process starts. The
+Windows task bakes in only `BIVY_DATA_DIR`; its supervisor reads the rest from
+`cli.json` each time it starts the node.
 
 ### `bivy start`
 
@@ -873,7 +876,8 @@ bivy doctor
 
 Tails the node's output from wherever it lands: the systemd journal
 (`journalctl --user -u bivy.service`), the launchd log files (`/tmp/bivy.log`,
-`/tmp/bivy.err.log`), or `<data-dir>/node.log` from a background `bivy start`.
+`/tmp/bivy.err.log`), or `<data-dir>/node.log` from the Windows service or a
+background `bivy start`.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
@@ -1018,5 +1022,6 @@ hand.
   route registered with `bivy nodes add`; relay-tunnelled routing is not
   implemented. `bivy github:app-create` needs a browser that can reach the
   node's local port.
-- **Not supported on Windows:** the background service (`service install`,
-  `stop`, `restart`). Use `bivy start`.
+- **Windows (preview):** `bivy shim` is unavailable, and `bivy update` must run
+  from a regular terminal rather than a Bivy terminal. See
+  [Windows](install.md#windows).

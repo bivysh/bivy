@@ -14,8 +14,9 @@
 import fs from "node:fs";
 import module from "node:module";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
+// npm is npm.cmd on Windows.
+import { portableSpawn } from "./portable-process.mjs";
 
 // src/ in a checkout, dist/ in a release: either way the parent is the package root.
 const packageRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -197,7 +198,7 @@ function installNow(names, { dir = bridgesDir(), stdio = "pipe" } = {}) {
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
   return new Promise((resolve, reject) => {
-    const child = spawn("npm", ["install", "--omit=optional", "--no-audit", "--no-fund"], {
+    const child = portableSpawn("npm", ["install", "--omit=optional", "--no-audit", "--no-fund"], {
       cwd: dir,
       stdio: stdio === "inherit" ? "inherit" : ["ignore", "pipe", "pipe"],
     });

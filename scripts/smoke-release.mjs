@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 /**
  * Clean-consumer smoke test for the exact curated npm artifact. CI runs this on
- * Ubuntu and macOS so release packaging cannot silently depend on the checkout,
- * devDependencies, or one operating system's node_modules layout.
+ * Ubuntu, macOS and Windows so release packaging cannot silently depend on the
+ * checkout, devDependencies, or one operating system's node_modules layout.
  *
  * With no arguments it builds the self-hosted artifact first. CI passes
  * `--artifact <path>` with the exact npm tarball so multiple consumer jobs can
@@ -12,9 +12,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+// npm and the installed `bivy` are .cmd shims on Windows.
+import { killProcessTree, npmPrefixBin, portableSpawn, portableSpawnSync } from "../src/portable-process.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const artifactIndex = process.argv.indexOf("--artifact");
@@ -36,7 +37,7 @@ const DEFAULT_STEP_TIMEOUT_MS = 10 * 60 * 1000;
 
 function run(command, args, options = {}) {
   const { capture, timeout, ...spawnOptions } = options;
-  const result = spawnSync(command, args, {
+  const result = portableSpawnSync(command, args, {
     cwd: root,
     encoding: "utf8",
     stdio: capture ? "pipe" : "inherit",
@@ -58,7 +59,7 @@ function run(command, args, options = {}) {
 function runAsync(command, args, options = {}) {
   const { timeout = DEFAULT_STEP_TIMEOUT_MS, ...spawnOptions } = options;
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = portableSpawn(command, args, {
       cwd: root,
       stdio: "inherit",
       detached: process.platform !== "win32",
@@ -78,12 +79,9 @@ function runAsync(command, args, options = {}) {
       else finish(new Error(`${command} ${args.join(" ")} failed (${code ?? signal ?? "unknown"})`));
     });
     const timer = setTimeout(() => {
-      try {
-        if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
-        else child.kill("SIGKILL");
-      } catch {
-        // The process exited between the timeout and kill.
-      }
+      // The whole tree: on Windows npm is cmd.exe → node.exe, and a surviving
+      // node.exe would keep the temp directory locked.
+      if (!killProcessTree(child.pid, "SIGKILL")) try { child.kill("SIGKILL"); } catch { /* already exited */ }
       finish(new Error(`${command} ${args.join(" ")} timed out after ${timeout}ms`));
     }, timeout);
   });
@@ -106,7 +104,9 @@ try {
   } else {
     run(process.execPath, [path.join(root, "scripts/build-release.mjs"), "--pack", releaseDir]);
   }
-  run("tar", ["-xzf", artifact, "-C", extracted]);
+  // Windows' own bsdtar: a Git-for-Windows GNU tar earlier on PATH reads `C:` as a host.
+  const tar = process.platform === "win32" ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
+  run(tar, ["-xzf", artifact, "-C", extracted]);
 
   // The fallback archive has a `bivy/` root; npm's canonical tarball uses
   // `package/`. Accept both so local fallback checks remain convenient while CI
@@ -131,15 +131,23 @@ try {
   // install.sh uses npm's global layout; a project-local install hoists
   // differently. The layouts are independent, so exercise both concurrently
   // rather than putting two registry installs in CI's critical path in a row.
-  const installs = await Promise.allSettled([
-    runAsync("npm", ["install", "--global", tarball, "--prefix", globalPrefix, "--no-audit", "--no-fund", "--prefer-offline"]),
-    runAsync("npm", ["install", tarball, "--no-fund", "--prefer-offline"], { cwd: consumer }),
-  ]);
+  // Windows runs them one at a time: concurrent npm installs contend for its cache there.
+  const timed = (label, install) => async () => {
+    const started = Date.now();
+    try { return await install(); } finally { console.log(`${label} install: ${((Date.now() - started) / 1000).toFixed(0)}s`); }
+  };
+  const steps = [
+    timed("global", () => runAsync("npm", ["install", "--global", tarball, "--prefix", globalPrefix, "--no-audit", "--no-fund", "--prefer-offline"])),
+    timed("local", () => runAsync("npm", ["install", tarball, "--no-fund", "--prefer-offline"], { cwd: consumer })),
+  ];
+  const installs = [];
+  if (process.platform === "win32") for (const step of steps) installs.push(...(await Promise.allSettled([step()])));
+  else installs.push(...(await Promise.allSettled(steps.map((step) => step()))));
   const failedInstall = installs.find((result) => result.status === "rejected");
   if (failedInstall?.status === "rejected") throw failedInstall.reason;
 
-  const globalBivy = path.join(globalPrefix, "bin", "bivy");
-  const globalRoot = path.join(globalPrefix, "lib", "node_modules", "@bivy", "bivy");
+  const globalBivy = path.join(npmPrefixBin(globalPrefix), "bivy");
+  const globalRoot = path.join(globalPrefix, ...(process.platform === "win32" ? [] : ["lib"]), "node_modules", "@bivy", "bivy");
   const globalVersion = run(globalBivy, ["--version"], { capture: true }).trim();
   if (globalVersion !== staged.version) throw new Error(`global CLI version ${globalVersion} != package ${staged.version}`);
   // Terminal support must be present and actually work from its prebuilt
@@ -150,6 +158,9 @@ try {
   for (const scope of ["@anthropic-ai", "@earendil-works"]) {
     if (fs.existsSync(path.join(globalRoot, "node_modules", scope))) throw new Error(`global install pulled in ${scope} packages`);
   }
+  // The daemon itself — command launch, a background service and its stop —
+  // has Windows-only code paths that no Linux job reaches.
+  if (process.platform === "win32") run(process.execPath, [path.join(root, "scripts/smoke-windows.mjs"), globalBivy], { timeout: 5 * 60 * 1000 });
 
   const bivy = path.join(consumer, "node_modules", ".bin", "bivy");
   const version = run(bivy, ["--version"], { cwd: consumer, capture: true }).trim();
@@ -203,5 +214,7 @@ try {
   // high/critical advisories through scripts/audit-prod.mjs.
   console.log(`release smoke passed on ${process.platform}: @bivy/bivy@${version}, no agent SDKs in the package, patched Pi bridge installed on demand`);
 } finally {
-  fs.rmSync(tmp, { recursive: true, force: true });
+  // Best effort: a cleanup failure must not replace the error that ended the run.
+  try { fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 }); }
+  catch (error) { console.warn(`could not remove ${tmp}: ${error.message}`); }
 }

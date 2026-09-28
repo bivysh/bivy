@@ -3,10 +3,10 @@
 // Compatibility launcher for npm scripts and older service configurations.
 // It delegates to the operator-installed Pi command without replacing Pi's
 // auth/config directory or selecting a bundled private executable.
-import { spawn } from "node:child_process";
+import { portableSpawn } from "../../portable-process.mjs";
 
 const command = process.env.BIVY_PI_COMMAND?.trim() || "pi";
-const child = spawn(command, process.argv.slice(2), {
+const child = portableSpawn(command, process.argv.slice(2), {
   cwd: process.env.BIVY_WORKSPACE || process.cwd(),
   stdio: "inherit",
   env: process.env,

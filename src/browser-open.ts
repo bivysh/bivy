@@ -27,12 +27,17 @@ export function canOpenBrowser(env: NodeJS.ProcessEnv = process.env): boolean {
  * print the URL regardless of the return value so the user can open it
  * themselves (on this machine or any other device).
  */
+// Windows: not `cmd /c start`, which would parse the `&` in a query string.
+const OPENERS: Partial<Record<NodeJS.Platform, [string, ...string[]]>> = {
+  darwin: ["open"],
+  win32: ["rundll32", "url.dll,FileProtocolHandler"],
+};
+
 export function openBrowser(target: string): boolean {
   if (!canOpenBrowser()) return false;
-  const command = process.platform === "win32" ? "cmd" : process.platform === "darwin" ? "open" : "xdg-open";
-  const args = process.platform === "win32" ? ["/c", "start", "", target] : [target];
+  const [command, ...args] = OPENERS[process.platform] ?? ["xdg-open"];
   try {
-    const child = spawn(command, args, { stdio: "ignore", detached: true });
+    const child = spawn(command, [...args, target], { stdio: "ignore", detached: true });
     // spawn reports a missing opener asynchronously via an 'error' event, not a
     // synchronous throw — without a listener that becomes an unhandled error
     // that crashes the process (see the crash this guarded against previously:
