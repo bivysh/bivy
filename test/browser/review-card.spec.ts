@@ -149,13 +149,16 @@ test("without agent screenshots, the card offers to turn them on and never does 
   await expect.poll(() => page.evaluate(() => (window as any).commands.some((c: any) => c.kind === "apps.showMe"))).toBe(true);
 });
 
-test("reviewer notes get a card with a count, and only become a draft when you ask", async ({ page }, testInfo) => {
+for (const theme of themes) test(`reviewer notes and pictures only become a draft when you ask (${theme})`, async ({ page }, testInfo) => {
+  await page.evaluate(value => document.documentElement.dataset.theme = value, theme);
   await page.evaluate(() => {
     const w = window as any;
     const list = w.c.appCommand;
+    const prefill = w.c.prefillComposer.bind(w.c);
+    w.c.prefillComposer = (text: string, attachments: unknown[]) => { w.draftedAttachments = attachments; return prefill(text, attachments); };
     const notes = [
       { id: "n1", at: 1, note: "Pay button still hugs the edge on my iPhone mini", selector: "footer > button.pay", text: "Pay now", path: "/checkout", viewport: { width: 375, height: 667 } },
-      { id: "n2", at: 2, note: "Total is cut off", selector: ".total", text: "", path: "/checkout", viewport: { width: 375, height: 667 } },
+      { id: "n2", at: 2, note: "Total is cut off", selector: ".total", text: "", path: "/checkout", viewport: { width: 375, height: 667 }, context: "box around total", shot: { hash: "c".repeat(64), size: 100, width: 390, height: 844 } },
     ];
     w.c.appCommand = async (kind: string, sessionId: string, fields: Record<string, unknown> = {}) => {
       if (kind !== "apps.list") return list(kind, sessionId, fields);
@@ -176,10 +179,24 @@ test("reviewer notes get a card with a count, and only become a draft when you a
   // The card holds a count; the composer stays empty until you ask for the draft.
   await expect(page.locator("textarea").first()).toHaveValue("");
   await page.screenshot({ path: testInfo.outputPath("review-card-notes.png"), fullPage: true });
+  await card.getByRole("button", { name: "Preview card options for Storefront" }).click();
+  await page.getByRole("menuitem", { name: "App options", exact: true }).click();
+  const apps = page.getByRole("dialog", { name: "Session apps" });
+  await expect(apps.getByText('“Total is cut off”')).toBeVisible();
+  await page.evaluate(() => Promise.all(document.getAnimations().map(animation => animation.finished)));
+  await page.screenshot({ path: testInfo.outputPath(`reviewer-notes-owner-${theme}.png`), fullPage: true });
+  await apps.getByRole("button", { name: "View approximate picture" }).click();
+  await expect(page.getByRole("dialog", { name: /Image/ })).toBeVisible();
+  await expect(page.locator('.image-viewer img')).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(apps).toBeVisible();
+  await page.keyboard.press("Escape");
   await notes.getByRole("button", { name: "Add to message" }).click();
   await expect(card.getByRole("status")).toContainText("Nothing is sent until you send it");
   await expect(page.locator("textarea").first()).toHaveValue(/Notes from people reviewing "Site":\n- "Pay button still hugs the edge on my iPhone mini" on footer > button\.pay \("Pay now"\)/);
   expect(await page.evaluate(() => (window as any).commands.some((c: any) => c.kind === "apps.share" || c.kind === "session.send"))).toBe(false);
+  expect(await page.evaluate(() => (window as any).draftedAttachments)).toMatchObject([{ kind: "image", name: "Reviewer note (approximate).png", hash: "c".repeat(64) }]);
+  expect(await page.evaluate(() => Boolean((window as any).draftedAttachments[0].data))).toBe(true);
 
   // Notes that ride on a run's visual card add the same row under the picture.
   await send({ id: "review-fedcba9876543210", trigger: "run", shot: shot("a"), notes: 1 });

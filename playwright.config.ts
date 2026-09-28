@@ -18,6 +18,7 @@ const singleViewport = [
 const mobileSpecs = [
   "**/browser-first-setup.spec.ts",
   "**/preview-drawing.spec.ts",
+  "**/preview-reviewer.spec.ts",
   "**/preview-peek.spec.ts",
   "**/screenshots.spec.ts",
   "**/self-host-onboarding.spec.ts",

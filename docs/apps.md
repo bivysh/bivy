@@ -182,7 +182,7 @@ with `url`, `expiresAt` (epoch milliseconds), `expires` (ISO 8601) and the app
 and view it picked:
 
 ```json
-{ "url": "https://<view>.preview.example.net/__bivy/open#…", "expiresAt": 1790532000000,
+{ "url": "https://view-<view>.preview.example.net/__bivy/open#…", "expiresAt": 1790532000000,
   "appId": "…", "viewId": "…", "app": "Shop", "view": "Storefront",
   "expires": "2026-09-27T18:00:00.000Z" }
 ```
@@ -540,9 +540,9 @@ works on devices signed in to the account that owns the machine, and nowhere
 else. Addresses stay the same across node restarts, because apps keep their IDs.
 
 **Copy link** in the Apps sheet mints a separate, reusable link for one web view.
-It points at the app's own origin rather than the shell, so it opens unframed in
-any browser (useful for devtools or another device). Every visit exchanges it for
-the same host-only cookie, capped so a browser session never outlives the link.
+It opens the isolated preview shell in reviewer mode, with the app in its own
+frame. Every visit exchanges it for a host-only app cookie, capped so a browser
+session never outlives the link.
 It stays valid for 24 hours, until **Revoke access**, until the app is removed,
 or until the machine restarts. Revoke access ends every link, browser session and
 open connection for that view without removing the app. A copied link is a
@@ -550,15 +550,28 @@ bearer capability: anyone holding it can use the app, including a live server's
 backend, until it lapses or is revoked. Agents mint the same link with
 [`bivy app share`](#share-links-bivy-app-share).
 
-**Reviewer notes.** A copied link opens the app with one extra control,
-**Leave a note**. It sits in a shadow root so the app's styles don't touch it.
-The visitor points at an element and writes a note. The note is stored with the
-element's selector and text, the page and the viewport. The owner sees notes
-under the view in **Apps**, with **Add to message** (drafts them into the
-composer) and **Clear**. Notes are untrusted text: at most 1,000 characters
-each, 50 per view (oldest dropped), same-origin POSTs from a valid link only.
-They're saved with the app (`apps.json`, mode 0600), so a restart doesn't lose
-them; **Clear** deletes them for good. They reach the agent only if the owner
+**Reviewer notes.** A copied link offers **Point** and **Draw → Pen / Box**,
+using the same controls as the owner's preview. The visitor marks the page,
+writes a note, and chooses **Send note**. No microphone or voice transcription
+is available, and submitting feedback never starts an agent run.
+
+When the owner's screenshot setting is on, Bivy retakes the page on the machine
+and overlays the marks. The picture is **approximate**: browser state such as
+logins, menus and typed input may differ. When screenshots are off, the words
+and mark details are saved without a picture. Public capture requests are
+bounded and throttled; screenshot bytes and attachment hashes are never returned
+to the public browser. A capture failure keeps the draft available to retry.
+
+The owner sees notes under the view in **Apps**, with **View approximate picture**,
+**Add to message** (drafts the words and pictures into the composer), and **Clear**.
+Notes are untrusted input: at most 1,000 characters each, 50 per view (oldest
+dropped), same-origin POSTs from a valid preview session only. Annotation capture
+also requires a shared-link session. Notes, bounded mark context, and picture
+references are saved with the app (`apps.json`, mode 0600); pictures live in the
+attachment store and remain available across restarts. Clearing or dropping a
+note releases its picture for normal attachment garbage collection unless it is
+referenced elsewhere. Older direct links retain the text-only **Leave a note**
+control. Notes reach the agent only if the owner
 sends them, or allows the agent to read them (see [Reviewer notes for
 agents](#reviewer-notes-for-agents-bivy-app-notes)).
 

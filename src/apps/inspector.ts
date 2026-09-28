@@ -52,7 +52,7 @@ const report=(el,hold)=>{
   const r=el.getBoundingClientRect();
   onPicked({type:'picked',selector:selector(el),tag:el.localName,text:(el.innerText||el.getAttribute('aria-label')||el.getAttribute('alt')||'').trim().replace(/\\s+/g,' ').slice(0,200),
     rect:{x:Math.round(r.left),y:Math.round(r.top),width:Math.round(r.width),height:Math.round(r.height)},
-    viewport:{width:innerWidth,height:innerHeight},path:location.pathname+location.search+location.hash,hold});
+    viewport:{width:innerWidth,height:innerHeight},scroll:{x:Math.round(scrollX),y:Math.round(scrollY)},theme:matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light',path:location.pathname+location.search+location.hash,hold});
 };
 // A long press picks at once and says so (the shell starts listening); the
 // layer stays until the finger lifts, so the release never reaches the app.
@@ -124,7 +124,12 @@ const marked=r=>{
 addEventListener('message',e=>{
   if(!framed||e.origin!==SHELL||e.source!==parent)return;
   const d=e.data||{},n=v=>Number.isFinite(+v)?+v:0;
-  if(d.type==='bivy:draw')post(drawState());
+  if(d.type==='bivy:note'&&REVIEWER){
+    void fetch('/__bivy/notes',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(d.note)})
+      .then(async r=>{if(!r.ok)throw Error(r.status===429?'Please wait a moment before sending another picture.':r.status===400||r.status===502?(await r.text()).slice(0,200):'Could not send. Check that the link is still valid and try again.');return r.json();})
+      .then(result=>post({type:'note-sent',id:d.id,screenshot:result.screenshot===true}),error=>post({type:'note-sent',id:d.id,error:error.message}));
+  }
+  else if(d.type==='bivy:draw')post(drawState());
   else if(d.type==='bivy:scroll'){scrollBy({left:n(d.dx),top:n(d.dy),behavior:'instant'});post({type:'scrolled',scroll:{x:Math.round(scrollX),y:Math.round(scrollY)}});}
   else if(d.type==='bivy:marks'&&d.rect)post({type:'marked',id:n(d.id),elements:marked({x:n(d.rect.x),y:n(d.rect.y),width:n(d.rect.width),height:n(d.rect.height)})});
 });

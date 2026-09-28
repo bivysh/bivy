@@ -13,7 +13,7 @@ export class RemotePreview {
   private relayUrl?: string;
   private online = false;
   private sockets = new Set<WebSocket>();
-  constructor(private readonly registry: AppRegistry, private readonly returnOrigins: () => readonly string[], private readonly signIn?: ConstructorParameters<typeof AppGateway>[3]) {}
+  constructor(private readonly registry: AppRegistry, private readonly returnOrigins: () => readonly string[], private readonly signIn?: ConstructorParameters<typeof AppGateway>[3], private readonly captureNote?: ConstructorParameters<typeof AppGateway>[4]) {}
 
   get available(): boolean { return this.online && Boolean(this.gateway); }
   ready(origin: string | undefined, relayUrl: string): void {
@@ -24,7 +24,7 @@ export class RemotePreview {
     if (target.protocol !== "wss:" && !(target.protocol === "ws:" && ["localhost", "127.0.0.1", "[::1]"].includes(target.hostname))) return;
     if (this.origin !== template) {
       this.gateway?.close();
-      this.gateway = new AppGateway(this.registry, template, this.returnOrigins, this.signIn);
+      this.gateway = new AppGateway(this.registry, template, this.returnOrigins, this.signIn, this.captureNote);
       this.origin = template;
     }
     this.relayUrl = relayUrl.replace(/\/$/, "") + "/preview/stream";

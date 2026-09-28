@@ -10,6 +10,8 @@ import { AppAccess } from "./AppAccess.js";
 import { PreviewPeek, peekBlocked } from "./PreviewPeek.js";
 import { seedSessionDraft } from "../shareTarget.js";
 import { MoreMenu } from "./MoreMenu.js";
+import { ImageGallery } from "./ImageGallery.js";
+import { noteAttachments, notePictures } from "./reviewerNotes.js";
 import { relTime } from "./SessionList.js";
 import { Spinner } from "./Spinner.js";
 import { AppRow, appInitial } from "./AppRow.js";
@@ -33,12 +35,13 @@ export const REVIEW_MODE_LABELS: Record<ReviewCardMode, string> = { ready: "When
 /** Reviewer notes as a message draft. Untrusted text: it only ever becomes a draft the owner sends. */
 export function notesDraft(viewName: string, notes: readonly ReviewerNote[]): string {
   return `Notes from people reviewing "${viewName}":\n` + notes.map((n) =>
-    `- "${n.note}" on ${n.selector}${n.text ? ` ("${n.text}")` : ""}, page ${n.path}, viewport ${n.viewport.width}×${n.viewport.height}`).join("\n");
+    `- "${n.note}" on ${n.selector}${n.text ? ` ("${n.text}")` : ""}, page ${n.path}, viewport ${n.viewport.width}×${n.viewport.height}${n.context ? `\n${n.context}` : ""}${n.shot ? "\nAttached picture is approximate: retaken on the machine, not the reviewer’s browser." : ""}`).join("\n");
 }
 
 /** `openView`: open this view straight away (a review card's Open preview), on `path` if given. */
 export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, onClose }: { sessionId: string; appId?: string; nodeId?: string | null; openView?: { viewId: string; path?: string }; onOpenInChat?: () => void; onClose: () => void }) {
-  const { connection } = useAppState();
+  const { connection, activeSession } = useAppState();
+  const [picture, setPicture] = useState<ReviewerNote | null>(null);
   const remote = Boolean(nodeId) && !controller.direct && nodeId !== connection.currentNodeId;
   const machine = remote ? nodeId : connection.currentNodeId;
   const [result, setResult] = useState<SessionAppsResult | null>(null);
@@ -169,10 +172,18 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
     finally { if (generation.current === current) setBusy(false); }
   };
   /** Reviewer notes are untrusted text: they only ever become a draft. */
-  const notesToMessage = (view: AppView & { kind: "web" }) => {
-    const text = notesDraft(view.name, view.notes ?? []);
-    if (!controller.prefillComposer(text)) seedSessionDraft(localStorage, sessionId, text);
-    onClose();
+  const notesToMessage = async (view: AppView & { kind: "web" }) => {
+    setBusy(true); setError("");
+    try {
+      const notes = view.notes ?? [], text = notesDraft(view.name, notes);
+      const attachments = await noteAttachments(notes);
+      if (remote || activeSession.activeSessionId !== sessionId || !controller.prefillComposer(text, attachments)) {
+        if (attachments.length) throw new Error("Open this session’s chat before adding reviewer pictures.");
+        seedSessionDraft(localStorage, sessionId, text);
+      }
+      onClose();
+    } catch (e) { setError(e instanceof Error ? e.message : "Could not add notes."); }
+    finally { setBusy(false); }
   };
   /** The owner's choice: `bivy app notes` works only on apps where this is on. */
   const setAgentNotes = async (app: SessionApp, enabled: boolean) => {
@@ -266,9 +277,10 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
               <ul>{view.notes.map((note) => <li className="apps-note" key={note.id}>
                 <span className="apps-note-text">“{note.note}”</span>{" "}
                 <span className="app-row-meta">{note.text ? `on “${note.text}”` : note.selector} · {note.path} · {note.viewport.width}×{note.viewport.height}</span>
+                {note.shot && <button className="btn sm ghost" onClick={() => setPicture(note)}>View approximate picture</button>}
               </li>)}</ul>
               <div className="apps-notes-actions">
-                <button className="btn sm" onClick={() => notesToMessage(view)}>Add to message</button>
+                <button className="btn sm" disabled={busy || !online} onClick={() => void notesToMessage(view)}>Add to message</button>
                 <button className="btn sm ghost" disabled={busy || !online} onClick={() => void clearNotes(app, view)}>Clear</button>
               </div>
             </div> : null}
@@ -278,6 +290,7 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
 
       {(shown.length > 0 || offers.length > 0) && <p className="apps-foot">Apps stay available while this machine runs. Removing an app keeps your project files.</p>}
     </div>
+    {picture && <ImageGallery images={notePictures([picture])} index={0} onClose={() => setPicture(null)} />}
     {confirm && <ConfirmDialog
       title={confirm.view ? `Open ${confirm.view.name}?` : `Remove ${confirm.app.name}?`}
       message={confirm.view?.kind === "terminal"

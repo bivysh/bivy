@@ -1854,6 +1854,7 @@ function referencedAttachmentHashes(): Set<string> | null {
       else if (entry.bivyKind === "outbound-attachment" || entry.bivyKind === "inline-image") hashes.add(entry.ref.hash);
     }
   }
+  for (const hash of appRegistry.notePictureHashes()) hashes.add(hash);
   return eventLog.health().ok ? hashes : null;
 }
 
@@ -2038,8 +2039,17 @@ const appSignIn = (view: { app: { id: string; sessionId: string }; view: { id: s
   if (!client) return undefined;
   return `${new URL(client).origin}/sessions/${encodeURIComponent(view.app.sessionId)}?node=${encodeURIComponent(identity.nodeId)}#preview=${view.app.id}.${view.view.id}.${encodeURIComponent(pagePath)}`;
 };
-const appGateway = process.env.BIVY_APPS_ORIGIN ? new AppGateway(appRegistry, process.env.BIVY_APPS_ORIGIN, appReturnOrigins, appSignIn) : undefined;
-const remotePreview = new RemotePreview(appRegistry, appReturnOrigins, appSignIn);
+// Public notes get owner-only encrypted pictures, never a screenshot response
+// on the public origin. The annotation service honors appScreenshots being off.
+const captureReviewerNote: NonNullable<ConstructorParameters<typeof AppGateway>[4]> = async (entry, mark) => {
+  const result = await appService.annotate(entry.app.sessionId, mark);
+  if (!result.image) return undefined;
+  const image = result.image;
+  const ref = attachmentStore.put(Buffer.from(image.data, "base64"), { name: "Reviewer note (approximate).png", mimeType: "image/png", kind: "image" });
+  return { hash: ref.hash, size: ref.size, width: image.width, height: image.height };
+};
+const appGateway = process.env.BIVY_APPS_ORIGIN ? new AppGateway(appRegistry, process.env.BIVY_APPS_ORIGIN, appReturnOrigins, appSignIn, captureReviewerNote) : undefined;
+const remotePreview = new RemotePreview(appRegistry, appReturnOrigins, appSignIn, captureReviewerNote);
 // Desktop app views: one private display per view, started on first open.
 const appDisplays = createDisplayHost(appDir);
 /** Review cards: screenshots become encrypted attachments (fetched by hash

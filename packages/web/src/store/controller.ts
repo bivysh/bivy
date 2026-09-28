@@ -1621,10 +1621,14 @@ export class AppController {
     const { connection } = this.store.getState();
     // A desktop app's display starts at this device's pixel density (1× or 2×).
     if (command === "apps.open") Object.assign(fields, { scale: typeof devicePixelRatio === "number" && devicePixelRatio >= 1.5 ? 2 : 1 });
-    if (this.isOtherMachine(nodeId)) return this.machineRequest(nodeId, { kind: command, sessionId, ...fields });
-    if (connection.status !== "online") throw new Error("Connect to the machine to open its apps.");
-    const result = await this.awaitAck({ kind: command, sessionId, ...fields }, 30_000);
-    if (this.store.getState().connection.currentNodeId !== connection.currentNodeId) throw new Error("Machine changed. Reopen Apps on the selected machine.");
+    const remote = this.isOtherMachine(nodeId);
+    if (!remote && connection.status !== "online") throw new Error("Connect to the machine to open its apps.");
+    const result = remote ? await this.machineRequest(nodeId, { kind: command, sessionId, ...fields }) : await this.awaitAck({ kind: command, sessionId, ...fields }, 30_000);
+    if (!remote && this.store.getState().connection.currentNodeId !== connection.currentNodeId) throw new Error("Machine changed. Reopen Apps on the selected machine.");
+    const home = remote ? nodeId : connection.currentNodeId;
+    if (command === "apps.list" && home) for (const app of (result as unknown as SessionAppsResult).apps ?? []) {
+      for (const view of app.views) if (view.kind === "web") for (const note of view.notes ?? []) if (note.shot) this.attachmentHomes.set(note.shot.hash, home);
+    }
     return result;
   }
 

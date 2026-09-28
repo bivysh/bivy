@@ -80,8 +80,14 @@ export function isAppReview(value: unknown): value is AppReview {
 }
 /** Input→frame latency and bandwidth measured by a display view's viewer. */
 export interface DisplayStats { at: number; latencyMs: { p50: number; p95: number }; kBps: number; viewport: { width: number; height: number; scale: number } }
-/** A note pinned to an element by someone viewing a shared link. */
-export interface ReviewerNote { id: string; at: number; note: string; selector: string; text: string; path: string; viewport: { width: number; height: number } }
+/** Untrusted feedback on an element or marked area from a shared link. */
+export interface ReviewerNote {
+  id: string; at: number; note: string; selector: string; text: string;
+  path: string; viewport: { width: number; height: number };
+  context?: string;
+  /** Retaken on the machine; may differ from the reviewer's browser. */
+  shot?: ReviewShot;
+}
 /** Durable chat reference; never persist launch tickets or preview URLs. */
 export interface AppReference { appId: string; sessionId: string; name: string }
 export const APP_PUBLICATION_BLOCK = "bivy_app";

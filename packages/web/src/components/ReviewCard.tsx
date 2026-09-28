@@ -9,6 +9,7 @@ import { AppRow, appInitial } from "./AppRow.js";
 import { Spinner } from "./Spinner.js";
 import { AppAccess } from "./AppAccess.js";
 import { MoreMenu } from "./MoreMenu.js";
+import { noteAttachments } from "./reviewerNotes.js";
 
 /** What made the card, as its one line of detail. */
 const TRIGGER_LABELS: Record<AppReview["trigger"], string> = {
@@ -88,7 +89,11 @@ export function ReviewCard({ review }: { review: AppReview }) {
     const notes = view?.kind === "web" ? view.notes ?? [] : [];
     if (!notes.length) { setStatus("These notes were cleared."); return; }
     const text = notesDraft(view!.name, notes);
-    if (!controller.prefillComposer(text)) seedSessionDraft(localStorage, review.sessionId, text);
+    const attachments = await noteAttachments(notes);
+    if (!controller.prefillComposer(text, attachments)) {
+      if (attachments.length) throw new Error("Open this session’s chat before adding reviewer pictures.");
+      seedSessionDraft(localStorage, review.sessionId, text);
+    }
   }, "Added to your message. Nothing is sent until you send it.");
   const enableShots = () => run("turn on screenshots", async () => {
     await controller.setNodeSettings({ appScreenshots: true });

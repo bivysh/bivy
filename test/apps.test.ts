@@ -452,6 +452,7 @@ test("people with a shared link can leave bounded notes that come back to the se
   try {
     const app = registry.publish("s", dir, staticManifest); const id = app.views[0].id;
     const shared = new URL(gateway.share(id).url);
+    shared.host = new URL(gateway.origin(id)).host;
     const host = shared.host;
     const redeemed = await request(port, host, "/__bivy/redeem", { method: "POST", headers: { origin: shared.origin }, body: shared.hash.slice(1) });
     const reviewer = redeemed.headers["set-cookie"]![0].split(";")[0];
@@ -460,7 +461,7 @@ test("people with a shared link can leave bounded notes that come back to the se
     assert.match((await request(port, host, "/__bivy/inspector.js", { headers: { cookie: reviewer } })).body, /REVIEWER=true/);
     assert.match((await request(port, host, "/__bivy/inspector.js", { headers: { cookie: owner } })).body, /REVIEWER=false/);
     const post = (body: string, headers: Record<string, string> = {}) => request(port, host, "/__bivy/notes", { method: "POST", headers: { cookie: reviewer, origin: shared.origin, ...headers }, body });
-    assert.equal((await post(JSON.stringify({ note: "Make this bigger", selector: "h1", text: "Preview", path: "/", viewport: { width: 390, height: 844 } }))).status, 204);
+    assert.equal((await post(JSON.stringify({ note: "Make this bigger", selector: "h1", text: "Preview", path: "/", viewport: { width: 390, height: 844 } }))).status, 200);
     assert.equal((await post(JSON.stringify({ note: "x" }), { origin: "https://evil.example" })).status, 403);
     assert.equal((await request(port, host, "/__bivy/notes", { method: "POST", headers: { origin: shared.origin }, body: JSON.stringify({ note: "x" }) })).status, 401);
     assert.equal((await post(JSON.stringify({ note: "  " }))).status, 400);
@@ -474,7 +475,56 @@ test("people with a shared link can leave bounded notes that come back to the se
   } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("copied links open the app unframed, are reusable until revoked and lapse after a day", async (t) => {
+test("public annotations are scoped, bounded, throttled and stored only as reviewer feedback", async (t) => {
+  const registry = new AppRegistry();
+  let now = Date.now(); t.mock.method(Date, "now", () => now);
+  let outcome: "picture" | "off" | "failed" = "picture";
+  const captures: any[] = [];
+  const shot = { hash: "b".repeat(64), size: 100, width: 390, height: 844 };
+  const gateway = new AppGateway(registry, "https://{app}.preview.example.net", undefined, undefined, async (entry, mark) => {
+    captures.push({ entry, mark });
+    if (outcome === "failed") throw Error("capture failed");
+    return outcome === "picture" ? shot : undefined;
+  });
+  const dir = workspace(), port = await listen(gateway.server);
+  try {
+    const app = registry.publish("s", dir, staticManifest), id = app.views[0].id;
+    const url = new URL(gateway.origin(id));
+    const link = new URL(gateway.share(id).url);
+    const redeemed = await request(port, url.host, "/__bivy/redeem", { method: "POST", headers: { origin: url.origin }, body: link.hash.slice(1) });
+    const cookie = redeemed.headers["set-cookie"]![0].split(";")[0];
+    const mark = { viewport: { width: 390, height: 844 }, strokes: [{ tool: "pen", points: [[10, 20], [40, 50]] }], path: "/", appId: "other", viewId: "other", compare: 0, dpr: 3 };
+    const submit = (value: unknown, auth = cookie) => request(port, url.host, "/__bivy/notes", { method: "POST", headers: { origin: url.origin, cookie: auth }, body: JSON.stringify(value) });
+    assert.equal((await submit({ note: "move this", mark }, (await grant(gateway, port, id)).cookie)).status, 403);
+    assert.equal((await submit({ note: "move this", mark: { ...mark, viewport: { width: 9000, height: 9000 } } })).status, 400);
+    assert.equal((await submit({ note: "move this", mark: { ...mark, strokes: [{ tool: "pen", points: [[0, 0], [100000, 100000]] }] } })).status, 400);
+    assert.equal((await submit(null)).status, 400);
+    assert.equal(captures.length, 0);
+    const response = await submit({ note: "move this", mark, context: "pen over title", viewport: mark.viewport });
+    assert.equal(response.status, 200);
+    assert.deepEqual(JSON.parse(response.body), { screenshot: true }, "public response must not contain screenshot bytes or hash");
+    assert.equal(captures[0].entry.app.sessionId, "s");
+    assert.equal(captures[0].mark.appId, app.id);
+    assert.equal(captures[0].mark.viewId, id);
+    assert.equal(captures[0].mark.compare, undefined);
+    assert.equal(captures[0].mark.dpr, 1);
+    assert.deepEqual(registry.getView(id)!.notes![0].shot, shot);
+    assert.equal(registry.getView(id)!.notes![0].context, "pen over title");
+    assert.equal(registry.agentNotes(app.id), false);
+    assert.equal((await submit({ note: "again", mark })).status, 429);
+    now += 10_001; outcome = "failed";
+    assert.equal((await submit({ note: "retry me", mark })).status, 502);
+    assert.equal(registry.getView(id)!.notes!.length, 1, "failed capture doesn't silently discard the image");
+    now += 10_001; outcome = "off";
+    assert.deepEqual(JSON.parse((await submit({ note: "without a picture", mark, context: "box over title" })).body), { screenshot: false });
+    assert.equal(registry.getView(id)!.notes!.at(-1)!.context, "box over title");
+    assert.equal(registry.getView(id)!.notes!.at(-1)!.shot, undefined);
+    gateway.revoke(id);
+    assert.equal((await submit({ note: "revoked", mark })).status, 401);
+  } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("copied links open reviewer controls, are reusable until revoked and lapse after a day", async (t) => {
   const registry = new AppRegistry(); const gateway = new AppGateway(registry, "https://{app}.preview.example.net");
   const dir = workspace(); const port = await listen(gateway.server);
   let now = Date.now(); t.mock.method(Date, "now", () => now);
@@ -482,7 +532,11 @@ test("copied links open the app unframed, are reusable until revoked and lapse a
     const app = registry.publish("s", dir, staticManifest); const id = app.views[0].id;
     const shared = gateway.share(id);
     const url = new URL(shared.url);
-    assert.equal(url.origin, gateway.origin(id)); assert.equal(url.pathname, "/__bivy/open"); assert.equal(url.search, "");
+    assert.equal(url.origin, gateway.shellOrigin(id)); assert.equal(url.pathname, "/__bivy/open"); assert.equal(url.search, "");
+    const launch = await request(port, url.host, "/__bivy/launch", { method: "POST", headers: { origin: url.origin }, body: url.hash.slice(1) });
+    assert.equal(JSON.parse(launch.body).reviewer, true);
+    assert.equal(JSON.parse(launch.body).returnTo, undefined);
+    url.host = new URL(gateway.origin(id)).host;
     assert.equal(shared.expiresAt, now + 24 * 3_600_000);
     const redeem = () => request(port, url.host, "/__bivy/redeem", { method: "POST", headers: { origin: url.origin }, body: url.hash.slice(1) });
     const first = await redeem(); const second = await redeem();
@@ -592,7 +646,7 @@ test("reviewer notes survive a restart, clear for good, and drop malformed recor
     const viewId = app.views[0].id;
     const emitted: string[] = [];
     registry.on("notes", (id: string) => emitted.push(id));
-    for (let i = 0; i < 52; i++) registry.addNote(viewId, { id: `n${i}`, at: i, note: `note ${i}`, selector: "a", text: "", path: "/", viewport: { width: 1, height: 1 } });
+    for (let i = 0; i < 52; i++) registry.addNote(viewId, { id: `n${i}`, at: i, note: `note ${i}`, selector: "a", text: "", path: "/", viewport: { width: 1, height: 1 }, context: "pen 0,0–10,10", shot: { hash: "a".repeat(64), size: 100, width: 390, height: 844 } });
     assert.equal(emitted.length, 52);
     registry.setAgentNotes("s", app.id, true);
 
@@ -601,9 +655,13 @@ test("reviewer notes survive a restart, clear for good, and drop malformed recor
     assert.equal(notes.length, 50, "bounded as when they arrived");
     assert.deepEqual([notes[0].note, notes.at(-1)!.note], ["note 2", "note 51"]);
     assert.equal(restarted.agentNotes(app.id), true);
+    assert.equal(notes[0].context, "pen 0,0–10,10");
+    assert.equal(notes[0].shot?.hash, "a".repeat(64));
+    assert.deepEqual(new Set(restarted.notePictureHashes()), new Set(["a".repeat(64)]));
     assert.equal((fs.statSync(file).mode & 0o777).toString(8), "600");
 
     restarted.clearNotes(viewId);
+    assert.deepEqual(restarted.notePictureHashes(), []);
     assert.equal(new AppRegistry([], file).getView(viewId)!.notes, undefined);
 
     // A tampered file keeps the app and only well-formed notes.
