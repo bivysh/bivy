@@ -463,6 +463,19 @@ export interface OpenSessionOptions {
    * so a remote runtime forwards invoke() over reverse RPC.
    */
   toolProvider?: ToolProvider;
+  /**
+   * The user's account-wide agent instructions (src/agent-instructions.ts),
+   * already composed. Additive to whatever the agent loads from the workspace:
+   * an adapter appends `text` to its system prompt where it can, or hands the
+   * agent `file` (same content). Absent = the user has none.
+   */
+  instructions?: SessionInstructions;
+}
+
+/** Composed account-wide instructions for one session: the text and a file holding exactly it. */
+export interface SessionInstructions {
+  text: string;
+  file: string;
 }
 
 export interface OpenSessionResult {

@@ -35,6 +35,7 @@ import type {
   RuntimeCapabilities,
   RuntimeEvent,
   RuntimeMessage,
+  SessionInstructions,
   ToolCallDecision,
   ToolResult,
   ToolSpec,
@@ -160,6 +161,8 @@ export interface StartOptions {
    * proxy to whatever runtime it hosts, exactly as the daemon would in-process.
    */
   toolSpecs?: ToolSpec[];
+  /** The user's account-wide instructions for create|open (OpenSessionOptions.instructions). */
+  instructions?: SessionInstructions;
 }
 
 // ---------------------------------------------------------------------------

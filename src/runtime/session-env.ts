@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+import type { SessionInstructions } from "./types.js";
+
 //
 // Shared across every runtime adapter that spawns (or configures the spawn of) a
 // subprocess for its agent: fold this into that subprocess's env so the agent's
@@ -19,4 +21,24 @@
 // how that gap is closed instead.
 export function bivySessionEnv(sessionId: string): { BIVY_SESSION_ID: string } {
   return { BIVY_SESSION_ID: sessionId };
+}
+
+/**
+ * Apply a profile's instructions env template (AgentProfile.instructions) for one
+ * session: `{file}` → the composed instructions file, `{fileJson}` → the same
+ * path escaped for use inside a JSON string. A variable the operator already set
+ * is left alone rather than clobbered. No template or no instructions = options
+ * returned unchanged.
+ */
+export function withSessionInstructions<T extends { env?: Record<string, string>; instructionsEnv?: Record<string, string> }>(
+  options: T,
+  instructions: SessionInstructions | undefined,
+): T {
+  if (!options.instructionsEnv || !instructions) return options;
+  const patch: Record<string, string> = {};
+  for (const [name, template] of Object.entries(options.instructionsEnv)) {
+    if (process.env[name] !== undefined || options.env?.[name] !== undefined) continue;
+    patch[name] = template.replace(/\{fileJson\}/g, JSON.stringify(instructions.file).slice(1, -1)).replace(/\{file\}/g, instructions.file);
+  }
+  return { ...options, env: { ...options.env, ...patch } };
 }

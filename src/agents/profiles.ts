@@ -165,6 +165,15 @@ export type AgentProfile = {
    * probe (operator override). Agents without `preferred` stay opt-in.
    */
   acp?: { args: string[]; helpToken?: string; preferred?: boolean; declared?: boolean };
+  /**
+   * How this CLI takes the user's account-wide Bivy instructions
+   * (src/agent-instructions.ts) — as data. `env` maps variable names to templates
+   * where `{file}` is the composed instructions file and `{fileJson}` that path
+   * escaped for a JSON string. Applied to both the pipe and ACP launch paths.
+   * Absent = the agent gets them only through the `bivy` MCP server's
+   * instructions (best effort) where that server is injected.
+   */
+  instructions?: { env: Record<string, string> };
   /** The manifest declares ACP as the only valid adapter; there is no process
    *  fallback to select when protocol startup is unavailable. */
   protocolOnly?: boolean;
@@ -220,6 +229,9 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // `opencode run -s <id> "<prompt>"` continues a prior session by its own id
     // (`-s, --session  session id to continue`, per `opencode run --help`).
     resume: { template: ["run", "-s", "{id}"] },
+    // OPENCODE_CONFIG_CONTENT is merged over OpenCode's own config; its
+    // `instructions` entries are loaded alongside the repo's AGENTS.md.
+    instructions: { env: { OPENCODE_CONFIG_CONTENT: '{"instructions":["{fileJson}"]}' } },
     // `opencode run --model <provider/model> "<prompt>"` — the flag follows the
     // `run` subcommand (insertAt: 1). Models are `provider/model` ids.
     model: {

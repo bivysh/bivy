@@ -18,6 +18,8 @@
 //                      NO preceding standalone `error` notification — the shape a
 //                      real usage-limit turn takes (codex 0.154). The shim must
 //                      still surface it as session.error, never a silent empty turn.
+//   "echo-developer-instructions" → the turn's reply is the developerInstructions
+//                      the thread was started/resumed with (empty when none).
 import readline from "node:readline";
 
 const MODE = process.env.FAKE_CODEX_MODE || "ok";
@@ -26,6 +28,7 @@ const reply = (id, result) => send({ jsonrpc: "2.0", id, result });
 const notify = (method, params) => send({ jsonrpc: "2.0", method, params });
 
 let threadSeq = 0;
+let developerInstructions = "";
 
 const rl = readline.createInterface({ input: process.stdin });
 rl.on("line", (line) => {
@@ -48,9 +51,11 @@ rl.on("line", (line) => {
       });
       return;
     case "thread/start":
+      developerInstructions = params?.developerInstructions ?? "";
       reply(id, { thread: { id: `thread-${++threadSeq}` } });
       return;
     case "thread/resume":
+      developerInstructions = params?.developerInstructions ?? "";
       reply(id, { thread: { id: params?.threadId || `thread-${++threadSeq}` } });
       return;
     case "thread/settings/update":
@@ -72,7 +77,7 @@ rl.on("line", (line) => {
           turn: { id: "turn-1", status: "failed", error: { message: "You've hit your usage limit.", codexErrorInfo: "usageLimitExceeded" } },
         });
       } else {
-        notify("item/agentMessage/delta", { itemId: "item-1", delta: MODE === "echo-input" ? JSON.stringify(params.input) : "BANANA" });
+        notify("item/agentMessage/delta", { itemId: "item-1", delta: MODE === "echo-input" ? JSON.stringify(params.input) : MODE === "echo-developer-instructions" ? developerInstructions || "(none)" : "BANANA" });
         notify("turn/completed", { threadId: params?.threadId });
       }
       reply(id, {});

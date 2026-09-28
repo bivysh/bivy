@@ -21,6 +21,7 @@
 // not expose governed Runs here: agents should use their native sub-agent tools,
 // which stay inside the parent Session instead of cluttering the Session list.
 
+import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -110,6 +111,18 @@ export interface McpServeDeps {
   sessionId?: string;
   token?: string;
   fetchImpl?: FetchLike;
+  /** Composed account-wide instructions file (BIVY_AGENT_INSTRUCTIONS_FILE). */
+  instructionsFile?: string;
+}
+
+/** The user's instructions to advertise at initialize, or undefined when there are none. */
+function readInstructions(file: string | undefined): string | undefined {
+  if (!file) return undefined;
+  try {
+    return fs.readFileSync(file, "utf8").trim() || undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Build the Bivy MCP `Server` with tools/list + tools/call handlers wired. */
@@ -119,7 +132,9 @@ export function createBivyMcpServer(deps: McpServeDeps = {}): Server {
   const token = deps.token ?? process.env.BIVY_MCP_TOKEN ?? undefined;
   const fetchImpl = deps.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
 
-  const server = new Server({ name: "bivy", version: "1.0.0" }, { capabilities: { tools: {} } });
+  const instructions = readInstructions(deps.instructionsFile ?? process.env.BIVY_AGENT_INSTRUCTIONS_FILE);
+
+  const server = new Server({ name: "bivy", version: "1.0.0" }, { capabilities: { tools: {} }, ...(instructions ? { instructions } : {}) });
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: BIVY_MCP_TOOLS as unknown as never[] }));
 

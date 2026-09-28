@@ -132,9 +132,12 @@ export function parseProxiedArgs(args: string[]): { server?: string; command: st
 // back to the right session.
 
 /** The server spec that launches `bivy mcp-serve` for a session. */
-export function bivyToolsServerSpec(opts: { sessionId: string; endpoint?: string; bivyCommand?: string }): McpServerSpec {
+export function bivyToolsServerSpec(opts: { sessionId: string; endpoint?: string; bivyCommand?: string; instructionsFile?: string }): McpServerSpec {
   const env: Record<string, string> = { BIVY_SESSION_ID: opts.sessionId };
   if (opts.endpoint) env.BIVY_MCP_ENDPOINT = opts.endpoint;
+  // The user's account-wide instructions, advertised as the server's MCP
+  // `instructions` — the best-effort channel for agents with no native one.
+  if (opts.instructionsFile) env.BIVY_AGENT_INSTRUCTIONS_FILE = opts.instructionsFile;
   return { command: opts.bivyCommand ?? "bivy", args: ["mcp-serve"], env };
 }
 

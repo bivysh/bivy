@@ -5,7 +5,7 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { buildAgentCredentialEnv } from "./credentials.js";
 import { withSessionCredentials, credentialEnvFallback } from "../credentials/session.js";
-import { bivySessionEnv } from "./session-env.js";
+import { bivySessionEnv, withSessionInstructions } from "./session-env.js";
 import { mergeAgentCommands, type SlashCommandProvider } from "./slash-commands.js";
 import type {
   AgentCommand,
@@ -45,6 +45,9 @@ function parseProtocolUsage(raw: unknown): UsageSnapshot | undefined {
 }
 
 export interface ProtocolRuntimeOptions {
+  /** Per-session env template carrying the user's account-wide instructions
+   *  (AgentProfile.instructions); applied by withSessionInstructions. */
+  instructionsEnv?: Record<string, string>;
   command: string;
   args?: string[];
   env?: Record<string, string>;
@@ -366,6 +369,9 @@ class ProtocolSession implements RuntimeSession {
     // row keyed by the ref, duplicating the conversation. Falls back to the ref,
     // then a fresh UUID, preserving the prior behaviour when no id is supplied.
     canonicalId?: string,
+    // The user's account-wide instructions (OpenSessionOptions.instructions),
+    // sent on session.create/session.resume for the shim to hand its agent.
+    private readonly instructions?: string,
   ) {
     this.id = canonicalId || resumeRef || randomUUID();
     this.resumeRef = resumeRef;
@@ -986,10 +992,14 @@ class ProtocolSession implements RuntimeSession {
     // resume.
     const resumeRef = this.resumeRef ?? this.runtimeSessionRef;
     const created = resumeRef && this.capabilitiesRef.resume
-      ? await this.command("session.resume", { workspace: this.cwd, sessionId: this.id, runtimeSessionRef: resumeRef, resumeRef })
-      : await this.command("session.create", { workspace: this.cwd, sessionId: this.id });
+      ? await this.command("session.resume", { workspace: this.cwd, sessionId: this.id, runtimeSessionRef: resumeRef, resumeRef, ...this.instructionsField() })
+      : await this.command("session.create", { workspace: this.cwd, sessionId: this.id, ...this.instructionsField() });
     if (typeof created.runtimeSessionRef === "string") this.runtimeSessionRef = created.runtimeSessionRef;
     this.started = true;
+  }
+
+  private instructionsField(): { instructions?: string } {
+    return this.instructions ? { instructions: this.instructions } : {};
   }
 
   async prompt(text: string, options?: PromptOptions): Promise<void> {
@@ -1123,7 +1133,7 @@ export class ProtocolRuntime implements AgentRuntime {
   }
 
   async createSession(options: OpenSessionOptions): Promise<OpenSessionResult> {
-    const session = new ProtocolSession(await withSessionCredentials(this.options, options.credentialLabels), options.workspace, this.capabilities, options.toolInterceptor);
+    const session = new ProtocolSession(withSessionInstructions(await withSessionCredentials(this.options, options.credentialLabels), options.instructions), options.workspace, this.capabilities, options.toolInterceptor, undefined, undefined, options.instructions?.text);
     try {
       await session.start();
       this.sessions.push(session);
@@ -1140,7 +1150,7 @@ export class ProtocolRuntime implements AgentRuntime {
     // Adopt the caller's canonical id (a reopen of a known session) so the
     // resumed session keeps its original id instead of taking `sessionFile` (the
     // agent's own ref) as its id — see OpenSessionOptions.canonicalId.
-    const session = new ProtocolSession(await withSessionCredentials(this.options, options.credentialLabels), options.workspace, this.capabilities, options.toolInterceptor, options.sessionFile, options.canonicalId);
+    const session = new ProtocolSession(withSessionInstructions(await withSessionCredentials(this.options, options.credentialLabels), options.instructions), options.workspace, this.capabilities, options.toolInterceptor, options.sessionFile, options.canonicalId, options.instructions?.text);
     try {
       await session.start();
       if (!this.options.resumable && !this.capabilities.resume) {

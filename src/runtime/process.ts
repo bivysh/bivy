@@ -8,7 +8,7 @@ import { buildAgentCredentialEnv } from "./credentials.js";
 import { withSessionCredentials, credentialEnvFallback } from "../credentials/session.js";
 import { egressEnv, sessionEgressEnv } from "../harness/egress.js";
 import { depCacheEnv } from "../harness/dep-cache.js";
-import { bivySessionEnv } from "./session-env.js";
+import { bivySessionEnv, withSessionInstructions } from "./session-env.js";
 import type { CliParser, CliParserFactory } from "./cli-parsers.js";
 import type { SlashCommandProvider } from "./slash-commands.js";
 import type {
@@ -74,6 +74,9 @@ export interface ProcessThinkingConfig {
 export type ProcessPromptMode = "stdin" | "argv";
 
 export interface ProcessRuntimeOptions {
+  /** Per-session env template carrying the user's account-wide instructions
+   *  (AgentProfile.instructions); applied by withSessionInstructions. */
+  instructionsEnv?: Record<string, string>;
   id?: string;
   displayName?: string;
   command: string;
@@ -713,7 +716,7 @@ export class ProcessRuntime implements AgentRuntime {
   }
 
   async createSession(options: OpenSessionOptions): Promise<OpenSessionResult> {
-    const session = new ProcessSession(await withSessionCredentials(this.options, options.credentialLabels), options.workspace);
+    const session = new ProcessSession(withSessionInstructions(await withSessionCredentials(this.options, options.credentialLabels), options.instructions), options.workspace);
     this.sessions.push(session);
     return { session, warning: "Generic CLI runtime streams stdout/stderr only; approvals, model picker, and resume depend on the underlying agent protocol." };
   }
@@ -722,7 +725,7 @@ export class ProcessRuntime implements AgentRuntime {
     // Resumable runtimes bind the agent's session id so each prompt continues it
     // (see resumeArgs); non-resumable ones ignore the ref and start fresh.
     if (this.options.resumable) {
-      const session = new ProcessSession(await withSessionCredentials(this.options, options.credentialLabels), options.workspace, options.sessionFile);
+      const session = new ProcessSession(withSessionInstructions(await withSessionCredentials(this.options, options.credentialLabels), options.instructions), options.workspace, options.sessionFile);
       this.sessions.push(session);
       return { session };
     }

@@ -40,7 +40,7 @@ function waitFor(events: RuntimeEvent[], pred: (event: RuntimeEvent) => boolean,
   });
 }
 
-function makeRuntime(mode: "ok" | "fail" | "usage-limit" | "echo-input"): ProtocolRuntime {
+function makeRuntime(mode: "ok" | "fail" | "usage-limit" | "echo-input" | "echo-developer-instructions"): ProtocolRuntime {
   return new ProtocolRuntime({
     id: "codex-approvals",
     displayName: "Codex",
@@ -139,5 +139,19 @@ test("Codex receives the original image bytes with the prompt, including an imag
         ...images.map(image => ({ type: "image", url: `data:${image.mimeType};base64,${image.data}` })),
       ]);
     }
+  } finally { session.dispose(); }
+});
+
+test("the user's account-wide instructions reach Codex as developerInstructions", async () => {
+  const runtime = makeRuntime("echo-developer-instructions");
+  const instructions = { text: "Always write tests first.", file: "/unused" };
+  const { session } = await runtime.createSession({ workspace: process.cwd(), instructions });
+  const events: RuntimeEvent[] = [];
+  session.subscribe(event => events.push(event));
+  try {
+    await session.prompt("hi");
+    await waitFor(events, event => event.type === "agent_end");
+    const reply = session.getMessages().filter(m => m.role === "assistant").at(-1)!;
+    assert.equal(String(reply.content), instructions.text);
   } finally { session.dispose(); }
 });

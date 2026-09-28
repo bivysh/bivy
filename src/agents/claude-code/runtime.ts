@@ -142,6 +142,9 @@ export interface ClaudeCodeRuntimeOptions {
    * discoverability prompt hint alone (BIVY_ATTACH_SYSTEM_PROMPT).
    */
   attachToChat?: AttachToChatFn;
+  /** Per-session: the user's composed account-wide instructions, appended to the
+   *  system prompt after the Bivy note (see OpenSessionOptions.instructions). */
+  instructions?: string;
   /** Override for the SDK loader (tests inject a fake `query()`); defaults to
    *  importing the real optional SDK package. */
   sdkLoader?: () => Promise<any>;
@@ -956,7 +959,9 @@ class ClaudeSession implements RuntimeSession {
       // Kept even when the native tool below is also registered: it's a cheap,
       // harmless fallback for a shell/subprocess the agent spawns that can't
       // reach the in-process MCP tool directly.
-      systemPrompt: { type: "preset", preset: "claude_code", append: BIVY_ATTACH_SYSTEM_PROMPT },
+      // The user's account-wide instructions follow it; the repo's CLAUDE.md
+      // still loads through the preset as usual.
+      systemPrompt: { type: "preset", preset: "claude_code", append: [BIVY_ATTACH_SYSTEM_PROMPT, this.runtimeOptions.instructions].filter(Boolean).join("\n\n") },
       ...(this.runtimeOptions.executablePath ? { pathToClaudeCodeExecutable: this.runtimeOptions.executablePath } : {}),
     };
     if (resumeId) options.resume = resumeId;
@@ -1575,13 +1580,13 @@ export class ClaudeCodeRuntime implements AgentRuntime {
   }
 
   async createSession(options: OpenSessionOptions): Promise<OpenSessionResult> {
-    const session = new ClaudeSession(await withSessionCredentials(this.options, options.credentialLabels), options.workspace, options.toolInterceptor, options.toolProvider);
+    const session = new ClaudeSession({ ...(await withSessionCredentials(this.options, options.credentialLabels)), instructions: options.instructions?.text }, options.workspace, options.toolInterceptor, options.toolProvider);
     this.sessions.push(session);
     return { session };
   }
 
   async openSession(options: OpenSessionOptions & { sessionFile: string }): Promise<OpenSessionResult> {
-    const session = new ClaudeSession(await withSessionCredentials(this.options, options.credentialLabels), options.workspace, options.toolInterceptor, options.toolProvider, options.sessionFile);
+    const session = new ClaudeSession({ ...(await withSessionCredentials(this.options, options.credentialLabels)), instructions: options.instructions?.text }, options.workspace, options.toolInterceptor, options.toolProvider, options.sessionFile);
     this.sessions.push(session);
     return {
       session,

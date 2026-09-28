@@ -478,6 +478,9 @@ function threadParams(msg, extra = {}) {
     approvalPolicy: APPROVAL_POLICY,
     sandbox: SANDBOX_MODE,
     ...(selectedModel ? { model: selectedModel } : {}),
+    // The user's account-wide Bivy instructions ride as developer instructions,
+    // alongside (not instead of) the AGENTS.md files Codex loads itself.
+    ...(typeof msg.instructions === "string" && msg.instructions ? { developerInstructions: msg.instructions } : {}),
     ...extra,
   };
 }

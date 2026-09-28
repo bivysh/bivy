@@ -729,6 +729,11 @@ export interface NodeSettings {
   autoAttachToolImages: boolean;
   /** Agents may screenshot their app previews (`bivy app shot`). Off by default. */
   appScreenshots?: boolean;
+  /** Account-wide instructions handed to every agent session, alongside the
+   *  workspace's own AGENTS.md. Synced to all the account's machines; save with
+   *  `agentInstructionsBaseUpdatedAt` so an edit made elsewhere isn't overwritten.
+   *  Absent on nodes that predate the feature. */
+  agentInstructions?: { text: string; updatedAt: number; maxBytes: number };
 }
 
 export interface ConnectionAccountState {
