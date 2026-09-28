@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.7] - 2026-09-28
+
+### Added
+
+- Offer a Fix sign-in button on credential errors, and refresh and settings buttons in the model picker.
+
+### Fixed
+
+- Keep the agent you pick for a new session instead of reverting to the machine's default, and finish selecting an agent once its install completes.
+- Fall back to an agent's own local login when a stored OAuth token has expired and cannot be refreshed, instead of failing with an authentication error.
+- Stop another agent's model list from flashing into the model picker while switching agents.
+
 ## [0.18.6] - 2026-09-28
 
 ### Fixed
