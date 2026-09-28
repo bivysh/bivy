@@ -1847,6 +1847,12 @@ app.post("/node/settled", requireNode, asyncHandler(async (req, res) => {
   res.json({ ok: true, reaped });
 }));
 
+// Opaque app registry IDs (random hex); a node publishes at most 50 at once.
+function appIdsFrom(raw: unknown): string[] {
+  const list = Array.isArray(raw) ? raw : [];
+  return [...new Set(list.filter((id): id is string => typeof id === "string" && /^[a-f0-9]{32}$/.test(id)))].slice(0, 100);
+}
+
 // The node advertises its current session metadata (replace semantics). Titles
 // arrive E2E-encrypted; the control plane stores them opaquely. This powers the
 // cross-node unified session list without the control plane seeing content.
@@ -1899,6 +1905,9 @@ app.post("/node/sessions", requireNode, asyncHandler(async (req, res) => {
   const sessions = sessionAdvertsFrom(req.body?.sessions);
   await store.replaceNodeSessions(node.accountId, node.id, sessions);
   await deploymentExtension.publishSessions(node.accountId, sessions.map((session) => session.sessionId));
+  // Reporting only: an older or unavailable extension must not fail the advert.
+  await deploymentExtension.publishApps(node.accountId, appIdsFrom(req.body?.apps))
+    .catch((error) => console.warn("publishing app IDs failed", error instanceof Error ? error.message : error));
   await correlateHostedSessions(store, node, sessions);
   res.json({ ok: true, count: sessions.length });
 }));

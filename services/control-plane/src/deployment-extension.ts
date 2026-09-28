@@ -87,6 +87,12 @@ export class DeploymentExtension {
     await this.request("/v1/policy/sessions/publish", { subject: { accountId }, sessionIds });
   }
 
+  /** Records the app IDs a node currently has published, for operator reporting. */
+  async publishApps(accountId: string, appIds: string[]): Promise<void> {
+    if (!this.url || appIds.length === 0) return;
+    await this.request("/v1/apps/publish", { subject: { accountId }, appIds });
+  }
+
   async filterSessions(accountId: string, sessionIds: string[]): Promise<Set<string>> {
     if (!this.url) return new Set(sessionIds);
     const result = await this.request("/v1/policy/sessions/filter", { subject: { accountId }, sessionIds }) as { allowedIds?: unknown };

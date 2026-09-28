@@ -2121,6 +2121,9 @@ const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
 // the owner gets one push per burst of notes on a view ("2 notes on
 // Storefront"), which opens the Apps sheet at that app. Counts, names and IDs
 // only: the note text never goes through push.
+// The session advert carries published app IDs (operator reporting only).
+appRegistry.on("published", () => scheduleAdvertise());
+
 const NOTES_NOTIFY_MS = 20_000;
 const noteBursts = new Map<string, number>();
 appRegistry.on("notes", (viewId: string) => {
@@ -4277,7 +4280,7 @@ async function advertiseSessions() {
     await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json", authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}` },
-      body: JSON.stringify({ sessions }),
+      body: JSON.stringify({ sessions, apps: appRegistry.list().map((app) => app.id) }),
     });
   } catch {
     // best effort; the periodic resync and the next change will retry
