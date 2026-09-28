@@ -91,7 +91,11 @@ export class RelayTransport implements Transport {
   private devicePromise: Promise<DeviceKeypair> | null = null;
   private readonly sendQueue: string[] = [];
   private readonly reassemble = createFrameReassembler({ onReject: message => {
-    this.handlers.onError?.(message); this.ws?.close();
+    this.handlers.onError?.(message);
+    // An older node will resend the same over-limit response on every
+    // reconnect. Stop that loop and leave an explicit error until retry/update.
+    if (/limit/.test(message)) this.close();
+    else this.ws?.close();
   } });
   private readonly acceptFrame = createReplayGuard();
   private readonly transfers: EventTransferReceiver;

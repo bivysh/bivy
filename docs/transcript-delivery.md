@@ -41,8 +41,8 @@ its existing response format and uses the same image projection.
 - Page: 384 KiB decoded bytes (512 KiB base64, before encryption).
 - One logical response: 64 MiB UTF-8 JSON. This is an explicit resource limit,
   not a promise to load arbitrarily large sessions in memory.
-- Sender snapshots: at most 128 MiB and 16 entries, with a fixed two-minute
-  lifetime. Identical responses reuse snapshots; active snapshots are not
+- Sender snapshots: at most 128 MiB and 16 entries, with two-minute idle expiry
+  and a ten-minute absolute lifetime. Successful page reads renew the idle lease. Identical responses reuse snapshots; active snapshots are not
   evicted to make room for new ones. Expiry and capacity return explicit errors.
 - Client: one active response, plus at most 8 MiB / 4,096 queued later events.
 - Page timeout: ten seconds, two retries. A retry resumes at the missing byte

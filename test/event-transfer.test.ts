@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { randomBytes } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { WebSocketServer, type WebSocket } from "ws";
+import { RelayConnector } from "../src/remote/relay-client.js";
+import { PairingStore } from "../src/device-registry.js";
 import { EventTransferStore, MAX_TRANSFER_BYTES, TRANSFER_PAGE_BYTES } from "../src/remote/event-transfer.js";
 import { EventTransferReceiver as NodeReceiver } from "../src/remote/event-transfer-receiver.js";
 import { EventTransferReceiver, MAX_TRANSFER_BYTES as CLIENT_MAX, TRANSFER_PAGE_BYTES as CLIENT_PAGE } from "../packages/core/src/event-transfer.js";
@@ -116,4 +122,63 @@ test("reconnect discards unfinished snapshots and ignores late pages", () => {
   receiver.accept(store.read(command!) as ServerEvent);
   receiver.accept({ type: "session.history", messages: ["fresh"] });
   assert.deepEqual(output, [{ type: "session.history", messages: ["fresh"] }]);
+});
+
+test("the real relay connector serves authenticated pages without recursively transferring page replies", { timeout: 15_000 }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-transfer-relay-"));
+  const pairing = PairingStore.load(dir);
+  const server = new WebSocketServer({ port: 0 });
+  await new Promise<void>(resolve => server.once("listening", resolve));
+  let socket: WebSocket | undefined;
+  const event = { type: "session.history", sessionId: "s", messages: ["x".repeat(5 * 1024 * 1024)] };
+  let resolve!: (event: ServerEvent) => void;
+  let reject!: (error: unknown) => void;
+  const delivered = new Promise<ServerEvent>((yes, no) => { resolve = yes; reject = no; });
+  const receiver = new EventTransferReceiver({
+    send: async command => { for (const frame of frameMessages(sealFrame(pairing.roomKey(), command))) socket!.send(frame); },
+    emit: resolve,
+    fault: reject,
+  });
+  const reassemble = createFrameReassembler({ onReject: reject });
+  server.on("connection", client => {
+    socket = client;
+    client.send(JSON.stringify({ t: "ready" }));
+    client.on("message", data => {
+      const envelope = JSON.parse(String(data));
+      if (envelope.t !== "frame") return;
+      const full = reassemble(envelope);
+      if (full) receiver.accept(openFrame(pairing.roomKey(), full).data as ServerEvent);
+    });
+  });
+  const port = (server.address() as { port: number }).port;
+  const connector = new RelayConnector({ url: `ws://127.0.0.1:${port}`, room: "test", roomToken: "test" },
+    () => reject(new Error("transfer.read must not reach the application command router")), { pairing });
+  try {
+    connector.start();
+    const deadline = Date.now() + 2000;
+    while (!connector.connected && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.ok(connector.connected);
+    connector.sendEvent(event);
+    assert.deepEqual(await delivered, event);
+  } finally {
+    receiver.reset();
+    reassemble.reset();
+    connector.stop();
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("active slow readers renew the idle lease, but cannot retain a snapshot forever", () => {
+  let now = 0;
+  const store = new EventTransferStore(() => now, 1);
+  const offer = store.offer({ type: "history", data: "test" })!;
+  const transferId = (offer.transfer as { id: string }).id;
+  for (let i = 1; i <= 5; i++) {
+    now = i * 110_000;
+    assert.equal(store.read({ transferId, offset: 0 }).error, undefined);
+  }
+  now = 600_001;
+  assert.match(String(store.read({ transferId, offset: 0 }).error), /expired/);
+  store.clear();
 });

@@ -10,9 +10,10 @@ export { TRANSFER_PAGE_BYTES, MAX_TRANSFER_BYTES };
 const MAX_STORED_BYTES = 128 * 1024 * 1024;
 const TTL_MS = 120_000;
 const INLINE_EVENT_BYTES = 4 * 1024 * 1024;
+const MAX_LIFETIME_MS = 10 * 60_000;
 
 export class EventTransferStore {
-  private entries = new Map<string, { body: Buffer; expires: number; hash: string }>();
+  private entries = new Map<string, { body: Buffer; expires: number; deadline: number; hash: string }>();
   private bytes = 0;
   private timer?: ReturnType<typeof setTimeout>;
   constructor(private now: () => number = Date.now, private inlineBytes = INLINE_EVENT_BYTES) {}
@@ -43,7 +44,7 @@ export class EventTransferStore {
         type: "session.error", ...context, code: "delivery_busy", error: "The machine is serving large responses. Please retry shortly.",
       };
       id = randomBytes(24).toString("hex");
-      this.entries.set(id, { body, hash, expires: this.now() + TTL_MS });
+      this.entries.set(id, { body, hash, expires: this.now() + TTL_MS, deadline: this.now() + MAX_LIFETIME_MS });
       this.bytes += body.length;
       if (!this.timer) {
         this.timer = setInterval(() => this.prune(), TTL_MS);
@@ -66,6 +67,7 @@ export class EventTransferStore {
     if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0 || offset >= entry.body.length || offset % TRANSFER_PAGE_BYTES !== 0) {
       return { ...base, error: "Invalid transfer offset." };
     }
+    entry.expires = Math.min(entry.deadline, this.now() + TTL_MS);
     return { ...base, data: entry.body.subarray(offset, offset + TRANSFER_PAGE_BYTES).toString("base64") };
   }
 
