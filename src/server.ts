@@ -223,6 +223,7 @@ import {
 } from "./stt.js";
 import { synthesizeOpenAiSpeech } from "./tts.js";
 import { seal, open } from "./e2e.js";
+import { recoverModelAuthKey } from "./model-auth-key-recovery.js";
 import { RunDelegationService, parseDelegationSource, type StartRunInput } from "./run-tools.js";
 import {
   ControlPlaneTaskPoller,
@@ -3510,11 +3511,6 @@ async function syncModelAuthFromControlPlane() {
     const targetVault = hostedCustody ? hostedData.hostedVault : data.vault;
     let vaultKeyB64 = hostedCustody ? readHostedModelAuthVaultKey() : readLocalModelAuthVaultKey();
 
-    if (!hostedCustody && !vaultKeyB64 && data.wrappedKey?.wrappedKey) {
-      vaultKeyB64 = pairingStore.unwrapFromNodePublicKey(data.wrappedKey.wrappedByPublicKey, data.wrappedKey.wrappedKey);
-      writeLocalModelAuthVaultKey(vaultKeyB64);
-    }
-
     // Hosted runners may decrypt ONLY the separately encrypted snapshot of
     // records that the user explicitly granted to unattended execution.
     if (hostedCustody && !vaultKeyB64 && hostedData.hostedKey && hostedData.hostedVault && Buffer.from(hostedData.hostedKey, "base64").length === 32) {
@@ -3522,10 +3518,23 @@ async function syncModelAuthFromControlPlane() {
       writeHostedModelAuthVaultKey(vaultKeyB64);
     }
 
-    if (targetVault?.ciphertext && vaultKeyB64) {
+    if (targetVault?.ciphertext && (vaultKeyB64 || (!hostedCustody && data.wrappedKey))) {
       let decrypted;
       try {
-        decrypted = decryptModelAuthEnvelope(targetVault.ciphertext, vaultKeyB64);
+        if (hostedCustody) {
+          decrypted = decryptModelAuthEnvelope(targetVault.ciphertext, vaultKeyB64!);
+        } else {
+          const wrapped = data.wrappedKey;
+          const recovered = recoverModelAuthKey({
+            localKey: vaultKeyB64,
+            unwrap: wrapped ? () => pairingStore.unwrapFromNodePublicKey(wrapped.wrappedByPublicKey, wrapped.wrappedKey) : undefined,
+            decrypt: (key) => decryptModelAuthEnvelope(targetVault.ciphertext, key),
+          });
+          if (!recovered) throw new Error("No available key can decrypt the account vault");
+          vaultKeyB64 = recovered.key;
+          decrypted = recovered.value;
+          writeLocalModelAuthVaultKey(vaultKeyB64);
+        }
       } catch (error) {
         // Most commonly this node cached the previous generation while another
         // survivor completed a revoke-triggered re-key. Forget it and request a
@@ -3536,7 +3545,10 @@ async function syncModelAuthFromControlPlane() {
         } else {
           forgetLocalModelAuthVaultKey();
           lastPushedModelAuthCiphertext = "";
-          await modelAuthFetch("/node/model-auth-key/request", { method: "POST", body: JSON.stringify({ publicKey: pairingStore.nodePublicKeyB64() }) });
+          await modelAuthFetch("/node/model-auth-key/request", {
+            method: "POST",
+            body: JSON.stringify({ publicKey: pairingStore.nodePublicKeyB64(), rejectedWrappedKey: data.wrappedKey?.wrappedKey }),
+          });
           ensureModelAuthColdStart();
         }
         console.warn("[auth-sync] cached vault key is stale; requested the rotated key:", (error as Error).message);

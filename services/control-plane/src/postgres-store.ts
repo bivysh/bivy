@@ -2224,8 +2224,16 @@ export class PostgresStore implements ControlPlaneStore {
     return row ? { nodeId: row.node_id, wrappedKey: row.wrapped_key, wrappedByNodeId: row.wrapped_by_node_id, wrappedByPublicKey: row.wrapped_by_public_key, updatedAt: new Date(row.updated_at).toISOString() } : undefined;
   }
 
-  async requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string): Promise<boolean> {
+  async requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string, rejectedWrappedKey?: string): Promise<boolean> {
     await this.setModelAuthNodePublicKey(accountId, nodeId, publicKey);
+    // A node can reject its own unusable wrap. Compare-and-delete so a delayed
+    // retry cannot remove a fresh replacement delivered by a peer meanwhile.
+    if (rejectedWrappedKey) {
+      await this.query(
+        `DELETE FROM model_auth_wrapped_keys WHERE account_id=$1 AND node_id=$2 AND wrapped_key=$3`,
+        [accountId, nodeId, rejectedWrappedKey],
+      );
+    }
     const existing = await this.getModelAuthWrappedKey(accountId, nodeId);
     if (existing) return false;
     const pending = await this.query(

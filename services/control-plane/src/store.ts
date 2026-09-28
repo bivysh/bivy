@@ -1432,7 +1432,7 @@ export interface VaultRepository {
   setModelAuthNodePublicKey(accountId: string, nodeId: string, publicKey: string): Promise<void>;
   getModelAuthWrappedKey(accountId: string, nodeId: string): Promise<ModelAuthWrappedKey | undefined>;
   /** Queue a key request. Returns true only when peers need a new wake-up. */
-  requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string): Promise<boolean>;
+  requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string, rejectedWrappedKey?: string): Promise<boolean>;
   listModelAuthKeyRequests(accountId: string, exceptNodeId: string): Promise<ModelAuthKeyRequest[]>;
   setModelAuthWrappedKey(accountId: string, targetNodeId: string, wrappedByNodeId: string, wrappedByPublicKey: string, wrappedKey: string): Promise<ModelAuthWrappedKey>;
 

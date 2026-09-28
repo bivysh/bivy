@@ -2271,7 +2271,8 @@ app.post("/node/model-auth-key/request", requireNode, modelAuthKeyRequestRateLim
   const node = (req as Request & { node: NodeRecord }).node;
   const publicKey = String(req.body?.publicKey ?? "").trim();
   if (!publicKey) return res.status(400).json({ error: "Missing publicKey" });
-  const queued = await store.requestModelAuthWrappedKey(node.accountId, node.id, publicKey);
+  const rejectedWrappedKey = typeof req.body?.rejectedWrappedKey === "string" ? req.body.rejectedWrappedKey : undefined;
+  const queued = await store.requestModelAuthWrappedKey(node.accountId, node.id, publicKey, rejectedWrappedKey);
   // Event-driven vault-key hand-off: wake the account's other (peer) nodes over
   // the relay so one of them runs a model-auth sync and answers this request now,
   // instead of on its 30s poll. Notify only for a new/changed request and exclude
