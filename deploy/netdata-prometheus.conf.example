@@ -1,0 +1,16 @@
+# Example Netdata go.d Prometheus collector config for a single self-hosted Bivy stack.
+# Install with:
+#   sudo install -m 0644 deploy/netdata-prometheus.conf.example /etc/netdata/go.d/prometheus.conf
+#   sudo systemctl restart netdata
+#
+# These URLs match deploy/docker-compose.yml defaults, which publish metrics on
+# host loopback only. If you run multiple stacks on one host, give each stack
+# unique *_METRICS_PUBLISHED_PORT values and duplicate these jobs with matching
+# names/ports.
+
+jobs:
+  - name: bivy_control_plane
+    url: http://127.0.0.1:9465/metrics
+
+  - name: bivy_relay
+    url: http://127.0.0.1:9464/metrics
