@@ -136,6 +136,56 @@ for (const theme of themes) {
   });
 }
 
+test("opening a published preview skips discovery and sharing can close during a request", async ({ page }) => {
+  await page.evaluate((r) => {
+    const w = window as any;
+    const command = w.c.appCommand;
+    w.c.appCommand = (kind: string, ...args: unknown[]) => {
+      if (kind === "apps.offers" || kind === "apps.share") return new Promise(() => {});
+      return command(kind, ...args);
+    };
+    w.c.store.apply({ type: "session.event", sessionId: "s", event: { type: "app_review", id: r.id, review: r } });
+  }, review({ screenshotsOff: true }));
+  await page.route("https://preview.example.net/**", (route) => route.fulfill({ contentType: "text/html", body: "<h1>Preview</h1>" }));
+  await page.getByRole("button", { name: "Open preview", exact: true }).click();
+  const preview = page.getByRole("dialog", { name: "Preview: Storefront" });
+  await expect(preview.frameLocator("iframe").getByRole("heading")).toBeVisible();
+  await preview.getByRole("button", { name: "Share Site" }).click();
+  await page.getByRole("button", { name: "Copy share link" }).click();
+  const share = page.getByRole("dialog", { name: "Share Site", exact: true });
+  await share.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(share).toHaveCount(0);
+  await preview.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+});
+
+test("long app histories defer offscreen screenshots and keep their loading footprint", async ({ page }) => {
+  await page.evaluate((base) => {
+    const w = window as any;
+    const fetch = w.c.fetchAttachment;
+    w.shotRequests = [];
+    w.finishShots = [];
+    w.c.fetchAttachment = (hash: string) => {
+      w.shotRequests.push(hash);
+      return new Promise(resolve => w.finishShots.push(async () => resolve(await fetch(hash))));
+    };
+    for (let i = 0; i < 30; i++) {
+      const r = { ...base, id: `review-${i}`, viewId: `view-${i}`, shot: { hash: i.toString(16).padStart(64, "0"), width: 780, height: 1688, size: 10 } };
+      w.c.store.apply({ type: "session.event", sessionId: "s", event: { type: "app_review", id: r.id, review: r } });
+    }
+  }, review({}));
+  const card = page.locator(".review-card").last();
+  await card.scrollIntoViewIfNeeded();
+  await expect.poll(() => page.evaluate(() => (window as any).shotRequests.length)).toBeGreaterThan(0);
+  expect(await page.evaluate(() => (window as any).shotRequests.length)).toBeLessThan(30);
+  const shotButton = card.locator(".review-shot");
+  const before = await shotButton.boundingBox();
+  await page.evaluate(() => Promise.all((window as any).finishShots.map((finish: () => Promise<void>) => finish())));
+  await expect(shotButton.locator("img")).toBeVisible();
+  const after = await shotButton.boundingBox();
+  expect(after!.height).toBeCloseTo(before!.height, 0);
+});
+
 test("without agent screenshots, the card offers to turn them on and never does it by itself", async ({ page }) => {
   await page.evaluate(() => { const w = window as any; w.settings = []; w.c.setNodeSettings = async (patch: unknown) => { w.settings.push(patch); }; });
   await page.evaluate((r) => (window as any).c.store.apply({ type: "session.event", sessionId: "s", event: { type: "app_review", id: r.id, review: r } }), review({ trigger: "asked", screenshotsOff: true }));

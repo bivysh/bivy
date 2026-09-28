@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AppReview, ReviewCardMode, ReviewShot, SessionAppsResult } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
 import { AppsSheet, REVIEW_MODE_LABELS, notesDraft } from "./AppsSheet.js";
@@ -52,8 +52,18 @@ export function ReviewCard({ review }: { review: AppReview }) {
   // Mute applies to the run in progress.
   const working = activeSession.activeSessionId === review.sessionId && activeSession.working;
   const online = connection.status === "online";
-  const now = useShot(review.expired ? undefined : review.shot);
-  const before = useShot(review.expired ? undefined : review.before);
+  const card = useRef<HTMLElement>(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry?.isIntersecting) { setVisible(true); observer.disconnect(); }
+    }, { rootMargin: "300px" });
+    if (card.current) observer.observe(card.current);
+    return () => observer.disconnect();
+  }, []);
+  // Historical cards must not flood the encrypted channel on session load.
+  const now = useShot(!visible || review.expired ? undefined : review.shot);
+  const before = useShot(!visible || review.expired ? undefined : review.before);
   const [side, setSide] = useState<"before" | "now">("now");
   const [sheet, setSheet] = useState<false | "preview" | "apps">(false);
   const [mode, setMode] = useState<ReviewCardMode | null>(null);
@@ -103,7 +113,7 @@ export function ReviewCard({ review }: { review: AppReview }) {
   const label = `${review.name}${review.view && review.view !== review.name ? ` · ${review.view}` : ""}`;
   const meta = `${TRIGGER_LABELS[review.trigger]} · ${review.path}`;
   return <>
-    <section className="apps-card review-card" aria-label={`${review.name}: ${TRIGGER_LABELS[review.trigger].toLowerCase()}`}>
+    <section ref={card} className="apps-card review-card" aria-label={`${review.name}: ${TRIGGER_LABELS[review.trigger].toLowerCase()}`}>
       <AppRow tile={appInitial(review.name)} name={label} meta={meta}
         action={<MoreMenu label={`Preview card options for ${review.name}`} onOpen={loadMode} items={[
           { label: "App options", onSelect: () => setSheet("apps") },
@@ -117,14 +127,14 @@ export function ReviewCard({ review }: { review: AppReview }) {
         <span className="banner-text">Turn on agent screenshots to see the app here. Bivy takes them with Chrome on this machine.</span>
         <span className="banner-actions"><button className="btn" disabled={busy || !online} onClick={() => void enableShots()}>Turn on</button></span>
       </div> : <div className="review-stage">
-        {review.expired || shown.state === "missing" || shown.state === "none"
+        {review.expired || shown.state === "missing" || !review.shot
           ? <p className="review-gone">{review.expired || shown.state === "missing" ? "Screenshot no longer stored" : "No screenshot this time"}</p>
-          : <button type="button" className="review-shot" onClick={() => setSheet("preview")} aria-label={`Open preview of ${review.name} at ${review.path}`}>
+          : <button type="button" className="review-shot" style={review.shot ? { aspectRatio: `${review.shot.width} / ${review.shot.height}`, blockSize: "var(--review-shot-height)", maxInlineSize: "100%" } : undefined} onClick={() => setSheet("preview")} aria-label={`Open preview of ${review.name} at ${review.path}`}>
               {shown.url ? <img src={shown.url} alt={`${review.name} at ${review.path}, ${side === "before" && hasBefore ? "before this run" : "now"}`} width={review.shot?.width} height={review.shot?.height} />
                 : <span className="review-loading"><Spinner size="sm" /><span className="sr-only">Loading screenshot…</span></span>}
             </button>}
-        {hasBefore && <div className="segmented review-side" role="radiogroup" aria-label="Show the app">
-          {(["before", "now"] as const).map((item) => <button key={item} type="button" role="radio" className="seg-btn" aria-checked={side === item} onClick={() => setSide(item)}>
+        {review.before && !review.expired && <div className="segmented review-side" role="radiogroup" aria-label="Show the app">
+          {(["before", "now"] as const).map((item) => <button key={item} type="button" role="radio" className="seg-btn" disabled={!hasBefore} aria-checked={side === item} onClick={() => setSide(item)}>
             {item === "before" ? "Before" : "Now"}</button>)}
         </div>}
       </div>}

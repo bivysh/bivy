@@ -67,16 +67,19 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
   useEffect(() => {
     const current = ++generation.current;
     setBusy(true); setError(""); setResult(null); setLink(null); setConfirm(null);
-    const offered = controller.appCommand("apps.offers", sessionId, {}, nodeId).then((event) => (event as unknown as SessionAppOffersResult).offers ?? [], () => []);
-    void Promise.all([controller.appCommand("apps.list", sessionId, {}, nodeId), offered]).then(([event, found]) => {
+    setOffers([]);
+    // Discovery may scan processes/ports. Never hold a published preview behind it.
+    if (!appId) void controller.appCommand("apps.offers", sessionId, {}, nodeId).then((event) => {
+      if (generation.current === current) setOffers((event as unknown as SessionAppOffersResult).offers ?? []);
+    }, () => {});
+    void controller.appCommand("apps.list", sessionId, {}, nodeId).then((event) => {
       if (generation.current !== current) return;
       setResult(event as unknown as SessionAppsResult);
-      setOffers(found);
     }).catch((e: unknown) => {
       if (generation.current === current) setError(e instanceof Error ? e.message : "Could not load apps.");
     }).finally(() => { if (generation.current === current) setBusy(false); });
     return () => { generation.current = current + 1; };
-  }, [sessionId, machine, online, refresh, nodeId]);
+  }, [sessionId, machine, online, refresh, nodeId, appId]);
 
   // Reviewer notes and publishes land while the sheet is open: refresh the
   // list only, keeping any link or confirmation on screen.
