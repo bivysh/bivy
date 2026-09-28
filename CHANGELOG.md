@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.8] - 2026-09-28
+
+### Fixed
+
+- Keep attachments you've added to the composer when you navigate away and come back before sending.
+
 ## [0.18.7] - 2026-09-28
 
 ### Added
