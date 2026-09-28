@@ -148,7 +148,8 @@ const embedded=parent!==window;
 const toBivy=m=>parent.postMessage(Object.assign({source:'bivy-preview'},m),location.ancestorOrigins?.[0]||new URL(metadata.returnTo).origin);
 const storageKey='bivy-preview';
 const safePath=p=>typeof p==='string'&&p.startsWith('/')&&!p.startsWith('//')&&p.length<=2048?p:'/';
-const open=(path,message)=>{status.hidden=false;status.textContent=message;resetConsole();frame.src=metadata.origin+safePath(path);};
+const reviewerTools=ready=>{if(metadata?.reviewer)for(const id of ['point','draw','errors'])$(id).disabled=!ready;};
+const open=(path,message)=>{status.hidden=false;status.textContent=message;resetConsole();reviewerTools(false);frame.src=metadata.origin+safePath(path);};
 function show(data,launch){
   metadata=data;
   if(data.reviewer){
@@ -171,6 +172,7 @@ function show(data,launch){
   frame.src=data.origin+(launch?'/__bivy/open#'+(embedded?'e:':'')+launch+(startPage?'~'+startPage:''):'/');
   back.hidden=Boolean(data.reviewer)||(embedded&&Boolean(data.returnTo));
   for(const b of [reload,$('point'),$('errors')])b.disabled=false;
+  reviewerTools(false);
   status.textContent='Loading app…';
   frame.onload=()=>{status.hidden=true;void loadCompare();if(revision===null){revision=-1;watch();}else if(wake)wake();};
   // A Bivy client framing the shell says whether it can take dictation.
@@ -482,7 +484,7 @@ addEventListener('message',e=>{
     ask.hidden=!metadata.returnTo;
   }else if(d.source==='bivy-inspector'){
     if(d.type==='note-sent'&&metadata.reviewer)finishNote(d);
-    else if(d.type==='route')currentPath=safePath(d.path);
+    else if(d.type==='route'){currentPath=safePath(d.path);reviewerTools(true);}
     else if(d.type==='console'&&(d.level==='error'||d.level==='warn')){entries.push({level:d.level,text:String(d.text).slice(0,500)});if(entries.length>50)entries.shift();renderConsole();}
     else if(d.type==='picked')picked(d);
     else if(d.type==='release'&&heldAt){heldAt=0;stopListening();}

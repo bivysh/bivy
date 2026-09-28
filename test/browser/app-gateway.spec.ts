@@ -535,8 +535,8 @@ test("Compare shows before and after the agent's last change", async ({ page }, 
   } finally { fixture.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });
 
-// Someone with a shared link sees the app unframed with one extra control:
-// point at an element, write a note, send it. The owner gets it in Apps.
+// A shared link opens the isolated shell in reviewer mode. Pointing creates
+// feedback for the owner, never an agent command (even with screenshots off).
 test("a reviewer on a shared link can pin a note to an element", async ({ page }, testInfo) => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bivy-review-"));
   const registry = new AppRegistry();
@@ -551,15 +551,19 @@ test("a reviewer on a shared link can pin a note to an element", async ({ page }
       await (response ? route.fulfill({ response }) : route.abort()).catch(() => {});
     });
     await page.goto(gateway.share(id).url);
-    await page.getByRole("button", { name: "Leave a note" }).click();
-    await expect(page.getByText("Tap the part of the page your note is about.")).toBeVisible();
-    await pointAt(page, page.getByRole("button", { name: "Add transaction" }));
+    const app = page.frameLocator('#app');
+    await expect(app.getByRole("button", { name: "Add transaction" })).toBeVisible();
+    await page.getByRole("button", { name: "Point", exact: true }).click();
+    await expect(page.locator('#pointing')).toBeVisible();
+    await pointAt(app, app.getByRole("button", { name: "Add transaction" }));
     // Under 16px, iOS zooms the page in when the note box takes focus.
-    await expect(page.getByRole("textbox", { name: "Your note" })).toHaveCSS("font-size", "16px");
-    await page.getByRole("textbox", { name: "Your note" }).fill("Use a plus icon here");
+    const note = page.getByRole("textbox", { name: "What should change?" });
+    await expect(note).toHaveCSS("font-size", "16px");
+    await expect(page.locator('#mic')).toBeHidden();
+    await note.fill("Use a plus icon here");
     await page.screenshot({ path: testInfo.outputPath("reviewer-note.png") });
     await page.getByRole("button", { name: "Send note" }).click();
-    await expect(page.getByText("Sent. Thanks")).toBeVisible();
+    await expect(page.locator('#status')).toContainText("Note sent without a picture");
     expect(registry.getView(id)!.notes).toEqual([expect.objectContaining({ note: "Use a plus icon here", selector: "button.cta", text: "Add transaction", path: "/" })]);
   } finally { fixture.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });
