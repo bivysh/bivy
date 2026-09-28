@@ -2011,6 +2011,69 @@ describe("SessionStore", () => {
     expect(store.getState().catalogs.currentModel?.id).toBe("sonnet");
   });
 
+  it("keeps a draft's chosen agent when the node reports a different default", () => {
+    // Regression: picking Claude on a new-session draft snapped back to Codex.
+    // A Cloud/ephemeral draft never sends runtime.select (the agent rides on
+    // session.new), so the node's default stays Codex and any later broadcast —
+    // another device, a finished install, a settings save — overwrote the pick.
+    const store = new SessionStore();
+    store.apply({
+      type: "runtimes.list",
+      current: { id: "codex", displayName: "Codex", current: true },
+      runtimes: [
+        { id: "codex", displayName: "Codex", current: true },
+        { id: "claude", displayName: "Claude Code" },
+      ],
+    });
+    expect(store.getState().catalogs.selectedAgentId).toBe("codex"); // node default seeds an unchosen draft
+
+    store.setSelectedAgentLocal("claude");
+    store.apply({
+      type: "runtime.updated",
+      current: { id: "codex", displayName: "Codex", current: true },
+      runtimes: [
+        { id: "codex", displayName: "Codex", current: true },
+        { id: "claude", displayName: "Claude Code" },
+      ],
+    });
+    expect(store.getState().catalogs.selectedAgentId).toBe("claude");
+    expect(store.getState().catalogs.currentAgentName).toBe("Claude Code");
+  });
+
+  it("ignores a models.list pushed for an agent other than the one on screen", () => {
+    // The node pushes model lists it was not asked for: every agent the picker
+    // prefetched warms a scratch session that emits one. Those carry no session
+    // id, so on a draft nothing but the runtime tag distinguishes them — applied
+    // blindly they flash another agent's models over the selected one.
+    const store = new SessionStore();
+    store.apply({
+      type: "runtimes.list",
+      current: { id: "claude", displayName: "Claude Code", current: true },
+      runtimes: [
+        { id: "claude", displayName: "Claude Code", current: true },
+        { id: "codex", displayName: "Codex" },
+      ],
+    });
+    store.apply({
+      type: "models.list",
+      runtimeId: "claude",
+      current: { id: "sonnet", provider: "anthropic" },
+      models: [{ id: "sonnet", provider: "anthropic" }],
+    });
+    store.apply({
+      type: "models.list",
+      runtimeId: "codex",
+      current: { id: "gpt-5", provider: "openai" },
+      models: [{ id: "gpt-5", provider: "openai" }],
+    });
+    expect(store.getState().catalogs.modelsRuntimeId).toBe("claude");
+    expect(store.getState().catalogs.models.map((m) => m.id)).toEqual(["sonnet"]);
+
+    // It was still cached, so switching to that agent repaints it with no round trip.
+    store.setSelectedAgentLocal("codex");
+    expect(store.getState().catalogs.models.map((m) => m.id)).toEqual(["gpt-5"]);
+  });
+
   it("still seeds the model when the held list is for the same agent (no flash)", () => {
     // The scoping above must not blank the pill when the cached list already
     // belongs to the agent being seeded — the common case on a second new

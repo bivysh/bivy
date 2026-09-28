@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { activationFromState, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionSummary } from "@bivy/core";
+import { activationFromState, authProviderForRuntime, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionSummary } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -453,6 +453,16 @@ export function App() {
       if (provider && nodeId) controller.store.setNeedsModelAuth({ nodeId, provider });
       return;
     }
+    // "My credential is broken" — raise the sign-in sheet for the provider we
+    // could name (subscription OAuth or API key, whichever that provider
+    // offers), else Settings → Providers & credentials, which covers every one.
+    if (name === "fix-auth" || name.startsWith("fix-auth:")) {
+      const provider = name.startsWith("fix-auth:") ? name.slice("fix-auth:".length) : "";
+      const nodeId = state.connection.currentNodeId;
+      if (provider && nodeId) controller.store.setNeedsModelAuth({ nodeId, provider });
+      else openSettings("providers");
+      return;
+    }
     if (name.startsWith("retry-at-reset:")) { controller.setLimitRetry(true); return; }
     switch (name) {
       case "/new": controller.newSession(); break;
@@ -467,6 +477,18 @@ export function App() {
         break;
     }
   }, [state.connection.currentNodeId]);
+
+  // Where a credential-shaped error should send the user. Agents report most
+  // auth failures as prose ("Failed to authenticate: OAuth session expired…")
+  // with no provider attached, so resolve it from the agent running the session
+  // and the provider behind its model; with neither, the error still gets a
+  // route — Settings → Providers & credentials (see runCommand).
+  const authAction = useMemo(() => {
+    const runtimeId = state.activeSession.activeRuntimeId ?? state.catalogs.selectedAgentId;
+    const modelProvider = state.catalogs.currentModel?.provider;
+    const provider = authProviderForRuntime(runtimeId, typeof modelProvider === "string" ? modelProvider : undefined);
+    return provider ? `fix-auth:${provider}` : "fix-auth";
+  }, [state.activeSession.activeRuntimeId, state.catalogs.selectedAgentId, state.catalogs.currentModel]);
 
   // Standalone (session-less) terminal: opened from the sidebar button, always
   // scoped to a node's default workspace rather than any chat session. Skips
@@ -1004,6 +1026,7 @@ export function App() {
               sessionKey={state.activeSession.activeSessionId}
               focusView={focusView}
               onAction={runCommand}
+              authAction={authAction}
               header={activeSession?.launchProgress ? <SessionLaunchProgressView
                 progress={activeSession.launchProgress}
                 onChooseModel={model => controller.chooseLaunchModel(activeSession.sessionId, model)}

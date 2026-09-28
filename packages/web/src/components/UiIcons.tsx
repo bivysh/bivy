@@ -98,6 +98,11 @@ export function LogsIcon({ size = 20, ...props }: IconProps) {
   return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><path d="M5 6h14M5 10h14M5 14h9M5 18h6" /></svg>;
 }
 
+/** Toothed wheel — settings. */
+export function GearIcon({ size = 20, ...props }: IconProps) {
+  return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><circle cx="12" cy="12" r="6.4" /><circle cx="12" cy="12" r="2.5" /><path d="M12 4v1.6M12 18.4V20M4 12h1.6M18.4 12H20M6.3 6.3l1.2 1.2M16.5 16.5l1.2 1.2M17.7 6.3l-1.2 1.2M7.5 16.5l-1.2 1.2" /></svg>;
+}
+
 /** Circular arrow — refresh. */
 export function RefreshIcon({ size = 20, ...props }: IconProps) {
   return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><path d="M20 12a8 8 0 1 1-2.34-5.66L20 8.5" /><path d="M20 4v4.5h-4.5" /></svg>;

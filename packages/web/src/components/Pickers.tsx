@@ -10,7 +10,8 @@ import { useModalEscape } from "../modalStack.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
 import { ModelAccounts } from "./ModelAccounts.js";
 import { modelAccountChoice, modelAccountProject } from "../modelAccounts.js";
-import { ChevronRightIcon } from "./UiIcons.js";
+import { ChevronRightIcon, GearIcon, RefreshIcon } from "./UiIcons.js";
+import { Spinner } from "./Spinner.js";
 import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { openSettings } from "../settingsRoute.js";
 import { agentPickerLabel, filterAndSortAgentRuntimes, isTopAgent } from "../agentPickerCatalog.js";
@@ -774,12 +775,30 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
   // sending the user to Settings. Just the id (not a name snapshot) so the
   // header stays live if providers.list resolves the display name later.
   const [connecting, setConnecting] = useState<string | null>(null);
-  useEffect(() => {
+  const refreshModels = () => {
     controller.listModels();
     controller.listProviders();
     controller.listCredentialRecords();
     controller.getCredentialPresets();
-  }, [state.connection.currentNodeId]);
+  };
+  useEffect(refreshModels, [state.connection.currentNodeId]);
+
+  // Manual refresh: the list is a cache of what the node resolved for this
+  // agent, and it can be behind reality — a credential connected on another
+  // device, or an agent whose real lineup only lands once its catalog is warm.
+  // The spinner is cleared by the list actually changing (or a timeout), so the
+  // button reports the round trip rather than a fixed animation.
+  const [refreshing, setRefreshing] = useState(false);
+  const modelsKey = `${state.catalogs.modelsRuntimeId ?? ""}:${state.catalogs.models.length}:${state.catalogs.models.map((m) => m.id).join(",")}`;
+  useEffect(() => {
+    if (!refreshing) return;
+    setRefreshing(false);
+  }, [modelsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!refreshing) return;
+    const timer = setTimeout(() => setRefreshing(false), 2500);
+    return () => clearTimeout(timer);
+  }, [refreshing]);
 
   // The connect form has no direct ack of its own; once the node's next
   // providers.list reports this provider configured, its models already moved
@@ -841,7 +860,37 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
   }
 
   return (
-    <Sheet title="Model" ariaLabel="Model" onClose={onClose} headExtra={<ReasoningPill state={state} />} autoFocusSearch={false} size="large">
+    <Sheet
+      title="Model"
+      ariaLabel="Model"
+      onClose={onClose}
+      headExtra={
+        <>
+          <ReasoningPill state={state} />
+          <button
+            type="button"
+            className="btn ghost icon"
+            onClick={() => { setRefreshing(true); refreshModels(); }}
+            disabled={refreshing}
+            aria-label="Refresh models"
+            title="Refresh models"
+          >
+            {refreshing ? <Spinner size="xs" /> : <RefreshIcon size={18} />}
+          </button>
+          <button
+            type="button"
+            className="btn ghost icon"
+            onClick={() => { onClose(); openSettings("providers"); }}
+            aria-label="Model and provider settings"
+            title="Model and provider settings"
+          >
+            <GearIcon size={18} />
+          </button>
+        </>
+      }
+      autoFocusSearch={false}
+      size="large"
+    >
       <input className="picker-search" placeholder="Search models…" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="picker-list">
         {connectedModels.length === 0 && otherProviders.length === 0 && <div className="picker-empty">No models available.</div>}

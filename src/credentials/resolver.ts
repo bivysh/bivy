@@ -86,13 +86,27 @@ export class NodeCredentialResolver implements AgentCredentialStore {
     // under the store lock).
     let token = typeof cred.access === "string" ? cred.access : "";
     const expires = Number(cred.expires) || 0;
-    if (!token || expires <= Date.now() + OAUTH_REFRESH_SKEW_MS || context?.rejectedToken === token) {
+    // Spent: the provider already refused this exact token, or its lifetime is
+    // over. A token merely inside the refresh skew is still live — that case
+    // refreshes early but may keep the current token if the refresh fails.
+    // An unknown expiry (0) is never assumed spent.
+    const spent = !token || context?.rejectedToken === token || (expires > 0 && expires <= Date.now());
+    if (spent || expires <= Date.now() + OAUTH_REFRESH_SKEW_MS) {
       // Refresh the SELECTED record (its label), not just the provider default —
       // so a second account on the same provider is left untouched. A provider
       // 401 forces refresh even before expiry; the rejected-token guard is
       // re-checked under the OAuth store lock to avoid duplicate rotations.
       const refreshed = await this.oauth.refresh(id, selection.record.label, context?.rejectedToken).catch(() => undefined);
-      if (refreshed) token = refreshed;
+      if (refreshed && refreshed !== token) token = refreshed;
+      // The refresh failed (commonly: the provider's own CLI rotated the refresh
+      // token out from under this copy) and what we hold is spent. Report NO
+      // credential rather than handing the agent a token that cannot work:
+      // Bivy's env var outranks the agent's own login, so returning it shadows a
+      // perfectly good `claude`/`codex` CLI session on this machine with a dead
+      // one — the "it ignored my local credentials" failure. With none, the
+      // agent falls back to that login, and an agent with no login of its own
+      // gets the vault's actionable "no credential" message instead of a 401.
+      else if (spent) return undefined;
     }
     if (!token) return undefined;
     const env = (cred as { env?: Record<string, string> }).env;

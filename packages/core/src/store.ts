@@ -67,7 +67,7 @@ import {
 
 // Re-export the helpers that moved out of this file so the package's public
 // surface (index.ts `export * from "./store.js"`) is unchanged.
-export { humanizeError, looksLikeAgentError } from "./store-errors.js";
+export { humanizeError, looksLikeAgentError, looksLikeAuthFailure, authProviderForRuntime } from "./store-errors.js";
 export {
   EMPTY_SESSION_DRAFT,
   reduceSessionDraft,
@@ -2620,6 +2620,19 @@ export class SessionStore {
         // instantly (see setSelectedAgentLocal). Keyed by the runtime the node
         // resolved the list for, never the app's currently-selected agent.
         if (listRuntimeId) this.modelsByRuntime.set(listRuntimeId, { models, currentModel: current });
+        // Only the agent on screen may paint the composer/picker. The node
+        // answers model reads per runtime and also *pushes* unsolicited lists —
+        // a warmed scratch session (see warmScratchModels) and every agent the
+        // picker prefetched each emit one, all outside any session. Applied
+        // blindly they flash another agent's models over the selected one (the
+        // "switching agents shows models the agent doesn't have" flicker), and a
+        // late arrival could even leave them there. A list tagged for another
+        // runtime is still cached above, so switching to that agent repaints it
+        // instantly. An untagged list (older node) stays trusted as before.
+        const viewRuntimeId = this.state.activeSession.activeSessionId
+          ? this.state.activeSession.activeRuntimeId
+          : this.state.catalogs.selectedAgentId;
+        if (listRuntimeId && viewRuntimeId && listRuntimeId !== viewRuntimeId) return;
         this.set({
           models,
           // The runtime this list was resolved for (undefined from an older node
@@ -2663,14 +2676,24 @@ export class SessionStore {
         // (which must runtime.select it so the node previews that agent's models),
         // not here — see AppController.maybeRestoreDraftAgent.
         const cur = e.current || runtimes.find((a) => a.id === (this.state.catalogs.selectedAgentId || e.activeAgent));
-        // Opening the picker requests runtimes.list. That response can race a
-        // click made while the sheet is open and still describe the old node
-        // default. Keep an optimistic draft choice until runtime.updated
-        // confirms runtime.select; otherwise the stale list makes the selected
-        // agent (and its composer pill) immediately snap back.
-        const localDraftSelection = !this.state.activeSession.activeSessionId && e.type === "runtimes.list"
-          ? runtimes.find((a) => a.id === this.state.catalogs.selectedAgentId)
-          : undefined;
+        // On a draft the *user's* pick owns the composer's agent; the node's
+        // `current` only seeds it while they haven't picked one (selectedAgentId
+        // null). Neither event may overrule a pick:
+        //  - runtimes.list is re-requested whenever the picker opens and can
+        //    still describe the pre-select default, which snapped the chosen
+        //    agent straight back.
+        //  - runtime.updated says what the NODE's default is now. That is not
+        //    the same statement. A Cloud/ephemeral draft never sends
+        //    runtime.select at all (the agent rides on session.new instead), so
+        //    the node's default stays whatever it was and any later broadcast —
+        //    another device, a finished install, a settings save — reverted the
+        //    draft to that agent under the user. It looked like "I switched to
+        //    Claude and it jumped back to Codex", and only a reload (which
+        //    re-applies the remembered pick) made the switch stick.
+        // A live session is unaffected: its agent comes from the session itself.
+        const localDraftSelection = this.state.activeSession.activeSessionId
+          ? undefined
+          : runtimes.find((a) => a.id === this.state.catalogs.selectedAgentId);
         const selectedAgentId = localDraftSelection?.id || cur?.id || e.activeAgent || this.state.catalogs.selectedAgentId;
         // runtimes.list is also requested whenever the agent sheet opens. Its
         // `current` runtime is the default for the *next* session, not the owner

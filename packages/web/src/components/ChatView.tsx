@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { stripAttachmentPlaceholders, toHtml, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
+import { looksLikeAuthFailure, stripAttachmentPlaceholders, toHtml, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
 import { AppMessage } from "./AppMessage.js";
 import { ReviewCard } from "./ReviewCard.js";
@@ -177,6 +177,7 @@ function actionLabel(action: string): string {
   if (action === "/resume") return "Resume";
   if (action === "fork") return "Fork to another agent";
   if (action === "cancel-resume") return "Cancel auto-retry";
+  if (action === "fix-auth" || action.startsWith("fix-auth:")) return "Fix sign-in";
   if (action.startsWith("connect-provider:")) return "Connect a provider";
   if (action.startsWith("retry-at-reset:")) return `Retry automatically at ${formatResetTime(action.slice("retry-at-reset:".length))}`;
   return `Run ${action}`;
@@ -370,9 +371,13 @@ function SpeakButton({ text }: { text: string }) {
 const EntryView = memo(function EntryView({
   entry,
   onAction,
+  authAction,
 }: {
   entry: TranscriptEntry;
   onAction?: (action: string) => void;
+  /** What to offer when an error turns out to be a credential problem the entry
+   *  itself couldn't name — see ChatView's prop of the same name. */
+  authAction?: string;
 }) {
   // Assistant prose is markdown. The store no longer renders it for the whole
   // transcript up front (that eager pass over every message is what made opening
@@ -440,10 +445,16 @@ const EntryView = memo(function EntryView({
   if (entry.role === "error") {
     const [summary = "The agent hit an error", ...detailLines] = entry.text.split("\n");
     const details = detailLines.join("\n").trim();
+    // An auth failure the agent reported as plain text ("Failed to authenticate:
+    // OAuth session expired…") carries no structured provider, so nothing points
+    // the user at the one screen that fixes it. Offer the sign-in route whenever
+    // the error reads like a credential problem and the node named no action of
+    // its own.
+    const actions = entry.actions?.length ? entry.actions : (authAction && looksLikeAuthFailure(entry.text) ? [authAction] : undefined);
     return (
       <div className="card" data-tone="danger" role="alert">
         <strong>{summary}</strong>
-        <EntryActions actions={entry.actions} onAction={onAction} />
+        <EntryActions actions={actions} onAction={onAction} />
         {details && (
           <details className="settings-disclosure">
             <summary className="settings-disclosure-summary">Details</summary>
@@ -583,6 +594,7 @@ export function ChatView({
   sessionKey,
   focusView,
   onAction,
+  authAction,
   header,
   footer,
   greeting,
@@ -605,6 +617,10 @@ export function ChatView({
   focusView?: boolean;
   /** Run a slash command from an inline notice action button (e.g. "/new"). */
   onAction?: (action: string) => void;
+  /** The action that takes the user to the sign-in for this session's agent
+   *  ("fix-auth[:provider]"), offered on a credential-shaped error the node
+   *  didn't already attach an action to. */
+  authAction?: string;
   /** Structured session startup state rendered before transcript entries. */
   header?: ReactNode;
   /** Rendered at the tail of the scroll area so approval/question cards flow
@@ -762,7 +778,7 @@ export function ChatView({
 
   const renderItem = (it: RenderItem) => it.kind === "tools"
     ? <ToolGroup key={it.key} tools={it.tools} />
-    : <EntryView key={it.key} entry={it.entry} onAction={onAction} />;
+    : <EntryView key={it.key} entry={it.entry} onAction={onAction} authAction={authAction} />;
 
   return (
     <div className="chat-wrap">
