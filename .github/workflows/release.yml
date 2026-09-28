@@ -8,49 +8,41 @@ name: Release
 #                         the `staging` dist-tag on every merge. No approval, no
 #                         git tag, never moves `latest`. This is the dev channel
 #                         every change lands on.
-#   release commit     -> PRODUCTION (automatic, approval-gated). A push that
-#                         lands a package.json version npm does not have yet
-#                         (`pnpm release` makes that PR) publishes staging, then
-#                         promotes that version to the `latest` dist-tag behind
-#                         the `release` environment approval, tags the commit and
-#                         creates the GitHub release.
-#   workflow_dispatch  -> PRODUCTION (manual). The same promotion, for a retry or
-#                         a release-intent recovery ref.
+#   push of a v* tag   -> PRODUCTION. `pnpm release` tags a commit already on
+#                         main whose package.json holds that version; this run
+#                         promotes it to the `latest` dist-tag, aliases its
+#                         service images and creates the GitHub release. Pushing
+#                         the tag is the approval: the release-tags ruleset lets
+#                         only maintainers create v* tags.
+#   workflow_dispatch  -> PRODUCTION retry, dispatched from the tag ref
+#                         (`gh workflow run release.yml --ref vX.Y.Z`).
 #
-# CI gates the exact promoted commit. A release commit that only changes
-# versions and CHANGELOG.md on top of main (scripts/release-only-diff.mjs) is
-# covered by the merge queue's successful release-tier run on this SHA: the
-# code it ships already passed CI on main. Any other commit needs a CI run on
-# this SHA that passed every job; otherwise the canonical CI workflow runs here
-# with force_all.
+# CI gates the exact promoted commit. Main only advances through the merge
+# queue, so a successful merge_group CI run on the tagged SHA is its receipt.
+# A commit without one (pushed past branch protection, say) gets the canonical
+# CI workflow with force_all before anything is published.
 #
 # Both jobs authenticate to npm with the job's GitHub Actions OIDC identity
 # (`id-token: write`) against the ONE trusted publisher configured for
 # `@bivy/bivy` -- there is no NPM_TOKEN. That trusted publisher MUST have its
-# Environment field left BLANK: the automatic staging job runs in no environment,
-# so a policy that pins an environment would reject it. The production job still
-# self-gates on the `release` GitHub environment (approval) -- that is a
-# GitHub-side control and does not need to be part of npm's trust policy.
+# Environment field left BLANK: neither job runs in a GitHub environment.
 # Provenance is attached automatically on both (scripts/build-release.mjs adds
 # --provenance whenever GITHUB_ACTIONS + id-token are present).
 
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
-    inputs:
-      confirm_version:
-        description: 'Promote to `latest`: type the exact version from package.json (e.g. 0.1.0).'
-        required: true
-        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  # Never cancel a publish mid-flight. Keyed per-SHA so rapid merges each publish
-  # their own unique staging version instead of cancelling one another.
-  group: release-${{ github.event_name }}-${{ github.sha }}
+  # Never cancel a publish mid-flight. Keyed per ref and SHA so rapid merges
+  # each publish their own unique staging version, and a release tag on a
+  # fresh main commit never queues behind that commit's staging publish.
+  group: release-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -58,7 +50,7 @@ jobs:
   # Automatic on every merge to main. The whole point of the dev channel: any
   # change that lands is immediately installable via `@bivy/bivy@staging`.
   staging:
-    if: github.event_name == 'push'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     name: Publish staging build (dist-tag `staging`)
     runs-on: ubuntu-latest
     permissions:
@@ -82,12 +74,13 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # Stamp a unique, immutable prerelease version for this build. The counter
-      # is scoped to the clean base version in package.json, so a new development
-      # minor starts at a readable version like 0.15.0-staging.1 instead of using
-      # GitHub's repository-wide run number. npm versions are immutable, so we
-      # derive the next suffix from already-published versions for this base.
-      # Once package.json's version is released, staging targets the next patch,
-      # so post-release builds sort above `latest` without a version-bump PR.
+      # is scoped to the clean base version in package.json -- the version main
+      # will release next -- so a new development minor starts at a readable
+      # version like 0.15.0-staging.1 instead of using GitHub's repository-wide
+      # run number. npm versions are immutable, so we derive the next suffix
+      # from already-published versions for this base. Between a release and
+      # its follow-up version bump, package.json names a released version;
+      # staging then targets the next patch so builds still sort above `latest`.
       - name: Stamp a unique staging prerelease version
         run: |
           base="$(node -p "require('./package.json').version")"
@@ -118,69 +111,65 @@ jobs:
         run: pnpm run publish:npm -- --tag staging
 
   # --------------------------------------------------------------- PRODUCTION --
-  # Decide whether this run promotes, and whether CI already covered it.
-  #   release: a dispatch always promotes; a push promotes when it lands a
-  #            package.json version that npm does not have yet (the commit
-  #            `pnpm release` produces).
-  #   tested:  a successful CI run on this exact SHA either ran every job, or
-  #            is the release tier for a commit that changes only versions and
-  #            notes relative to its parent. Otherwise production-ci runs the
-  #            full suite here.
+  # Validate the tag and decide whether CI already covered its commit.
+  #   tested: a successful merge-queue CI run on this exact SHA (how every
+  #           commit reaches main), or a successful run where every job passed.
+  #           Otherwise production-ci runs the full suite here.
   plan:
+    if: startsWith(github.ref, 'refs/tags/v')
     name: Plan production promotion
     runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read
     outputs:
-      release: ${{ steps.plan.outputs.release }}
+      version: ${{ steps.plan.outputs.version }}
+      sha: ${{ steps.plan.outputs.sha }}
       tested: ${{ steps.plan.outputs.tested }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - id: plan
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
+          sha="$(git rev-parse 'HEAD^{commit}')"
           version="$(node -p "require('./package.json').version")"
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ]; then
-            release=true
-          # Fails closed: a registry error makes this test false, so no promotion.
-          elif npm view @bivy/bivy versions --json | node -e '
-            process.exit(JSON.parse(require("fs").readFileSync(0, "utf8")).includes(process.argv[1]) ? 1 : 0)
-          ' "$version"; then
-            release=true
-            echo "::notice::main now holds unreleased $version; promoting it after the staging publish."
-          else
-            release=false
-          fi
+          case "$version" in
+            *-*) echo "::error::package.json version '$version' is a prerelease; main must hold a clean X.Y.Z."; exit 1 ;;
+          esac
+          [ "$TAG" = "v$version" ] \
+            || { echo "::error::Tag $TAG does not match package.json version $version at $sha. Tag the commit whose package.json holds the version (pnpm release does)."; exit 1; }
+          git merge-base --is-ancestor "$sha" origin/main \
+            || { echo "::error::$TAG points to $sha, which is not on main. Only commits that landed through the merge queue can be released."; exit 1; }
           tested=false
-          release_only="$(node scripts/release-only-diff.mjs HEAD^ HEAD 2>/dev/null || echo false)"
-          if [ "$release" = true ]; then
-            for run in $(gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=success" --jq '.workflow_runs[].id'); do
-              if [ "$release_only" = true ]; then
-                tested=true
-                echo "CI run $run passed on $GITHUB_SHA, which only changes versions and notes; the shipped code already passed CI on main."
-                break
-              fi
-              if [ "$(gh api --paginate "/repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs" --jq '.jobs[] | select(.conclusion != "success") | .name' | wc -l)" -eq 0 ]; then
-                tested=true
-                echo "CI run $run already passed every job on $GITHUB_SHA; not re-running it."
-                break
-              fi
-            done
-          fi
-          echo "release=$release" >> "$GITHUB_OUTPUT"
-          echo "tested=$tested" >> "$GITHUB_OUTPUT"
+          for run in $(gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$sha&status=success" --jq '.workflow_runs[] | "\(.id):\(.event)"'); do
+            if [ "${run#*:}" = merge_group ]; then
+              tested=true
+              echo "Merge-queue CI run ${run%%:*} passed on $sha."
+              break
+            fi
+            if [ "$(gh api --paginate "/repos/$GITHUB_REPOSITORY/actions/runs/${run%%:*}/jobs" --jq '.jobs[] | select(.conclusion != "success") | .name' | wc -l)" -eq 0 ]; then
+              tested=true
+              echo "CI run ${run%%:*} already passed every job on $sha; not re-running it."
+              break
+            fi
+          done
+          {
+            echo "version=$version"
+            echo "sha=$sha"
+            echo "tested=$tested"
+          } >> "$GITHUB_OUTPUT"
 
   # A staging publish proves packaging, not correctness. Reuse the canonical CI
-  # workflow on this exact SHA, even when branch protection was bypassed or the
-  # dispatch uses a recovery tag. Do not duplicate a subset of its checks here.
+  # workflow on this exact SHA when no receipt exists. Do not duplicate a subset
+  # of its checks here.
   production-ci:
     needs: plan
-    if: needs.plan.outputs.release == 'true' && needs.plan.outputs.tested != 'true'
+    if: needs.plan.outputs.tested != 'true'
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
@@ -191,61 +180,24 @@ jobs:
 
   production:
     # Explicit results rather than always(): a failed or cancelled dependency
-    # skips publication. It runs alongside this push's staging publish rather
-    # than after it: packaging is not a CI receipt, and the production job
-    # builds and publishes the same package itself.
+    # skips publication.
     if: >-
       !cancelled()
-      && needs.plan.outputs.release == 'true'
+      && needs.plan.result == 'success'
       && (needs.production-ci.result == 'success'
           || (needs.production-ci.result == 'skipped' && needs.plan.outputs.tested == 'true'))
     needs: [plan, production-ci]
-    name: Promote to npm `latest` + tag + GitHub release
+    name: Promote to npm `latest` + GitHub release
     runs-on: ubuntu-latest
-    # Approval gate: a dispatch alone cannot publish to production.
-    environment: release
     permissions:
-      actions: read # verify this exact commit published successfully to staging
-      contents: write # push the tag + create the GitHub release
+      contents: write # create the GitHub release
       packages: write # add stable tags to the already-built Core service images
       id-token: write # OIDC: trusted publish + provenance
+    env:
+      VERSION: ${{ needs.plan.outputs.version }}
+      RELEASE_SHA: ${{ needs.plan.outputs.sha }}
     steps:
-      # A manual promotion also requires the automatic staging publication for
-      # the exact main SHA, proving the commit landed through the normal path.
-      # Wait briefly when Promote is clicked immediately after merge. A push
-      # promotion is that normal path, and publishes alongside its staging job.
-      - name: Require a successful staging publish for this commit
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          for attempt in $(seq 1 40); do
-            count="$(gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/release.yml/runs?head_sha=$GITHUB_SHA&event=push&status=success&per_page=1" --jq '.total_count')"
-            if [ "$count" -gt 0 ]; then
-              echo "The staging publish for $GITHUB_SHA succeeded."
-              exit 0
-            fi
-            echo "Waiting for the staging publish for $GITHUB_SHA ($attempt/40)..."
-            sleep 15
-          done
-          echo "::error::No successful staging publish found for $GITHUB_SHA. Wait for the push-triggered Release run (and the PR's required CI) to pass, then retry."
-          exit 1
-
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      # Always use the peeled checkout commit below. This remains stable even
-      # when recovery is dispatched from a tag ref.
-      - name: Resolve release commit
-        run: echo "RELEASE_SHA=$(git rev-parse 'HEAD^{commit}')" >> "$GITHUB_ENV"
-
-      - name: Require main or a release-recovery ref
-        run: |
-          case "$GITHUB_REF" in
-            refs/heads/main|refs/tags/release-intent-v*) ;;
-            *) echo "::error::Promotion must start from main or its release-intent recovery tag (got $GITHUB_REF)."; exit 1 ;;
-          esac
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -259,36 +211,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # package.json is the single source of truth for the version to release.
-      # Validate it is clean and explicitly confirmed: a dispatch types it, a
-      # push confirms it by landing the release commit. A same-commit tag is
-      # accepted so a run interrupted after npm publication can resume safely.
-      - name: Resolve and validate the release version
-        id: ver
-        env:
-          CONFIRM: ${{ inputs.confirm_version || '' }}
-        run: |
-          version="$(node -p "require('./package.json').version")"
-          case "$version" in
-            *-*) echo "::error::package.json version '$version' is a prerelease; bump it to a clean X.Y.Z in a PR before promoting."; exit 1 ;;
-          esac
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] && [ "$CONFIRM" != "$version" ]; then
-            echo "::error::Confirmation '$CONFIRM' does not match package.json version '$version'. Re-run and type the exact version to promote."; exit 1
-          fi
-          git fetch --tags origin
-          if git rev-parse "v$version" >/dev/null 2>&1; then
-            tagged_commit="$(git rev-list -n 1 "v$version")"
-            [ "$tagged_commit" = "$RELEASE_SHA" ] \
-              || { echo "::error::Tag v$version points to $tagged_commit, not this commit $RELEASE_SHA."; exit 1; }
-            echo "Existing same-commit tag v$version found; resuming its release."
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
       # The npm artifact ships only the root package, but keep all workspaces in
       # lockstep so the monorepo never publishes an internally inconsistent state.
       - name: Verify all workspaces agree on the version
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           for w in package.json packages/*/package.json services/*/package.json; do
             [ -f "$w" ] || continue
@@ -298,12 +223,25 @@ jobs:
           done
 
       # Validate release notes and require the immutable service artifacts BEFORE
-      # the irreversible npm publish. The image workflow runs independently on
-      # the same main commit and is normally already complete.
-      - name: Extract CHANGELOG section for this version
+      # the irreversible npm publish. Notes are CHANGELOG.md's [Unreleased]
+      # section at the tagged commit plus the tag message (pnpm release
+      # --notes-file); the follow-up version bump dates them in CHANGELOG.md.
+      - name: Collect release notes
         env:
-          VERSION: ${{ steps.ver.outputs.version }}
-        run: node scripts/extract-changelog.mjs "v$VERSION" > release-notes.md
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          unreleased="$(node scripts/extract-changelog.mjs Unreleased 2>/dev/null || true)"
+          # An annotated tag's message is "Bivy X.Y.Z", a blank line, then notes.
+          tag_object="$(gh api "/repos/$GITHUB_REPOSITORY/git/ref/tags/v$VERSION" --jq 'select(.object.type == "tag") | .object.sha')"
+          tagged=""
+          if [ -n "$tag_object" ]; then
+            tagged="$(gh api "/repos/$GITHUB_REPOSITORY/git/tags/$tag_object" --jq '.message' | tail -n +3)"
+          fi
+          printf '%s\n\n%s\n' "$unreleased" "$tagged" | node -e 'process.stdout.write(require("fs").readFileSync(0, "utf8").trim() + "\n")' > release-notes.md
+          [ -n "$(tr -d '[:space:]' < release-notes.md)" ] \
+            || { echo "::error::No release notes: CHANGELOG.md's [Unreleased] section and the v$VERSION tag message are both empty."; exit 1; }
+          cat release-notes.md
 
       - name: Require public Core service images for this commit
         env:
@@ -326,40 +264,10 @@ jobs:
           echo "::error::Core service images were not successfully published for $RELEASE_SHA."
           exit 1
 
-      # Bind this version to one commit before the first irreversible operation.
-      # The marker remains after success: if main advances after npm publishes but
-      # before image/tag promotion completes, a retry from the new main fails
-      # rather than combining npm from the old commit with newer images. Recovery
-      # must dispatch this workflow from the marker ref printed below.
-      - name: Establish immutable release intent
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
-        run: |
-          set -euo pipefail
-          intent="release-intent-v$VERSION"
-          git fetch --tags origin
-          if git rev-parse "$intent" >/dev/null 2>&1; then
-            intent_commit="$(git rev-list -n 1 "$intent")"
-            if [ "$intent_commit" != "$RELEASE_SHA" ]; then
-              echo "::error::$intent is bound to $intent_commit, not $RELEASE_SHA. Resume with: gh workflow run release.yml --ref $intent -f confirm_version=$VERSION"
-              exit 1
-            fi
-            echo "Release intent already binds $VERSION to $RELEASE_SHA; resuming."
-          else
-            # Lightweight on purpose: workflow_dispatch and checkout both resolve
-            # this ref directly to the bound commit, avoiding annotated-tag object
-            # SHA ambiguity during recovery.
-            git tag "$intent"
-            git push origin "$intent"
-            echo "Bound $VERSION to $RELEASE_SHA in $intent."
-          fi
-
-      # npm versions are immutable. If a previous attempt published successfully
-      # and then failed while tagging images, the intent check above proves this
-      # is the original commit; verify `latest` and resume without republishing.
+      # npm versions are immutable. The protected tag binds this version to one
+      # commit, so a retry of a run that published and then failed later can
+      # verify `latest` and resume without republishing.
       - name: Publish or resume npm `latest`
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
           published="$(npm view "@bivy/bivy@$VERSION" version 2>/dev/null || true)"
@@ -375,8 +283,6 @@ jobs:
       # A release tag is an alias of the already-tested SHA manifests, not a
       # rebuild. `latest` therefore points to byte-identical service artifacts.
       - name: Promote Core service image tags
-        env:
-          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           set -euo pipefail
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -392,33 +298,21 @@ jobs:
       - name: Build the checksummed self-host deployment bundle
         run: node scripts/build-self-host.mjs self-host-release
 
-      # Tag the promoted commit and cut the GitHub release. The tag push uses
-      # GITHUB_TOKEN, which by design does not retrigger this workflow (and a tag
-      # push would not match `on: push: branches` anyway).
-      - name: Tag the release commit and create the GitHub release
+      # The GitHub release is the last step on purpose: its existence is the
+      # signal that npm and the images are live, for any deployment waiting on it.
+      - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          # An annotated tag needs a committer identity, and the runner has none
-          # it can auto-detect (its hostname has no domain, so git derives an
-          # invalid `runner@host.(none)` and hard-fails). This step runs *after*
-          # the irreversible publish, so an unset identity would strand a release
-          # on npm with no tag and no GitHub release.
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
-            echo "Tag v$VERSION already exists at this commit; preserving it."
-          else
-            git tag -a "v$VERSION" -m "Bivy $VERSION"
-            git push origin "v$VERSION"
-          fi
+          set -euo pipefail
+          # Bundles carry the immutable SHA whose public service images were
+          # verified above; upload before publishing so the release is complete
+          # the moment it appears.
           if gh release view "v$VERSION" >/dev/null 2>&1; then
-            echo "GitHub release v$VERSION already exists; promotion is complete."
+            echo "GitHub release v$VERSION already exists; refreshing its assets."
           else
-            gh release create "v$VERSION" --title "v$VERSION" --notes-file release-notes.md
+            gh release create "v$VERSION" --verify-tag --title "v$VERSION" --notes-file release-notes.md --draft
           fi
-          # Same-commit recovery may resume after release creation. Bundles carry
-          # the immutable SHA whose public service images were verified above.
           gh release upload "v$VERSION" self-host-release/bivy-self-host.tar.gz \
             self-host-release/bivy-self-host.tar.gz.sha256 self-host-release/install.sh --clobber
+          gh release edit "v$VERSION" --draft=false --latest

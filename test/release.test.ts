@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { extractChangelogSection } from "../scripts/extract-changelog.mjs";
-import { addUnreleasedNotes, nextVersion, rotateChangelog } from "../scripts/release.mjs";
+import { nextVersion, recordRelease, releaseNotes } from "../scripts/release.mjs";
 
 test("nextVersion bumps by level and resets lower parts", () => {
   assert.equal(nextVersion("0.17.3", "patch"), "0.17.4");
@@ -33,24 +33,23 @@ const CHANGELOG = `# Changelog
 - older
 `;
 
-test("rotateChangelog dates the unreleased notes and leaves a fresh [Unreleased]", () => {
-  const rotated = rotateChangelog(CHANGELOG, "0.17.1", "2026-09-26");
-  assert.match(rotated, /## \[Unreleased\]\n\n## \[0\.17\.1\] - 2026-09-26\n\n### Fixed\n\n- a fix\n\n## \[0\.17\.0\]/);
-  assert.equal(extractChangelogSection(rotated, "0.17.1"), "### Fixed\n\n- a fix");
-  assert.equal(extractChangelogSection(rotated, "Unreleased"), "");
+test("releaseNotes joins [Unreleased] with --notes-file notes and is empty when both are", () => {
+  assert.equal(releaseNotes(CHANGELOG, "### Added\n\n- a feature\n"), "### Fixed\n\n- a fix\n\n### Added\n\n- a feature");
+  assert.equal(releaseNotes("## [Unreleased]\n\n## [0.1.0]\n- x\n", ""), "");
+  assert.throws(() => releaseNotes("# Changelog\n", ""), /no `## \[Unreleased\]`/);
 });
 
-test("rotateChangelog refuses an empty or missing [Unreleased]", () => {
-  assert.throws(() => rotateChangelog("## [Unreleased]\n\n## [0.1.0]\n- x\n", "0.1.1", "2026-09-26"), /empty/);
-  assert.throws(() => rotateChangelog("# Changelog\n", "0.1.1", "2026-09-26"), /no `## \[Unreleased\]`/);
+test("recordRelease dates the released notes and leaves a fresh [Unreleased]", () => {
+  const notes = releaseNotes(CHANGELOG, "- from the tag");
+  const recorded = recordRelease(CHANGELOG, "0.17.1", "2026-09-26", notes);
+  assert.match(recorded, /## \[Unreleased\]\n\n## \[0\.17\.1\] - 2026-09-26\n\n### Fixed\n\n- a fix\n\n- from the tag\n\n## \[0\.17\.0\]/);
+  assert.equal(extractChangelogSection(recorded, "Unreleased"), "");
+  assert.equal(extractChangelogSection(recorded, "0.17.0"), "- older");
 });
 
-test("addUnreleasedNotes lets notes and the version bump land in one release", () => {
-  const withNotes = addUnreleasedNotes(CHANGELOG, "### Added\n\n- a feature\n");
-  const rotated = rotateChangelog(withNotes, "0.17.1", "2026-09-26");
-  assert.equal(extractChangelogSection(rotated, "0.17.1"), "### Fixed\n\n- a fix\n\n### Added\n\n- a feature");
-  assert.equal(extractChangelogSection(rotated, "0.17.0"), "- older");
-
-  const empty = rotateChangelog(addUnreleasedNotes("## [Unreleased]\n\n## [0.1.0]\n- x\n", "- new"), "0.1.1", "2026-09-26");
-  assert.equal(extractChangelogSection(empty, "0.1.1"), "- new");
+test("recordRelease keeps entries that landed after the release was tagged", () => {
+  const later = CHANGELOG.replace("- a fix\n", "- a fix\n- a later fix\n\n### Added\n\n- a later feature\n");
+  const recorded = recordRelease(later, "0.17.1", "2026-09-26", releaseNotes(CHANGELOG, ""));
+  assert.equal(extractChangelogSection(recorded, "Unreleased"), "### Fixed\n\n- a later fix\n\n### Added\n\n- a later feature");
+  assert.equal(extractChangelogSection(recorded, "0.17.1"), "### Fixed\n\n- a fix");
 });

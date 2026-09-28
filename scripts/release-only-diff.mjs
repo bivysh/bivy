@@ -6,10 +6,10 @@
  *
  *   node scripts/release-only-diff.mjs <base> <head>   # prints true or false
  *
- * `pnpm release` produces exactly this shape: every package manifest's
- * `version` and CHANGELOG.md. The code it ships already passed CI on main, so
- * CI runs a light tier for such a range (ci.yml) and release.yml accepts that
- * run as the release receipt. Anything else in the range fails closed.
+ * The version bumps `pnpm release` opens have exactly this shape: every
+ * package manifest's `version` and CHANGELOG.md. The code they carry already
+ * passed CI on main, so CI runs a light tier for such a range (ci.yml).
+ * Anything else in the range fails closed.
  */
 import { execFileSync } from "node:child_process";
 import path from "node:path";
