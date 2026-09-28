@@ -1694,6 +1694,10 @@ export class SessionStore {
     }
   }
 
+  clearActivationReadiness(): void {
+    this.set({ activationReadiness: null });
+  }
+
   setStatus(status: ConnectionStatus): void {
     if (status === this.state.connection.status) return;
     const currentNodeId = this.state.connection.currentNodeId;

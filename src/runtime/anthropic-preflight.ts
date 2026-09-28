@@ -117,7 +117,7 @@ export async function probeAnthropicAccess(
 ): Promise<ModelAccessProbe> {
   const key = apiKey?.trim();
   // Subscription/OAuth tokens are not API keys; there is no safe read probe.
-  if (!key || !key.startsWith("sk-")) return { probed: false, ok: true, reason: "no API key to probe" };
+  if (!key || !key.startsWith("sk-") || key.startsWith("sk-ant-oat")) return { probed: false, ok: true, reason: "no API key to probe" };
 
   const doFetch = deps.fetch ?? fetch;
   const base = (deps.baseUrl ?? "https://api.anthropic.com").replace(/\/+$/, "");

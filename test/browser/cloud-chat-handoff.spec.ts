@@ -52,7 +52,7 @@ for (const { outcome, currentModelKnown } of scenarios) {
         if (command.sessionId?.startsWith('starting-')) mainHandlers.onEvent({ type: 'session.error', sessionId: command.sessionId, error: 'Session not found' });
       } };
       globalThis.refreshAccountIndex = controller.refreshAccountSessions.bind(controller);
-      for (const name of ['refreshAccountSessions','syncAccountCredentialsWithNode','resyncScheduledFollowups','seedEphemeralNodeIfNeeded','maybePromptFirstRunModelAuth','refreshEphemeralCorrelations','refreshSessions','seedAndRequestHistory','observeActivationMilestones']) controller[name] = () => {};
+      for (const name of ['refreshAccountSessions','syncAccountCredentialsWithNode','resyncScheduledFollowups','seedEphemeralNodeIfNeeded','maybePromptFirstRunModelAuth','refreshEphemeralCorrelations','refreshSessions','seedAndRequestHistory','observeActivationMilestones']) controller[name] = async () => {};
       controller.pendingLaunchStore = { put: async task => globalThis.persisted.push(task.id), remove: async () => {}, list: async () => [] };
       controller.store.setNodes([{ id: 'cloud-node', name: 'Bivy Cloud', online: true }]);
       controller.ephemeralCorrelations = [{ sessionId: 'real-session', nodeId: 'cloud-node', computeSource: 'managed' }];

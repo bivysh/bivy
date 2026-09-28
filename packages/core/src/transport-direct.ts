@@ -729,6 +729,9 @@ export class DirectTransport implements Transport {
             await this.directApi(`/api/rulesets/${encodeURIComponent(String((obj as any).name ?? ""))}`, { method: "DELETE" }),
           );
           break;
+        case "activation.readiness":
+          this.emitMerged("activation.readiness", await this.directApi("/api/activation/readiness"));
+          break;
         case "repos.list":
           this.emitMerged("repos.list", await this.directApi("/api/repos"));
           break;

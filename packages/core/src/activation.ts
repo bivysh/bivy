@@ -1,17 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// The activation readiness model: one resumable setup sequence expressed as a
-// pure, framework-agnostic projection over the current signals. It produces the
-// distinct, ordered checks a customer sees — Machine online, agent installed,
-// credential valid, repository ready, and finally a real agent answer — each with
-// exactly one remediation when it fails.
-//
-// The load-bearing invariant lives here, not in any UI: setup is **activated**
-// only when a real agent has answered. A green Machine/agent/credential/repo
-// chain is "almost there", never "ready". This is the "never report setup
-// success before a real agent response" rule, enforced as a property of the
-// model so no client can accidentally claim a false-positive readiness.
+// Setup is ready when the machine, agent, credentials and workspace are ready.
+// Sending a message and receiving a reply are separate from setup.
 
 /** The distinct readiness checks, in the order they must resolve. Each depends on
  *  every earlier one, so a downstream check stays pending until its prerequisites
@@ -20,16 +11,15 @@
  *  `account_signed_in` is resolved eagerly by every caller (never left
  *  "checking") — in hosted mode the sign-in screen already gates all
  *  rendering before this model ever runs, and direct/self-host mode has no
- *  account concept at all. It exists so the model names the full five-step
- *  journey (sign-in, machine, provider, agent, first response) for state-model
+ *  account concept at all. It exists so the model names the setup
+ *  journey (sign-in, machine, provider, agent, workspace) for state-model
  *  tests and funnel metrics, not to duplicate that screen's own gating. */
 export type ActivationCheckId =
   | "account_signed_in"
   | "machine_online"
   | "agent_installed"
   | "credential_valid"
-  | "repository_ready"
-  | "agent_answered";
+  | "repository_ready";
 
 export type ActivationCheckState = "pending" | "checking" | "passed" | "failed" | "unavailable";
 
@@ -40,8 +30,7 @@ export type ActivationRemediationKind =
   | "connect_machine"
   | "install_agent"
   | "authenticate_credential"
-  | "grant_repository"
-  | "run_starter_task";
+  | "grant_repository";
 
 export interface ActivationRemediation {
   kind: ActivationRemediationKind;
@@ -63,13 +52,11 @@ export type ActivationStage = "not_started" | "in_progress" | "blocked" | "activ
 export interface Activation {
   checks: ActivationCheck[];
   stage: ActivationStage;
-  /** True ONLY when the `agent_answered` check has passed — a real agent response
-   *  is the sole evidence of readiness. Never derived from the upstream chain. */
+  /** All setup checks passed; the user can send their first message. */
   activated: boolean;
   /** The first failed check, when the sequence is blocked. */
   blockingCheckId?: ActivationCheckId;
-  /** The single next action to move activation forward: the blocking check's
-   *  remediation, or running the starter task once the chain is otherwise green. */
+  /** The single next action to resolve the first incomplete setup check. */
   nextAction?: ActivationRemediation & { checkId: ActivationCheckId };
 }
 
@@ -90,9 +77,6 @@ export interface ActivationSignals {
   credentialValid?: boolean;
   /** The target repository is cloned/accessible on the Machine. */
   repositoryReady?: boolean;
-  /** A real agent response was observed for the starter task. This alone proves
-   *  readiness; it is never inferred from the four signals above. */
-  agentAnswered?: boolean;
 }
 
 interface CheckSpec {
@@ -144,29 +128,20 @@ const SPECS: readonly CheckSpec[] = [
   },
   {
     id: "repository_ready",
-    label: "Repository ready",
+    label: "Workspace ready",
     signal: (s) => s.repositoryReady,
-    passed: "Your repository is ready on the Machine.",
-    checking: "Preparing your repository…",
-    failed: "The repository isn't available to the agent.",
+    passed: "Your workspace is ready on the Machine.",
+    checking: "Checking your workspace…",
+    failed: "The workspace isn't available to the agent.",
     remediation: { kind: "grant_repository", label: "Grant repository access" },
   },
-  {
-    id: "agent_answered",
-    label: "Agent answered",
-    signal: (s) => s.agentAnswered,
-    passed: "The agent answered — you're ready to run.",
-    checking: "Waiting for the agent to answer the starter task…",
-    failed: "The starter task didn't get an agent response.",
-    remediation: { kind: "run_starter_task", label: "Run the starter task" },
-  },
+
 ];
 
 /** Project the current signals into the ordered, distinct activation checks and
  *  the single next action. Sequential: the first unresolved check is `checking`,
  *  everything after an unresolved/blocking check stays `pending`, and a `false`
- *  signal blocks with its remediation. `activated` is true only when the final
- *  agent-answered check passes. */
+ *  signal blocks with its remediation. `activated` is true when all setup checks pass. */
 export function deriveActivation(signals: ActivationSignals): Activation {
   const checks: ActivationCheck[] = [];
   let blockingCheckId: ActivationCheckId | undefined;
@@ -194,7 +169,7 @@ export function deriveActivation(signals: ActivationSignals): Activation {
   const anyPassed = checks.some((c) => c.state === "passed");
   // Stage reflects how much is KNOWN: nothing resolved yet is not_started (even
   // though the first check is already probing), any pass is in_progress, a
-  // failure is blocked, and only a real agent answer is activated.
+  // failure is blocked, and all checks passed is activated.
   const stage: ActivationStage = activated
     ? "activated"
     : blockingCheckId
@@ -204,8 +179,7 @@ export function deriveActivation(signals: ActivationSignals): Activation {
         : "not_started";
 
   // The single next action. When blocked, it's the failing check's remediation.
-  // Otherwise it's the first still-`checking` check's remediation (e.g. "run the
-  // starter task" once the chain is green but the agent hasn't answered yet).
+  // Otherwise it is the first still-checking check's remediation.
   let nextAction: Activation["nextAction"];
   if (!activated) {
     const target = checks.find((c) => c.state === "failed") ?? checks.find((c) => c.state === "checking");
@@ -238,9 +212,7 @@ export interface ActivationStateInput {
    *  accept any record and read both defensively (an absent status means
    *  "available"; only `supportTier === "supported"` counts as certified). */
   runtimes: ReadonlyArray<Record<string, unknown>>;
-  providers: ReadonlyArray<{ configured?: boolean; expiresAt?: number }>;
-  reposAuthed: boolean;
-  transcript: ReadonlyArray<{ role: string; text: string; tool?: unknown }>;
+  readiness: { credential: { ok: boolean }; repository: { ok: boolean } } | null;
 }
 
 /** Map the current client state to activation signals, then use
@@ -250,21 +222,14 @@ export interface ActivationStateInput {
  *    `machineOnline` undefined (still checking) rather than failing;
  *  - `agentInstalled` requires a *certified, supported* runtime — an installed
  *    but experimental/beta/unverified one leaves the signal `false`, not `true`;
- *  - `agentAnswered` is set ONLY by a real assistant message with text in the
- *    transcript — never by an installed agent or an online Machine. A turn that
- *    has not answered yet stays "checking", surfacing "run the starter task" as
- *    the next action, so the UI can never claim readiness before a real response.
  */
-export function activationFromState(state: ActivationStateInput, now: number = Date.now()): Activation {
+export function activationFromState(state: ActivationStateInput): Activation {
   const accountSignedIn = state.direct ? true : state.signedIn;
   const machineOnline = state.status === "online" ? true : state.status === "offline" ? false : undefined;
   const agentInstalled = state.runtimes.length
     ? state.runtimes.some((r) => String(r.status ?? "available") === "available" && r.supportTier === "supported")
     : undefined;
-  const credentialValid = state.providers.length
-    ? state.providers.some((p) => p.configured === true && (!p.expiresAt || p.expiresAt > now))
-    : undefined;
-  const repositoryReady = state.reposAuthed;
-  const agentAnswered = state.transcript.some((e) => e.role === "assistant" && Boolean(e.text) && !e.tool) ? true : undefined;
-  return deriveActivation({ accountSignedIn, machineOnline, agentInstalled, credentialValid, repositoryReady, agentAnswered });
+  const credentialValid = state.readiness?.credential.ok;
+  const repositoryReady = state.readiness?.repository.ok;
+  return deriveActivation({ accountSignedIn, machineOnline, agentInstalled, credentialValid, repositoryReady });
 }

@@ -2137,20 +2137,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .run-sheet-recovery { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 .run-sheet-recovery .btn.sm { padding: var(--space-1) var(--space-3); }
 
-.composer-starter {
-  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
-  margin: 0 var(--space-3) var(--space-2); padding: var(--space-3); border: 1px solid var(--line);
-  border-radius: var(--radius-md); background: var(--surface);
-}
-.composer-starter > div { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
-.composer-starter strong { font-size: var(--text-sm); color: var(--ink); }
-.composer-starter span { font-size: var(--text-xs); line-height: var(--lh-sm); color: var(--muted); }
-.composer-starter .btn { flex: none; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
-@media (max-width: 520px) {
-  .composer-starter { align-items: stretch; flex-direction: column; }
-  .composer-starter .btn { min-height: var(--space-7); }
-}
-
 /* Review surface (C3): state badges, checks strip, view-mode toggle, file tree,
    per-file actions, and the split (side-by-side) diff layout. */
 .changes-meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); }
@@ -3167,9 +3153,8 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
   letter-spacing: -0.01em;
 }
 
-/* Activation readiness strip (src/components/ReadinessChecklist.tsx) — the honest
-   "get to your first agent response" checklist shown until the agent answers. */
-.readiness { margin: 10px 12px 0; }
+/* Setup checks and the ready-to-message confirmation. */
+.readiness { margin: var(--space-3) var(--space-3) 0; }
 .readiness-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .readiness-title { font-weight: 600; font-size: var(--text-base); letter-spacing: -0.01em; }
 .readiness-dismiss {
@@ -3179,8 +3164,7 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
 .readiness-dismiss:hover { background: var(--surface-2); color: var(--ink); }
 .readiness-passed { margin: 0 0 var(--space-2); color: var(--ok); font-size: var(--text-sm); font-weight: var(--weight-medium); }
 .readiness-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
-/* Completed setup is summarized above. Keeping six verbose rows after five are
-   already done buried the only useful state (waiting for the first answer). */
+/* Summarize completed checks so the next setup action stays visible. */
 .readiness-check.state-passed { display: none; }
 .readiness-check { display: flex; align-items: baseline; gap: 8px; font-size: var(--text-sm); }
 .readiness-mark {
