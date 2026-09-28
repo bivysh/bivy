@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { scanListeners } from "./listeners.js";
 import { takeShots, type Shot, type ShotRequest } from "./screenshot.js";
-import { approximate, composite, readStrokes, type PageSignals } from "./annotate.js";
+import { approximate, composite, readStrokes, readElementScrolls, type ElementScroll, type PageSignals } from "./annotate.js";
 import { captureFrame, encodePng, sendInput } from "./rfb.js";
 import { inputEvents, readAction } from "./input.js";
 import { pressMenu, readMenuPath, readMenus, type AppMenu } from "./menu.js";
@@ -423,11 +423,12 @@ export class AppService {
    * doesn't. Returned to the client (over the session channel) as a PNG. */
   async annotate(sessionId: string, input: {
     appId: string; viewId: string; path?: string; viewport: { width: number; height: number };
-    scroll?: { x: number; y: number }; dpr?: number; theme?: "light" | "dark"; strokes: unknown; compare?: number; signals?: PageSignals;
+    scroll?: { x: number; y: number }; elementScrolls?: ElementScroll[]; dpr?: number; theme?: "light" | "dark"; strokes: unknown; compare?: number; signals?: PageSignals;
   }): Promise<{ image?: { data: string; mimeType: "image/png"; name: string; width: number; height: number }; approximate: boolean; screenshotsOff?: true }> {
     const entry = this.registry.requireView(sessionId, input.appId, input.viewId);
     if (entry.view.kind !== "web") throw new Error("Only previews can be drawn on.");
     const strokes = readStrokes(input.strokes);
+    const elementScrolls = readElementScrolls(input.elementScrolls);
     const whole = (n: unknown, min: number, max: number) => typeof n === "number" && Number.isFinite(n) && n >= min && n <= max;
     // Compare's shot is drawn on at its on-screen size, which can be small.
     if (!whole(input.viewport?.width, 40, 4000) || !whole(input.viewport?.height, 40, 8000)) throw new Error("Invalid viewport.");
@@ -455,7 +456,7 @@ export class AppService {
     }
     const outDir = path.join(os.tmpdir(), "bivy-shots", "annotate", entry.view.id);
     const dpr = whole(input.dpr, 1, 3) ? Math.round(input.dpr! * 4) / 4 : 2;
-    const run = this.shooting.catch(() => {}).then(() => this.screenshots.take([entry], { widths: [viewport.width], themes: [input.theme === "dark" ? "dark" : "light"], path: page, height: viewport.height, scale: dpr, scroll }, outDir));
+    const run = this.shooting.catch(() => {}).then(() => this.screenshots.take([entry], { widths: [viewport.width], themes: [input.theme === "dark" ? "dark" : "light"], path: page, height: viewport.height, scale: dpr, scroll, ...(elementScrolls.length ? { elementScrolls } : {}) }, outDir));
     this.shooting = run;
     const [shot] = await run;
     if (!shot) throw new Error("Couldn't take a picture of the page.");
@@ -464,7 +465,7 @@ export class AppService {
     const landed = shot.scroll ?? scroll;
     const scrolledTo = Math.abs(landed.x - scroll.x) <= 2 && Math.abs(landed.y - scroll.y) <= 2;
     // Marks stay on the content they were drawn on, wherever the retake scrolled.
-    return finish(base, landed, approximate("retake", input.signals, scrolledTo));
+    return finish(base, landed, approximate("retake", input.signals, scrolledTo && shot.elementScrollsRestored !== false));
   }
   /** The managed server's output, as an attachable terminal (starts it if needed). */
   async logs(sessionId: string, appId: string, viewId: string): Promise<OpenAppViewResult> {

@@ -8,17 +8,19 @@ import { once } from "node:events";
 import { spawn, execFileSync } from "node:child_process";
 import { WebSocket } from "ws";
 import type { RegisteredView } from "./registry.js";
+import type { ElementScroll } from "./annotate.js";
 import { captureFrame, encodePng } from "./rfb.js";
 
 export interface ShotRequest {
   widths: number[]; themes: ("light" | "dark")[]; path: string;
   /** Match a particular device instead of the defaults (a phone at 844×2, a
    * desktop at 800×1): its viewport height, pixel ratio and scroll position. */
+  elementScrolls?: ElementScroll[];
   height?: number; scale?: number; scroll?: { x: number; y: number };
 }
 /** Desktop apps are shot as they are on screen: `theme` is "native" for them.
  * `scroll`: where the page actually scrolled to, when asked to scroll. */
-export interface Shot { viewId: string; view: string; width: number; theme: "light" | "dark" | "native"; file: string; scroll?: { x: number; y: number } }
+export interface Shot { viewId: string; view: string; width: number; theme: "light" | "dark" | "native"; file: string; elementScrollsRestored?: boolean; scroll?: { x: number; y: number } }
 
 /** Browsers tried in order; BIVY_CHROME overrides. Any Chromium works. */
 const CANDIDATES = [
@@ -143,6 +145,16 @@ export async function takeShots(views: RegisteredView[], request: ShotRequest, o
         await cdp.send("Page.navigate", { url: origin + request.path }, sessionId);
         await loaded;
         await new Promise((r) => setTimeout(r, 400)); // let fonts and first effects settle
+        // Match scrolling inside app panels as well as the document. Marks are
+        // viewport positions within these panels; subtract only document scroll.
+        let elementScrollsRestored: boolean | undefined;
+        if (request.elementScrolls?.length) {
+          const positions = JSON.stringify(request.elementScrolls);
+          await cdp.send("Runtime.evaluate", { expression: `(${positions}).forEach(p => { try { document.querySelector(p.selector)?.scrollTo({left:p.x,top:p.y,behavior:'instant'}); } catch {} })` }, sessionId);
+          await new Promise((r) => setTimeout(r, 150));
+          const { result } = await cdp.send("Runtime.evaluate", { expression: `(${positions}).every(p => { try { const el=document.querySelector(p.selector); return el && Math.abs(el.scrollLeft-p.x)<=2 && Math.abs(el.scrollTop-p.y)<=2; } catch { return false; } })`, returnByValue: true }, sessionId);
+          elementScrollsRestored = result?.value === true;
+        }
         let scroll: { x: number; y: number } | undefined;
         if (request.scroll) {
           const { result } = await cdp.send("Runtime.evaluate", { expression: `scrollTo(${Number(request.scroll.x) || 0}, ${Number(request.scroll.y) || 0}); [scrollX, scrollY]`, returnByValue: true }, sessionId);
@@ -152,7 +164,7 @@ export async function takeShots(views: RegisteredView[], request: ShotRequest, o
         const { data } = await cdp.send("Page.captureScreenshot", { format: "png" }, sessionId);
         const file = path.join(outDir, `${entry.view.id.slice(0, 8)}-${width}-${theme}.png`);
         fs.writeFileSync(file, Buffer.from(data, "base64"));
-        shots.push({ viewId: entry.view.id, view: entry.view.name, width, theme, file, ...(scroll ? { scroll } : {}) });
+        shots.push({ viewId: entry.view.id, view: entry.view.name, width, theme, file, ...(scroll ? { scroll } : {}), ...(elementScrollsRestored !== undefined ? { elementScrollsRestored } : {}) });
       }
     }
     return shots;

@@ -10,7 +10,7 @@ import { MoreIcon } from "./UiIcons.js";
 import type { PromptAttachment } from "@bivy/core";
 
 /** Marks drawn in the preview, as the shell hands them over (see apps.annotate). */
-type Mark = { path?: string; viewport: { width: number; height: number }; scroll?: { x: number; y: number }; dpr?: number; theme?: string; strokes: unknown[]; compare?: number; signals?: Record<string, boolean> };
+type Mark = { path?: string; viewport: { width: number; height: number }; scroll?: { x: number; y: number }; elementScrolls?: { selector: string; x: number; y: number }[]; dpr?: number; theme?: string; strokes: unknown[]; compare?: number; signals?: Record<string, boolean> };
 type Annotated = { image?: { data: string; mimeType: string; name: string }; approximate: boolean; screenshotsOff?: boolean };
 const APPROXIMATE = "Picture: retaken on the machine, so it may not show this page’s state (a cart, a sign-in, an open menu). The marks and elements are exact.";
 
