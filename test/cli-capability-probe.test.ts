@@ -92,10 +92,7 @@ fs.writeFileSync(
   ["#!/bin/sh", 'echo "usage: gemini [-p <prompt>] [--yolo]"', 'echo "a stripped-down build with no model or resume flags"', ""].join("\n"),
   { mode: 0o755 },
 );
-// CLI probes are memoized for the process lifetime, and the catalog is built once
-// at import — before this stub exists and this PATH is set — so `gemini` is already
-// cached as "not found". Drop that cache now that the stub is in place, exactly as
-// an install would, so the probe-on check below actually re-probes the stub.
+// Refresh expensive help probes now that the stub is in place.
 invalidateCliProbeCache();
 
 check("probe off by default: gemini keeps its pinned capabilities", () => {

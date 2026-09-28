@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 
 import { claudeCodeIntegration } from "../src/agents/claude-code/integration.js";
-import { invalidateClaudeCliProbe } from "../src/agents/claude-code/runtime.js";
 import { setProviderApiKey } from "../src/credentials/api.js";
 
 // Regression (#433/#435): the unified agent integration's create() must forward
@@ -22,7 +21,6 @@ import { setProviderApiKey } from "../src/credentials/api.js";
   // PATH; point the probe at `node` (always present) so neither short-circuits.
   const prevCommand = process.env.BIVY_CLAUDE_COMMAND;
   process.env.BIVY_CLAUDE_COMMAND = "node";
-  invalidateClaudeCliProbe();
   try {
     const integration = claudeCodeIntegration({ kind: "config" });
     assert.ok(integration.create, "the claude integration exposes create()");
@@ -41,7 +39,6 @@ import { setProviderApiKey } from "../src/credentials/api.js";
   } finally {
     if (prevCommand === undefined) delete process.env.BIVY_CLAUDE_COMMAND;
     else process.env.BIVY_CLAUDE_COMMAND = prevCommand;
-    invalidateClaudeCliProbe();
     fs.rmSync(dir, { recursive: true, force: true });
   }
   console.log("claude create() forwards vault credential OK");

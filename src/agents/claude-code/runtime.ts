@@ -44,7 +44,7 @@ import type {
 } from "../../runtime/types.js";
 import { withExactCapabilitySurface } from "../../runtime/types.js";
 import { mapToolCall, mapToolResult } from "../../runtime/tool-call-map.js";
-import { spawnSync } from "node:child_process";
+import { resolveExecutable } from "../../executable.js";
 import fs from "node:fs";
 import { depCacheEnv } from "../../harness/dep-cache.js";
 import os from "node:os";
@@ -61,24 +61,9 @@ import { bivySessionEnv } from "../../runtime/session-env.js";
  *  native-process-scan.ts's best-effort cwd match). */
 const CLAUDE_BIN_NAMES = ["claude"];
 
-const CLAUDE_CLI_PATH_CACHE = new Map<string, string | undefined>();
-
 /** Resolve the operator-installed Claude Code CLI; never use the SDK's bundled fallback. */
 export function claudeCliPath(): string | undefined {
-  const command = process.env.BIVY_CLAUDE_COMMAND?.trim() || "claude";
-  const key = `${command}\0${process.env.PATH ?? ""}`;
-  if (CLAUDE_CLI_PATH_CACHE.has(key)) return CLAUDE_CLI_PATH_CACHE.get(key);
-  const result = spawnSync(process.platform === "win32" ? "where" : "command", process.platform === "win32" ? [command] : ["-v", command], {
-    shell: process.platform !== "win32",
-    encoding: "utf8",
-  });
-  const resolved = result.status === 0 ? result.stdout.split(/\r?\n/)[0]?.trim() || undefined : undefined;
-  CLAUDE_CLI_PATH_CACHE.set(key, resolved);
-  return resolved;
-}
-
-export function invalidateClaudeCliProbe(): void {
-  CLAUDE_CLI_PATH_CACHE.clear();
+  return resolveExecutable(process.env.BIVY_CLAUDE_COMMAND?.trim() || "claude") ?? undefined;
 }
 
 export function claudeCliAvailable(): boolean {

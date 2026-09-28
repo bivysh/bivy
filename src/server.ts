@@ -312,7 +312,7 @@ process.chdir(appDir);
 // dirs here makes commands work from agent shells without requiring a user shell
 // profile.
 const userLocalPrefix = process.env.BIVY_NPM_GLOBAL_PREFIX || path.join(process.env.HOME ?? os.homedir(), ".local");
-process.env.PATH = [path.join(repoRoot, "bin"), path.join(userLocalPrefix, "bin"), process.env.PATH || ""].filter(Boolean).join(path.delimiter);
+process.env.PATH = [path.join(repoRoot, "bin"), path.join(userLocalPrefix, "bin"), process.env.PATH || "", path.dirname(process.execPath)].filter(Boolean).join(path.delimiter);
 const piDir = path.join(appDir, "pi");
 // The node's shared, agent-neutral credential vault (auth.enc/auth.key). NOT
 // inside any one agent's dir — every runtime (Pi, Codex, Claude, …) reads the

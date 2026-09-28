@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
+import { resolveExecutable } from "../../executable.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineAgentIntegration, type AgentIntegrationOrigin } from "../definition.js";
@@ -20,27 +21,13 @@ import { codexSlashCommands } from "../../runtime/slash-commands.js";
 import type { AgentRuntime } from "../../runtime/types.js";
 
 export const CODEX_TESTED_VERSION = "0.156.1";
-const CODEX_AVAILABLE_CACHE = new Map<string, boolean>();
 
 function codexCommand(): string {
   return process.env.BIVY_CODEX_BIN?.trim() || "codex";
 }
 
 export function codexCommandAvailable(): boolean {
-  const command = codexCommand();
-  const cached = CODEX_AVAILABLE_CACHE.get(command);
-  if (cached !== undefined) return cached;
-  const result = spawnSync(process.platform === "win32" ? "where" : "command", process.platform === "win32" ? [command] : ["-v", command], {
-    shell: process.platform !== "win32",
-    stdio: "ignore",
-  });
-  const available = result.status === 0;
-  CODEX_AVAILABLE_CACHE.set(command, available);
-  return available;
-}
-
-export function invalidateCodexCommandProbe(): void {
-  CODEX_AVAILABLE_CACHE.clear();
+  return resolveExecutable(codexCommand()) !== null;
 }
 
 async function suggestCodexSessionName(firstPrompt: string, context: { cwd: string; model?: string }): Promise<string | undefined> {

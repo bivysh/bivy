@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { piIntegration, invalidatePiCommandProbe } from "../src/agents/pi/integration.js";
+import { piIntegration } from "../src/agents/pi/integration.js";
 import { createCredentialVault } from "../src/runtime/credential-store.js";
 
 // Regression (#433): the unified agent integration constructed the daemon-hosted
@@ -37,7 +37,6 @@ import { createCredentialVault } from "../src/runtime/credential-store.js";
   const prevAgentDir = process.env.PI_CODING_AGENT_DIR;
   process.env.BIVY_PI_COMMAND = "node";
   process.env.PI_CODING_AGENT_DIR = agentDir;
-  invalidatePiCommandProbe();
   try {
     const integration = piIntegration({ kind: "config" });
     assert.ok(integration.create, "the pi integration exposes create()");
@@ -56,7 +55,6 @@ import { createCredentialVault } from "../src/runtime/credential-store.js";
     else process.env.BIVY_PI_COMMAND = prevCommand;
     if (prevAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = prevAgentDir;
-    invalidatePiCommandProbe();
     fs.rmSync(dir, { recursive: true, force: true });
   }
   console.log("pi integration create() is vault-backed OK");

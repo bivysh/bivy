@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import { resolveExecutable } from "./executable.js";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { depCacheEnv } from "./harness/dep-cache.js";
@@ -228,39 +229,7 @@ function defaultShell(): string {
  * Resolving up front lets open() throw a clear, catchable error — and hands the
  * PTY an unambiguous absolute path.
  */
-export function resolveExecutable(command: string, env: NodeJS.ProcessEnv, cwd: string): string | null {
-  const win = process.platform === "win32";
-  const isExecutable = (file: string): boolean => {
-    try {
-      if (!fs.statSync(file).isFile()) return false;
-      if (win) return true;
-      fs.accessSync(file, fs.constants.X_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  // On Windows a bare name may need a PATHEXT suffix (claude → claude.cmd).
-  const exts = win ? (env.PATHEXT || ".COM;.EXE;.BAT;.CMD").split(";").filter(Boolean) : [""];
-  const withExts = (file: string): string[] =>
-    exts.map((ext) => (ext && !file.toLowerCase().endsWith(ext.toLowerCase()) ? file + ext : file));
-
-  // A command with an explicit path is resolved directly (against the workspace
-  // for a relative one), never via PATH — same as exec.
-  if (command.includes("/") || (win && command.includes("\\"))) {
-    for (const candidate of withExts(path.resolve(cwd, command))) {
-      if (isExecutable(candidate)) return candidate;
-    }
-    return null;
-  }
-
-  for (const dir of (env.PATH || "").split(path.delimiter).filter(Boolean)) {
-    for (const candidate of withExts(path.join(dir, command))) {
-      if (isExecutable(candidate)) return candidate;
-    }
-  }
-  return null;
-}
+export { resolveExecutable } from "./executable.js";
 
 /**
  * Restore the execute bit on node-pty's bundled `spawn-helper` binary.

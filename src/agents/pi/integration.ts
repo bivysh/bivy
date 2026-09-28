@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { spawnSync } from "node:child_process";
+import { resolveExecutable } from "../../executable.js";
 import os from "node:os";
 import path from "node:path";
 import { defineAgentIntegration, type AgentIntegrationOrigin } from "../definition.js";
@@ -43,23 +43,8 @@ export async function listNativePiSessions(): Promise<SessionSummary[]> {
   }));
 }
 
-const PI_COMMAND_CACHE = new Map<string, boolean>();
-
 export function piCommandAvailable(): boolean {
-  const command = piCommand();
-  const cached = PI_COMMAND_CACHE.get(command);
-  if (cached !== undefined) return cached;
-  const result = spawnSync(process.platform === "win32" ? "where" : "command", process.platform === "win32" ? [command] : ["-v", command], {
-    shell: process.platform !== "win32",
-    stdio: "ignore",
-  });
-  const available = result.status === 0;
-  PI_COMMAND_CACHE.set(command, available);
-  return available;
-}
-
-export function invalidatePiCommandProbe(): void {
-  PI_COMMAND_CACHE.clear();
+  return resolveExecutable(piCommand()) !== null;
 }
 
 export function piBridgeInstalled(): boolean {
