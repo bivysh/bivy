@@ -8,8 +8,9 @@ is a thin bootstrapper: it ensures a supported Node.js is present, runs
 The control plane and relay are distributed as public GHCR images built by
 `service-images.yml` from their source commit. Every Core commit on `main`
 receives an immutable full-SHA tag. Production promotion aliases those existing
-manifests to `X.Y.Z`, `vX.Y.Z`, and `latest` without rebuilding them. Cloud deployment may
-add deployment-specific metadata around these images, but does not rebuild Core.
+manifests to `X.Y.Z`, `vX.Y.Z`, and `latest` without rebuilding them. A hosted
+deployment may add deployment-specific metadata around these images, but does
+not rebuild Core.
 
 Stable releases also publish `bivy-self-host.tar.gz`, its `.sha256` checksum,
 and the standalone `install.sh` release asset (built from **`deploy/install.sh`**,
@@ -189,6 +190,11 @@ cut over once the GitHub release exists. Finally it opens the follow-up PR
 that records the notes under `## [X.Y.Z] - YYYY-MM-DD` and moves `main` to the
 next patch; entries that landed after the tag stay under `[Unreleased]`. Merge
 it before the next release.
+
+npm accepts the publish at once, but the registry can take several minutes to
+show the new version under `latest` (`npm view` and `npm i -g @bivy/bivy`). The
+Release run's log is the authority; nothing downstream depends on the registry
+catching up.
 
 To retry a failed promotion, dispatch the workflow from the tag:
 
