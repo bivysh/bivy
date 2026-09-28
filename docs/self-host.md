@@ -131,6 +131,36 @@ git checkout vX.Y.Z
 bash deploy/self-host.sh app.example.com relay.example.com
 ```
 
+## Monitoring metrics
+
+The control plane and relay expose Prometheus metrics on separate internal
+listeners, never on the public app/relay ports. The Compose stack binds those
+listeners inside each container to `0.0.0.0` and publishes them on host loopback
+only so a host-local collector can scrape them:
+
+```text
+control-plane: http://127.0.0.1:9465/metrics
+relay:         http://127.0.0.1:9464/metrics
+```
+
+Keep `CONTROL_PLANE_METRICS_BIND` and `RELAY_METRICS_BIND` set to `127.0.0.1`
+unless the scrape target is on a private monitoring network you control. The
+metrics include operational counts such as accounts, nodes, sessions, relay rooms,
+and connection counters.
+
+For Netdata's Prometheus collector:
+
+```bash
+sudo install -m 0644 deploy/netdata-prometheus.conf.example /etc/netdata/go.d/prometheus.conf
+sudo systemctl restart netdata
+curl -fsS http://127.0.0.1:9465/metrics | grep '^bivy_'
+curl -fsS http://127.0.0.1:9464/metrics | grep '^bivy_'
+```
+
+If you run multiple Bivy stacks on the same host, assign unique
+`CONTROL_PLANE_METRICS_PUBLISHED_PORT` and `RELAY_METRICS_PUBLISHED_PORT` values
+per stack, then duplicate the Netdata jobs with matching names and ports.
+
 ## Connect a node
 
 The easiest path is the web app's **Connect a Machine → Auto sign-in** command.

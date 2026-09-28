@@ -65,8 +65,13 @@ services:
     environment:
       NODE_ENV: "${NODE_ENV:-production}"
       PORT: "4400"
-      # Only Caddy publishes ports; trust proxies on this private Docker network.
-      # Override with narrower proxy IPs/CIDRs for a customized network layout.
+      # Prometheus metrics are bound to a separate listener and published only on
+      # host loopback below, so host agents such as Netdata can scrape them
+      # without exposing operational counters through the public proxy.
+      METRICS_HOST: "${CONTROL_PLANE_METRICS_HOST:-0.0.0.0}"
+      METRICS_PORT: "${CONTROL_PLANE_METRICS_PORT:-9465}"
+      # Only Caddy publishes public ports; trust proxies on this private Docker
+      # network. Override with narrower proxy IPs/CIDRs for a customized layout.
       TRUST_PROXY: "${TRUST_PROXY-uniquelocal}"
       RELAY_SECRET: "${RELAY_SECRET}"
       RELAY_PUBLIC_URL: "${RELAY_PUBLIC_URL}"
@@ -108,6 +113,8 @@ services:
         hard: 65536
     expose:
       - "4400"
+    ports:
+      - "${CONTROL_PLANE_METRICS_BIND:-127.0.0.1}:${CONTROL_PLANE_METRICS_PUBLISHED_PORT:-9465}:${CONTROL_PLANE_METRICS_PORT:-9465}"
     depends_on:
       postgres:
         condition: service_healthy
@@ -131,6 +138,11 @@ services:
     environment:
       NODE_ENV: "${NODE_ENV:-production}"
       PORT: "4500"
+      # Prometheus metrics are bound to a separate listener and published only on
+      # host loopback below, so host agents such as Netdata can scrape them
+      # without exposing operational counters through the public proxy.
+      METRICS_HOST: "${RELAY_METRICS_HOST:-0.0.0.0}"
+      METRICS_PORT: "${RELAY_METRICS_PORT:-9464}"
       RELAY_SECRET: "${RELAY_SECRET}"
       # Override for a relay running on another host against the control-plane
       # load balancer; the single-host stack keeps using Docker DNS.
@@ -155,6 +167,8 @@ services:
         hard: 65536
     expose:
       - "4500"
+    ports:
+      - "${RELAY_METRICS_BIND:-127.0.0.1}:${RELAY_METRICS_PUBLISHED_PORT:-9464}:${RELAY_METRICS_PORT:-9464}"
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4500/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 5s
