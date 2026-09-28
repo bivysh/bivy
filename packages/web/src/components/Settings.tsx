@@ -193,6 +193,7 @@ export function Settings({
   const isDesktop = useMediaQuery("(min-width: 721px)");
   const DEFAULT: View = "appearance";
   const [query, setQuery] = useState("");
+  const [signOutOpen, setSignOutOpen] = useState(false);
   const [credentialProvider, setCredentialProvider] = useState<string | null>(null);
 
   // null === the mobile root menu. On desktop we always resolve to a panel —
@@ -282,6 +283,19 @@ export function Settings({
 
   return createPortal(
     <div className="settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
+      {signOutOpen && (
+        <ConfirmDialog
+          title="Sign out?"
+          message="Sign out of Bivy on this device?"
+          confirmLabel="Sign out"
+          danger
+          onCancel={() => setSignOutOpen(false)}
+          onConfirm={() => {
+            setSignOutOpen(false);
+            void controller.signOut().catch((e) => controller.store.setError(String(e?.message || e)));
+          }}
+        />
+      )}
       <div className="settings-scrim" onClick={closeWithBack} />
       <div className="settings-panel" data-mode={activeView ? "panel" : "menu"}>
         <aside className="settings-nav">
@@ -327,6 +341,11 @@ export function Settings({
               );
             })}
           </nav>
+          {hosted && (
+            <button className="btn block" onClick={() => setSignOutOpen(true)}>
+              Sign out
+            </button>
+          )}
           <div className="settings-nav-version" title="The version of the Bivy app running on this device">
             <span>Bivy v{__APP_VERSION__}</span>
             {formatBuildTime(__APP_BUILD_TIME__) && (
@@ -2322,22 +2341,7 @@ function AccountPanel() {
         </div>
       </div>
 
-      {/* This signs the whole account out on this device (unlike the per-device
-          "Sign out" above, which only revokes one paired device) — the higher-
-          impact action, so it gets the same confirmation as every other
-          destructive action in this panel. */}
       <div className="settings-section">
-        <button
-          className="btn danger-ghost block"
-          onClick={() => setConfirm({
-            title: "Sign out?",
-            message: "Sign out of Bivy on this device?",
-            label: "Sign out",
-            action: () => controller.signOut().catch((e) => setErr(String(e?.message || e))),
-          })}
-        >
-          Sign out
-        </button>
         <button
           className="btn danger-ghost block"
           disabled={accountAction !== null}

@@ -6,7 +6,6 @@ import { createPortal } from "react-dom";
 import { controller, useAppState } from "../store/useStore.js";
 import { ConfirmDialog, RenameDialog } from "./AppDialog.js";
 import { ForkSheet } from "./ForkSheet.js";
-import { AppsSheet } from "./AppsSheet.js";
 import { sessionReferenceText, writeClipboard } from "../clipboard.js";
 import { routePath } from "../router.js";
 import { useModalEscape } from "../modalStack.js";
@@ -89,8 +88,6 @@ export function SessionMenu({
   sessionFile,
   auditHealth,
   eventLogHealth,
-  onContinueInTerminal,
-  hasApps,
 }: {
   sessionId: string;
   name: string;
@@ -108,23 +105,14 @@ export function SessionMenu({
     corruptLines: number;
   };
   eventLogHealth?: { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number };
-  /** "Continue in terminal": hand this session to the runtime's interactive TUI.
-   *  Undefined (item hidden) when the runtime lacks `interactiveTui` or the node
-   *  is offline — the reverse of the terminal's "continue in chat". */
-  onContinueInTerminal?: () => void;
-  /** The session has published apps: offer Show me (a review card now). */
-  hasApps?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [forkOpen, setForkOpen] = useState<"fork" | "move" | null>(null);
-  const [appsOpen, setAppsOpen] = useState(false);
+  const [forkOpen, setForkOpen] = useState(false);
   const [resumeOpen, setResumeOpen] = useState(false);
   const [prBusy, setPrBusy] = useState(false);
-  const { presentation: { prResult, error }, connection: { nodes, currentNodeId } } = useAppState();
-  // Moving needs somewhere to go: another of your machines.
-  const canMove = nodes.some((node) => node.id !== currentNodeId);
+  const { presentation: { prResult, error } } = useAppState();
   const prBusyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -207,8 +195,7 @@ export function SessionMenu({
           onSave={(next) => { controller.renameSession(sessionId, next); setRenaming(false); }}
         />
       )}
-      {appsOpen && <AppsSheet sessionId={sessionId} onClose={() => setAppsOpen(false)} />}
-      {forkOpen && <ForkSheet sessionId={sessionId} intent={forkOpen} onClose={() => setForkOpen(null)} />}
+      {forkOpen && <ForkSheet sessionId={sessionId} onClose={() => setForkOpen(false)} />}
       {resumeOpen && <ResumeCommandDialog sessionId={sessionId} name={name} onCancel={() => setResumeOpen(false)} />}
       {deleting && (
         <ConfirmDialog
@@ -234,36 +221,15 @@ export function SessionMenu({
               <span>The last {eventLogHealth.operation ?? "storage"} operation failed. History may be incomplete.</span>
             </div>
           )}
-          {hasApps && <button className="menu-item session-actions-item" role="menuitem" onClick={() => {
-            close();
-            // The card lands in the chat when the screenshot is ready.
-            void controller.appCommand("apps.showMe", sessionId).catch((e: unknown) => controller.store.setError(e instanceof Error ? e.message : "Couldn't show the app"));
-          }}>Show me the app</button>}
-          <button className="menu-item session-actions-item" role="menuitem" onClick={() => { close(); setAppsOpen(true); }}>Apps…</button>
           <button className="menu-item session-actions-item" role="menuitem" onClick={copyReference} disabled={prBusy}>
             Copy session reference
           </button>
           <button className="menu-item session-actions-item" role="menuitem" onClick={rename} disabled={prBusy}>
             Rename
           </button>
-          {canMove && (
-            <button className="menu-item session-actions-item" role="menuitem" onClick={() => { close(); setForkOpen("move"); }} disabled={prBusy}>
-              Move to machine…
-            </button>
-          )}
-          <button className="menu-item session-actions-item" role="menuitem" onClick={() => { close(); setForkOpen("fork"); }} disabled={prBusy}>
-            Fork…
+          <button className="menu-item session-actions-item" role="menuitem" onClick={() => { close(); setForkOpen(true); }} disabled={prBusy}>
+            Fork / move…
           </button>
-          {onContinueInTerminal && (
-            <button
-              className="menu-item session-actions-item"
-              role="menuitem"
-              onClick={() => { close(); onContinueInTerminal(); }}
-              title="Open this session in the agent's interactive terminal (resumes the same conversation)"
-            >
-              Continue in terminal
-            </button>
-          )}
           <button
             className="menu-item session-actions-item"
             role="menuitem"
