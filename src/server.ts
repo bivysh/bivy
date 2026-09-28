@@ -78,6 +78,7 @@ import { createSessionEngine } from "./session/engine.js";
 import { exportProviderAuth, exportAccountApiKeys, exportAccountOAuthCredentials, importAccountOAuthCredentials, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, setCredentialUnattended, exportUnattendedRecords, unattendedCredentialRevision, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords, reconcileHostedCredentialRecords } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
+import { mergeSyncedAgentInstructions, readAgentInstructions, sessionInstructions, writeAgentInstructions, MAX_AGENT_INSTRUCTIONS_BYTES } from "./agent-instructions.js";
 import { execEphemeralRequest, type EphemeralExecRequest } from "./ephemeral-exec.js";
 import { ApprovalManager, type ApprovalRequest } from "./approval.js";
 import { QuestionManager, validQuestions, isAskUserQuestionTool, formatQuestionResult } from "./question.js";
@@ -1482,6 +1483,8 @@ type NodeSettings = {
    *  headless browser. Off by default: it needs Chrome/Chromium and a few
    *  hundred MB of memory while it runs. */
   appScreenshots: boolean;
+  /** Account-wide instructions every agent session receives (src/agent-instructions.ts). */
+  agentInstructions: { text: string; updatedAt: number; maxBytes: number };
   forkWorkspaceMaxBytes: number;
 };
 
@@ -1553,10 +1556,22 @@ function nodeSettingsSnapshot(): NodeSettings {
     autoAttachToolImages: readSettings().autoAttachToolImages === true,
     appScreenshots: appScreenshotsEnabled(),
     forkWorkspaceMaxBytes: Number.isInteger(readSettings().forkWorkspaceMaxBytes) ? Number(readSettings().forkWorkspaceMaxBytes) : 50 * 1024 * 1024,
+    agentInstructions: { ...readAgentInstructions(appDir), maxBytes: MAX_AGENT_INSTRUCTIONS_BYTES },
   };
 }
 
 async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSettings> {
+  // Account-wide agent instructions live in their own file (not config.yaml) and
+  // sync through the E2E vault. Applied first so a rejected save changes nothing.
+  if (typeof patch.agentInstructions === "string") {
+    const current = readAgentInstructions(appDir);
+    const base = Number(patch.agentInstructionsBaseUpdatedAt);
+    if (Number.isFinite(base) && current.updatedAt > base && current.text !== patch.agentInstructions) {
+      throw new Error("These instructions were changed on another device. Reload them before saving.");
+    }
+    writeAgentInstructions(appDir, patch.agentInstructions);
+    void pushModelAuthToControlPlane();
+  }
   const settings = readSettings();
   if (typeof patch.name === "string" && patch.name.trim()) {
     const prev = identity.name;
@@ -3389,6 +3404,10 @@ type ModelAuthEnvelope = {
   localModels?: Record<string, unknown>;
   records?: Record<string, unknown>;
   recordsDeletedAt?: Record<string, number>;
+  // The user's account-wide agent instructions ({ text, updatedAt }, last writer
+  // wins — see src/agent-instructions.ts). Additive and optional: an older peer
+  // drops it on re-push, and a newer peer holding a newer copy re-publishes.
+  agentInstructions?: { text: string; updatedAt: number };
 };
 
 function encryptModelAuthProviders(
@@ -3398,15 +3417,16 @@ function encryptModelAuthProviders(
   vaultKeyB64: string,
   records: Record<string, unknown> = {},
   recordsDeletedAt: Record<string, number> = {},
+  agentInstructions?: { text: string; updatedAt: number },
 ): string {
-  const envelope: ModelAuthEnvelope = { v: MODEL_AUTH_ENVELOPE_VERSION, providers, deletedAt, localModels, records, recordsDeletedAt };
+  const envelope: ModelAuthEnvelope = { v: MODEL_AUTH_ENVELOPE_VERSION, providers, deletedAt, localModels, records, recordsDeletedAt, ...(agentInstructions ? { agentInstructions } : {}) };
   return seal(Buffer.from(vaultKeyB64, "base64"), JSON.stringify(envelope));
 }
 
 function decryptModelAuthEnvelope(
   ciphertext: string,
   vaultKeyB64: string,
-): { v: number; providers: Record<string, unknown>; deletedAt: Record<string, unknown>; localModels: Record<string, unknown>; records: Record<string, unknown>; recordsDeletedAt: Record<string, unknown> } {
+): { v: number; providers: Record<string, unknown>; deletedAt: Record<string, unknown>; localModels: Record<string, unknown>; records: Record<string, unknown>; recordsDeletedAt: Record<string, unknown>; agentInstructions?: unknown } {
   const empty = { v: 0, providers: {}, deletedAt: {}, localModels: {}, records: {}, recordsDeletedAt: {} };
   const parsed = JSON.parse(open(Buffer.from(vaultKeyB64, "base64"), ciphertext)) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return empty;
@@ -3421,6 +3441,7 @@ function decryptModelAuthEnvelope(
       localModels: obj(envelope.localModels),
       records: obj(envelope.records),
       recordsDeletedAt: obj(envelope.recordsDeletedAt),
+      agentInstructions: envelope.agentInstructions,
     };
   }
   // Back-compat: a bare `{ [id]: Credential }` map (pre-envelope / other sender).
@@ -3586,6 +3607,11 @@ async function syncModelAuthFromControlPlane() {
         await importProviderAuth(credsDir, providers, deletedAt);
       }
       importLocalModels(localModelsDir, localModels);
+      // Account-wide agent instructions reconcile last-writer-wins. Hosted
+      // runners hold only the filtered credential snapshot, which never carries
+      // them, so they neither import nor republish.
+      const instructionsSync = hostedCustody ? "unchanged" : mergeSyncedAgentInstructions(appDir, decrypted.agentInstructions);
+      if (instructionsSync === "imported") broadcast({ type: "node.settings", settings: nodeSettingsSnapshot() });
       // A synced key or config change can both alter the projection, so always
       // regenerate it (and refresh the panel) after importing the vault.
       await writePiModelsProjection();
@@ -3597,6 +3623,7 @@ async function syncModelAuthFromControlPlane() {
       stopModelAuthColdStart();
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
       if (!hostedCustody && data.vault?.needsRotation) await pushModelAuthToControlPlane(true);
+      else if (instructionsSync === "local-newer") await pushModelAuthToControlPlane();
     } else if (targetVault?.ciphertext && !vaultKeyB64 && !hostedCustody) {
       await modelAuthFetch("/node/model-auth-key/request", { method: "POST", body: JSON.stringify({ publicKey: pairingStore.nodePublicKeyB64() }) });
       // No peer has wrapped our key yet. Fast-retry (bounded) so a short-lived
@@ -3605,7 +3632,8 @@ async function syncModelAuthFromControlPlane() {
       ensureModelAuthColdStart();
     } else if (
       Object.keys(await exportProviderAuth(credsDir)).length > 0 ||
-      Object.keys(exportLocalModels(localModelsDir)).length > 0
+      Object.keys(exportLocalModels(localModelsDir)).length > 0 ||
+      readAgentInstructions(appDir).updatedAt > 0
     ) {
       await pushModelAuthToControlPlane();
     }
@@ -3706,7 +3734,8 @@ async function pushModelAuthToControlPlane(rotateKey = false, throwOnFailure = f
     const previousKey = readLocalModelAuthVaultKey();
     const vaultKeyB64 = rotateKey ? randomBytes(32).toString("base64") : ensureLocalModelAuthVaultKey();
     if (rotateKey) writeLocalModelAuthVaultKey(vaultKeyB64);
-    const ciphertext = encryptModelAuthProviders(providers, deletedAt, localModels, vaultKeyB64, records, recordsDeletedAt);
+    const instructions = readAgentInstructions(appDir);
+    const ciphertext = encryptModelAuthProviders(providers, deletedAt, localModels, vaultKeyB64, records, recordsDeletedAt, instructions.updatedAt > 0 ? instructions : undefined);
     if (!rotateKey && ciphertext === lastPushedModelAuthCiphertext) {
       await pushHostedModelAuthToControlPlane(allowEmptyHostedEscrow);
       return;
@@ -7972,7 +8001,7 @@ async function refreshRecordAfterTui(record: SessionRecord) {
     const workspace = record.worktree?.path || oldSession.cwd || record.workspace;
     // Refreshing an EXISTING record: its id is already known, so attach_to_chat
     // (see toolProvider's SessionIdRef doc) can be wired live, not deferred.
-    const runtimeSessionOptions = { credentialLabels: record.credentialLabels, workspace, toolProvider: integrations.toolProvider({ current: record.id }), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
+    const runtimeSessionOptions = { credentialLabels: record.credentialLabels, workspace, toolProvider: integrations.toolProvider({ current: record.id }), instructions: sessionInstructions(appDir), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
     const { session, warning } = await runtimeHost.openSession(rt, { ...runtimeSessionOptions, sessionFile: record.sessionFile });
     record.session = session;
     record.sessionFile = session.sessionFile ?? record.sessionFile;
@@ -8215,6 +8244,7 @@ async function recoverRecordAfterAbort(record: SessionRecord): Promise<void> {
       workspace,
       credentialLabels: record.credentialLabels,
       toolProvider: integrations.toolProvider({ current: record.id }),
+      instructions: sessionInstructions(appDir),
       ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}),
     };
     const { session, warning } = await runtimeHost.openSession(rt, {
@@ -8413,7 +8443,9 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // `.current` in the moment `sessionId` is (see toolProvider's SessionIdRef doc).
   const attachSessionIdRef: SessionIdRef = {};
   const credentialLabels = opts.credentialLabels ?? storedMeta?.credentialLabels;
-  const runtimeSessionOptions = { credentialLabels, workspace: runtimeWorkspace, toolProvider: integrations.toolProvider(attachSessionIdRef), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
+  // The user's account-wide instructions, as of this session's start.
+  const instructions = sessionInstructions(appDir);
+  const runtimeSessionOptions = { credentialLabels, workspace: runtimeWorkspace, toolProvider: integrations.toolProvider(attachSessionIdRef), instructions, ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
   // Stage 2/3: prefer re-attaching to a still-live remote session — routed to its
   // OWN agent service — over re-opening a fresh copy from disk. Falls back to
   // open/create when nothing live is there.
@@ -8531,6 +8563,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
         home: os.homedir(),
         sessionId,
         endpoint: process.env.BIVY_MCP_ENDPOINT,
+        instructionsFile: instructions?.file,
       });
       if (res.injected.length) {
         const prev = record.mcpRestore;

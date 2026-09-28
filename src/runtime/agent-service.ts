@@ -250,8 +250,8 @@ export class AgentService<H = ReturnType<typeof setTimeout>> {
       const workspace = message.options.workspace ?? process.cwd();
       const result =
         message.op === "open" && message.options.sessionFile
-          ? await runtime.openSession({ workspace, credentialLabels: message.options.credentialLabels, sessionFile: message.options.sessionFile, toolInterceptor, toolProvider })
-          : await runtime.createSession({ workspace, credentialLabels: message.options.credentialLabels, toolInterceptor, toolProvider });
+          ? await runtime.openSession({ workspace, credentialLabels: message.options.credentialLabels, sessionFile: message.options.sessionFile, toolInterceptor, toolProvider, instructions: message.options.instructions })
+          : await runtime.createSession({ workspace, credentialLabels: message.options.credentialLabels, toolInterceptor, toolProvider, instructions: message.options.instructions });
 
       svc.session = result.session;
       svc.id = result.session.id;

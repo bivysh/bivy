@@ -32,6 +32,9 @@ Current model:
   envelope. Tombstones remove older credentials on every node and prevent a stale
   snapshot from resurrecting them; signing in again later supersedes the tombstone.
 - That request now **wakes the account's peer nodes over the relay** (the same `work.available` signal used for queued work), so a peer answers the wrapped-key request within seconds rather than on its 30s poll. The requesting node fast-retries (bounded) until the key lands, then falls back to the steady poll. This makes the vault — including supported subscription-OAuth logins — usable almost immediately on a short-lived ephemeral runner, while staying **peer-only**: the key is always wrapped node→node and never transits the device or control plane in the clear.
+- The same envelope also carries your account-wide
+  [agent instructions](agent-instructions.md) (last writer wins), so they reach
+  every machine without a separate store.
 - Bivy Cloud never receives plaintext model credentials in ordinary account sync.
   **Allow unattended runs** is a separate per-item custody grant: Bivy encrypts
   only granted stored credentials into a second snapshot under a different key,

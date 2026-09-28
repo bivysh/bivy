@@ -70,6 +70,7 @@ which subsystem or command you need.
 | --- | --- |
 | [config-as-code.md](config-as-code.md) | Developers managing typed node configuration and repository policy in YAML. |
 | [configuration.md](configuration.md) | Complete environment-variable and internal state reference. |
+| [agent-instructions.md](agent-instructions.md) | Users giving every agent session the same personal instructions, across machines. |
 | [cli-reference.md](cli-reference.md) | Anyone looking up a `bivy` command, flag, or subcommand. |
 | [runtime-support-matrix.md](runtime-support-matrix.md) | Users deciding which agent to run and what works with it today. |
 | [supported-agents.md](supported-agents.md) | Generated release-tested capability matrix for richer agent-fidelity claims and version pins. |

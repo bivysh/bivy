@@ -32,6 +32,7 @@ export type SettingsView =
   | "import"
   | "providers"
   | "models"
+  | "instructions"
   | "voice"
   | "share"
   | "github"
@@ -51,6 +52,7 @@ const SETTINGS_VIEWS: readonly SettingsView[] = [
   "import",
   "providers",
   "models",
+  "instructions",
   "voice",
   "share",
   "github",

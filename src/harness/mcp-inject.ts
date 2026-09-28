@@ -131,6 +131,8 @@ export interface BivyToolsContext extends McpConfigContext {
   sessionId: string;
   /** Node URL the tool posts back to (BIVY_MCP_ENDPOINT); default loopback. */
   endpoint?: string;
+  /** Composed account-wide instructions file, served as MCP `instructions`. */
+  instructionsFile?: string;
 }
 
 /**
@@ -153,7 +155,7 @@ export function injectBivyToolsForSession(agentId: string, ctx: BivyToolsContext
     return ext === ".json" || ext === ".toml";
   });
   if (!target) return { injected: [], restore: () => {} };
-  const spec = bivyToolsServerSpec({ sessionId: ctx.sessionId, endpoint: ctx.endpoint, bivyCommand });
+  const spec = bivyToolsServerSpec({ sessionId: ctx.sessionId, endpoint: ctx.endpoint, bivyCommand, instructionsFile: ctx.instructionsFile });
   const ext = path.extname(target).toLowerCase();
   const openCode = agentId === "opencode" || isOpenCodeConfigFile(target);
 

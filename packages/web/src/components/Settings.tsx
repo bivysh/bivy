@@ -24,6 +24,7 @@ import { getAppIconBadgeEnabled, setAppIconBadgeEnabled, setNotificationPreferen
 import { CheckIcon, ChevronRightIcon, CloseIcon, CopyIcon } from "./UiIcons.js";
 import { writeClipboard } from "../clipboard.js";
 import { CredentialVault } from "./CredentialVault.js";
+import { AgentInstructionsPanel } from "./AgentInstructionsPanel.js";
 
 const VoiceSettings = lazy(() => import("./VoiceSettings.js").then((module) => ({ default: module.VoiceSettings })));
 
@@ -55,6 +56,9 @@ const IconAppearance = () => (
 );
 const IconKey = () => (
   <Glyph><circle cx="7.5" cy="15.5" r="4.5" /><path d="m11 12 8-8" /><path d="m16 5 3 3" /><path d="m13 8 3 3" /></Glyph>
+);
+const IconDoc = () => (
+  <Glyph><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /><path d="M9 13h6M9 17h4" /></Glyph>
 );
 const IconMic = () => (
   <Glyph><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10a7 7 0 0 0 14 0" /><path d="M12 19v3" /></Glyph>
@@ -129,6 +133,7 @@ const TITLES: Record<View, string> = {
   import: "Import session",
   providers: "Models & keys",
   models: "Models & keys",
+  instructions: "Agent instructions",
   voice: "Voice",
   share: "Share to Bivy",
   github: "GitHub App",
@@ -151,6 +156,7 @@ const SEARCH_TERMS: Record<View, string> = {
   import: "session transcript file upload migrate",
   providers: "model provider api key oauth openai anthropic google login credentials custom endpoint local ollama import claude codex grok machine",
   models: "model provider api key oauth ollama local custom endpoint",
+  instructions: "agents.md claude.md system prompt global instructions rules preferences memory",
   voice: "microphone speech transcription read aloud reader text to speech voice tone speed",
   share: "share sheet send android ios iphone ipad shortcut link url target",
   github: "github app repository installation issue pull request",
@@ -238,6 +244,12 @@ export function Settings({
       label: "Models & keys",
       items: [
         { id: "providers", label: "Providers & credentials", icon: <IconKey /> },
+      ],
+    },
+    {
+      label: "Agents",
+      items: [
+        { id: "instructions", label: "Agent instructions", icon: <IconDoc /> },
       ],
     },
     {
@@ -374,6 +386,7 @@ export function Settings({
                 added from Models & keys; this keeps the full legacy endpoint
                 editor reachable without splitting the primary navigation. */}
             {activeView === "models" && <LocalModelsPanel state={state} onStartWork={onClose} />}
+            {activeView === "instructions" && <AgentInstructionsPanel state={state} />}
             {activeView === "voice" && (
               <Suspense fallback={<div className="muted">Loading voice settings…</div>}>
                 <VoiceSettings

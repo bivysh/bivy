@@ -7,6 +7,9 @@
 // attach_to_chat; tools/call posts to the node's attach endpoint).
 
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { createBivyMcpServer, runAttachToChat } from "../src/harness/mcp-serve-cli.js";
@@ -89,6 +92,26 @@ await check("round-trip: a real MCP client lists + calls attach_to_chat", async 
   const bad: any = await client.callTool({ name: "nope", arguments: {} });
   assert.equal(bad.isError, true);
   await client.close();
+});
+
+await check("the user's account-wide instructions are advertised as MCP server instructions", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-mcp-instr-"));
+  const file = path.join(dir, "composed.md");
+  fs.writeFileSync(file, "Prefer small commits.\n");
+  const connect = async (instructionsFile: string) => {
+    const server = createBivyMcpServer({ sessionId: "sess-1", instructionsFile });
+    const [clientT, serverT] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverT);
+    const client = new Client({ name: "test", version: "1.0.0" });
+    await client.connect(clientT);
+    const instructions = client.getInstructions();
+    await client.close();
+    return instructions;
+  };
+  assert.equal(await connect(file), "Prefer small commits.");
+  // A cleared (removed) file means no instructions, not an error.
+  assert.equal(await connect(path.join(dir, "missing.md")), undefined);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 if (failures > 0) {

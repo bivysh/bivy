@@ -690,7 +690,7 @@ function acpShimPath(): string {
  * through bin/acp-shim.mjs. Shared by the generic `acp` runtime and the per-agent
  * ACP promotion path so both wrap agents identically.
  */
-function acpRuntimeOptions(opts: { id: string; displayName: string; command: string; agentArgs: string[]; credsDir?: string; behaviors?: AgentProfileBehaviors; mcpConfig?: McpConfig; sandbox?: AgentSessionOptions["sandbox"] }): ProtocolRuntimeOptions {
+function acpRuntimeOptions(opts: { id: string; displayName: string; command: string; agentArgs: string[]; credsDir?: string; behaviors?: AgentProfileBehaviors; mcpConfig?: McpConfig; sandbox?: AgentSessionOptions["sandbox"]; instructionsEnv?: Record<string, string> }): ProtocolRuntimeOptions {
   const slashBehavior = opts.behaviors?.slashCommands;
   const slashCommands = slashBehavior ? SLASH_COMMAND_BEHAVIORS[slashBehavior]() : undefined;
   // Forward Bivy's configured MCP servers to the ACP agent: the shim reads
@@ -713,6 +713,7 @@ function acpRuntimeOptions(opts: { id: string; displayName: string; command: str
     // An ACP-promoted opencode still surfaces/expands its on-disk commands (the
     // ACP handshake doesn't carry them); a bare ACP agent has none.
     ...(slashCommands ? { slashCommands } : {}),
+    ...(opts.instructionsEnv ? { instructionsEnv: opts.instructionsEnv } : {}),
     ...(opts.credsDir ? { credentials: createCredentialStore(opts.credsDir) } : {}),
     // Declared credential behaviors apply to the governed path exactly as they do
     // to the pipe path: the preflight surfaces a clear no-credential error before
@@ -1250,6 +1251,7 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
           ...(spec.authOwner && spec.authOwner !== "agent" ? { credsDir: options.credsDir } : {}),
           sandbox: options.sandbox,
           mcpConfig: options.mcpConfig,
+          instructionsEnv: spec.instructions?.env,
         }));
       }
       const structured = executionMode === "structured-pipe";
@@ -1373,6 +1375,7 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
         thinking: cliThinkingConfig(id, spec),
         usageReporting: cliUsageReporting(spec),
         slashCommands: cliSlashCommands(spec),
+        ...(spec.instructions ? { instructionsEnv: spec.instructions.env } : {}),
         ...resumeOpts,
         ...nativeSessionOpts,
       });

@@ -528,6 +528,9 @@ export class PiRuntime implements AgentRuntime {
         modelRuntime,
         resourceLoaderOptions: {
           extensionFactories: [guardianFactory(sessionId, options.toolInterceptor), ...providedTools],
+          // Additive: keep whatever Pi discovered itself, then the user's
+          // account-wide instructions (see OpenSessionOptions.instructions).
+          ...(options.instructions ? { appendSystemPromptOverride: (base: string[]) => [...base, options.instructions!.text] } : {}),
         },
       });
       // Override only the built-in bash definition. Pi still owns rendering,
