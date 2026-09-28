@@ -52,6 +52,7 @@ import { createCredentialStore, testProviderCredential } from "./runtime/credent
 import { decodeAutomationTemplate, type AutomationFilter } from "./automation-template.js";
 import { passWebhookFilter } from "./automation-filter-gate.js";
 import { isModelAuthError, authProviderForSession, classifyModelAuthError } from "./runtime/auth-errors.js";
+import { npmPrefixBin, portableSpawn } from "./portable-process.mjs";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
 import { probeAnthropicAccess } from "./runtime/anthropic-preflight.js";
 import { credentialReadiness } from "./runtime/activation-readiness.js";
@@ -319,7 +320,7 @@ process.chdir(appDir);
 // dirs here makes commands work from agent shells without requiring a user shell
 // profile.
 const userLocalPrefix = process.env.BIVY_NPM_GLOBAL_PREFIX || path.join(process.env.HOME ?? os.homedir(), ".local");
-process.env.PATH = [path.join(repoRoot, "bin"), path.join(userLocalPrefix, "bin"), process.env.PATH || "", path.dirname(process.execPath)].filter(Boolean).join(path.delimiter);
+process.env.PATH = [path.join(repoRoot, "bin"), npmPrefixBin(userLocalPrefix), process.env.PATH || "", path.dirname(process.execPath)].filter(Boolean).join(path.delimiter);
 const piDir = path.join(appDir, "pi");
 // The node's shared, agent-neutral credential vault (auth.enc/auth.key). NOT
 // inside any one agent's dir — every runtime (Pi, Codex, Claude, …) reads the
@@ -825,6 +826,11 @@ async function maybeNotifyBivyUpdate() {
 // (e.g. an unusual layout), so the banner can fall back to the manual command.
 function runBivyUpdate(): { ok: boolean; error?: string } {
   const script = path.join(repoRoot, "bin", "bivy.mjs");
+  // Stopping the node on Windows ends its whole process tree, updater included
+  // (see runUpdate in bin/bivy.mjs).
+  if (process.platform === "win32") {
+    return { ok: false, error: "On Windows, run `bivy update` from a terminal window." };
+  }
   if (!fs.existsSync(script)) {
     return { ok: false, error: "Could not locate the bivy CLI on this node — run `bivy update` in a terminal." };
   }
@@ -832,6 +838,7 @@ function runBivyUpdate(): { ok: boolean; error?: string } {
     const child = spawn(process.execPath, [script, "update"], {
       detached: true,
       stdio: "ignore",
+      windowsHide: true,
       // The daemon is commonly itself managed by systemd/launchd. Mark this
       // invocation as terminal-style so the CLI moves the real update into a
       // process that survives the service restart (systemd-run on Linux).
@@ -865,8 +872,8 @@ function installCommandText(spec: RuntimeInstallSpec): string {
 
 function runInstallCommand(spec: RuntimeInstallSpec): Promise<{ output: string }> {
   return new Promise((resolve, reject) => {
-    if (spec.command === "npm" && spec.args.includes("--prefix")) fs.mkdirSync(path.join(userLocalPrefix, "bin"), { recursive: true });
-    const child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: process.env });
+    if (spec.command === "npm" && spec.args.includes("--prefix")) fs.mkdirSync(npmPrefixBin(userLocalPrefix), { recursive: true });
+    const child = portableSpawn(spec.command, spec.args, { cwd: spec.cwd, env: process.env });
     let output = "";
     const append = (chunk: Buffer) => {
       output = (output + chunk.toString()).slice(-12000);

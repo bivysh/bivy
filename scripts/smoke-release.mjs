@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 /**
  * Clean-consumer smoke test for the exact curated npm artifact. CI runs this on
- * Ubuntu and macOS so release packaging cannot silently depend on the checkout,
- * devDependencies, or one operating system's node_modules layout.
+ * Ubuntu, macOS and Windows so release packaging cannot silently depend on the
+ * checkout, devDependencies, or one operating system's node_modules layout.
  *
  * With no arguments it builds the self-hosted artifact first. CI passes
  * `--artifact <path>` with the exact npm tarball so multiple consumer jobs can
@@ -12,9 +12,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { spawn, spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
+// npm and the installed `bivy` are .cmd shims on Windows.
+import { npmPrefixBin, portableSpawn, portableSpawnSync } from "../src/portable-process.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const artifactIndex = process.argv.indexOf("--artifact");
@@ -36,7 +37,7 @@ const DEFAULT_STEP_TIMEOUT_MS = 10 * 60 * 1000;
 
 function run(command, args, options = {}) {
   const { capture, timeout, ...spawnOptions } = options;
-  const result = spawnSync(command, args, {
+  const result = portableSpawnSync(command, args, {
     cwd: root,
     encoding: "utf8",
     stdio: capture ? "pipe" : "inherit",
@@ -58,7 +59,7 @@ function run(command, args, options = {}) {
 function runAsync(command, args, options = {}) {
   const { timeout = DEFAULT_STEP_TIMEOUT_MS, ...spawnOptions } = options;
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
+    const child = portableSpawn(command, args, {
       cwd: root,
       stdio: "inherit",
       detached: process.platform !== "win32",
@@ -106,7 +107,9 @@ try {
   } else {
     run(process.execPath, [path.join(root, "scripts/build-release.mjs"), "--pack", releaseDir]);
   }
-  run("tar", ["-xzf", artifact, "-C", extracted]);
+  // Windows' own bsdtar: a Git-for-Windows GNU tar earlier on PATH reads `C:` as a host.
+  const tar = process.platform === "win32" ? path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe") : "tar";
+  run(tar, ["-xzf", artifact, "-C", extracted]);
 
   // The fallback archive has a `bivy/` root; npm's canonical tarball uses
   // `package/`. Accept both so local fallback checks remain convenient while CI
@@ -138,8 +141,8 @@ try {
   const failedInstall = installs.find((result) => result.status === "rejected");
   if (failedInstall?.status === "rejected") throw failedInstall.reason;
 
-  const globalBivy = path.join(globalPrefix, "bin", "bivy");
-  const globalRoot = path.join(globalPrefix, "lib", "node_modules", "@bivy", "bivy");
+  const globalBivy = path.join(npmPrefixBin(globalPrefix), "bivy");
+  const globalRoot = path.join(globalPrefix, ...(process.platform === "win32" ? [] : ["lib"]), "node_modules", "@bivy", "bivy");
   const globalVersion = run(globalBivy, ["--version"], { capture: true }).trim();
   if (globalVersion !== staged.version) throw new Error(`global CLI version ${globalVersion} != package ${staged.version}`);
   // Terminal support must be present and actually work from its prebuilt
@@ -150,6 +153,9 @@ try {
   for (const scope of ["@anthropic-ai", "@earendil-works"]) {
     if (fs.existsSync(path.join(globalRoot, "node_modules", scope))) throw new Error(`global install pulled in ${scope} packages`);
   }
+  // The daemon itself — command launch, a background service and its stop —
+  // has Windows-only code paths that no Linux job reaches.
+  if (process.platform === "win32") run(process.execPath, [path.join(root, "scripts/smoke-windows.mjs"), globalBivy], { timeout: 5 * 60 * 1000 });
 
   const bivy = path.join(consumer, "node_modules", ".bin", "bivy");
   const version = run(bivy, ["--version"], { cwd: consumer, capture: true }).trim();

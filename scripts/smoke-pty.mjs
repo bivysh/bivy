@@ -11,7 +11,11 @@ const require = createRequire(path.resolve(process.argv[2], "package.json"));
 const pty = require("@lydell/node-pty");
 await new Promise((resolve, reject) => {
   let output = "";
-  const terminal = pty.spawn("/bin/sh", ["-c", "printf bivy-pty-ok"], {
+  // ConPTY on Windows; a POSIX pty elsewhere.
+  const [shell, args] = process.platform === "win32"
+    ? [process.env.COMSPEC || "cmd.exe", ["/d", "/c", "echo bivy-pty-ok"]]
+    : ["/bin/sh", ["-c", "printf bivy-pty-ok"]];
+  const terminal = pty.spawn(shell, args, {
     name: "xterm",
     cols: 80,
     rows: 24,

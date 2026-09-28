@@ -175,6 +175,12 @@ const qrEntry = path.join(repoRoot, "public", "qr.js");
 const tsxCli = packaged ? "" : path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
 const nodeBin = process.execPath;
 const nodeScriptArgs = (entry) => (tsxCli ? [tsxCli, entry] : [entry]);
+// Cross-platform command lookup/launch shared with the daemon (dependency-free,
+// shipped to dist/ like hosted-endpoints.mjs). Windows needs it for PATHEXT
+// lookup and for npm's `.cmd` shims (npm, pnpm, every agent CLI).
+const { killProcessTree, npmPrefixBin, portableSpawn, portableSpawnSync, resolveExecutable } = await import(
+  pathToFileURL(path.join(repoRoot, packaged ? "dist/portable-process.mjs" : "src/portable-process.mjs")).href
+);
 
 // Resolve the baked-in hosted endpoints (app/relay/client URLs). Imported lazily
 // so the packaged-aware path above is only touched when setup actually needs it.
@@ -413,11 +419,11 @@ function storeLocalSecretSync(id, plaintext, description) {
 // a raw token — is reflected on disk immediately. Best-effort; the running
 // service keeps its current env until its next restart.
 function writeServiceUnitFileQuietly(config) {
-  const { kind, file } = servicePaths();
-  if (kind === "unsupported" || !fs.existsSync(file)) return;
+  const backend = serviceBackend();
+  if (!backend || !fs.existsSync(backend.file)) return;
   try {
-    fs.writeFileSync(file, kind === "launchd" ? plistContent(config) : systemdContent(config));
-    if (kind === "systemd") runQuiet("systemctl", ["--user", "daemon-reload"], { env: systemdUserEnv() });
+    writeServiceFile(backend, config);
+    backend.reload?.();
   } catch { /* best effort */ }
 }
 
@@ -523,7 +529,7 @@ function nodeBindHost() {
 
 function run(cmd, args, opts = {}) {
   return new Promise((resolve) => {
-    const child = spawn(cmd, args, { stdio: "inherit", ...opts });
+    const child = portableSpawn(cmd, args, { stdio: "inherit", ...opts });
     child.on("exit", (code) => resolve(code ?? 0));
     child.on("error", (error) => {
       console.error(c.red(`Failed to run ${cmd}: ${error.message}`));
@@ -552,7 +558,7 @@ function runSetupModelLogin(config) {
 }
 
 function runQuiet(cmd, args, opts = {}) {
-  const res = spawnSync(cmd, args, { encoding: "utf8", ...opts });
+  const res = portableSpawnSync(cmd, args, { encoding: "utf8", ...opts });
   return { code: res.status ?? 1, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
 }
 
@@ -564,11 +570,15 @@ function argValue(args, name) {
   return i !== -1 ? args[i + 1] || "" : "";
 }
 
+// POSIX asks a login shell so profile-only PATH entries count; Windows has no
+// such shell, and a direct PATH/PATHEXT lookup is what CreateProcess sees.
 function commandExists(cmd) {
+  if (process.platform === "win32") return Boolean(resolveExecutable(cmd));
   return runQuiet("sh", ["-lc", "command -v -- \"$1\" >/dev/null 2>&1", "sh", cmd]).code === 0;
 }
 
 function commandOnPath(cmd) {
+  if (process.platform === "win32") return resolveExecutable(cmd) || "";
   const result = runQuiet("sh", ["-lc", "command -v -- \"$1\"", "sh", cmd]);
   return result.code === 0 ? result.stdout.trim().split(/\r?\n/)[0] || "" : "";
 }
@@ -578,7 +588,7 @@ function npmGlobalBinCommand(cmd) {
   const prefix = runQuiet("npm", ["prefix", "-g"]);
   if (prefix.code !== 0 || !prefix.stdout.trim()) return "";
   const executable = process.platform === "win32" ? `${cmd}.cmd` : cmd;
-  const candidate = path.join(prefix.stdout.trim(), "bin", executable);
+  const candidate = path.join(npmPrefixBin(prefix.stdout.trim()), executable);
   return fs.existsSync(candidate) ? candidate : "";
 }
 
@@ -839,7 +849,7 @@ const AGENT_INTEGRATIONS = new Map([
 async function ensureTerminalCommand(agent) {
   const shimDir = defaultShimDir();
   const managedExe = process.platform === "win32" ? `${agent.command}.cmd` : agent.command;
-  const managed = path.join(shimDir, managedExe);
+  const managed = path.join(npmPrefixBin(userLocalPrefix), managedExe);
 
   // Launch exactly what the user's own PATH points the command at — the same
   // binary they'd get by typing it in their shell (e.g. a newer nvm/asdf/global
@@ -865,7 +875,7 @@ async function ensureTerminalCommand(agent) {
   }
 
   console.log(c.dim(`${agent.label} command not found; installing ${agent.npmPackage}…`));
-  fs.mkdirSync(path.join(userLocalPrefix, "bin"), { recursive: true });
+  fs.mkdirSync(npmPrefixBin(userLocalPrefix), { recursive: true });
   const code = await run("npm", ["install", "--global", "--prefix", userLocalPrefix, agent.npmPackage, "--no-audit", "--no-fund"]);
   if (code !== 0) return "";
 
@@ -935,6 +945,7 @@ async function ensureNodeRunning(config) {
     cwd: repoRoot,
     env: startEnv(config),
     detached: true,
+    windowsHide: true,
     stdio: logFd === undefined ? "ignore" : ["ignore", logFd, logFd],
   });
   child.unref();
@@ -1241,6 +1252,7 @@ function resolveRealBinary(agentCmd, excludeDir) {
     .split(path.delimiter)
     .filter((entry) => entry && path.resolve(entry) !== path.resolve(excludeDir))
     .join(path.delimiter);
+  if (process.platform === "win32") return resolveExecutable(agentCmd, { ...process.env, PATH: cleaned }) || "";
   // Plain `-c` (not `-lc`): PATH is set explicitly here, and a login shell would
   // source profiles that can print noise onto stdout.
   const found = runQuiet("sh", ["-c", 'PATH="$1" command -v -- "$2" 2>/dev/null', "sh", cleaned, agentCmd]);
@@ -1270,6 +1282,7 @@ function isBivyShim(candidate) {
 // shell, so no profile noise). Used to check whether an installed shim actually
 // wins on PATH. Returns "" when unresolved or resolved to a non-path (builtin).
 function whichOnPath(cmd) {
+  if (process.platform === "win32") return resolveExecutable(cmd) || "";
   const found = runQuiet("sh", ["-c", 'command -v -- "$1" 2>/dev/null', "sh", cmd]);
   const line = found.code === 0 ? found.stdout.trim().split("\n").pop() : "";
   return line && line.startsWith("/") ? line : "";
@@ -1607,6 +1620,13 @@ async function cmdShim(args = []) {
 
   if (sub && sub !== "status" && sub !== "list" && sub !== "install" && sub !== "add" && sub !== "uninstall" && sub !== "remove" && sub !== "rm") {
     console.error(c.red(`Unknown shim subcommand: ${sub}. Usage: bivy shim install|uninstall|status <agent>`));
+    process.exit(1);
+    return;
+  }
+
+  if ((sub === "install" || sub === "add") && process.platform === "win32") {
+    // The shim is a POSIX sh script that takes over the agent's command name.
+    console.error(c.yellow("Agent shims are not available on Windows yet. Use 'bivy run <agent>' instead."));
     process.exit(1);
     return;
   }
@@ -3278,20 +3298,153 @@ function createPrompter() {
 
 // --- service management -----------------------------------------------------
 
+// One row per service manager; every caller dispatches through the row for
+// this platform, so supporting another manager is a new row, not new branches.
+//   file         the rendered definition — its presence means "installed"
+//   render       config → canonical file content (drift triggers a reinstall)
+//   encoding     how `file` is stored (default utf8)
+//   activate     register + start once `file` is written; false on failure
+//   deactivate   stop + unregister, and remove `file`
+//   restart      (re)start; false when the manager could not be reached
+//   stop         stop without unregistering
+//   state        one word for `bivy status`
+//   logs         tail the service's output (lines, follow)
+//   diagnostics  recent output after a failed start ("" → use node.log)
+const SERVICE_BACKENDS = {
+  darwin: {
+    kind: "launchd",
+    file: path.join(os.homedir(), "Library", "LaunchAgents", `${SERVICE_LABEL}.plist`),
+    render: (config) => plistContent(config),
+    activate(file) {
+      runQuiet("launchctl", ["unload", file]);
+      const res = runQuiet("launchctl", ["load", "-w", file]);
+      if (res.code !== 0) console.error(c.red(`launchctl load failed: ${res.stderr.trim()}`));
+      return res.code === 0;
+    },
+    deactivate(file) {
+      runQuiet("launchctl", ["unload", file]);
+      fs.rmSync(file, { force: true });
+    },
+    restart(file) {
+      runQuiet("launchctl", ["kickstart", "-k", `gui/${process.getuid?.() ?? ""}/${SERVICE_LABEL}`]);
+      // Fallback for older launchctl
+      runQuiet("launchctl", ["unload", file]);
+      runQuiet("launchctl", ["load", "-w", file]);
+      return true;
+    },
+    stop: (file) => { runQuiet("launchctl", ["unload", file]); },
+    state: () => (runQuiet("launchctl", ["list", SERVICE_LABEL]).code === 0 ? "loaded" : "not loaded"),
+    logs: (lines, follow) => tailFiles(["/tmp/bivy.log", "/tmp/bivy.err.log"], lines, follow),
+    diagnostics: () => [readTail("/tmp/bivy.err.log"), readTail("/tmp/bivy.log")].filter(Boolean).join("\n"),
+  },
+  linux: {
+    kind: "systemd",
+    file: path.join(os.homedir(), ".config", "systemd", "user", SERVICE_UNIT),
+    render: (config) => systemdContent(config),
+    reload: () => runQuiet("systemctl", ["--user", "daemon-reload"], { env: systemdUserEnv() }),
+    activate() {
+      const username = os.userInfo().username;
+      // Best effort. This succeeds when run as root, via sudo permissions, or on
+      // systems that allow users to enable their own linger. It is safe to try
+      // before systemctl so a direct SSH-less install has a better chance to work.
+      const linger = runQuiet("loginctl", ["enable-linger", username]);
+      const systemdEnv = systemdUserEnv();
+      runQuiet("systemctl", ["--user", "daemon-reload"], { env: systemdEnv });
+      const res = runQuiet("systemctl", ["--user", "enable", "--now", SERVICE_UNIT], { env: systemdEnv });
+      if (res.code !== 0) {
+        console.error(c.red("Could not start the systemd user service from this shell."));
+        console.error(c.dim((res.stderr || res.stdout || "").trim()));
+        console.log("\nTo finish service setup, SSH in directly as this user and run:");
+        console.log(c.cyan("  bivy service install"));
+        console.log("If it still fails, run once as root:");
+        console.log(c.cyan(`  loginctl enable-linger ${username}`));
+        return false;
+      }
+      if (linger.code === 0) {
+        console.log(c.dim("Enabled systemd linger so the node keeps running after SSH logout."));
+      } else {
+        console.log(c.dim(`If the node stops after logout, run as root: loginctl enable-linger ${username}`));
+      }
+      return true;
+    },
+    deactivate(file) {
+      runQuiet("systemctl", ["--user", "disable", "--now", SERVICE_UNIT]);
+      fs.rmSync(file, { force: true });
+      runQuiet("systemctl", ["--user", "daemon-reload"]);
+    },
+    // Report the real outcome: if the user manager can't be reached (no linger,
+    // missing XDG_RUNTIME_DIR, etc.) the restart failed and callers should fall
+    // back to a foreground/background start instead of waiting on a node that
+    // was never (re)started.
+    restart: () => runQuiet("systemctl", ["--user", "restart", SERVICE_UNIT], { env: systemdUserEnv() }).code === 0,
+    stop: () => { runQuiet("systemctl", ["--user", "stop", SERVICE_UNIT], { env: systemdUserEnv() }); },
+    state: () => runQuiet("systemctl", ["--user", "is-active", SERVICE_UNIT], { env: systemdUserEnv() }).stdout.trim() || "unknown",
+    async logs(lines, follow) {
+      const jargs = ["--user", "-u", SERVICE_UNIT, "-n", lines, "--no-pager"];
+      if (follow) jargs.push("-f");
+      await run("journalctl", jargs, { env: systemdUserEnv() });
+    },
+    diagnostics() {
+      const res = runQuiet("journalctl", ["--user", "-u", SERVICE_UNIT, "-n", "30", "--no-pager"], { env: systemdUserEnv() });
+      const out = (res.stdout || res.stderr || "").replace(/\s+$/, "");
+      // journalctl prints "-- No entries --" (exit 0) when the unit has no logs.
+      return out && !/^-- No entries --$/.test(out) ? out : "";
+    },
+  },
+  // A per-user Task Scheduler task started at logon: the Windows counterpart of
+  // a systemd user unit or LaunchAgent, and registrable without elevation. It
+  // runs `bivy service run`, which supervises the node (restart on exit, output
+  // to node.log) since Task Scheduler does neither.
+  win32: {
+    kind: "scheduled task",
+    file: path.join(appDir, "service", "bivy-task.xml"),
+    render: (config) => windowsTaskXml(config),
+    // schtasks reads task XML reliably only as UTF-16.
+    encoding: "utf16le",
+    activate(file) {
+      const created = runQuiet("schtasks", ["/Create", "/TN", WINDOWS_TASK, "/XML", file, "/F"]);
+      if (created.code !== 0) {
+        console.error(c.red("Could not register the Bivy scheduled task."));
+        console.error(c.dim((created.stderr || created.stdout || "").trim()));
+        return false;
+      }
+      return startWindowsTask();
+    },
+    deactivate(file) {
+      stopWindowsTask();
+      runQuiet("schtasks", ["/Delete", "/TN", WINDOWS_TASK, "/F"]);
+      fs.rmSync(file, { force: true });
+    },
+    restart: () => startWindowsTask(),
+    stop: () => stopWindowsTask(),
+    state: () => (supervisorPid() ? "running" : "stopped"),
+    logs: (lines, follow) => tailFiles([nodeLogPath], lines, follow),
+    diagnostics: () => "",
+  },
+};
+
+function serviceBackend() {
+  return SERVICE_BACKENDS[process.platform];
+}
+
 function servicePaths() {
-  if (process.platform === "darwin") {
-    return {
-      kind: "launchd",
-      file: path.join(os.homedir(), "Library", "LaunchAgents", `${SERVICE_LABEL}.plist`),
-    };
+  const backend = serviceBackend();
+  return backend ? { kind: backend.kind, file: backend.file } : { kind: "unsupported", file: "" };
+}
+
+function writeServiceFile(backend, config) {
+  fs.mkdirSync(path.dirname(backend.file), { recursive: true });
+  const content = backend.render(config);
+  fs.writeFileSync(backend.file, backend.encoding === "utf16le" ? `\ufeff${content}` : content, backend.encoding ?? "utf8");
+}
+
+function serviceFileMatches(backend, config) {
+  try {
+    const content = fs.readFileSync(backend.file, backend.encoding ?? "utf8").replace(/^\ufeff/, "");
+    return content === backend.render(config);
+  } catch {
+    return false;
   }
-  if (process.platform === "linux") {
-    return {
-      kind: "systemd",
-      file: path.join(os.homedir(), ".config", "systemd", "user", SERVICE_UNIT),
-    };
-  }
-  return { kind: "unsupported", file: "" };
 }
 
 function plistContent(config) {
@@ -3379,8 +3532,8 @@ async function installService(config) {
     console.log(`Install a persistent copy first: ${c.cyan("npm i -g @bivy/bivy")}, then run ${c.cyan("bivy service install")}.`);
     return false;
   }
-  const { kind, file } = servicePaths();
-  if (kind === "unsupported") {
+  const backend = serviceBackend();
+  if (!backend) {
     console.log(c.yellow(`No background-service template for ${process.platform}. Use 'bivy start' instead.`));
     return false;
   }
@@ -3389,60 +3542,21 @@ async function installService(config) {
   // this path used to write it in verbatim (so the node would fail to bind and
   // silently exit). reconcileNodePort persists any change into `config` first.
   await reconcileNodePort(config);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  if (kind === "launchd") {
-    fs.writeFileSync(file, plistContent(config));
-    runQuiet("launchctl", ["unload", file]);
-    const res = runQuiet("launchctl", ["load", "-w", file]);
-    if (res.code !== 0) {
-      console.error(c.red(`launchctl load failed: ${res.stderr.trim()}`));
-      return false;
-    }
-  } else {
-    fs.writeFileSync(file, systemdContent(config));
-    const username = os.userInfo().username;
-    // Best effort. This succeeds when run as root, via sudo permissions, or on
-    // systems that allow users to enable their own linger. It is safe to try
-    // before systemctl so a direct SSH-less install has a better chance to work.
-    const linger = runQuiet("loginctl", ["enable-linger", username]);
-    const runtimeDir = process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? ""}`;
-    const systemdEnv = { ...process.env, XDG_RUNTIME_DIR: runtimeDir };
-    runQuiet("systemctl", ["--user", "daemon-reload"], { env: systemdEnv });
-    const res = runQuiet("systemctl", ["--user", "enable", "--now", SERVICE_UNIT], { env: systemdEnv });
-    if (res.code !== 0) {
-      console.error(c.red("Could not start the systemd user service from this shell."));
-      console.error(c.dim((res.stderr || res.stdout || "").trim()));
-      console.log("\nTo finish service setup, SSH in directly as this user and run:");
-      console.log(c.cyan("  bivy service install"));
-      console.log("If it still fails, run once as root:");
-      console.log(c.cyan(`  loginctl enable-linger ${username}`));
-      return false;
-    }
-    if (linger.code === 0) {
-      console.log(c.dim("Enabled systemd linger so the node keeps running after SSH logout."));
-    } else {
-      console.log(c.dim(`If the node stops after logout, run as root: loginctl enable-linger ${username}`));
-    }
-  }
+  writeServiceFile(backend, config);
+  if (!backend.activate(backend.file)) return false;
   config.service = true;
   saveConfig(config);
-  console.log(c.green(`Background service installed (${kind}).`));
+  console.log(c.green(`Background service installed (${backend.kind}).`));
   return true;
 }
 
 function uninstallService() {
-  const { kind, file } = servicePaths();
-  if (kind === "unsupported" || !fs.existsSync(file)) {
+  const backend = serviceBackend();
+  if (!backend || !fs.existsSync(backend.file)) {
     console.log("No background service installed.");
-  } else if (kind === "launchd") {
-    runQuiet("launchctl", ["unload", file]);
-    fs.rmSync(file, { force: true });
-    console.log(c.green("launchd service removed."));
   } else {
-    runQuiet("systemctl", ["--user", "disable", "--now", SERVICE_UNIT]);
-    fs.rmSync(file, { force: true });
-    runQuiet("systemctl", ["--user", "daemon-reload"]);
-    console.log(c.green("systemd service removed."));
+    backend.deactivate(backend.file);
+    console.log(c.green(`${backend.kind} service removed.`));
   }
   const config = loadConfig();
   config.service = false;
@@ -3459,23 +3573,9 @@ function systemdUserEnv() {
 }
 
 function restartService() {
-  const { kind, file } = servicePaths();
-  if (!fs.existsSync(file)) return false;
-  if (kind === "launchd") {
-    runQuiet("launchctl", ["kickstart", "-k", `gui/${process.getuid?.() ?? ""}/${SERVICE_LABEL}`]);
-    // Fallback for older launchctl
-    runQuiet("launchctl", ["unload", file]);
-    runQuiet("launchctl", ["load", "-w", file]);
-    return true;
-  }
-  if (kind === "systemd") {
-    // Report the real outcome: if the user manager can't be reached (no linger,
-    // missing XDG_RUNTIME_DIR, etc.) the restart failed and callers should fall
-    // back to a foreground/background start instead of waiting on a node that
-    // was never (re)started.
-    return runQuiet("systemctl", ["--user", "restart", SERVICE_UNIT], { env: systemdUserEnv() }).code === 0;
-  }
-  return false;
+  const backend = serviceBackend();
+  if (!backend || !fs.existsSync(backend.file)) return false;
+  return backend.restart(backend.file);
 }
 
 // Is `config.port` currently held by *this install's own* node, as opposed to a
@@ -3526,12 +3626,10 @@ function hasConfiguredService(config) {
 }
 
 async function restartServiceReconciled(config) {
-  const { kind, file } = servicePaths();
-  if (!fs.existsSync(file)) return restartService();
+  const backend = serviceBackend();
+  if (!backend || !fs.existsSync(backend.file)) return restartService();
   const portChanged = await reconcileNodePort(config);
-  const expected = kind === "launchd" ? plistContent(config) : kind === "systemd" ? systemdContent(config) : "";
-  let configChanged = false;
-  try { configChanged = Boolean(expected) && fs.readFileSync(file, "utf8") !== expected; } catch { configChanged = true; }
+  const configChanged = !serviceFileMatches(backend, config);
   // A typed config edit may change workspace, port, or environment without
   // touching the old unit. Reinstall on content drift so `bivy restart` really
   // applies the canonical file instead of reviving stale baked-in values.
@@ -3636,24 +3734,11 @@ function readTail(file, lines = 30) {
 // "Could not start". Pulls from the systemd journal, the launchd log files, or
 // the background log depending on how the node was launched.
 function printNodeStartupDiagnostics() {
-  const { kind, file } = servicePaths();
-  let details = "";
   // Only consult service logs when the node was actually launched via the
   // service (its unit/plist exists). Otherwise it came from the background
   // spawn below, whose output we captured to nodeLogPath.
-  if (kind === "systemd" && fs.existsSync(file)) {
-    const res = runQuiet(
-      "journalctl",
-      ["--user", "-u", SERVICE_UNIT, "-n", "30", "--no-pager"],
-      { env: systemdUserEnv() },
-    );
-    const out = (res.stdout || res.stderr || "").replace(/\s+$/, "");
-    // journalctl prints "-- No entries --" (exit 0) when the unit has no logs.
-    if (out && !/^-- No entries --$/.test(out)) details = out;
-  } else if (kind === "launchd" && fs.existsSync(file)) {
-    details = [readTail("/tmp/bivy.err.log"), readTail("/tmp/bivy.log")].filter(Boolean).join("\n");
-  }
-  if (!details) details = readTail(nodeLogPath);
+  const backend = serviceBackend();
+  const details = (backend && fs.existsSync(backend.file) ? backend.diagnostics() : "") || readTail(nodeLogPath);
   if (details) {
     console.error(c.dim("Recent output from the Bivy node:"));
     console.error(details);
@@ -3663,29 +3748,142 @@ function printNodeStartupDiagnostics() {
 }
 
 function stopService() {
-  const { kind, file } = servicePaths();
-  if (!fs.existsSync(file)) {
+  const backend = serviceBackend();
+  if (!backend || !fs.existsSync(backend.file)) {
     console.log("No background service installed (nothing to stop).");
     return;
   }
-  if (kind === "launchd") {
-    runQuiet("launchctl", ["unload", file]);
-  } else {
-    runQuiet("systemctl", ["--user", "stop", SERVICE_UNIT], { env: systemdUserEnv() });
-  }
+  backend.stop(backend.file);
   console.log(c.green("Node service stopped."));
 }
 
 function serviceStatusLine() {
-  const { kind, file } = servicePaths();
-  if (kind === "unsupported") return "service: unsupported platform";
-  if (!fs.existsSync(file)) return "service: not installed";
-  if (kind === "systemd") {
-    const res = runQuiet("systemctl", ["--user", "is-active", SERVICE_UNIT], { env: systemdUserEnv() });
-    return `service: systemd (${res.stdout.trim() || "unknown"})`;
+  const backend = serviceBackend();
+  if (!backend) return "service: unsupported platform";
+  if (!fs.existsSync(backend.file)) return "service: not installed";
+  return `service: ${backend.kind} (${backend.state(backend.file)})`;
+}
+
+// --- Windows scheduled task -------------------------------------------------
+
+const WINDOWS_TASK = "Bivy";
+// The supervisor's pid: Task Scheduler's own state is localized text, and its
+// End action does not reliably reach the node the supervisor started.
+const servicePidPath = path.join(appDir, "service.pid");
+
+function windowsTaskXml(config) {
+  const user = [process.env.USERDOMAIN, os.userInfo().username].filter(Boolean).join("\\");
+  const ps = (value) => `'${String(value).replace(/'/g, "''")}'`;
+  // PowerShell only to start hidden: node.exe is a console program, and a task
+  // running it directly would open a console window at every logon.
+  const command = `$env:BIVY_DATA_DIR = ${ps(appDir)}; & ${[nodeBin, selfScript, "service", "run"].map(ps).join(" ")}; exit $LASTEXITCODE`;
+  return `<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Description>Bivy node (port ${escapeXml(String(config.port))})</Description>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>${escapeXml(user)}</UserId>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>${escapeXml(user)}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>powershell.exe</Command>
+      <Arguments>-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -Command "${escapeXml(command)}"</Arguments>
+      <WorkingDirectory>${escapeXml(repoRoot)}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
+`;
+}
+
+function supervisorPid() {
+  let pid;
+  try { pid = Number(fs.readFileSync(servicePidPath, "utf8").trim()); } catch { return 0; }
+  if (!Number.isInteger(pid) || pid <= 0) return 0;
+  try { process.kill(pid, 0); return pid; } catch { return 0; }
+}
+
+function stopWindowsTask() {
+  // Supervisor first: its tree holds the node and every agent it started.
+  const pid = supervisorPid();
+  if (pid) killProcessTree(pid);
+  runQuiet("schtasks", ["/End", "/TN", WINDOWS_TASK]);
+  fs.rmSync(servicePidPath, { force: true });
+}
+
+function startWindowsTask() {
+  stopWindowsTask();
+  const res = runQuiet("schtasks", ["/Run", "/TN", WINDOWS_TASK]);
+  if (res.code !== 0) console.error(c.red(`Could not start the Bivy scheduled task: ${(res.stderr || res.stdout).trim()}`));
+  return res.code === 0;
+}
+
+const SUPERVISOR_RESTART_MS = 5000;
+const NODE_LOG_ROTATE_BYTES = 10 * 1024 * 1024;
+
+// `bivy service run`: keep the node running for a service manager that only
+// starts a process (the Windows scheduled task) — the systemd Restart=always /
+// launchd KeepAlive equivalent. Reads the config on every start, so a restart
+// applies config edits.
+async function runServiceSupervisor() {
+  const other = supervisorPid();
+  if (other && other !== process.pid) {
+    console.log(c.dim(`A Bivy service supervisor is already running (pid ${other}).`));
+    return;
   }
-  const res = runQuiet("launchctl", ["list", SERVICE_LABEL]);
-  return `service: launchd (${res.code === 0 ? "loaded" : "not loaded"})`;
+  fs.mkdirSync(appDir, { recursive: true });
+  fs.writeFileSync(servicePidPath, String(process.pid));
+  let child;
+  let stopping = false;
+  const stop = () => {
+    stopping = true;
+    if (child) killProcessTree(child.pid);
+    fs.rmSync(servicePidPath, { force: true });
+    process.exit(0);
+  };
+  for (const signal of ["SIGINT", "SIGTERM", "SIGBREAK", "SIGHUP"]) process.on(signal, stop);
+
+  while (!stopping) {
+    try { if (fs.statSync(nodeLogPath).size > NODE_LOG_ROTATE_BYTES) fs.renameSync(nodeLogPath, `${nodeLogPath}.1`); } catch { /* no log yet */ }
+    const logFd = fs.openSync(nodeLogPath, "a");
+    fs.writeSync(logFd, `\n=== bivy node starting ${new Date().toISOString()} ===\n`);
+    const config = loadConfig();
+    child = spawn(nodeBin, nodeScriptArgs(serverEntry), {
+      cwd: repoRoot,
+      env: { ...startEnv(config), PATH: commandPath(config.env?.PATH) },
+      stdio: ["ignore", logFd, logFd],
+      windowsHide: true,
+    });
+    fs.closeSync(logFd);
+    const outcome = await new Promise((resolve) => {
+      child.once("exit", (code, signal) => resolve(signal ?? `exit ${code}`));
+      child.once("error", (error) => resolve(error.message));
+    });
+    if (stopping) break;
+    fs.appendFileSync(nodeLogPath, `=== bivy node stopped (${outcome}); restarting in ${SUPERVISOR_RESTART_MS / 1000}s ===\n`);
+    await new Promise((resolve) => setTimeout(resolve, SUPERVISOR_RESTART_MS));
+  }
 }
 
 // --- browser ----------------------------------------------------------------
@@ -3694,10 +3892,15 @@ function serviceStatusLine() {
 // must present to mint its device token. Read it and append to the open URL so
 // the legitimate launcher works while other local users (who can't read the
 // file) cannot bootstrap. Falls back to the plain URL if absent.
+// Windows: not `start`, a cmd builtin that would also parse the `&` in a query.
+const BROWSER_OPENERS = {
+  darwin: ["open"],
+  win32: ["rundll32", "url.dll,FileProtocolHandler"],
+};
+
 function openBrowser(target) {
-  const opener =
-    process.platform === "darwin" ? "open" : process.platform === "win32" ? "start" : "xdg-open";
-  runQuiet(opener, [target]);
+  const [opener, ...args] = BROWSER_OPENERS[process.platform] ?? ["xdg-open"];
+  runQuiet(opener, [...args, target]);
 }
 
 // Best-effort guess at whether this machine can actually open a browser. macOS
@@ -4547,16 +4750,9 @@ async function cmdLogs(args = []) {
   const follow = args.includes("-f") || args.includes("--follow");
   const nArg = argValue(args, "lines") || argValue(args, "n");
   const lines = Number(nArg) > 0 ? String(Math.floor(Number(nArg))) : "80";
-  const { kind, file } = servicePaths();
-
-  if (kind === "systemd" && fs.existsSync(file)) {
-    const jargs = ["--user", "-u", SERVICE_UNIT, "-n", lines, "--no-pager"];
-    if (follow) jargs.push("-f");
-    await run("journalctl", jargs, { env: systemdUserEnv() });
-    return;
-  }
-  if (kind === "launchd" && fs.existsSync(file)) {
-    await tailFiles(["/tmp/bivy.log", "/tmp/bivy.err.log"], lines, follow);
+  const backend = serviceBackend();
+  if (backend && fs.existsSync(backend.file)) {
+    await backend.logs(lines, follow);
     return;
   }
   if (fs.existsSync(nodeLogPath)) {
@@ -4580,7 +4776,24 @@ async function tailFiles(files, lines, follow) {
     if (present.length > 1) console.log(c.dim(`==> ${f} <==`));
     console.log(readTail(f, Number(lines)));
   }
-  if (follow) console.log(c.dim("(install 'tail' to follow logs live)"));
+  if (!follow) return;
+  // No `tail` (Windows): poll for appended output until interrupted.
+  const offsets = new Map(present.map((f) => [f, fs.statSync(f).size]));
+  const decoder = new StringDecoder("utf8");
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    for (const [f, offset] of offsets) {
+      let size;
+      try { size = fs.statSync(f).size; } catch { continue; }
+      const start = size < offset ? 0 : offset; // rotated or truncated
+      if (size === start) continue;
+      const buf = Buffer.alloc(size - start);
+      const fd = fs.openSync(f, "r");
+      try { fs.readSync(fd, buf, 0, buf.length, start); } finally { fs.closeSync(fd); }
+      offsets.set(f, size);
+      process.stdout.write(decoder.write(buf));
+    }
+  }
 }
 
 // Stream only this update's portion of update.log while the detached process is
@@ -4683,6 +4896,13 @@ async function cmdUpdate(args = []) {
   // Outside a Bivy terminal (a normal shell, where the restart can't kill us) we
   // keep the simple inline flow.
   if (process.env.BIVY_TERMINAL === "1" && process.env.BIVY_UPDATE_DETACHED !== "1") {
+    if (process.platform === "win32") {
+      // Windows stops the node by ending its process tree, which includes
+      // anything started from its terminals — the updater would die mid-install.
+      console.error(c.yellow("On Windows, run 'bivy update' from a regular terminal window, not from a Bivy terminal."));
+      process.exitCode = 1;
+      return;
+    }
     fs.mkdirSync(appDir, { recursive: true });
     const logFd = fs.openSync(updateLogPath, "a");
     const logStart = fs.fstatSync(logFd).size;
@@ -4695,6 +4915,19 @@ async function cmdUpdate(args = []) {
     return;
   }
   await runUpdate(args);
+}
+
+// Windows locks the native modules (node-pty) a running node has loaded, so
+// npm/pnpm cannot replace them underneath it. There, wait for idle sessions and
+// stop the service before installing; the usual restart afterwards starts it
+// again. Returns whether it stopped the node (the caller then skips its own wait).
+async function stopNodeBeforeInstall(skipWait) {
+  if (process.platform !== "win32") return false;
+  const config = loadConfig();
+  if (!hasConfiguredService(config)) return false;
+  await waitForIdleSessions(config, { skip: skipWait });
+  stopService();
+  return true;
 }
 
 async function runUpdate(args = []) {
@@ -4725,13 +4958,15 @@ async function runUpdate(args = []) {
     // that is actually running this command.
     const prefix = npmGlobalPrefix(repoRoot);
     const prefixArgs = prefix ? ["--prefix", prefix] : [];
+    const stopped = await stopNodeBeforeInstall(skipWait);
     const code = await run("npm", ["install", "-g", ...prefixArgs, `@bivy/bivy@${channel}`, "--no-audit", "--no-fund"]);
     if (code !== 0) {
+      if (stopped) restartService();
       console.log(c.yellow(`npm reported an issue (exit ${code}). Try: sudo npm i -g @bivy/bivy@${channel}`));
       process.exit(code);
     }
     const config = loadConfig();
-    await waitForIdleSessions(config, { skip: skipWait });
+    if (!stopped) await waitForIdleSessions(config, { skip: skipWait });
     if (hasConfiguredService(config) && (await restartServiceReconciled(config))) {
       if (await verifyNodeCameUp(config)) {
         console.log(c.green("Updated and restarted the background service."));
@@ -4743,6 +4978,13 @@ async function runUpdate(args = []) {
       console.log(c.green("Updated. Run 'bivy start' (or restart your service) to apply."));
     }
     console.log(c.dim(`=== bivy update finished ${new Date().toISOString()} ===`));
+    return;
+  }
+
+  if (kind === "packaged" && process.platform === "win32") {
+    // install.sh is a bash installer; Windows installs come from npm.
+    console.log(c.yellow(`This install was not made with npm. Reinstall with: npm i -g @bivy/bivy@${channel}`));
+    process.exitCode = 1;
     return;
   }
 
@@ -4780,14 +5022,16 @@ async function runUpdate(args = []) {
     return;
   }
   const [updateCmd, updateArgs] = installCommandFor(repoRoot);
+  const stopped = await stopNodeBeforeInstall(skipWait);
   const installCode = await run(updateCmd, updateArgs, { cwd: repoRoot });
   if (installCode !== 0) {
+    if (stopped) restartService();
     console.log(c.yellow(`Dependency installation failed (exit ${installCode}); service not restarted. Resolve the installation error and retry 'bivy update'.`));
     process.exitCode = installCode;
     return;
   }
   const config = loadConfig();
-  await waitForIdleSessions(config, { skip: skipWait });
+  if (!stopped) await waitForIdleSessions(config, { skip: skipWait });
   if (hasConfiguredService(config) && (await restartServiceReconciled(config))) {
     if (await verifyNodeCameUp(config)) {
       console.log(c.green("Updated and restarted the background service."));
@@ -5148,8 +5392,10 @@ async function cmdUninstall(args = []) {
 
     // Stop and remove the background service, then kill any node still running.
     uninstallService();
-    runQuiet("pkill", ["-f", serverEntry]);
-    runQuiet("pkill", ["-f", path.join(repoRoot, "dist/server.js")]);
+    if (process.platform !== "win32") {
+      runQuiet("pkill", ["-f", serverEntry]);
+      runQuiet("pkill", ["-f", path.join(repoRoot, "dist/server.js")]);
+    }
 
     // Remove the git worktrees Bivy created in your repos, then drop their now
     // dangling git registration (mirrors `bivy prune`).
@@ -5242,7 +5488,7 @@ async function cmdRelaySetup(args) {
 
 async function cmdService(args) {
   if (args.includes("-h") || args.includes("--help")) {
-    console.log("Usage: bivy service <install|uninstall|status>\n\nManage the background service (systemd on Linux, launchd on macOS) that keeps the node running across reboots.");
+    console.log("Usage: bivy service <install|uninstall|status>\n\nManage the background service (systemd on Linux, launchd on macOS, a logon scheduled task on Windows) that keeps the node running across reboots.");
     return;
   }
   const action = args[0];
@@ -5253,6 +5499,9 @@ async function cmdService(args) {
     uninstallService();
   } else if (action === "status") {
     console.log(serviceStatusLine());
+  } else if (action === "run") {
+    // Internal: what the Windows scheduled task executes.
+    await runServiceSupervisor();
   } else {
     console.error(c.red(`${action ? `Unknown service action: ${action}. ` : ""}Usage: bivy service <install|uninstall|status>`));
     process.exit(1);

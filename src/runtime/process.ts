@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { killProcessTree, portableSpawn } from "../portable-process.mjs";
 import { stripAnsi } from "./ansi.js";
 import { buildAgentCredentialEnv } from "./credentials.js";
 import { withSessionCredentials, credentialEnvFallback } from "../credentials/session.js";
@@ -187,26 +188,15 @@ export interface ProcessRuntimeOptions {
 }
 
 /**
- * Send `signal` to `child`'s whole process group when possible, so a forking CLI
- * agent's grandchildren (it shells out to git/npm/build tools, or forks its own
- * worker processes) die with it instead of being orphaned. Relies on the child
- * having been spawned `detached` (making it its own process-group leader, POSIX
- * only — see the spawn() call in ProcessSession.prompt); `process.kill(-pid,
- * signal)` then targets the whole group, as the PTY command launcher does
- * (src/command-launch.ts). Falls back to killing just the direct child on Windows (no
- * negative-pid group kill there) or if the group is already gone.
+ * Send `signal` to `child`'s whole process tree, so a forking CLI agent's
+ * grandchildren (it shells out to git/npm/build tools, or forks its own worker
+ * processes) die with it instead of being orphaned. On POSIX this relies on the
+ * child having been spawned `detached` (its own process-group leader — see the
+ * spawn() call in ProcessSession.prompt); on Windows, where an npm-installed
+ * agent is cmd.exe running the real CLI, it ends the tree with taskkill.
  */
 function killProcessGroup(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
-  const pid = child.pid;
-  if (pid && process.platform !== "win32") {
-    try {
-      process.kill(-pid, signal);
-      return;
-    } catch {
-      // No such process group (already exited) or we're not its leader — fall
-      // through to a direct kill of the child itself.
-    }
-  }
+  if (killProcessTree(child.pid, signal)) return;
   try {
     child.kill(signal);
   } catch {
@@ -513,7 +503,7 @@ class ProcessSession implements RuntimeSession {
     // The agent enforces its own containment via its native sandbox (Codex
     // --sandbox, Gemini --approval-mode, Claude permissionMode; see
     // src/harness/sandbox.ts). Bivy no longer wraps the process in an OS jail.
-    const child = spawn(this.runtimeOptions.command, args, {
+    const child = portableSpawn(this.runtimeOptions.command, args, {
       cwd: this.cwd,
       // Route this agent's outbound traffic through an egress proxy: this
       // session's OWN proxy if it has one (a per-session sandbox/workflow network

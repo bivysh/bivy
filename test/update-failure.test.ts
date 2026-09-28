@@ -83,6 +83,7 @@ function setup(kind: string, codes: number[]) {
     ensureKnownAgents: async () => { calls.push("agents"); },
     loadConfig: () => ({}),
     waitForIdleSessions: async () => {},
+    stopNodeBeforeInstall: async () => false,
     hasConfiguredService: () => true,
     restartServiceReconciled: async () => { calls.push("restart"); return true; },
     verifyNodeCameUp: async () => true,

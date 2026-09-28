@@ -147,7 +147,7 @@ Where the logs live, by platform:
 ```bash
 journalctl --user -u bivy.service -n 100 --no-pager   # Linux (systemd)
 tail -n 100 /tmp/bivy.log /tmp/bivy.err.log           # macOS (launchd)
-tail -n 100 ~/.bivy/node.log                          # fallback
+tail -n 100 ~/.bivy/node.log                          # Windows service, or fallback
 ```
 
 `bivy logs [-f] [--n N]` picks the right one for you.

@@ -17,9 +17,9 @@
 //
 // Unit-tested in test/harness-mcp-proxy.test.ts.
 
-import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
+import { portableSpawn } from "../portable-process.mjs";
 
 /** A JSON-RPC 2.0 message (request, response, or notification). */
 export interface JsonRpcMessage {
@@ -152,7 +152,8 @@ export function runMcpProxy(options: RunMcpProxyOptions): Promise<number> {
   const mediator = new McpMediator(options);
   const agentIn: Readable = options.agentInput ?? process.stdin;
   const agentOut: Writable = options.agentOutput ?? process.stdout;
-  const child = spawn(options.command, options.args ?? [], {
+  // MCP servers are commonly `npx …`/`uvx …`, which are .cmd shims on Windows.
+  const child = portableSpawn(options.command, options.args ?? [], {
     stdio: ["pipe", "pipe", "inherit"],
     env: { ...process.env, ...options.env },
     cwd: options.cwd,

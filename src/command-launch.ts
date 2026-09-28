@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { spawn } from "node:child_process";
 import os from "node:os";
 
+import { killProcessTree, portableSpawn } from "./portable-process.mjs";
 import { loadPty } from "./terminal.js";
 
 /** Where a short-lived server command's output and lifecycle are reported. */
@@ -39,7 +39,7 @@ export function launchCommand(spec: CommandSpec, requiresTty: boolean | undefine
 }
 
 function launchPipes({ command, args, cwd, env }: CommandSpec, handlers: CommandHandlers): CommandHandle {
-  const child = spawn(command, args, { cwd, env });
+  const child = portableSpawn(command, args, { cwd, env });
   child.stdout.on("data", (data) => handlers.onOutput("stdout", String(data)));
   child.stderr.on("data", (data) => handlers.onOutput("stderr", String(data)));
   child.on("error", handlers.onError);
@@ -47,7 +47,8 @@ function launchPipes({ command, args, cwd, env }: CommandSpec, handlers: Command
   return {
     usesPty: false,
     write: (text) => child.stdin.write(text),
-    interrupt: () => child.kill("SIGINT"),
+    // Windows has no SIGINT for a piped child; end its tree there instead.
+    interrupt: () => { if (process.platform === "win32") killProcessTree(child.pid); else child.kill("SIGINT"); },
   };
 }
 

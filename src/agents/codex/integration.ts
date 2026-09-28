@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { spawn } from "node:child_process";
 import { resolveExecutable } from "../../executable.js";
+import { portableSpawn } from "../../portable-process.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineAgentIntegration, type AgentIntegrationOrigin } from "../definition.js";
@@ -43,7 +43,7 @@ async function suggestCodexSessionName(firstPrompt: string, context: { cwd: stri
     const args = ["exec", "--ephemeral", "--json", "--sandbox", "read-only", "--skip-git-repo-check"];
     if (context.model) args.push("--model", context.model);
     args.push(instruction);
-    const child = spawn(codexCommand(), args, { cwd: context.cwd, stdio: ["ignore", "pipe", "ignore"] });
+    const child = portableSpawn(codexCommand(), args, { cwd: context.cwd, stdio: ["ignore", "pipe", "ignore"] });
     let stdout = "";
     const timer = setTimeout(() => { child.kill("SIGTERM"); resolve(undefined); }, 60_000);
     child.stdout.on("data", (chunk: Buffer) => { stdout += chunk.toString("utf8"); });
