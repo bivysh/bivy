@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { createHmac, randomBytes } from "node:crypto";
+import { createCipheriv, randomBytes } from "node:crypto";
 
 // A logical event is immutable while clients pull its pages. Pages are encoded
 // independently, so neither history nor an individual attachment must fit in a
@@ -13,7 +13,7 @@ const INLINE_EVENT_BYTES = 4 * 1024 * 1024;
 const MAX_LIFETIME_MS = 10 * 60_000;
 
 export class EventTransferStore {
-  private entries = new Map<string, { body: Buffer; expires: number; deadline: number; mac: string }>();
+  private entries = new Map<string, { body: Buffer; expires: number; deadline: number; key: string; iv: string }>();
   private bytes = 0;
   private timer?: ReturnType<typeof setTimeout>;
   constructor(private now: () => number = Date.now, private inlineBytes = INLINE_EVENT_BYTES) {}
@@ -31,31 +31,33 @@ export class EventTransferStore {
     const source = event as Record<string, unknown>;
     const context = { sessionId: source.sessionId, requestId: source.requestId };
     this.prune();
-    if (body.length > MAX_TRANSFER_BYTES) return {
+    if (body.length + 16 > MAX_TRANSFER_BYTES) return {
       type: "session.error", ...context, code: "delivery_too_large",
       error: "This response exceeds the machine's 64 MiB delivery limit. The original data is retained on the machine.",
     };
-    let id = [...this.entries].find(([, entry]) => entry.body.equals(body))?.[0];
-    if (!id) {
-      // Never evict an active snapshot to admit another: all existing clients
-      // must either complete that exact revision or receive an explicit expiry.
-      if (this.bytes + body.length > MAX_STORED_BYTES || this.entries.size >= 16) return {
-        type: "session.error", ...context, code: "delivery_busy", error: "The machine is serving large responses. Please retry shortly.",
-      };
-      id = randomBytes(24).toString("hex");
-      const mac = createHmac("sha256", id).update(body).digest("hex");
-      this.entries.set(id, { body, mac, expires: this.now() + TTL_MS, deadline: this.now() + MAX_LIFETIME_MS });
-      this.bytes += body.length;
-      if (!this.timer) {
-        this.timer = setInterval(() => this.prune(), TTL_MS);
-        this.timer.unref();
-      }
+    // Retain only authenticated ciphertext. This is response encryption, not
+    // a password digest or a second durable copy of credential-bearing events.
+    if (this.bytes + body.length + 16 > MAX_STORED_BYTES || this.entries.size >= 16) return {
+      type: "session.error", ...context, code: "delivery_busy", error: "The machine is serving large responses. Please retry shortly.",
+    };
+    const id = randomBytes(24).toString("hex");
+    const key = randomBytes(32);
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    // WebCrypto's native AES-GCM layout is ciphertext followed by its tag.
+    const sealed = Buffer.concat([cipher.update(body), cipher.final(), cipher.getAuthTag()]);
+    this.entries.set(id, { body: sealed, key: key.toString("hex"), iv: iv.toString("hex"),
+      expires: this.now() + TTL_MS, deadline: this.now() + MAX_LIFETIME_MS });
+    this.bytes += sealed.length;
+    if (!this.timer) {
+      this.timer = setInterval(() => this.prune(), TTL_MS);
+      this.timer.unref();
     }
     // Legacy clients already display session.notice messages. Updated clients consume the
     // transfer before the reducer sees this compatibility envelope.
     return { type: "session.notice", ...context, code: "transfer_required",
       message: "Update the Bivy app to load this large response.",
-      transfer: { id, bytes: body.length, mac: this.entries.get(id)!.mac, pageBytes: TRANSFER_PAGE_BYTES } };
+      transfer: { id, bytes: sealed.length, key: key.toString("hex"), iv: iv.toString("hex"), pageBytes: TRANSFER_PAGE_BYTES } };
   }
 
   read(command: Record<string, unknown>): Record<string, unknown> {

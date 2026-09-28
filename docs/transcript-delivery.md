@@ -18,15 +18,16 @@ image-unavailable note rather than silently dropping the whole conversation.
 Relay events of at most 4 MiB of UTF-8 JSON keep the existing wire format. Larger
 events use an immutable snapshot and authenticated pull requests:
 
-1. The sender retains the serialized event and sends a small `session.notice`
+1. The sender seals the serialized event with a fresh AES-256-GCM key and retains
+   the ciphertext. It sends a small `session.notice`
    with `code: "transfer_required"`, the original session/request identity, and
-   `transfer: { id, bytes, mac, pageBytes }`.
+   `transfer: { id, bytes, key, iv, pageBytes }`.
 2. The receiver sends `transfer.read` with a random request ID, transfer ID, and
    byte offset. Only one page is in flight. The node answers `transfer.part`
    with the same identifiers and base64 bytes. Each page is independently
    encrypted and fits well below the existing relay reassembly cap.
 3. Missing pages retry twice. Offsets and lengths are checked and the completed
-   response's HMAC-SHA-256 is verified before decoding JSON.
+   response is authenticated and decrypted before decoding JSON.
 4. The receiver emits the original event only when complete. Later events wait
    behind it, so a history cursor/sequence baseline cannot advance from partial
    history, and later live output cannot be overwritten by that snapshot.
@@ -39,11 +40,12 @@ its existing response format and uses the same image projection.
 ## Bounds and recovery
 
 - Page: 384 KiB decoded bytes (512 KiB base64, before encryption).
-- One logical response: 64 MiB UTF-8 JSON. This is an explicit resource limit,
-  not a promise to load arbitrarily large sessions in memory.
+- One logical response: 64 MiB ciphertext, including its 16-byte authentication
+  tag. This is an explicit resource limit, not a promise to load arbitrarily
+  large sessions in memory.
 - Sender snapshots: at most 128 MiB and 16 entries, with two-minute idle expiry
-  and a ten-minute absolute lifetime. Successful page reads renew the idle lease. Identical responses reuse snapshots; active snapshots are not
-  evicted to make room for new ones. Expiry and capacity return explicit errors.
+  and a ten-minute absolute lifetime. Successful page reads renew the idle lease.
+  Active snapshots are not evicted to make room for new ones. Expiry and capacity return explicit errors.
 - Client: one active response, plus at most 8 MiB / 4,096 queued later events.
 - Page timeout: ten seconds, two retries. A retry resumes at the missing byte
   offset. Reconnect drops partial state and the existing history/replay path
@@ -55,8 +57,9 @@ its existing response format and uses the same image projection.
 The relay stays blind to content and protocol semantics. Transfer commands are
 processed only after room-key authentication and replay checks. No new HTTP
 endpoint or public blob URL is added. Random transfer IDs are carried only
-inside encrypted frames. The random transfer ID keys the MAC, binding all pages
-to the authenticated offer. Node transfer data is held in memory and reclaimed;
+inside encrypted frames, together with the per-transfer key and IV. The GCM tag
+authenticates the complete snapshot, including page order and content. Node
+transfer data is held in memory and reclaimed;
 it is not written to another transcript file.
 
 Transfer errors preserve cached transcript text and do not change the agent's
