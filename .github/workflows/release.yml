@@ -20,7 +20,7 @@ name: Release
 # CI gates the exact promoted commit. Main only advances through the merge
 # queue, so a successful merge_group CI run on the tagged SHA is its receipt.
 # A commit without one (pushed past branch protection, say) gets the canonical
-# CI workflow with force_all before anything is published.
+# CI workflow's full tier, dispatched on the tag, before anything is published.
 #
 # Both jobs authenticate to npm with the job's GitHub Actions OIDC identity
 # (`id-token: write`) against the ONE trusted publisher configured for
@@ -111,28 +111,25 @@ jobs:
         run: pnpm run publish:npm -- --tag staging
 
   # --------------------------------------------------------------- PRODUCTION --
-  # Validate the tag and decide whether CI already covered its commit.
-  #   tested: a successful merge-queue CI run on this exact SHA (how every
-  #           commit reaches main), or a successful run where every job passed.
-  #           Otherwise production-ci runs the full suite here.
-  plan:
+  # One job, so a release pays for one runner start. It validates the tag,
+  # requires a CI receipt for the exact commit, then publishes.
+  production:
     if: startsWith(github.ref, 'refs/tags/v')
-    name: Plan production promotion
+    name: Promote to npm `latest` + GitHub release
     runs-on: ubuntu-latest
     permissions:
-      actions: read
-      contents: read
-    outputs:
-      version: ${{ steps.plan.outputs.version }}
-      sha: ${{ steps.plan.outputs.sha }}
-      tested: ${{ steps.plan.outputs.tested }}
+      actions: write # read CI receipts; dispatch full CI when there is none
+      contents: write # create the GitHub release
+      packages: write # add stable tags to the already-built Core service images
+      id-token: write # OIDC: trusted publish + provenance
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - id: plan
+
+      # The tag must name package.json's version on a commit that is on main.
+      - name: Validate the release tag
         env:
-          GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -145,59 +142,47 @@ jobs:
             || { echo "::error::Tag $TAG does not match package.json version $version at $sha. Tag the commit whose package.json holds the version (pnpm release does)."; exit 1; }
           git merge-base --is-ancestor "$sha" origin/main \
             || { echo "::error::$TAG points to $sha, which is not on main. Only commits that landed through the merge queue can be released."; exit 1; }
-          tested=false
-          for run in $(gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$sha&status=success" --jq '.workflow_runs[] | "\(.id):\(.event)"'); do
+          { echo "VERSION=$version"; echo "RELEASE_SHA=$sha"; } >> "$GITHUB_ENV"
+
+      # A staging publish proves packaging, not correctness. Main only advances
+      # through the merge queue, so its successful merge_group CI run on this
+      # SHA is the receipt; so is a run where every job passed. A commit without
+      # one (pushed past branch protection, say) gets the canonical CI workflow
+      # -- its full tier, on this tag -- before anything is published. Do not
+      # duplicate a subset of its checks here.
+      - name: Require a CI receipt for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          runs() { gh api "/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$RELEASE_SHA&$1" --jq '.workflow_runs[] | "\(.id):\(.event)"'; }
+          for run in $(runs status=success); do
             if [ "${run#*:}" = merge_group ]; then
-              tested=true
-              echo "Merge-queue CI run ${run%%:*} passed on $sha."
-              break
+              echo "Merge-queue CI run ${run%%:*} passed on $RELEASE_SHA."
+              exit 0
             fi
             if [ "$(gh api --paginate "/repos/$GITHUB_REPOSITORY/actions/runs/${run%%:*}/jobs" --jq '.jobs[] | select(.conclusion != "success") | .name' | wc -l)" -eq 0 ]; then
-              tested=true
-              echo "CI run ${run%%:*} already passed every job on $sha; not re-running it."
-              break
+              echo "CI run ${run%%:*} already passed every job on $RELEASE_SHA."
+              exit 0
             fi
           done
-          {
-            echo "version=$version"
-            echo "sha=$sha"
-            echo "tested=$tested"
-          } >> "$GITHUB_OUTPUT"
-
-  # A staging publish proves packaging, not correctness. Reuse the canonical CI
-  # workflow on this exact SHA when no receipt exists. Do not duplicate a subset
-  # of its checks here.
-  production-ci:
-    needs: plan
-    if: needs.plan.outputs.tested != 'true'
-    uses: ./.github/workflows/ci.yml
-    permissions:
-      contents: read
-      pull-requests: read
-      actions: read # CI consumers wait for this run's release artifact
-    with:
-      force_all: true
-
-  production:
-    # Explicit results rather than always(): a failed or cancelled dependency
-    # skips publication.
-    if: >-
-      !cancelled()
-      && needs.plan.result == 'success'
-      && (needs.production-ci.result == 'success'
-          || (needs.production-ci.result == 'skipped' && needs.plan.outputs.tested == 'true'))
-    needs: [plan, production-ci]
-    name: Promote to npm `latest` + GitHub release
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write # create the GitHub release
-      packages: write # add stable tags to the already-built Core service images
-      id-token: write # OIDC: trusted publish + provenance
-    env:
-      VERSION: ${{ needs.plan.outputs.version }}
-      RELEASE_SHA: ${{ needs.plan.outputs.sha }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+          echo "::warning::No CI receipt for $RELEASE_SHA; running the full CI tier on $TAG first."
+          before="$(runs event=workflow_dispatch | head -n 1)"
+          gh workflow run ci.yml --ref "$TAG"
+          for attempt in $(seq 1 360); do
+            sleep 10
+            run="$(runs event=workflow_dispatch | head -n 1)"
+            [ -n "$run" ] && [ "$run" != "$before" ] || continue
+            conclusion="$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/${run%%:*}" --jq '.conclusion // ""')"
+            case "$conclusion" in
+              "") ;;
+              success) echo "Full CI run ${run%%:*} passed on $RELEASE_SHA."; exit 0 ;;
+              *) echo "::error::Full CI run ${run%%:*} on $RELEASE_SHA ended in '$conclusion'; nothing was published."; exit 1 ;;
+            esac
+          done
+          echo "::error::Full CI on $RELEASE_SHA did not finish within an hour; nothing was published."
+          exit 1
 
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -266,10 +251,23 @@ jobs:
 
       # npm versions are immutable. The protected tag binds this version to one
       # commit, so a retry of a run that published and then failed later can
-      # verify `latest` and resume without republishing.
-      - name: Publish or resume npm `latest`
+      # verify `latest` and resume without republishing. The image aliases are
+      # independent of npm, so they are added at the same time.
+      # A release tag is an alias of the already-tested SHA manifests, not a
+      # rebuild. `latest` therefore points to byte-identical service artifacts.
+      - name: Publish or resume npm `latest`; alias the service images
         run: |
           set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          (
+            for image in bivy-control-plane bivy-relay; do
+              docker buildx imagetools create \
+                --tag "ghcr.io/bivysh/$image:$VERSION" \
+                --tag "ghcr.io/bivysh/$image:v$VERSION" \
+                --tag "ghcr.io/bivysh/$image:latest" \
+                "ghcr.io/bivysh/$image:$RELEASE_SHA"
+            done
+          ) & images=$!
           published="$(npm view "@bivy/bivy@$VERSION" version 2>/dev/null || true)"
           if [ "$published" = "$VERSION" ]; then
             latest="$(npm view @bivy/bivy dist-tags.latest)"
@@ -279,21 +277,7 @@ jobs:
           else
             pnpm run publish:npm
           fi
-
-      # A release tag is an alias of the already-tested SHA manifests, not a
-      # rebuild. `latest` therefore points to byte-identical service artifacts.
-      - name: Promote Core service image tags
-        run: |
-          set -euo pipefail
-          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
-          for image in bivy-control-plane bivy-relay; do
-            source="ghcr.io/bivysh/$image:$RELEASE_SHA"
-            docker buildx imagetools create \
-              --tag "ghcr.io/bivysh/$image:$VERSION" \
-              --tag "ghcr.io/bivysh/$image:v$VERSION" \
-              --tag "ghcr.io/bivysh/$image:latest" \
-              "$source"
-          done
+          wait "$images"
 
       - name: Build the checksummed self-host deployment bundle
         run: node scripts/build-self-host.mjs self-host-release
