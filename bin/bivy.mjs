@@ -35,7 +35,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, createCipheriv, createDecipheriv, randomUUID, createHash, verify as cryptoVerify } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
-import { selectStaleSessions, sessionActivityMs } from "./prune-sessions.mjs";
+import { linkSessionWorktrees, selectStaleSessions, sessionActivityMs } from "./prune-sessions.mjs";
 import { nativeResumeRef, resolveSessionsLimit, truncateSavedSessions } from "./sessions-list.mjs";
 import { renderManagedBlock, upsertManagedBlock, removeManagedBlock, rcFileForShell } from "./shim-path.mjs";
 import { removeInstallAndState } from "./uninstall-paths.mjs";
@@ -3129,6 +3129,11 @@ ${c.bold("bivy prune")} — remove old sessions, --clone workspaces, and git wor
   is never pruned while the node is running, regardless of --keep/--older-than —
   only idle worktrees are removed. If the node is down, nothing is live to guard.
 
+  A session and its worktree are removed together: pruning a worktree also
+  removes the sessions that ran in it, pruning a session also removes its
+  worktree (once no remaining session uses it), and sessions whose worktree is
+  already gone are removed — so no session is left pointing at a deleted checkout.
+
   Paths (default to the installed node)
     --data-dir <dir>      node data dir (default: this install's .bivy, or $BIVY_DATA_DIR)
     --workspace <dir>     also scan this workspace for worktrees (default: configured workspace)
@@ -3196,12 +3201,41 @@ async function cmdPrune(args = []) {
   const now = Date.now();
   const plan = [];
   let worktreeGuard = { reachable: false, protected: 0 };
-  if (doSessions) {
-    // Sessions live in the metadata index (all agents) plus each agent's own
-    // transcript store — not just .bivy/pi/sessions. Select from metadata so
-    // shim/native (Claude Code, Codex, …) sessions are actually covered; the old
-    // pi-sessions-only scan silently no-oped for every terminal-started session.
-    const staleSessions = selectStaleSessions(loadMetadataSessions(dataDir).sessions, keepFor("sessions"), ageMs, now);
+  // Sessions live in the metadata index (all agents) plus each agent's own
+  // transcript store — not just .bivy/pi/sessions. Select from metadata so
+  // shim/native (Claude Code, Codex, …) sessions are actually covered; the old
+  // pi-sessions-only scan silently no-oped for every terminal-started session.
+  const allSessions = loadMetadataSessions(dataDir).sessions;
+  const selectedSessions = doSessions ? selectStaleSessions(allSessions, keepFor("sessions"), ageMs, now) : [];
+  // Worktrees: keep the newest N overall (across all roots), matching the node
+  // prune script. Scan roots: the data dir plus the configured workspace repo.
+  const worktreeRoots = findWorktreeRoots([dataDir, workspace].filter(Boolean));
+  const staleWorktrees = doWorktrees ? selectStale(worktreeRoots.flatMap((r) => pruneListEntries(r, "dir")), keepFor("worktrees"), ageMs, now) : [];
+  // Guard: never delete a worktree a live agent is using. Ask the daemon what's
+  // live (it owns every runtime and PTY); protected worktrees drop out of the
+  // removal set entirely, so an aggressive --older-than can't nuke a running
+  // agent's checkout. Node down ⇒ nothing live ⇒ policy alone is safe.
+  const live = await liveWorktreePaths(config);
+  const isLive = (p) => isLiveWorktree(p, live.paths);
+  const idleWorktrees = staleWorktrees.filter((e) => !isLive(e.path));
+  worktreeGuard = { reachable: live.reachable, protected: staleWorktrees.length - idleWorktrees.length };
+  // A session and its worktree go together: removing one without the other left
+  // sessions pointing at a deleted checkout (or checkouts nobody can reach).
+  const linked = linkSessionWorktrees({
+    sessions: allSessions,
+    staleSessions: selectedSessions,
+    staleWorktrees: idleWorktrees.map((e) => e.path),
+    isLive,
+    exists: (p) => fs.existsSync(p),
+  });
+  const staleSessions = linked.sessions;
+  const worktreeMtime = new Map(idleWorktrees.map((e) => [path.resolve(e.path), e.mtimeMs]));
+  const worktreesToRemove = linked.worktrees.map((p) => {
+    let mtimeMs = worktreeMtime.get(p);
+    if (mtimeMs === undefined) { try { mtimeMs = fs.statSync(p).mtimeMs; } catch { mtimeMs = now; } }
+    return { path: p, mtimeMs };
+  }).sort((a, b) => b.mtimeMs - a.mtimeMs);
+  if (doSessions || staleSessions.length) {
     plan.push({
       kind: "sessions",
       root: metadataFilePath(dataDir),
@@ -3224,20 +3258,8 @@ async function cmdPrune(args = []) {
     const dir = path.join(dataDir, "workspaces");
     plan.push({ kind: "workspaces", root: dir, remove: selectStale(pruneListEntries(dir, "dir"), keepFor("workspaces"), ageMs, now) });
   }
-  if (doWorktrees) {
-    // Keep the newest N worktrees overall (across all roots), matching the node
-    // prune script. Scan roots: the data dir plus the configured workspace repo.
-    const roots = findWorktreeRoots([dataDir, workspace].filter(Boolean));
-    const all = roots.flatMap((r) => pruneListEntries(r, "dir"));
-    const stale = selectStale(all, keepFor("worktrees"), ageMs, now);
-    // Guard: never delete a worktree a live agent is using. Ask the daemon what's
-    // live (it owns every runtime and PTY); protected worktrees drop out of the
-    // removal set entirely, so an aggressive --older-than can't nuke a running
-    // agent's checkout. Node down ⇒ nothing live ⇒ policy alone is safe.
-    const live = await liveWorktreePaths(config);
-    const remove = stale.filter((e) => !isLiveWorktree(e.path, live.paths));
-    worktreeGuard = { reachable: live.reachable, protected: stale.length - remove.length };
-    plan.push({ kind: "worktrees", root: roots.join(", ") || "(none found)", remove });
+  if (doWorktrees || worktreesToRemove.length) {
+    plan.push({ kind: "worktrees", root: worktreeRoots.join(", ") || "(none found)", remove: worktreesToRemove });
   }
   const total = plan.reduce((n, p) => n + p.remove.length, 0);
 

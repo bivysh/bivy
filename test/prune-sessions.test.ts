@@ -1,6 +1,6 @@
 import assert from "node:assert";
 // Pure selection logic for `bivy prune --sessions` (bin/prune-sessions.mjs).
-import { isEmptySession, selectStaleSessions, sessionActivityMs } from "../bin/prune-sessions.mjs";
+import { isEmptySession, linkSessionWorktrees, selectStaleSessions, sessionActivityMs } from "../bin/prune-sessions.mjs";
 
 // Minutes-ago helper: returns an ISO timestamp `m` minutes before `now`.
 const NOW = Date.parse("2026-07-12T12:00:00.000Z");
@@ -53,6 +53,29 @@ function run() {
   // Newest-first ordering of the returned set.
   const ordered = selectStaleSessions(sessions, 0, null, NOW).map((s) => s.id);
   assert.deepEqual(ordered, ["n1", "n2", "n3", "e1", "e2", "n4"], "keep 0 removes all non-live, newest first");
+
+  // --- linkSessionWorktrees: a session and its worktree go together ----------
+  const wt = (slug: string) => `/repo/.bivy/worktrees/${slug}`;
+  const linkedSessions = [
+    { id: "a", worktree: wt("a"), updatedAt: ago(1) }, // kept, but its worktree is stale → goes
+    { id: "b", worktree: wt("b"), updatedAt: ago(2) }, // stale → its worktree goes too
+    { id: "c1", worktree: wt("c"), updatedAt: ago(3) }, // stale, but shares worktree c with c2
+    { id: "c2", worktree: wt("c"), updatedAt: ago(4) }, // kept → worktree c stays
+    { id: "gone", worktree: wt("gone"), updatedAt: ago(5) }, // worktree already deleted → goes
+    { id: "w", worktree: wt("w"), status: "working", updatedAt: ago(6) }, // live → never touched
+    { id: "held", worktree: wt("held"), updatedAt: ago(7) }, // stale, but a live terminal holds its worktree
+    { id: "ext", worktree: "/elsewhere/checkout", updatedAt: ago(8) }, // not Bivy-managed → ignored
+  ];
+  const byId = (ids: string[]) => linkedSessions.filter((s) => ids.includes(s.id));
+  const linked = linkSessionWorktrees({
+    sessions: linkedSessions,
+    staleSessions: byId(["b", "c1", "held", "ext"]),
+    staleWorktrees: [wt("a"), wt("w")],
+    isLive: (p: string) => p === wt("held"),
+    exists: (p: string) => p !== wt("gone"),
+  });
+  assert.deepEqual(linked.sessions.map((s) => s.id), ["a", "b", "c1", "gone", "held", "ext"], "sessions follow their worktree; orphans go; live stays");
+  assert.deepEqual([...linked.worktrees].sort(), [wt("a"), wt("b")], "worktrees follow their sessions; shared, live, and working ones stay");
 
   console.log("prune-sessions: all tests passed");
 }
