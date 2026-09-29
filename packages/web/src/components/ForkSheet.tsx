@@ -47,6 +47,11 @@ export function ForkSheet({ sessionId, intent = "fork", onClose }: {
   useEffect(() => {
     if (agentId == null && sourceAgentId) setAgentId(sourceAgentId);
   }, [agentId, sourceAgentId]);
+  // Same for the model: until the session's model arrives the select showed its
+  // first option, so the sheet read as if the fork would switch models.
+  useEffect(() => {
+    if (model == null && currentModel) setModel(currentModel);
+  }, [model, currentModel]);
   useEffect(() => {
     void controller.listEphemeralConfigs()
       .then((configs) => setManagedConfig(configs.find((config) => config.computeSource === "managed") ?? null))
@@ -92,6 +97,10 @@ export function ForkSheet({ sessionId, intent = "fork", onClose }: {
   }
 
   const busy = status === "working";
+  // The session's model may carry a different provider spelling than the
+  // catalog row (e.g. none at all); match on id before giving up.
+  const selectedModel = model && (models.find((m) => modelKey(m) === modelKey(model)) ?? models.find((m) => m.id === model.id));
+  const selectedModelKey = selectedModel ? modelKey(selectedModel) : "";
 
   return (
     <Sheet title={willRetire ? "Move session" : "Fork session"} onClose={onClose} autoFocusSearch={false}>
@@ -135,13 +144,14 @@ export function ForkSheet({ sessionId, intent = "fork", onClose }: {
           <label htmlFor="fork-model">Model</label>
           <select
             id="fork-model"
-            value={model ? modelKey(model) : ""}
+            value={selectedModelKey}
             disabled={busy}
             onChange={(e) => {
               const selected = models.find((m) => modelKey(m) === e.target.value);
               if (selected) setModel(selected);
             }}
           >
+            {!selectedModelKey && <option value="">Keep the session&rsquo;s model</option>}
             {models.map((m) => (
               <option key={modelKey(m)} value={modelKey(m)}>{String(m.name || m.id)}</option>
             ))}

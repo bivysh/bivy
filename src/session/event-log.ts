@@ -829,9 +829,14 @@ export class EventLog {
    * `mergeConversation` helper.
    */
   deriveHistory(id: string, runtimeBase?: readonly RuntimeMessage[]): RuntimeMessage[] {
+    return mergeTranscript(this.deriveBase(id, runtimeBase), this.read(id));
+  }
+
+  /** The conversation itself (runtime transcript over the logged base), without
+   *  the display overlays — what a fork carries to another agent. */
+  deriveBase(id: string, runtimeBase?: readonly RuntimeMessage[]): RuntimeMessage[] {
     const logged = this.readBase(id);
-    const base = runtimeBase && runtimeBase.length ? mergeBases(logged, runtimeBase) : logged;
-    return mergeTranscript(base, this.read(id));
+    return runtimeBase && runtimeBase.length ? mergeBases(logged, runtimeBase) : logged;
   }
 
   /** Full ordered record list (already-flushed followed by pending). */

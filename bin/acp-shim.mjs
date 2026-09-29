@@ -139,6 +139,23 @@ let pendingModel = null;
 // toolCallId -> { requestId, options } so a later bivy tool.decision answers the
 // right ACP permission request with a concrete optionId.
 const permissionRequests = new Map();
+// Calls the human (or policy) already approved. An agent that performs an
+// approved edit through fs/write_text_file (Grok does) must not be gated — and
+// carded — a second time for the same file.
+const approvedCalls = new Set();
+
+/** The approved, still-running call whose inputs name `file`, if any. */
+function approvedCallWriting(file) {
+  for (const id of approvedCalls) {
+    const state = toolCallState.get(id);
+    if (!state) { approvedCalls.delete(id); continue; }
+    const input = toolCallInput(state);
+    const paths = [input.path, input.file_path, input.filePath, ...(state.locations || []).map((l) => l?.path)].filter(Boolean);
+    const root = fs.realpathSync(cwd);
+    if (paths.some((p) => path.resolve(root, String(p)) === file || path.resolve(cwd, String(p)) === file)) return id;
+  }
+  return undefined;
+}
 const sandboxTier = process.env.BIVY_ACP_SANDBOX || "workspace-write";
 
 function isWithin(root, candidate) {
@@ -190,6 +207,9 @@ function finishTurnDone() {
   turnDrainTimer = null;
   if (!turnDraining) return;
   turnDraining = false;
+  ownCalls.clear();
+  childParent.clear();
+  approvedCalls.clear();
   bivy({ type: "session.status", status: "idle" });
   bivy({ type: "session.done" });
 }
@@ -222,6 +242,11 @@ function mergeToolCallState(toolCallId, u) {
   const next = {
     kind: u.kind ?? prev.kind,
     title: u.title ?? prev.title,
+    // Agents open a call titled with the tool's own name ("task",
+    // "spawn_subagent", "bash") and later retitle it with prose ("Count README
+    // lines"). Keep the first identifier-like title as the stable name, so a
+    // delegation still classifies as one after the retitle.
+    name: prev.name ?? (typeof u.title === "string" && /^[A-Za-z_][\w.:-]*$/.test(u.title) ? u.title : undefined),
     rawInput: u.rawInput && typeof u.rawInput === "object" && Object.keys(u.rawInput).length ? u.rawInput : prev.rawInput,
     locations: Array.isArray(u.locations) && u.locations.length ? u.locations : prev.locations,
     content: content && content.length ? content : prev.content,
@@ -259,7 +284,60 @@ function toolCallInput(state) {
  *  both the node's bucket classifier and the client's own name-based heuristic,
  *  which both expect short tool-name-like tokens, not prose. */
 function toolCallName(state) {
-  return (state.kind && KIND_TOOL_NAME[state.kind]) || state.title || state.kind || "tool";
+  return (state.kind && KIND_TOOL_NAME[state.kind]) || state.name || state.title || state.kind || "tool";
+}
+
+// --- sub-agent sessions ------------------------------------------------------
+// Agents that run sub-agents as ACP sessions of their own (Grok's
+// spawn_subagent) stream the child's updates over this same connection, tagged
+// with the CHILD's sessionId. Folding those into the parent turn glued the
+// sub-agent's prose onto the parent's answer and listed its tools as the
+// parent's. Route them instead: child tool calls carry `parentToolCallId` (the
+// delegating call, so the transcript nests them) and child prose stays out of
+// the parent reply — the delegation's own tool result carries its answer.
+const childParent = new Map(); // child sessionId -> delegating toolCallId ("" if unknown)
+// This turn's own (non-child) calls, kept after they complete: a background
+// sub-agent's spawn call often finishes before the child's first update lands.
+const ownCalls = new Map(); // toolCallId -> accumulated state
+const DELEGATION_NAME = /agent|task|delegat/i;
+
+function isDelegation(state) {
+  const input = state?.rawInput || {};
+  return DELEGATION_NAME.test(String(state?.name || "")) || typeof input.subagent_type === "string" || typeof input.prompt === "string";
+}
+
+/** The delegating call for a child session: an explicit link when the agent
+ *  sent one (see linkChildSession), else the newest delegation-shaped call of
+ *  this turn that no other child has claimed, else the newest open call. */
+function parentCallFor(childSessionId) {
+  if (childParent.has(childSessionId)) return childParent.get(childSessionId);
+  const claimed = new Set(childParent.values());
+  const calls = [...ownCalls].reverse().filter(([id]) => !claimed.has(id));
+  const pick = calls.find(([, st]) => isDelegation(st)) ?? calls.find(([id]) => toolCallState.has(id));
+  const parent = pick?.[0] ?? "";
+  childParent.set(childSessionId, parent);
+  return parent;
+}
+
+/** An agent-specific notification that names a child session and its parent
+ *  (`child_session_id` / `parent_session_id`, plus the tool call id or the
+ *  delegation's description) pins the link instead of the heuristic above. */
+function linkChildSession(update) {
+  const child = update?.child_session_id ?? update?.childSessionId;
+  const parentSession = update?.parent_session_id ?? update?.parentSessionId;
+  if (!child || (parentSession && parentSession !== sessionId) || childParent.get(child)) return;
+  const byId = update.tool_call_id ?? update.toolCallId;
+  const match = byId && ownCalls.has(byId)
+    ? byId
+    : [...ownCalls].reverse().find(([, st]) => update.description && (st.title === update.description || st.rawInput?.description === update.description))?.[0];
+  if (match) childParent.set(child, match);
+}
+
+/** Routing for an update from `sid`: null for this session, else the parent
+ *  call id ("" when it can't be placed). */
+function childRoute(sid) {
+  if (!sid || !sessionId || sid === sessionId) return null;
+  return parentCallFor(sid);
 }
 
 async function ensureInitialized() {
@@ -309,6 +387,9 @@ function onSessionUpdate(params) {
   // window so session.done waits for it instead of sealing history short.
   if (turnDraining) scheduleTurnDone();
   const kind = String(u.sessionUpdate || "");
+  const parentCall = childRoute(params?.sessionId);
+  const child = parentCall !== null;
+  const nest = parentCall ? { parentToolCallId: parentCall } : {};
   const textOf = (content) => {
     if (!content) return "";
     if (typeof content === "string") return content;
@@ -327,12 +408,12 @@ function onSessionUpdate(params) {
   switch (kind) {
     case "agent_message_chunk": {
       const t = textOf(u.content);
-      if (t) bivy({ type: "message.delta", text: t });
+      if (t && !child) bivy({ type: "message.delta", text: t });
       break;
     }
     case "agent_thought_chunk": {
       const t = textOf(u.content);
-      if (t) bivy({ type: "message.reasoning", text: t });
+      if (t && !child) bivy({ type: "message.reasoning", text: t });
       break;
     }
     case "tool_call": {
@@ -340,12 +421,14 @@ function onSessionUpdate(params) {
       // shows the action; the result arrives via tool_call_update.
       const toolCallId = String(u.toolCallId ?? u.id ?? "");
       const state = mergeToolCallState(toolCallId, u);
-      bivy({ type: "tool.observe", toolCallId, name: toolCallName(state), input: toolCallInput(state) });
+      if (!child) ownCalls.set(toolCallId, state);
+      bivy({ type: "tool.observe", toolCallId, name: toolCallName(state), input: toolCallInput(state), ...nest });
       break;
     }
     case "tool_call_update": {
       const toolCallId = String(u.toolCallId ?? u.id ?? "");
       const state = mergeToolCallState(toolCallId, u);
+      if (!child && ownCalls.has(toolCallId)) ownCalls.set(toolCallId, state);
       const status = String(u.status || "");
       if (status === "completed" || status === "failed") {
         toolCallState.delete(toolCallId);
@@ -362,17 +445,18 @@ function onSessionUpdate(params) {
           // the terminal frame's content when it has some, else the accumulated.
           result: textOf(u.content) || textOf(state.content) || status,
           isError: status === "failed",
+          ...nest,
         });
       } else {
         // Still running: forward the fuller name/input as it fills in so a live
         // tool card isn't stuck with the sparse initial notification.
-        bivy({ type: "tool.update", toolCallId, name: toolCallName(state), input: toolCallInput(state) });
+        bivy({ type: "tool.update", toolCallId, name: toolCallName(state), input: toolCallInput(state), ...nest });
       }
       break;
     }
     case "plan":
       // Optional planning stream — fold into reasoning so nothing is lost.
-      if (Array.isArray(u.entries)) bivy({ type: "message.reasoning", text: u.entries.map((e) => `• ${e.content ?? ""}`).join("\n") });
+      if (!child && Array.isArray(u.entries)) bivy({ type: "message.reasoning", text: u.entries.map((e) => `• ${e.content ?? ""}`).join("\n") });
       break;
     default:
       break;
@@ -391,7 +475,9 @@ async function onAgentRequest(id, method, params) {
       const options = Array.isArray(params?.options) ? params.options : [];
       permissionRequests.set(toolCallId, { requestId: id, options });
       const state = mergeToolCallState(toolCallId, tc);
-      bivy({ type: "tool.call", toolCallId, name: toolCallName(state), input: toolCallInput(state) });
+      const parentCall = childRoute(params?.sessionId);
+      if (parentCall === null) ownCalls.set(toolCallId, state);
+      bivy({ type: "tool.call", toolCallId, name: toolCallName(state), input: toolCallInput(state), ...(parentCall ? { parentToolCallId: parentCall } : {}) });
       return;
     }
     case "fs/read_text_file": {
@@ -413,9 +499,15 @@ async function onAgentRequest(id, method, params) {
       try {
         if (sandboxTier === "read-only") throw new Error("writes are disabled by the read-only sandbox");
         const file = workspacePath(params?.path, { write: true });
+        if (approvedCallWriting(file)) {
+          fs.writeFileSync(file, String(params?.content ?? ""));
+          agentReply(id, {});
+          return;
+        }
         const toolCallId = `acp-fs-write-${id}`;
         permissionRequests.set(toolCallId, { kind: "fs-write", requestId: id, file, content: String(params?.content ?? "") });
-        bivy({ type: "tool.call", toolCallId, name: "write", input: { path: file } });
+        const parentCall = childRoute(params?.sessionId);
+        bivy({ type: "tool.call", toolCallId, name: "write", input: { path: file }, ...(parentCall ? { parentToolCallId: parentCall } : {}) });
       } catch (e) {
         agentReplyError(id, -32000, `write failed: ${e.message}`);
       }
@@ -449,6 +541,7 @@ createInterface({ input: agent.stdout }).on("line", (line) => {
   if (msg.id !== undefined && msg.method) { void onAgentRequest(msg.id, msg.method, msg.params); return; }
   // Notification (method, no id).
   if (msg.method === "session/update") onSessionUpdate(msg.params);
+  else if (msg.params?.update) linkChildSession(msg.params.update);
 });
 
 /**
@@ -554,16 +647,22 @@ async function onBivyCommand(msg) {
           permissionRequests.delete(msg.toolCallId);
           const allow = msg.decision !== "deny";
           if (entry.kind === "fs-write") {
-            if (!allow) agentReplyError(entry.requestId, -32001, String(msg.reason || "write denied by Bivy policy"));
-            else {
-              try { fs.writeFileSync(entry.file, entry.content); agentReply(entry.requestId, {}); }
-              catch (e) { agentReplyError(entry.requestId, -32000, `write failed: ${e.message}`); }
+            // The write card is the shim's own call, so the shim closes it too —
+            // left open it pinned the turn "Working" after the agent finished.
+            let error = allow ? "" : String(msg.reason || "write denied by Bivy policy");
+            if (allow) {
+              try { fs.writeFileSync(entry.file, entry.content); }
+              catch (e) { error = `write failed: ${e.message}`; }
             }
+            if (error) agentReplyError(entry.requestId, allow ? -32000 : -32001, error);
+            else agentReply(entry.requestId, {});
+            bivy({ type: "tool.result", toolCallId: msg.toolCallId, name: "write", result: error || `Wrote ${entry.file}`, isError: Boolean(error) });
             return;
           }
           // Pick an ACP option matching the human's choice by its `kind`
           // (allow_once/allow_always vs reject_once/reject_always); fall back to the
           // first option, or a cancelled outcome when nothing fits.
+          if (allow) approvedCalls.add(msg.toolCallId);
           const want = allow ? /^allow/ : /^reject/;
           const opt = entry.options.find((o) => want.test(String(o.kind || ""))) ?? entry.options[0];
           if (opt && opt.optionId !== undefined) agentReply(entry.requestId, { outcome: { outcome: "selected", optionId: opt.optionId } });

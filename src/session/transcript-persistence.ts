@@ -80,6 +80,7 @@ export interface TranscriptPersistence {
   persistIntermediateFromEvent(record: PersistSession, event: Record<string, unknown>, final?: boolean): void;
   resolveInlineImages(record: PersistSession): void;
   conversationMessages(record: PersistSession): RuntimeMessage[];
+  forkMessages(record: PersistSession): RuntimeMessage[];
   buildHistoryEvent(opts: BuildHistoryEventOptions): Record<string, unknown>;
   buildReplayEvent(sessionId: string, afterSeq: number): Record<string, unknown>;
   /** Drop the coalescing state for a session (tool boundary / agent_end). */
@@ -266,6 +267,10 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
     return eventLog.deriveHistory(record.id, record.session.getMessages());
   }
 
+  function forkMessages(record: PersistSession): RuntimeMessage[] {
+    return eventLog.deriveBase(record.id, record.session.getMessages());
+  }
+
   function buildHistoryEvent(opts: BuildHistoryEventOptions): Record<string, unknown> {
     const messages = opts.sessionId ? project(opts.sessionId, opts.messages) as unknown[] : opts.messages;
     const delta = historyDelta(messages, opts.cursor);
@@ -319,6 +324,7 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
     persistIntermediateFromEvent,
     resolveInlineImages,
     conversationMessages,
+    forkMessages,
     buildHistoryEvent,
     buildReplayEvent,
     clearLiveIntermediate,

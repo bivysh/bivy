@@ -103,6 +103,26 @@ function insertionIndex(base: readonly RuntimeMessage[], timeline: { times: numb
   return Math.max(0, Math.min(base.length, entry.afterMessageCount));
 }
 
+/** Tool-call ids a message references (tool_use/toolCall ids, tool_result targets). */
+function toolIds(content: unknown): string[] {
+  if (!Array.isArray(content)) return [];
+  return content.flatMap((part) => {
+    if (!part || typeof part !== "object") return [];
+    const record = part as Record<string, unknown>;
+    const id = record.tool_use_id ?? record.toolUseId ?? record.toolCallId ?? (/^(tool_use|toolCall)$/.test(String(record.type)) ? record.id : undefined);
+    return typeof id === "string" && id ? [id] : [];
+  });
+}
+
+/** base index of the first message referencing each tool id. */
+function toolIdIndex(base: readonly RuntimeMessage[]): Map<string, number> {
+  const index = new Map<string, number>();
+  base.forEach((message, i) => {
+    for (const id of toolIds((message as { content?: unknown }).content)) if (!index.has(id)) index.set(id, i);
+  });
+  return index;
+}
+
 /**
  * Merge the `extras` (intermediate + tool-activity sidecar entries) into `base`,
  * each placed by time (see file header). Deduplicates intermediate reasoning that
@@ -111,10 +131,16 @@ function insertionIndex(base: readonly RuntimeMessage[], timeline: { times: numb
 export function mergeTranscript(base: readonly RuntimeMessage[], extras: readonly SidecarMessage[]): RuntimeMessage[] {
   if (!extras.length) return base as RuntimeMessage[];
   const timeline = baseTimeline(base);
+  const baseToolIndex = toolIdIndex(base);
   const byIndex = new Map<number, SidecarMessage[]>();
   const seenIntermediate = new Set<string>();
   for (const entry of extras) {
-    const index = insertionIndex(base, timeline, entry);
+    // A tool row whose call is already in the base transcript sits right after
+    // that message. Protocol runtimes persist a whole turn as one message when
+    // it ends, so time placement put every tool row ahead of the prose that
+    // preceded it in the turn (clients keep the first copy of a tool id).
+    const anchored = entry.bivyKind === "tool" ? toolIds(entry.content).map((id) => baseToolIndex.get(id)).find((i) => i !== undefined) : undefined;
+    const index = anchored !== undefined ? anchored + 1 : insertionIndex(base, timeline, entry);
     if (entry.bivyKind === "intermediate") {
       const text = normalizedIntermediateText(thinkingTextFromContent(entry.content));
       // Skip a sidecar reasoning copy when the adjacent persisted message already

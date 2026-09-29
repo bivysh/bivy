@@ -6,6 +6,8 @@ import assert from "node:assert/strict";
 import { createForkCommands, type ForkCommandDeps } from "../src/controllers/fork-commands.js";
 
 type Ctx = { reply: (e: unknown) => void };
+// Handlers answer the requesting client through ctx.reply; each harness points
+// it at that harness's event list.
 const CTX: Ctx = { reply: () => {} };
 
 function harness(over: Partial<ForkCommandDeps> = {}) {
@@ -13,8 +15,8 @@ function harness(over: Partial<ForkCommandDeps> = {}) {
   const broadcasts: any[] = [];
   const rec: any = { id: "s1", runtimeId: "codex", workspace: "/tmp", sessionFile: "ref", worktree: undefined, session: { getMessages: () => [], cwd: "/tmp" } };
   const deps: ForkCommandDeps = {
-    sendEvent: (e) => events.push(e),
     broadcast: (e) => broadcasts.push(e),
+    forkMessages: () => [],
     resolveSession: () => rec,
     getRuntime: () => ({ id: "codex", capabilities: {} }) as any,
     forkRecordFor: () => ({ sourceSessionId: "s1", runtimeId: "codex", workspace: "/tmp", cwd: "/tmp", repoSlug: "octo/repo" }) as any,
@@ -29,6 +31,7 @@ function harness(over: Partial<ForkCommandDeps> = {}) {
     retireSource: async () => ({ ok: true, retired: true, alreadyGone: false }),
     ...over,
   };
+  CTX.reply = (e) => events.push(e);
   return { events, broadcasts, cmds: createForkCommands(deps) };
 }
 
@@ -94,4 +97,13 @@ test("retire-source gate + broadcast wiring", async () => {
   await (gated.cmds["session.fork.retire-source"] as any)({ kind: "session.fork.retire-source", sourceSessionId: "s1", newSessionId: "" }, CTX);
   assert.match(gated.events.find((e) => e.type === "session.fork.error")?.error ?? "", /confirmed destination/);
   assert.equal(gated.broadcasts.length, 0, "no broadcast when the gate refuses");
+});
+
+test("export carries the node's transcript when a reopened runtime reports none", async () => {
+  // A protocol session reopened after a restart returns [] from getMessages();
+  // the node's log still holds the conversation the user sees.
+  const { events, cmds } = harness({ forkMessages: () => [{ role: "user", content: "add sub()" }, { role: "assistant", content: "Added sub(a, b)." }] });
+  await (cmds["session.fork.export"] as any)({ kind: "session.fork.export", sessionId: "s1", agent: "opencode" }, CTX);
+  const bundle = events.find((e) => e.type === "session.fork.bundle")?.bundle;
+  assert.deepEqual(bundle?.normalized?.turns?.map((t: any) => t.role), ["user", "assistant"]);
 });

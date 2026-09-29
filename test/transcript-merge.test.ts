@@ -64,3 +64,15 @@ test("intermediate reasoning already present in an adjacent message is deduped",
   const merged = mergeTranscript(base, [dup]);
   assert.equal(merged.length, 2); // the duplicate reasoning card is dropped
 });
+
+test("a tool row whose call the base already holds sits after that message, not ahead of its turn's prose", () => {
+  // Protocol runtimes persist the whole turn as one message when it ends, so
+  // the tool ran (createdAt 150) before that message's timestamp (300).
+  const base = [
+    msg("user", "q", 100),
+    { role: "assistant", content: [{ type: "text", text: "intro" }, { type: "tool_use", id: "t1", name: "bash", input: {} }, { type: "text", text: "done" }], timestamp: 300 },
+    { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }], timestamp: 300 },
+  ];
+  const merged = mergeTranscript(base, [tool("t1", 1, 150)]);
+  assert.deepEqual(merged.map((m: any) => m.bivyKind ?? m.role), ["user", "assistant", "tool", "user"]);
+});

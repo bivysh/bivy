@@ -34,6 +34,12 @@ import { withExactCapabilitySurface } from "./types.js";
 import { extractTokenUsage } from "./cli-parsers.js";
 import { mapToolCall, mapToolResult } from "./tool-call-map.js";
 
+/** A tool message's sub-agent parent (`parentToolCallId`), spread into the
+ *  runtime event and persisted block so delegated work nests under its call. */
+function parentOf(msg: Record<string, unknown>): { parentToolUseId?: string } {
+  return typeof msg.parentToolCallId === "string" && msg.parentToolCallId ? { parentToolUseId: msg.parentToolCallId } : {};
+}
+
 /** A protocol `usage` message → UsageSnapshot (reuses the CLI token-key scan). */
 function parseProtocolUsage(raw: unknown): UsageSnapshot | undefined {
   if (!raw || typeof raw !== "object") return undefined;
@@ -872,6 +878,7 @@ class ProtocolSession implements RuntimeSession {
       const toolName = String(msg.name || "tool");
       const detail = mapToolCall(toolName, msg.input, { provider: this.runtimeOptions.id || "acp", protocol: "protocol" });
       if (detail) this.toolDetailsByCallId.set(toolCallId, detail);
+      const parent = parentOf(msg);
       // `tool.observe` is for activity an upstream runtime reports after it has
       // already begun (Codex read-only MCP and sub-agent items, for example).
       // It must render and persist exactly like a call, but must never open a
@@ -885,12 +892,18 @@ class ProtocolSession implements RuntimeSession {
         if (detail) existing.detail = detail;
       } else {
         this.flushPendingTurnText();
-        this.turnContent.push({ type: "tool_use", id: toolCallId, name: toolName, input: msg.input ?? {}, ...(detail ? { detail } : {}) });
+        this.turnContent.push({ type: "tool_use", id: toolCallId, name: toolName, input: msg.input ?? {}, ...(detail ? { detail } : {}), ...parent });
+        // Prose after a tool is a new item: separate it in the cumulative live
+        // text too, or "…the README.Added `sub`…" reads as one sentence.
+        if (this.assistantText) this.assistantItemBoundary = true;
+        // Reasoning after a tool is a new thinking item as well; accumulating it
+        // re-showed the earlier thoughts as the prefix of the next block.
+        this.reasoningText = "";
       }
       // Stream the live tool card for every protocol agent. Interception is an
       // additional round-trip only for a real `tool.call`; observed activity is
       // informational because the upstream runtime is already executing it.
-      this.emit({ type: existing ? "tool_execution_update" : "tool_call", toolName, input: msg.input, toolCallId, ...(detail ? { detail } : {}) });
+      this.emit({ type: existing ? "tool_execution_update" : "tool_call", toolName, input: msg.input, toolCallId, ...(detail ? { detail } : {}), ...parent });
       if (type === "tool.call" && this.capabilitiesRef.toolInterception && this.toolInterceptor) {
         const decision = await this.toolInterceptor({ sessionId: this.id, toolName, input: msg.input });
         try {
@@ -920,7 +933,7 @@ class ProtocolSession implements RuntimeSession {
         block.input = msg.input ?? {};
         if (detail) block.detail = detail;
       }
-      this.emit({ type: "tool_execution_update", toolName, input: msg.input, toolCallId, ...(detail ? { detail } : {}) });
+      this.emit({ type: "tool_execution_update", toolName, input: msg.input, toolCallId, ...(detail ? { detail } : {}), ...parentOf(msg) });
       return;
     }
     if (type === "tool.result") {
@@ -935,7 +948,7 @@ class ProtocolSession implements RuntimeSession {
       });
       const priorDetail = this.toolDetailsByCallId.get(toolCallId);
       const detail = priorDetail ? { ...priorDetail, result: mapToolResult(result, isError) } : undefined;
-      this.emit({ type: "tool_result", toolName: String(msg.name || "tool"), toolCallId, result, ...(detail ? { detail } : {}) });
+      this.emit({ type: "tool_result", toolName: String(msg.name || "tool"), toolCallId, result, ...(detail ? { detail } : {}), ...parentOf(msg) });
       return;
     }
     this.emit({ type, ...msg });

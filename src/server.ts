@@ -42,6 +42,7 @@ import { createAppCommands } from "./controllers/app-commands.js";
 import { bindClientCommandRoutes } from "./http/client-command-routes.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, catalogReplyEvent, mergeProviderCatalog } from "./runtime/model-catalog.js";
+import { resolveModelRef } from "./runtime/model-ref.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
 import { RemoteRuntime, RemoteRuntimeSession } from "./runtime/remote.js";
 import { InMemorySessionLocationRegistry, type SessionLocation, type SessionLocationRegistry } from "./runtime/session-location.js";
@@ -2282,8 +2283,8 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   // (server.ts decomposition). Late-bound singletons (forkStandUp/forkRetire/
   // branchPublish, declared below) are wrapped in thunks resolved at dispatch time.
   ...createForkCommands({
-    sendEvent: (event) => relay?.sendEvent(event),
     broadcast,
+    forkMessages: (rec) => transcripts.forkMessages(rec),
     resolveSession: (sessionId) => resolveSession(sessionId),
     getRuntime: (runtimeId) => getRuntime(runtimeId),
     forkRecordFor,
@@ -6270,6 +6271,17 @@ function modelFrom(msg: Record<string, unknown>): { provider: string; id: string
 async function applyRequestedModel(record: SessionRecord, model: { provider: string; id: string } | undefined): Promise<void> {
   if (!model) return;
   try {
+    // A provider-less id (CLI --model, `bivy-model:`) binds against the
+    // session's catalog. Protocol agents only publish theirs once running, so
+    // warm it when the first lookup can't place the id.
+    if (!model.provider) {
+      const resolve = async () => resolveModelRef(await record.session.getModels(), model!, record.session.getCurrentModel());
+      model = await resolve();
+      if (!model.provider && record.session.warmModels) {
+        await record.session.warmModels().catch(() => {});
+        model = await resolve();
+      }
+    }
     assertSessionModel(record, model.id);
     await record.session.setModel(model.provider, model.id);
     broadcast({ type: "model.updated", sessionId: record.id, model: publicModel(record.session.getCurrentModel(), record.session.getCurrentModel()) });
@@ -6814,6 +6826,7 @@ function persistSessionMetadata(record: SessionRecord, status = sessionStatus(re
     runtimeId: record.runtimeId,
     sandbox: record.sandbox,
     approvalMode: record.approvalMode,
+    ...sessionModelRef(record),
     credentialLabels: record.credentialLabels,
     agentName: getRuntime(record.runtimeId).displayName,
     contract: record.contract,
@@ -6876,6 +6889,13 @@ function bivySessionEnvelopeFromSummary(s: SessionSummary & { agent: string; age
     issueUrl,
     prUrl: meta?.prUrl ?? (s as any).prUrl,
   };
+}
+
+/** The session's current model as a metadata patch (empty when unknown, so a
+ *  reopened session that hasn't reported one yet keeps the stored value). */
+function sessionModelRef(record: SessionRecord): { model?: { provider: string; id: string } } {
+  const model = record.session.getCurrentModel();
+  return model?.id ? { model: { provider: String(model.provider ?? ""), id: model.id } } : {};
 }
 
 function touchSession(record: SessionRecord) {
@@ -8561,6 +8581,13 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // would overwrite the stored name with undefined — surfacing as "Untitled
   // session" in the sidebar.
   if (requestedSessionFile && storedMeta?.name && !session.getName()) session.setName(storedMeta.name);
+  // Runtimes that learn their model from the next reply (Claude Code) reopen
+  // with none, so the picker showed the default and the next turn ran on it.
+  // Restore the model the session last used. Best-effort: a model this node no
+  // longer offers keeps the runtime default.
+  if (requestedSessionFile && storedMeta?.model && !session.getCurrentModel()) {
+    await session.setModel(storedMeta.model.provider, storedMeta.model.id).catch(() => {});
+  }
   const sessionWorkspace = session.cwd || runtimeWorkspace;
   // Best-effort here (unlike createWorkspaceSession, which must fail loudly):
   // this only decides whether to ADOPT an already-checked-out branch as the
@@ -11858,6 +11885,15 @@ wss.on("connection", (socket, req) => {
     if (msg?.kind === "ping") {
       const requestId = (msg as { requestId?: unknown }).requestId;
       if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "pong", requestId: typeof requestId === "string" ? requestId : undefined }));
+      return;
+    }
+    if (typeof msg?.kind === "string" && msg.kind.startsWith("session.fork.")) {
+      // Fork/move is a request/reply exchange with no REST route, so direct
+      // (loopback/LAN) clients send it on this authenticated socket and get the
+      // reply here — the same handlers the relay dispatches.
+      const reply = (event: unknown) => { if (socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(event)); };
+      void clientCommands.dispatch(msg.kind, msg as ClientMessage, { reply, broadcast })
+        .catch((error) => reply({ type: "session.fork.error", requestId: (msg as { requestId?: unknown }).requestId, error: error instanceof Error ? error.message : String(error) }));
       return;
     }
     if (typeof msg?.kind === "string" && msg.kind.startsWith("terminal.")) {
