@@ -17,6 +17,7 @@ function harness(over: Partial<ForkCommandDeps> = {}) {
   const deps: ForkCommandDeps = {
     broadcast: (e) => broadcasts.push(e),
     forkMessages: () => [],
+    forkDisplay: () => [],
     resolveSession: () => rec,
     getRuntime: () => ({ id: "codex", capabilities: {} }) as any,
     forkRecordFor: () => ({ sourceSessionId: "s1", runtimeId: "codex", workspace: "/tmp", cwd: "/tmp", repoSlug: "octo/repo" }) as any,

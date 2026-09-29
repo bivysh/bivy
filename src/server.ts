@@ -2285,6 +2285,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   ...createForkCommands({
     broadcast,
     forkMessages: (rec) => transcripts.forkMessages(rec),
+    forkDisplay: (rec) => transcripts.conversationMessages(rec),
     resolveSession: (sessionId) => resolveSession(sessionId),
     getRuntime: (runtimeId) => getRuntime(runtimeId),
     forkRecordFor,
@@ -9125,6 +9126,7 @@ const forkStandUp = createForkStandUp<SessionRecord>({
   createSession,
   broadcast,
   persistSessionMetadata,
+  recordForkDisplay: (record, messages, forkedAt) => eventLog.appendForkDisplay(record.id, messages, forkedAt),
   scheduleAdvertise,
   bivySessionEnvelope,
   applyRequestedModel,

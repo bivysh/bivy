@@ -570,3 +570,27 @@ test("deriveHistory: a resumed blank runtime's disjoint new turns concatenate af
     assert.equal(folded.find(([t]) => t === "one")![1][0]!.hash, "3".repeat(64));
   });
 }
+
+test("a fork's display transcript stands in for the runtime's replay and survives a reload", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-eventlog-"));
+  try {
+    const pathFor = (id: string) => path.join(dir, `${encodeURIComponent(id)}.jsonl`);
+    const source = [
+      { role: "user", content: "list files", timestamp: 10 },
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "bash", input: { command: "ls" } }], timestamp: 11 },
+    ];
+    const runtime = [
+      { role: "user", content: "list files", timestamp: 100 },
+      { role: "assistant", content: "[ran bash] bash({\"command\":\"ls\"})", timestamp: 100 },
+      { role: "user", content: "now add a test", timestamp: 300 },
+    ];
+    const log = new EventLog(dir, pathFor, (t) => t, 0);
+    log.appendForkDisplay("f1", source, 200);
+    log.appendBaseSnapshot("f1", runtime);
+    log.flush("f1");
+    const reloaded = new EventLog(dir, pathFor, (t) => t, 0);
+    assert.deepEqual(reloaded.deriveBase("f1", runtime), [...source, runtime[2]]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
