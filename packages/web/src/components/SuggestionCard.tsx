@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // A task the agent proposed with `bivy suggest`. One tap starts it in its own
-// session beside this one (the primary action: parallel work is the point), or
+// session beside this one (the primary action), or
 // sends it here. The last card of a run of suggestions can start them all.
 // What was started is remembered per device, so a reload doesn't offer it again.
 
