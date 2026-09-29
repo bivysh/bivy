@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import type { AppState } from "@bivy/core";
 import { controller } from "../store/useStore.js";
+import { Sheet } from "./Sheet.js";
+import { Toggle } from "./Toggle.js";
 
 const encoder = new TextEncoder();
 
@@ -27,6 +29,8 @@ export function AgentInstructionsPanel({ state }: { state: AppState }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [noteSaving, setNoteSaving] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
 
   const currentNodeId = controller.local.cur;
   useEffect(() => {
@@ -52,8 +56,11 @@ export function AgentInstructionsPanel({ state }: { state: AppState }) {
   };
   // Seed on first arrival, then follow the node's copy whenever nothing unsaved
   // would be lost — including the echo of our own save.
+  // Flipping the Bivy-note switch restamps the same text; an unsaved edit just
+  // moves onto the new stamp instead of reading as changed elsewhere.
   useEffect(() => {
     if (remote && (base === null || !dirty || remote.text === draft)) load();
+    else if (remote && remote.text === baseText) setBase(remote.updatedAt);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [remote?.updatedAt, remote?.text]);
 
@@ -84,6 +91,18 @@ export function AgentInstructionsPanel({ state }: { state: AppState }) {
   const bytes = encoder.encode(draft).length;
   const over = bytes > remote.maxBytes;
 
+  const setBivyNote = async (on: boolean) => {
+    setNoteSaving(true);
+    setError(null);
+    try {
+      await controller.setNodeSettings({ agentInstructionsBivyNote: on });
+    } catch (e) {
+      setError(String((e as Error)?.message || e));
+    } finally {
+      setNoteSaving(false);
+    }
+  };
+
   const save = async () => {
     if (saving || over || !dirty || stale) return;
     setSaving(true);
@@ -111,6 +130,31 @@ export function AgentInstructionsPanel({ state }: { state: AppState }) {
             <button type="button" className="btn sm ghost" onClick={keepMine}>Keep mine</button>
           </span>
         </div>
+      )}
+      {remote.bivyNote !== undefined && (
+        <section className="settings-section">
+          <div className="settings-toggle-row">
+            <div className="settings-toggle-text">
+              <span className="settings-toggle-title">Send Bivy's system instructions</span>
+              <span className="muted small">
+                A short note ahead of your instructions that tells agents they run in Bivy and how to send you files and app
+                previews.
+              </span>
+              <button type="button" className="btn link" onClick={() => setNoteOpen(true)}>View system instructions</button>
+            </div>
+            <Toggle checked={remote.bivyNote} onChange={setBivyNote} disabled={noteSaving} label="Send Bivy's system instructions" />
+          </div>
+        </section>
+      )}
+      {noteOpen && (
+        <Sheet title="Bivy's system instructions" onClose={() => setNoteOpen(false)} autoFocusSearch={false}>
+          <div className="settings-form">
+            <p className="muted small">
+              {remote.bivyNote ? "Every agent session gets this note ahead of your instructions." : "Turned off: agent sessions don't get this note."}
+            </p>
+            <pre className="code-snippet agent-note-text">{remote.bivyNoteText}</pre>
+          </div>
+        </Sheet>
       )}
       <section className="settings-section">
         <p className="muted small">

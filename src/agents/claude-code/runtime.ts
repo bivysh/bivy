@@ -139,42 +139,16 @@ export interface ClaudeCodeRuntimeOptions {
    * in-process MCP server (via the SDK's createSdkMcpServer/tool) so the agent
    * sees it in its tool list instead of having to shell out to `bivy attach`.
    * Absent = the tool isn't registered and the session falls back to the
-   * discoverability prompt hint alone (BIVY_ATTACH_SYSTEM_PROMPT).
+   * `bivy attach` line of the Bivy note (BIVY_AGENT_NOTE in src/agent-instructions.ts).
    */
   attachToChat?: AttachToChatFn;
-  /** Per-session: the user's composed account-wide instructions, appended to the
-   *  system prompt after the Bivy note (see OpenSessionOptions.instructions). */
+  /** Per-session: the Bivy note plus the user's account-wide instructions,
+   *  appended to the system prompt (see OpenSessionOptions.instructions). */
   instructions?: string;
   /** Override for the SDK loader (tests inject a fake `query()`); defaults to
    *  importing the real optional SDK package. */
   sdkLoader?: () => Promise<any>;
 }
-
-/**
- * Appended to the Claude Code system prompt so the agent DISCOVERS the outbound
- * attachment capability. `bivy attach` is just a shell command — without this the
- * agent has no way to know it exists and, when asked to "send a file", concludes
- * it can't (it looks for a tool, finds none). BIVY_SESSION_ID is injected into the
- * subprocess env (see spawnQuery), so the bare command resolves the session. Keep
- * this short: it rides on every turn's system prompt.
- *
- * The chat still has no route to a LOCAL/workspace file path, so that half of the
- * guidance (use `bivy attach`, not markdown, for those) stands. A REMOTE
- * `https://` image URL is different: the node now fetches it server-side and
- * serves it back to the chat (see src/session/inline-image-fetch.ts, issue #293),
- * so plain markdown is the right tool there — `bivy attach` only works on files
- * already inside the workspace, which a URL by definition isn't.
- */
-export const BIVY_ATTACH_SYSTEM_PROMPT =
-  "Sending files and images to the user: the person you're talking to is in a chat UI. They cannot see files you only " +
-  "write to disk, and the chat has no route to a workspace file path. " +
-  "To show them a LOCAL file or image — a report, screenshot, chart, or a file they asked for — run " +
-  '`bivy attach <path> [--caption "short note"]` in your shell. ' +
-  "An image renders inline in the chat; any other file shows as a downloadable chip. The path must be inside the session " +
-  "workspace. Do NOT use markdown image syntax like ![](path) for a local file or workspace path — it will not render; " +
-  "always use `bivy attach` for those. A REMOTE image you already have a URL for is different: plain markdown " +
-  "`![alt](https://...)` renders it inline, no attach needed. Prefer `bivy attach` / markdown links over pasting large " +
-  "file contents or describing where a file lives on disk.";
 
 /** Name of the in-process MCP server the native attach tool is registered
  *  under (see buildAttachMcpServer) — the SDK namespaces the tool the agent
@@ -185,8 +159,8 @@ export const BIVY_ATTACH_TOOL_NAME = "attach_to_chat";
 
 /**
  * Build the in-process MCP server that exposes `attach_to_chat` as a native
- * tool call (issue #291) — the stronger sibling of BIVY_ATTACH_SYSTEM_PROMPT's
- * shell-out hint: the agent sees this in its actual tool list instead of having
+ * tool call (issue #291) — the stronger sibling of the Bivy note's
+ * `bivy attach` hint: the agent sees this in its actual tool list instead of having
  * to discover a shell command from prose. Bound to one session's id so the
  * handler always attaches into the conversation that called it, regardless of
  * how many Claude sessions this node is running concurrently.
@@ -957,22 +931,18 @@ class ClaudeSession implements RuntimeSession {
       permissionMode,
       canUseTool,
       env,
-      // Keep the default Claude Code prompt, appending the note that teaches the
-      // agent how to send a file to the user (`bivy attach`) — otherwise the
-      // capability is undiscoverable and "send me X as an attachment" fails.
-      // Kept even when the native tool below is also registered: it's a cheap,
-      // harmless fallback for a shell/subprocess the agent spawns that can't
-      // reach the in-process MCP tool directly.
-      // The user's account-wide instructions follow it; the repo's CLAUDE.md
-      // still loads through the preset as usual.
-      systemPrompt: { type: "preset", preset: "claude_code", append: [BIVY_ATTACH_SYSTEM_PROMPT, this.runtimeOptions.instructions].filter(Boolean).join("\n\n") },
+      // Keep the default Claude Code prompt, appending the session instructions:
+      // the Bivy note (how to reach the user's chat — `bivy attach`, previews)
+      // and the user's account-wide instructions. The repo's CLAUDE.md still
+      // loads through the preset as usual.
+      systemPrompt: { type: "preset", preset: "claude_code", ...(this.runtimeOptions.instructions ? { append: this.runtimeOptions.instructions } : {}) },
       ...(this.runtimeOptions.executablePath ? { pathToClaudeCodeExecutable: this.runtimeOptions.executablePath } : {}),
     };
     if (resumeId) options.resume = resumeId;
     else options.sessionId = this.id;
     if (this.desiredModel) options.model = this.desiredModel;
     // Native attach_to_chat tool (issue #291) — the stronger, tool-based sibling
-    // of the system-prompt hint above. Wired only when the daemon handed us a
+    // of the Bivy note's `bivy attach` line. Wired only when the daemon handed us a
     // callback (see ClaudeCodeRuntimeOptions.attachToChat); absent in a few
     // deliberately minimal test harnesses, and gracefully degrades to the prompt
     // hint alone if this SDK build lacks the MCP builder helpers.

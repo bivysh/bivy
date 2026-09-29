@@ -26,6 +26,7 @@ import { CheckIcon, ChevronRightIcon, CloseIcon, CopyIcon } from "./UiIcons.js";
 import { writeClipboard } from "../clipboard.js";
 import { CredentialVault } from "./CredentialVault.js";
 import { AgentInstructionsPanel } from "./AgentInstructionsPanel.js";
+import { Toggle } from "./Toggle.js";
 
 const VoiceSettings = lazy(() => import("./VoiceSettings.js").then((module) => ({ default: module.VoiceSettings })));
 
@@ -569,23 +570,6 @@ function SharePanel() {
         <p className="muted small">Sharing opens Bivy in Safari with the shared text in the composer — sign in there once if Safari and the installed app don't share a session.</p>
       </section>
     </div>
-  );
-}
-
-// ---- Reusable switch ----
-function Toggle({ checked, onChange, disabled, label }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; label?: string }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      disabled={disabled}
-      className={`settings-toggle${checked ? " on" : ""}`}
-      onClick={() => onChange(!checked)}
-    >
-      <span className="settings-toggle-knob" aria-hidden />
-    </button>
   );
 }
 

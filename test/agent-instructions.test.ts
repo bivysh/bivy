@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   agentInstructionsPath,
+  BIVY_AGENT_NOTE,
   mergeSyncedAgentInstructions,
   readAgentInstructions,
   sessionInstructions,
@@ -28,7 +29,7 @@ test("a newer synced copy replaces the local file and keeps the writer's timesta
   const dir = tempDir();
   writeAgentInstructions(dir, "old", 1_000);
   assert.equal(mergeSyncedAgentInstructions(dir, { text: "new", updatedAt: 2_000 }), "imported");
-  assert.deepEqual(readAgentInstructions(dir), { text: "new", updatedAt: 2_000 });
+  assert.deepEqual(readAgentInstructions(dir), { text: "new", updatedAt: 2_000, bivyNote: true });
 });
 
 test("an older or missing synced copy leaves the local file and asks to republish", () => {
@@ -37,25 +38,50 @@ test("an older or missing synced copy leaves the local file and asks to republis
   assert.equal(mergeSyncedAgentInstructions(dir, { text: "stale", updatedAt: 1_000 }), "local-newer");
   // An older peer re-pushed the vault without the field.
   assert.equal(mergeSyncedAgentInstructions(dir, undefined), "local-newer");
-  assert.deepEqual(readAgentInstructions(dir), { text: "mine", updatedAt: 2_000 });
+  assert.deepEqual(readAgentInstructions(dir), { text: "mine", updatedAt: 2_000, bivyNote: true });
   // A machine that never had any has nothing to publish.
   assert.equal(mergeSyncedAgentInstructions(tempDir(), undefined), "unchanged");
 });
 
-test("clearing propagates: a newer empty copy clears the instructions sessions receive", () => {
+test("sessions always get the Bivy note; clearing propagates and leaves only the note", () => {
   const dir = tempDir();
+  const noteOnly = sessionInstructions(dir);
+  assert.equal(noteOnly?.text, `${BIVY_AGENT_NOTE}\n`, "no instructions written yet: just the note");
+
   writeAgentInstructions(dir, "Use pnpm.", 1_000);
   const before = sessionInstructions(dir);
   assert.ok(before);
+  assert.ok(before.text.startsWith(BIVY_AGENT_NOTE));
   assert.match(before.text, /repository's instructions win/);
   assert.match(before.text, /Use pnpm\./);
   assert.equal(fs.readFileSync(before.file, "utf8"), before.text);
 
   assert.equal(mergeSyncedAgentInstructions(dir, { text: "", updatedAt: 2_000 }), "imported");
-  assert.equal(sessionInstructions(dir), undefined);
-  // The composed file an injected MCP server may still point at is gone too.
-  assert.equal(fs.existsSync(before.file), false);
+  const after = sessionInstructions(dir);
+  // The composed file an injected MCP server may still point at drops the cleared text too.
+  assert.equal(after?.text, `${BIVY_AGENT_NOTE}\n`);
+  assert.equal(fs.readFileSync(before.file, "utf8"), after?.text);
   assert.equal(fs.existsSync(agentInstructionsPath(dir)), true, "the empty file keeps the clear's timestamp");
+});
+
+test("the Bivy-note switch syncs with the text and turns the note off", () => {
+  const dir = tempDir();
+  writeAgentInstructions(dir, "Use pnpm.", 1_000, false);
+  assert.equal(readAgentInstructions(dir).bivyNote, false);
+  assert.ok(!sessionInstructions(dir)?.text.includes(BIVY_AGENT_NOTE));
+  assert.match(sessionInstructions(dir)!.text, /Use pnpm\./);
+
+  // Same text, newer switch from a peer: that alone is a change to import.
+  assert.equal(mergeSyncedAgentInstructions(dir, { text: "Use pnpm.", updatedAt: 2_000, bivyNote: true }), "imported");
+  assert.equal(readAgentInstructions(dir).bivyNote, true);
+  // A peer that predates the switch sends no bivyNote: the note was always on there.
+  assert.equal(mergeSyncedAgentInstructions(dir, { text: "Use pnpm.", updatedAt: 3_000 }), "unchanged");
+
+  // Off with no text leaves nothing to send, and no composed file behind.
+  const file = sessionInstructions(dir)!.file;
+  writeAgentInstructions(dir, "", 4_000, false);
+  assert.equal(sessionInstructions(dir), undefined);
+  assert.equal(fs.existsSync(file), false);
 });
 
 test("instructions over the size limit are rejected", () => {

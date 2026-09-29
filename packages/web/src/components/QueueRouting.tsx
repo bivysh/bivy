@@ -12,6 +12,7 @@
 // work run". Gated by EPHEMERAL_MACHINES_ENABLED, same as before.
 import { useEffect, useState } from "react";
 import { ephemeralCatalogEntry, type AccountNode, type EphemeralNodeConfig, type HostedProvisioningStatus, type ProviderKeyInfo, type QueueRouting } from "@bivy/core";
+import { Toggle } from "./Toggle.js";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -34,23 +35,6 @@ const QUEUE_TTL_OPTIONS = [
   { v: 60, label: "1 hour" },
   { v: 180, label: "3 hours" },
 ];
-
-/** Local switch — mirrors the Settings Toggle so this module stays self-contained. */
-function Toggle({ checked, onChange, disabled, label }: { checked: boolean; onChange: (v: boolean) => void; disabled?: boolean; label?: string }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      disabled={disabled}
-      className={`settings-toggle${checked ? " on" : ""}`}
-      onClick={() => onChange(!checked)}
-    >
-      <span className="settings-toggle-knob" aria-hidden />
-    </button>
-  );
-}
 
 export function QueueRoutingSection({
   hosted,

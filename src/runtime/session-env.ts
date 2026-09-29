@@ -8,7 +8,7 @@ import type { SessionInstructions } from "./types.js";
 // own shell can resolve its chat session without being told the id.
 // `bivy attach <path>` (bin/bivy.mjs's cmdAttach) reads $BIVY_SESSION_ID to know
 // which session to post an outbound attachment to — see
-// claude-code.ts's BIVY_ATTACH_SYSTEM_PROMPT for the discoverability half of this
+// BIVY_AGENT_NOTE (src/agent-instructions.ts) for the discoverability half of this
 // feature (issue #288 shipped attach; issue #290 is making it universal). One
 // helper, one env-var name, so a new adapter can't independently invent — or
 // simply forget — its own convention.
