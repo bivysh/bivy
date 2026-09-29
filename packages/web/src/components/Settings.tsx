@@ -157,28 +157,26 @@ function AccountUsage({ meter, action }: { meter: NonNullable<AccountHeaderView[
       <div className="meter" role="meter" aria-label={meter.label} aria-valuemin={0} aria-valuemax={meter.limit} aria-valuenow={meter.used} aria-valuetext={`${meter.used} of ${meter.limit}${note ? ` — ${note.toLowerCase()}` : ""}`} data-state={meter.state}>
         <span className="meter-fill" style={{ width: `${(meter.used / meter.limit) * 100}%` }} />
       </div>
-      {(note || action) && (
-        <div className="settings-account-usage-row">
-          <span className="settings-account-usage-status">
-            {note && <span className="settings-account-usage-note">{note}</span>}
-            {meter.freesNote && <span>{meter.freesNote}</span>}
-          </span>
-          {action && (
-            <button
-              type="button"
-              className="btn sm primary"
-              disabled={busy}
-              onClick={() => {
-                setBusy(true);
-                setErr(null);
-                controller.invokeAccountExtensionAction(action.id)
-                  .then(({ url }) => openAccountAction(url))
-                  .catch((e) => setErr(String(e?.message || e)))
-                  .finally(() => setBusy(false));
-              }}
-            >{busy ? "Opening…" : action.label}</button>
-          )}
-        </div>
+      {note && (
+        <span className="settings-account-usage-status">
+          <span className="settings-account-usage-note">{note}</span>
+          {meter.freesNote && <span>{meter.freesNote}</span>}
+        </span>
+      )}
+      {action && (
+        <button
+          type="button"
+          className="btn primary block"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            setErr(null);
+            controller.invokeAccountExtensionAction(action.id)
+              .then(({ url }) => openAccountAction(url))
+              .catch((e) => setErr(String(e?.message || e)))
+              .finally(() => setBusy(false));
+          }}
+        >{busy ? "Opening…" : action.label}</button>
       )}
       {err && <div className="banner inline" data-tone="danger">{err}</div>}
     </div>
