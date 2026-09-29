@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Setup checks and the confirmation that the user can send a message.
+// Setup checks until setup passes (then GetStarted takes this slot).
 
 import type { Activation, ActivationCheckState, ActivationRemediationKind } from "@bivy/core";
 
@@ -24,11 +24,7 @@ export function ReadinessChecklist({
   onRemediate?: Partial<Record<ActivationRemediationKind, () => void>>;
   onDismiss?: () => void;
 }) {
-  if (activation.activated) return (
-    <section className="readiness" role="status" aria-label="Setup readiness">
-      <div className="banner inline" data-tone="ok">You're all ready to send a message.</div>
-    </section>
-  );
+  if (activation.activated) return null;
 
   const next = activation.nextAction;
   const handler = next && onRemediate ? onRemediate[next.kind] : undefined;
