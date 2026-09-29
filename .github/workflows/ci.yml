@@ -54,7 +54,6 @@ jobs:
       pull-requests: read
     outputs:
       tier: ${{ steps.tier.outputs.tier }}
-      consumer_os: ${{ steps.tier.outputs.consumer_os }}
       # A release tier touches only versions and notes, so no area filter fires.
       root: ${{ steps.tier.outputs.tier != 'release' && steps.filter.outputs.root || 'false' }}
       web: ${{ steps.tier.outputs.tier != 'release' && steps.filter.outputs.web || 'false' }}
@@ -68,7 +67,10 @@ jobs:
       # rather than mutable major-version tags.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # The release-only check diffs against the base; history without
+          # every old blob is enough.
           fetch-depth: 0
+          filter: blob:none
       - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
@@ -147,7 +149,6 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           CI_CHANGED: ${{ steps.filter.outputs.common }}
-          INSTALLER_CHANGED: ${{ steps.filter.outputs.installer }}
           QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
         run: |
           # A version bump (manifest versions + CHANGELOG.md only) carries code
@@ -170,121 +171,98 @@ jobs:
           else
             tier=gate
           fi
-          # The npm consumer runs on Linux for every app change; macOS joins in
-          # the full tier and whenever packaging inputs change.
-          if [ "$tier" = full ] || [ "$INSTALLER_CHANGED" = true ]; then
-            consumer_os='["ubuntu-latest","macos-latest"]'
-          else
-            consumer_os='["ubuntu-latest"]'
-          fi
           echo "tier=$tier" >> "$GITHUB_OUTPUT"
-          echo "consumer_os=$consumer_os" >> "$GITHUB_OUTPUT"
           echo "CI tier: $tier" >> "$GITHUB_STEP_SUMMARY"
 
-  # The root checks used to share one runner: nine independent commands ran
-  # back-to-back while three of the box's four cores sat idle, and the unit
-  # suite ran unsharded at the end. Setup was merged into one job to avoid
-  # paying checkout+install repeatedly, but that traded ~23s of setup for ~170s
-  # of serialisation.
-  #
-  # They are separate lanes again, because for a public repository extra runners
-  # are free and run at the same time. Setup is now the floor on each lane, so it
-  # is a shared composite action that also restores a warm cache (see
-  # .github/actions/setup). Every lane below is a leaf: nothing depends on it
-  # except ci-ok, so they all start at once.
+  # Lanes are sized around two limits. A free plan runs at most 20 jobs at once
+  # across every workflow, and each lane pays ~15s of checkout and install. When
+  # one run fanned out to ~20 small lanes it queued behind its own jobs for
+  # 40-50s, and far longer when another PR was also running. So cheap checks
+  # share a runner and run concurrently on its four cores (scripts/ci-parallel.mjs),
+  # and only the suites long enough to set the critical path (unit, browser) are
+  # sharded. A typical app change runs nine lanes, so two PRs fit side by side.
+  # Every lane below is a leaf: nothing depends on it except ci-ok, so they all
+  # start at once.
 
-  # Policy and metadata checks. Seconds of work each, no build needed.
-  policy:
+  # Policy, docs links, lint, both typecheckers and the web build with its
+  # bundle budget. Lint and tsc are incremental (warm cache below), so none of
+  # these takes longer than the setup it shares.
+  static:
     needs: changes
-    if: needs.changes.outputs.tier != 'gate' || needs.changes.outputs.root == 'true'
-    name: Policy checks
+    if: needs.changes.outputs.tier != 'gate' || needs.changes.outputs.root == 'true' || needs.changes.outputs.docs == 'true'
+    name: Static checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # check-links only uses node:fs/node:path, so the runner's own Node does,
+      # and a docs-only change needs no install.
+      - name: Docs links
+        if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.docs == 'true'
+        run: node scripts/check-links.mjs
       - uses: ./.github/actions/setup
-      # Verify the transitive security pins actually took effect on disk, and
-      # that package.json (which resolves the published npm artifact) and
-      # pnpm-workspace.yaml (which resolves what CI tests) declare the same ones.
-      # See scripts/check-security-pins.mjs.
-      - run: pnpm run check:pins
-      # Production dependencies ship to users; do not release an unreviewed
-      # high/critical advisory. audit:prod applies the documented narrow
-      # allowlist in scripts/audit-prod.mjs.
-      - run: pnpm run audit:prod
-      - run: pnpm run check:licenses
-      - run: pnpm run check:secrets -- --current-only
-      - run: pnpm run check:boundaries
-      - run: pnpm run check:routes
-      - run: pnpm run check:design
-      - run: pnpm run certification:check
-      # Release notes collect under [Unreleased] until `pnpm release` tags
-      # main; release.yml publishes that section as the GitHub release body.
-      - run: grep -q '^## \[Unreleased\]' CHANGELOG.md || { echo "::error::CHANGELOG.md needs a '## [Unreleased]' section."; exit 1; }
-
-  # ESLint, with its cache restored. A warm run only lints changed files, which
-  # takes it from ~24s to ~2s; a cold one is no slower than before.
-  lint:
-    needs: changes
-    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
-    name: Lint
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/setup
+        if: needs.changes.outputs.tier != 'gate' || needs.changes.outputs.root == 'true'
         with:
-          cache-name: lint
-      - run: pnpm run lint
-
-  # Both typecheckers, incrementally and at the same time as each other. They
-  # are independent tsc invocations, so running them in sequence just added the
-  # smaller one's time to the lane.
-  types:
-    needs: changes
-    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
-    name: Types
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/setup
-        with:
-          cache-name: types
-      - name: typecheck + typecheck:web
-        run: |
-          pnpm run typecheck & root=$!
-          pnpm run typecheck:web & web=$!
-          # Wait for both and fail if either did, rather than letting the last
-          # one's status decide the step.
-          failed=0
-          wait $root || failed=1
-          wait $web || failed=1
-          exit $failed
+          cache-name: static
+      # check:pins verifies the transitive security pins actually took effect on
+      # disk, and that package.json (which resolves the published npm artifact)
+      # and pnpm-workspace.yaml (which resolves what CI tests) declare the same
+      # ones. audit:prod blocks unreviewed high/critical advisories in
+      # production dependencies, with the narrow allowlist in
+      # scripts/audit-prod.mjs. Release notes collect under [Unreleased] until
+      # `pnpm release` tags main; release.yml publishes that section.
+      - name: Policy checks
+        if: needs.changes.outputs.tier != 'gate' || needs.changes.outputs.root == 'true'
+        run: >-
+          node scripts/ci-parallel.mjs
+          "pnpm run check:pins"
+          "pnpm run audit:prod"
+          "pnpm run check:licenses"
+          "pnpm run check:secrets -- --current-only"
+          "pnpm run check:boundaries"
+          "pnpm run check:routes"
+          "pnpm run check:design"
+          "pnpm run certification:check"
+          "grep -q '^## \[Unreleased\]' CHANGELOG.md || { echo 'CHANGELOG.md needs a ## [Unreleased] section.'; exit 1; }"
+      # Emitting the PWA bundle also catches imports tsc --noEmit can miss.
+      - name: Lint, types, web build + bundle budget
+        if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
+        run: >-
+          node scripts/ci-parallel.mjs
+          "pnpm run lint"
+          "pnpm run typecheck"
+          "pnpm run typecheck:web"
+          "pnpm run build:web && node scripts/check-bundle-size.mjs"
 
   # The node unit suites, split across runners. The whole set is ~300 suites and
   # parallelises almost perfectly (it measured 98% efficient on one 4-core box),
-  # so it scales with cores, and four free runners give four times as many as
-  # one. On a pull request each shard first narrows to the suites the change can
-  # actually reach; the merge queue and nightly always run everything, so a
-  # suite the selection misses still gates the merge.
+  # so it scales with runners. On a pull request each shard first narrows to the
+  # suites the change can actually reach; the merge queue and nightly always run
+  # everything, so a suite the selection misses still gates the merge. The core
+  # package's vitest suite rides along on the first shard.
   unit:
     needs: changes
     if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
-    name: Unit tests (${{ matrix.shard }}/4)
+    name: Unit tests (${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        include:
+          - shard: 1
+            core: true
+          - shard: 2
+          - shard: 3
     env:
-      TEST_SHARD: ${{ matrix.shard }}/4
+      TEST_SHARD: ${{ matrix.shard }}/3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Change selection diffs against the merge base, which needs history.
+          # Change selection diffs against the merge base, which needs history
+          # but only file names, so skip downloading every old blob.
           fetch-depth: 0
+          filter: blob:none
       - uses: ./.github/actions/setup
         with:
           cache-name: unit-${{ matrix.shard }}
@@ -316,65 +294,53 @@ jobs:
       # Within the runner, independent suites run across its CPUs while suites
       # with a shared port are serialized (scripts/run-tests.mjs).
       - run: pnpm run test:unit -- ${{ steps.select.outputs.args }}
+      - run: pnpm run test:core
+        if: matrix.core
       # The loader's transform cache is content-addressed, so entries accumulate
       # across runs. Cap it before the warm cache is saved. After the suites, so
       # this run always had a fully warm cache.
       - run: node scripts/prune-ts-cache.mjs
         if: always()
 
-  core:
-    needs: changes
-    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
-    name: Core suite
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/setup
-      - run: pnpm run test:core
-
-  # Initial-bundle budget (B4b): fail if the PWA entry chunk grows past its
-  # raw/gzip ceiling. The long-transcript budget runs in the unit suite.
-  web-build:
-    needs: changes
-    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
-    name: Web build + bundle budget
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: ./.github/actions/setup
-        with:
-          cache-name: web-build
-      - run: pnpm run build:web && node scripts/check-bundle-size.mjs
-
-  # Build the platform-independent release package. Emitting JavaScript and
+  # Build the platform-independent release package, then install that exact
+  # curated npm tarball into a fresh consumer project. Emitting JavaScript and
   # curating the package catches cross-boundary imports that tsc --noEmit can
-  # miss.
-  root-release:
+  # miss; the consumer catches release-only dependency/audit, native-module,
+  # README metadata, and built-in Pi discovery regressions, which ordinary
+  # source changes cause too. One lane, so the Linux consumer never waits on an
+  # artifact upload.
+  package:
     needs: changes
     if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
-    name: Release package
+    name: Release package + npm consumer (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22.19.0'
-          cache: pnpm
-      - run: pnpm install --filter @bivy/bivy --frozen-lockfile
+      - uses: ./.github/actions/setup
       # Pack the exact npm payload; unlike the fallback archive it needs no
       # excluded package-lock.
       - run: node scripts/build-release.mjs --npm-pack release-artifact
-      - name: Upload release package for consumer tests
+      # Only the macOS consumer and the clean installer, which run when
+      # packaging inputs change, consume the package from another runner.
+      - name: Upload release package for packaging lanes
+        if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.installer == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-package
           path: release-artifact/bivy-npm.tgz
           if-no-files-found: error
           retention-days: 1
+      # Cache registry downloads, never node_modules or an installed Bivy. The
+      # consumer project remains fresh and executes all package lifecycle hooks.
+      - name: Cache consumer downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: consumer-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('package.json', 'pnpm-lock.yaml') }}
+          restore-keys: consumer-downloads-${{ runner.os }}-${{ runner.arch }}-
+      - name: Verify fresh npm consumers
+        run: node scripts/smoke-release.mjs --artifact release-artifact/bivy-npm.tgz
 
   # The Supported promise on every certified OS family. The Linux fixtures also
   # run in the unit suite; this lane adds macOS and runs in the full tier.
@@ -390,41 +356,27 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22.19.0'
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - uses: ./.github/actions/setup
       - run: pnpm run certification:check
       - run: pnpm exec tsx test/agent-certification.test.ts
 
-  # Install the exact curated npm tarball into a fresh consumer project on both
-  # supported desktop OS families. This catches release-only dependency/audit,
-  # native-module, README metadata, and built-in Pi discovery regressions, which
-  # ordinary source changes cause too, so Linux runs for every app change.
-  release-consumer:
-    # Prepare the consumer while root-release builds. The bounded artifact
-    # wait below replaces the whole-job dependency; ci-ok still gates both jobs.
+  # The same fresh npm consumer on macOS, when packaging inputs change and in
+  # the full tier. It prepares while the package lane builds; the bounded
+  # artifact wait below replaces a whole-job dependency.
+  release-consumer-macos:
     needs: changes
     permissions:
       contents: read
       actions: read
-    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
-    name: Release consumer (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: ${{ fromJSON(needs.changes.outputs.consumer_os) }}
-    runs-on: ${{ matrix.os }}
+    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.installer == 'true'
+    name: Release consumer (macOS)
+    runs-on: macos-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '22.19.0'
-      # Cache registry downloads, never node_modules or an installed Bivy. Both
-      # consumer projects remain fresh and execute all package lifecycle hooks.
       - name: Cache consumer downloads
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -484,7 +436,7 @@ jobs:
         if: always()
         run: bash scripts/installer-smoke-guest.sh cleanup
 
-  # The browser suite runs whenever the app changes. It is ~120 tests and ~310
+  # The browser suite runs whenever the app changes. It is ~150 tests and ~370
   # test-seconds; a single 4-worker runner spent 90s on it, so it is split the
   # same way as the unit suite. Playwright's own --shard balances by file.
   browser:
@@ -500,12 +452,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
+      # Key the browser on Playwright's own version, not the whole lockfile, so
+      # an unrelated dependency bump does not re-download it on every shard.
+      - name: Playwright version
+        id: playwright
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
       - name: Cache Chromium
         id: chromium
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
-          key: chromium-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('pnpm-lock.yaml') }}
+          key: chromium-${{ runner.os }}-${{ runner.arch }}-${{ steps.playwright.outputs.version }}
       # Install fonts as well as shared libraries: a successful browser launch
       # alone does not guarantee the screenshot environment matches baselines.
       # --with-deps shells out to apt every time, so on a cache hit (the browser
@@ -527,20 +484,6 @@ jobs:
             test-results/**
           if-no-files-found: error
           retention-days: 14
-
-  # Cheap, dependency-free check: no install is needed because check-links only
-  # uses node:fs/node:path. Its own filter keeps docs-only feedback fast.
-  docs-links:
-    needs: changes
-    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.docs == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22.19.0'
-      - run: node scripts/check-links.mjs
 
   # Service checks use separate runners so control-plane verification does not
   # block relay feedback. They are cheap and path-filtered, so they run in every
@@ -611,36 +554,28 @@ jobs:
       - run: npm run --if-present test:unit
         working-directory: services/relay
 
-  # Remote-path and X25519 pairing suites run on separate runners to keep each
-  # suite's service ports isolated. They run whenever the node, core or services
-  # change.
+  # The remote-path and X25519 pairing suites each start their own control
+  # plane and relay on free ports, so they run side by side on one runner. They
+  # run whenever the node, core or services change.
   remote-e2e:
     needs: changes
     if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.e2e == 'true'
-    name: ${{ matrix.name }}
+    name: Remote path + X25519 pairing e2e
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: Remote path e2e
-            script: test/remote-e2e.ts
-          - name: X25519 pairing e2e
-            script: test/remote-pairing-e2e.ts
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22.19.0'
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: npm ci
-        working-directory: services/control-plane
-      - run: npm ci
-        working-directory: services/relay
-      - run: pnpm exec tsx ${{ matrix.script }}
+      - uses: ./.github/actions/setup
+      - name: Install services
+        run: >-
+          node scripts/ci-parallel.mjs
+          "npm ci --prefix services/control-plane"
+          "npm ci --prefix services/relay"
+      - name: Remote e2e suites
+        run: >-
+          node scripts/ci-parallel.mjs
+          "pnpm exec tsx test/remote-e2e.ts"
+          "pnpm exec tsx test/remote-pairing-e2e.ts"
 
   # Single gate for branch protection. Always runs, and passes only if no needed
   # job failed or was cancelled. A skipped job means its area was untouched or
@@ -649,18 +584,13 @@ jobs:
     if: ${{ always() }}
     needs:
       - changes
-      - policy
-      - lint
-      - types
+      - static
       - unit
-      - core
-      - web-build
-      - root-release
+      - package
       - agent-certification
-      - release-consumer
+      - release-consumer-macos
       - installer-smoke
       - browser
-      - docs-links
       - control-plane
       - relay
       - remote-e2e

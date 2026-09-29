@@ -9,6 +9,12 @@ updates:
         dependency-type: production
       development-dependencies:
         dependency-type: development
+    # typescript-eslint does not support TypeScript 7 yet, so the grouped bump
+    # failed lint on every rebase and held up the rest of the group. Take the
+    # major by hand once lint supports it.
+    ignore:
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
 
   - package-ecosystem: npm
     directory: /services/control-plane
