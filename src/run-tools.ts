@@ -148,7 +148,9 @@ export class RunDelegationService {
       const expectedSource = input.idempotencyKey ? delegationSource(sessionId, provenance.parentRunId, provenance.depth, input.idempotencyKey) : undefined;
       const existing = expectedSource ? recent.find((r) => r.source === expectedSource) : undefined;
       if (existing) return safeRun(existing, provenance);
-      const active = recent.filter((r) => parseDelegationSource(r.source)?.parentSessionId === sessionId && !TERMINAL.has(r.status as DelegatedRunStatus)).length;
+      // A parked child (needs_attention) runs nothing until a person acts, so it
+      // doesn't hold one of the parent's concurrent slots.
+      const active = recent.filter((r) => parseDelegationSource(r.source)?.parentSessionId === sessionId && !SETTLED.has(r.status as DelegatedRunStatus)).length;
       if (active >= RUN_TOOL_LIMITS.maxConcurrentChildren) throw new Error(`concurrent child Run limit (${RUN_TOOL_LIMITS.maxConcurrentChildren}) reached`);
       const raw = await this.backend.start(sessionId, input, provenance);
       const value = safeRun(raw, provenance);
