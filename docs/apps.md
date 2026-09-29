@@ -191,6 +191,14 @@ The link works for 24 hours, until **Revoke access** in the Apps sheet, until
 the app is removed, or until the machine restarts. People who open it can leave
 reviewer notes, which come back under the view in **Apps**.
 
+People who open a share link see a small **Made with Bivy** strip under the app,
+linking to bivy.sh. Your own previews never show it. A machine can turn it off
+with `bivy config set sessions.previewBadge false` (or `BIVY_PREVIEW_BADGE=0`).
+On a hosted account that works on the plans the deployment allows; a control
+plane lists them in `BIVY_PREVIEW_BADGE_HIDE_PLANS` (for example
+`individual,pro,team`), and when that is unset every machine decides for itself,
+which is the self-hosted default.
+
 > **Security:** a share link is a bearer capability. **Anyone who has the link
 > can use the app, including its live backend, until it expires or you revoke
 > it.** Posting it in a thread, issue or chat gives it to everyone who can read

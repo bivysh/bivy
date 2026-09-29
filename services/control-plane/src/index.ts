@@ -3166,6 +3166,17 @@ function nodePublicRun(run: AutomationRun) {
   return metadata;
 }
 
+// "Made with Bivy" on shared previews: which account plans may hide it
+// (comma-separated, e.g. "individual,pro,team"). Unset, every account may — a
+// deployment without plans leaves the choice to each machine's setting.
+const PREVIEW_BADGE_HIDE_PLANS = (process.env.BIVY_PREVIEW_BADGE_HIDE_PLANS ?? "").split(",").map((plan) => plan.trim()).filter(Boolean);
+app.get("/node/preview-badge", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  if (!PREVIEW_BADGE_HIDE_PLANS.length) return res.json({ hideAllowed: true });
+  const account = await store.getAccount(node.accountId);
+  res.json({ hideAllowed: Boolean(account && PREVIEW_BADGE_HIDE_PLANS.includes(account.plan)) });
+}));
+
 app.get("/node/automation-runs", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 30));

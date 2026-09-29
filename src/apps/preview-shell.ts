@@ -82,11 +82,16 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
 #compare[data-drawing] #compare-slider, #compare[data-drawing] #compare-hint, #compare[data-drawing] #compare-draw { display:none; }
 .label-narrow { display:none; }
 @media (max-width: 699px) { #lens { display:none; } #name { display:none; } .label-wide { display:none; } .label-narrow { display:inline; } }
+/* "Made with Bivy": a quiet strip under a shared app, never over it. */
+#made-with { flex-shrink:0; display:flex; align-items:center; justify-content:center; gap:var(--space-1); min-height:var(--space-6); padding:0 var(--space-3) env(safe-area-inset-bottom); box-sizing:border-box; background:var(--surface); border-top:thin solid var(--line); color:var(--muted); font-size:var(--text-xs); text-decoration:none; }
+#made-with:hover, #made-with:focus-visible { color:var(--ink); }
+body.badged #dock { bottom:calc(var(--space-2) + var(--space-6) + env(safe-area-inset-bottom)); }
 [hidden] { display:none !important; }
 </style></head><body>
 <div class="banner" data-tone="warn" id="down" hidden><span class="banner-text" id="down-text" role="status"></span><span class="banner-actions"><button class="btn sm" id="ask" hidden>Ask agent to fix</button></span></div>
 <p id="status" role="status">Opening app…</p>
 <div id="stage" data-lens="full"><iframe id="app" title="App preview" hidden sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups" referrerpolicy="no-referrer"></iframe></div>
+<a id="made-with" href="https://bivy.sh/?ref=preview" target="_blank" rel="noopener" hidden>Made with <strong>Bivy</strong><span aria-hidden="true">↗</span><span class="sr-only"> (opens in a new tab)</span></a>
 <div id="ink" hidden aria-hidden="true"><svg id="ink-marks"></svg></div>
 <div id="dock">
   <section class="panel" id="console" hidden aria-labelledby="console-title">
@@ -158,6 +163,8 @@ function show(data,launch){
     $('draft-text').maxLength=1000;
     $('send-errors').textContent='Leave a note…';
   }
+  $('made-with').hidden=!data.badge;
+  document.body.classList.toggle('badged',Boolean(data.badge));
   $('title').textContent=data.name;
   $('title').title=data.name;
   document.title='Bivy · '+data.name;

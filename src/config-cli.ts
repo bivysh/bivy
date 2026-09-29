@@ -118,6 +118,7 @@ const ENV_FOR_KEY: Record<string, string> = {
   "defaults.approval": "BIVY_APPROVAL_MODE",
   "sessions.autoAttachToolImages": "BIVY_AUTO_ATTACH_TOOL_IMAGES",
   "sessions.appScreenshots": "BIVY_APP_SCREENSHOTS",
+  "sessions.previewBadge": "BIVY_PREVIEW_BADGE",
   "automation.checks": "BIVY_AUTOMATION_CHECKS",
   "automation.checkTimeoutMinutes": "BIVY_AUTOMATION_CHECK_TIMEOUT_MS",
 };
@@ -134,6 +135,7 @@ const BUILTIN_VALUES: Record<string, unknown> = {
   "sessions.resume": "auto",
   "sessions.autoAttachToolImages": false,
   "sessions.appScreenshots": false,
+  "sessions.previewBadge": true,
   "automation.checks": ["test", "lint", "typecheck"],
   "automation.checkTimeoutMinutes": 10,
 };

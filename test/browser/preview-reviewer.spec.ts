@@ -20,9 +20,15 @@ for (const theme of themes) test(`public preview sends annotations as notes with
     if (route.request().url().includes('/__bivy/')) return route.fulfill({ status: 503 });
     return route.fulfill({ contentType: 'text/html', body: `<h1>Review this app</h1><button>Buy a ticket</button><script>${inspectorScript(origin, true)}</script>` });
   });
-  await context.addInitScript(() => sessionStorage.setItem('bivy-preview', JSON.stringify({ name: 'Public website preview', origin: 'http://preview.test', reviewer: true })));
+  await context.addInitScript(() => sessionStorage.setItem('bivy-preview', JSON.stringify({ name: 'Public website preview', origin: 'http://preview.test', reviewer: true, badge: true })));
   await page.goto(`${origin}/shell`);
   await expect(page.getByRole('button', { name: 'Draw', exact: true })).toBeVisible();
+  // "Made with Bivy" sits under the app, and the floating tools stay clear of it.
+  const badge = page.getByRole('link', { name: /Made with Bivy/ });
+  await expect(badge).toHaveAttribute('href', 'https://bivy.sh/?ref=preview');
+  const [bar, tools, stage] = await Promise.all([badge.boundingBox(), page.locator('#dock nav').boundingBox(), page.locator('#stage').boundingBox()]);
+  expect(tools!.y + tools!.height).toBeLessThanOrEqual(bar!.y);
+  expect(stage!.y + stage!.height).toBeLessThanOrEqual(bar!.y);
   await expect(page.locator('#back')).toBeHidden();
   await expect(page.locator('#mic')).toBeHidden();
   await expect(page.locator('#compare-btn')).toBeHidden();
