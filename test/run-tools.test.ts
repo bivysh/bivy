@@ -103,3 +103,14 @@ test("a finished child's answer comes back once, from the machine that ran it, b
   failing.advance(RUN_TOOL_LIMITS.minPollMs);
   assert.equal((await failing.service.getRunStatus("parent", child.runId)).status, "failed", "an unreachable answer never hides the outcome");
 });
+
+test("a child parked by its machine's policy ends the wait and explains why", async () => {
+  const { service, runs, backend } = fixture();
+  backend.answer = async () => "The delegated agent failed: missing credentials";
+  const started = await service.startRun("parent", { instructions: "x", machine: "linux-box" });
+  runs.get(started.runId)!.status = "needs_attention";
+  const waited = await service.waitForRun("parent", started.runId, 5);
+  assert.equal(waited.status, "needs_attention");
+  assert.equal(waited.timedOut, undefined, "returned at once, not after the timeout");
+  assert.equal(waited.answer, "The delegated agent failed: missing credentials");
+});

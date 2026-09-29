@@ -47,6 +47,9 @@ export interface RunDelegationBackend {
 }
 
 const TERMINAL = new Set<DelegatedRunStatus>(["succeeded", "failed", "cancelled"]);
+// Parked by the node's policy (usage limit, missing credentials): it won't
+// progress without a person, so waiting ends there and the reason comes back.
+const SETTLED = new Set<DelegatedRunStatus>([...TERMINAL, "needs_attention"]);
 const STATUSES = new Set<DelegatedRunStatus>(["pending", "claimed", "running", "waiting", "needs_attention", "succeeded", "failed", "cancelled"]);
 const SOURCE_PREFIX = "agent-delegation:v1:";
 const bounded = (v: unknown, n: number): string | undefined => typeof v === "string" && v ? v.slice(0, n) : undefined;
@@ -124,7 +127,7 @@ export class RunDelegationService {
     const provenance = raw ? parseDelegationSource(raw.source) : undefined;
     if (!raw || provenance?.parentSessionId !== sessionId) throw new Error("delegated Run not found");
     const value = safeRun(raw, provenance);
-    if (TERMINAL.has(value.status) && this.backend.answer) {
+    if (SETTLED.has(value.status) && this.backend.answer) {
       // Best-effort: an unreachable machine still leaves status + references.
       const answer = cached?.value.answer ?? await this.backend.answer(raw).catch(() => undefined);
       if (answer) value.answer = answer.length > RUN_TOOL_LIMITS.maxAnswer ? `${answer.slice(0, RUN_TOOL_LIMITS.maxAnswer - 1)}…` : answer;
@@ -163,7 +166,7 @@ export class RunDelegationService {
     while (true) {
       if (signal?.aborted) throw signal.reason ?? new Error("wait cancelled; the child Run may still be running");
       const result = await this.authorized(sessionId, runId, true);
-      if (TERMINAL.has(result.status)) return result;
+      if (SETTLED.has(result.status)) return result;
       if (this.now() >= deadline) return { ...result, timedOut: true, wait: { timedOut: true, childContinues: true } };
       await this.sleep(Math.min(RUN_TOOL_LIMITS.minPollMs, Math.max(1, deadline - this.now())), signal);
     }

@@ -2506,7 +2506,8 @@ async function cmdDelegate(args = []) {
     if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
     return data;
   };
-  const terminal = (run) => ["succeeded", "failed", "cancelled"].includes(run?.status);
+  // needs_attention = parked by the machine's policy; it won't move on its own.
+  const terminal = (run) => ["succeeded", "failed", "cancelled", "needs_attention"].includes(run?.status);
   // The node caps one wait at 300s; loop until the child ends or our budget does.
   const waitFor = async (runId, seconds) => {
     const deadline = Date.now() + seconds * 1000;
