@@ -40,7 +40,10 @@ type Behavior =
   // Turn ends with NO assistant text but a failing agent_end (non-zero code)
   // plus an agent_output stderr line — e.g. an unauthenticated CLI. exec must
   // surface the stderr and exit non-zero, not report a silent empty success.
-  | "fail-no-text-with-code";
+  | "fail-no-text-with-code"
+  // The runtime seals a failed turn (usage limit) as an assistant message with
+  // stopReason "error", then a plain agent_end — as ProtocolRuntime does.
+  | "turn-error-message";
 
 /** Records the parsed body of the last POST /api/session, so tests can assert
  *  which fields (name/model/workspace) exec sends to the daemon. */
@@ -78,6 +81,9 @@ async function withFakeDaemon(behavior: Behavior, fn: (url: string, probe: Creat
           } else if (behavior === "fail-no-text-with-code") {
             send({ type: "tool_execution_update", toolName: "agent_output", toolCallId: "agent-output", input: { stream: "stderr", output: "Error: Not signed in. Run: grok login" } });
             send({ type: "agent_end", code: 1 });
+          } else if (behavior === "turn-error-message") {
+            send({ type: "message_end", message: { role: "assistant", content: "", stopReason: "error", errorMessage: "You've hit your usage limit." } });
+            send({ type: "agent_end" });
           } else {
             send({ type: "message_start", message: { role: "assistant", content: "" } });
             send({ type: "message_update", message: { role: "assistant", content: "the full answer" } });
@@ -156,6 +162,14 @@ await check("exits non-zero and surfaces stderr when a turn ends with no text bu
     assert.notEqual(code, 0, `a failed turn with no output must exit non-zero, got ${code}`);
     assert.equal(stdout.trim(), "", `stdout should stay empty on failure, got ${JSON.stringify(stdout)}`);
     assert.ok(stderr.includes("Not signed in"), `stderr should carry the agent's error, got ${JSON.stringify(stderr)}`);
+  });
+});
+
+await check("exits non-zero with the runtime's error when it seals the turn as failed", async () => {
+  await withFakeDaemon("turn-error-message", async (url) => {
+    const { code, stderr } = await runExec(url);
+    assert.notEqual(code, 0);
+    assert.ok(stderr.includes("usage limit"), `stderr should carry the turn error, got ${JSON.stringify(stderr)}`);
   });
 });
 

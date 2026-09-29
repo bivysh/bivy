@@ -109,6 +109,57 @@ await check("acp: observed tool activity never opens a misleading approval", asy
   }
 });
 
+await check("acp: a sub-agent session nests under its delegating call and keeps its prose out of the reply", async () => {
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_SUBAGENT = "1";
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: __dirname, piDir: __dirname, sessionsDir: __dirname });
+    const { session } = await runtime.createSession({ workspace: __dirname, toolInterceptor: async () => undefined });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    await session.prompt("delegate");
+    await waitFor(events, (event) => event.type === "agent_end");
+    const spawn = events.find((event) => event.type === "tool_result" && event.toolCallId === "sub1") as any;
+    assert.equal(spawn?.detail?.kind, "delegation", "the retitled spawn call still classifies as a delegation");
+    const child = events.find((event) => event.type === "tool_call" && event.toolCallId === "child-tool") as any;
+    assert.equal(child?.parentToolUseId, "sub1", "the child's tool nests under the spawn call");
+    const text = events.filter((e) => e.type === "message_update").map((e) => (e as any).message?.content).filter((c: unknown) => typeof c === "string").join("");
+    assert.doesNotMatch(text, /child prose/);
+    const persisted = session.getMessages().flatMap((m: any) => (Array.isArray(m.content) ? m.content : []));
+    assert.equal(persisted.find((b: any) => b.id === "child-tool")?.parentToolUseId, "sub1", "nesting survives a reopen");
+    session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_SUBAGENT;
+  }
+});
+
+await check("acp: an approved edit's own fs write is applied without a second approval", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-acp-edit-"));
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_APPROVED_EDIT_PATH = path.join(tmp, "math.js");
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: tmp, piDir: tmp, sessionsDir: tmp, sandbox: "workspace-write" });
+    const decisions: string[] = [];
+    const { session } = await runtime.createSession({ workspace: tmp, toolInterceptor: async (ctx) => { decisions.push(ctx.toolName); } });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    await session.prompt("edit");
+    await waitFor(events, (event) => event.type === "agent_end");
+    assert.deepEqual(decisions, ["edit"], "one decision for one edit");
+    assert.equal(fs.readFileSync(path.join(tmp, "math.js"), "utf8"), "edited");
+    session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_APPROVED_EDIT_PATH;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 await check("acp: a tool's output that streamed before the closing frame survives in the result", async () => {
   // Regression: opencode's execute tool streams stdout in an in_progress
   // tool_call_update and closes with an empty `completed` frame. The shim must
@@ -234,6 +285,8 @@ await check("acp: confines and approval-gates filesystem writes", async () => {
     await opened.session.prompt("write");
     await waitFor(events, (event) => event.type === "agent_end");
     assert.equal(fs.readFileSync(path.join(tmp, "inside.txt"), "utf8"), "written by ACP fixture");
+    const write = events.find((event) => event.type === "tool_call" && event.toolName === "write") as any;
+    assert.ok(events.some((event) => event.type === "tool_result" && event.toolCallId === write?.toolCallId), "the write card closes instead of spinning forever");
     opened.session.dispose();
 
     fs.rmSync(resultDump, { force: true });

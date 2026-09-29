@@ -28,7 +28,22 @@ type Args = {
   prompt: string;
   json: boolean;
   timeoutMs: number;
+  help: boolean;
 };
+
+const USAGE = `Usage: bivy exec [options] "<prompt>"   (or pipe the prompt on stdin, or pass -)
+
+One-shot headless turn: prints the final answer to stdout, progress to stderr.
+
+  -a, --agent <id>       Agent to run (default: the node's default agent)
+  -m, --model <model>    Model id, bare or provider-qualified (gpt-5.6-sol, openai-codex/gpt-5.6-sol)
+  -n, --name <label>     Session name
+  -w, --workspace <dir>  Workspace directory
+      --session <ref>    Continue an existing session instead of starting one
+      --json             Print {"sessionId","answer"} instead of plain text
+      --timeout <sec>    Give up after this many seconds (default 600)
+  -h, --help             Show this help
+`;
 
 const err = (s: string) => process.stderr.write(s);
 
@@ -41,6 +56,7 @@ function parseArgs(argv: string[]): Args {
   let name: string | undefined;
   let workspace: string | undefined;
   let json = false;
+  let help = false;
   let timeoutMs = Number(process.env.BIVY_EXEC_TIMEOUT_MS) || 10 * 60 * 1000;
   const prompt: string[] = [];
   for (let i = 0; i < argv.length; i++) {
@@ -60,10 +76,11 @@ function parseArgs(argv: string[]): Args {
     else if ((arg === "-w" || arg === "--workspace") && argv[i + 1]) workspace = argv[++i];
     else if (arg.startsWith("--workspace=")) workspace = arg.slice("--workspace=".length);
     else if (arg === "--json") json = true;
+    else if (arg === "-h" || arg === "--help") help = true;
     else if (arg === "--timeout" && argv[i + 1]) timeoutMs = Number(argv[++i]) * 1000;
     else prompt.push(arg);
   }
-  return { url: url.replace(/\/+$/, ""), token, agent, model, session, name, workspace, prompt: prompt.join(" "), json, timeoutMs };
+  return { url: url.replace(/\/+$/, ""), token, agent, model, session, name, workspace, prompt: prompt.join(" "), json, timeoutMs, help };
 }
 
 function authHeaders(token?: string): Record<string, string> {
@@ -113,10 +130,14 @@ async function readStdin(): Promise<string> {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.help) {
+    process.stdout.write(USAGE);
+    return;
+  }
   let prompt = args.prompt.trim();
   if (prompt === "-" || (!prompt && !process.stdin.isTTY)) prompt = (await readStdin()).trim();
   if (!prompt) {
-    err('Usage: bivy exec "<prompt>"  (or pipe the prompt on stdin)\n');
+    err(USAGE);
     process.exit(2);
   }
 
@@ -130,7 +151,7 @@ async function main() {
       });
       sessionId = opened.id;
     } else {
-      const created = await api<{ id: string }>(args.url, args.token, "/api/session", {
+      const created = await api<{ id: string; model?: { provider?: string; id?: string } | null }>(args.url, args.token, "/api/session", {
         method: "POST",
         body: JSON.stringify({
           ...(args.agent ? { agent: args.agent } : {}),
@@ -145,6 +166,15 @@ async function main() {
         }),
       });
       sessionId = created.id;
+      // The node binds the model best-effort and keeps the agent's default when
+      // it can't; say so instead of silently answering on another model.
+      const model = created.model;
+      if (args.model && model?.id) {
+        const qualified = !model.provider || model.id.startsWith(`${model.provider}/`) ? model.id : `${model.provider}/${model.id}`;
+        if (![model.id, qualified].some((id) => id === args.model || id.endsWith(`/${args.model}`))) {
+          err(`Model "${args.model}" is not available for this agent; using ${qualified}.\n`);
+        }
+      }
     }
   } catch (error) {
     err(`Could not start a session: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -160,6 +190,9 @@ async function main() {
   // Last stderr the agent surfaced (auth failures, crashes). Carried so a turn
   // that ends with no assistant text can explain WHY instead of printing empty.
   let lastStderr = "";
+  // A runtime that fails a turn (usage limit, provider error) seals it with an
+  // assistant message marked stopReason "error" before a normal agent_end.
+  let turnError = "";
 
   const finish = (code: number, errorText?: string) => {
     if (settled) return;
@@ -207,6 +240,8 @@ async function main() {
       if (ev.type === "message_start" || ev.type === "message_update" || ev.type === "message_end") {
         const text = assistantText(ev);
         if (text) answer = text; // events carry the full message text so far
+        const message = ev.message as { stopReason?: unknown; errorMessage?: unknown } | undefined;
+        if (message?.stopReason === "error" && typeof message.errorMessage === "string") turnError = message.errorMessage.trim();
       } else if (ev.type === "tool_execution_update" && ev.toolName === "agent_output") {
         const input = (ev.input || {}) as Record<string, unknown>;
         if (input.stream === "stderr" && typeof input.output === "string" && input.output.trim()) {
@@ -219,10 +254,12 @@ async function main() {
         // non-zero). Printing an empty answer with exit 0 would report a silent
         // false success to a script. Surface the failure instead: prefer an
         // explicit error string, then the last stderr line, then the exit code.
-        const errText = typeof ev.error === "string" && ev.error.trim() ? ev.error.trim() : undefined;
+        const errText = typeof ev.error === "string" && ev.error.trim() ? ev.error.trim() : turnError || undefined;
         const code = typeof ev.code === "number" ? ev.code : undefined;
         const failed = !!errText || (code !== undefined && code !== 0);
-        if (!answer.trim() && failed) {
+        // A turn the runtime itself marked failed is a failure even when some
+        // prose streamed before the error.
+        if (turnError || (!answer.trim() && failed)) {
           finish(1, errText || lastStderr || `The agent produced no output (exit code ${code ?? "unknown"}).`);
         } else {
           finish(0);

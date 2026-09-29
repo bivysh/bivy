@@ -10,6 +10,7 @@
 
 import type { CommandEntries } from "../protocol/command-registry.js";
 import type { AgentRuntime } from "../runtime/index.js";
+import type { RuntimeMessage } from "../runtime/types.js";
 import type { SessionRecord } from "../session/record.js";
 import { buildForkBundle, type ForkBundle, type ForkPlan, type ForkRecord } from "../session/fork.js";
 import { captureDirtyPatch, captureWorkspaceDirtyPatch, captureWorkspaceSnapshot } from "../session/fork-dirty.js";
@@ -27,8 +28,9 @@ export interface ForkCommandMessage {
 /** Everything the fork handlers reach into the daemon for. Kept explicit so the
  *  cluster's coupling to server.ts is visible (and injectable in tests). */
 export interface ForkCommandDeps {
-  /** Emit to the requesting device (server wraps `relay?.sendEvent`). */
-  sendEvent(event: unknown): void;
+  /** The session's conversation as the node knows it. A reopened protocol
+   *  session's runtime transcript can be empty while the node's log holds it. */
+  forkMessages(rec: SessionRecord): readonly RuntimeMessage[];
   /** Emit to every connected device (server's `broadcast`). */
   broadcast(event: unknown): void;
   resolveSession(sessionId: unknown): SessionRecord | undefined;
@@ -47,7 +49,7 @@ export interface ForkCommandDeps {
 
 export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCommandMessage> {
   return {
-    async "session.fork.retire-source"(msg) {
+    async "session.fork.retire-source"(msg, ctx) {
       // Retire a MOVE's source once its destination is confirmed (1A). Gated (won't
       // retire without newSessionId) and idempotent (safe for the client to retry),
       // so a crashed-mid-move client can't orphan the source or lose it. Emits the
@@ -58,23 +60,23 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
       try {
         const outcome = await deps.retireSource({ sourceSessionId, newSessionId });
         if (!outcome.ok) {
-          deps.sendEvent({ type: "session.fork.error", requestId, sessionId: sourceSessionId || undefined, error: outcome.error });
+          ctx.reply({ type: "session.fork.error", requestId, sessionId: sourceSessionId || undefined, error: outcome.error });
           return;
         }
         if (outcome.retired) deps.broadcast({ type: "session.deleted", sessionId: sourceSessionId });
-        deps.sendEvent({ type: "session.fork.retired", requestId, sourceSessionId, newSessionId, alreadyGone: outcome.alreadyGone });
+        ctx.reply({ type: "session.fork.retired", requestId, sourceSessionId, newSessionId, alreadyGone: outcome.alreadyGone });
       } catch (error) {
-        deps.sendEvent({ type: "session.fork.error", requestId, sessionId: sourceSessionId || undefined, error: error instanceof Error ? error.message : String(error) });
+        ctx.reply({ type: "session.fork.error", requestId, sessionId: sourceSessionId || undefined, error: error instanceof Error ? error.message : String(error) });
       }
     },
-    async "session.fork.export"(msg) {
+    async "session.fork.export"(msg, ctx) {
       // Source side of a session fork: package the session's transcript +
       // portable metadata + any uncommitted worktree changes into an E2E
       // bundle the client carries to the destination node.
       const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
       const rec = deps.resolveSession(msg.sessionId);
       if (!rec) {
-        deps.sendEvent({ type: "session.fork.error", requestId, error: "Session not found on this node." });
+        ctx.reply({ type: "session.fork.error", requestId, error: "Session not found on this node." });
         return;
       }
       try {
@@ -105,13 +107,13 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
         // When the client has already picked a target agent, pass it so the
         // bundle omits the native payload for a cross-runtime fork (it could
         // never be replayed there — see buildForkBundle). Unset => keep it.
-        const bundle = buildForkBundle({ runtime: deps.getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, workspaceSnapshot, targetRuntimeId: deps.agentFrom(msg), liveMessages: rec.session.getMessages(), state: deps.forkInFlightState(rec) });
-        deps.sendEvent({ type: "session.fork.bundle", requestId, bundle });
+        const bundle = buildForkBundle({ runtime: deps.getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, workspaceSnapshot, targetRuntimeId: deps.agentFrom(msg), liveMessages: deps.forkMessages(rec), state: deps.forkInFlightState(rec) });
+        ctx.reply({ type: "session.fork.bundle", requestId, bundle });
       } catch (error) {
-        deps.sendEvent({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
+        ctx.reply({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
       }
     },
-    async "session.fork.import"(msg) {
+    async "session.fork.import"(msg, ctx) {
       // Destination side of a fork: rebuild the repo/worktree, materialise the
       // transcript into the (possibly different) target runtime — full fidelity
       // for a same-runtime fork, a seeded continuation prompt otherwise — and
@@ -120,7 +122,7 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
       const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
       const bundle = msg.bundle as ForkBundle | undefined;
       if (!bundle?.record || !bundle.normalized) {
-        deps.sendEvent({ type: "session.fork.error", requestId, error: "Malformed fork bundle." });
+        ctx.reply({ type: "session.fork.error", requestId, error: "Malformed fork bundle." });
         return;
       }
       try {
@@ -144,15 +146,15 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
             : {}),
         });
         if (!outcome.ok) {
-          deps.sendEvent({ type: "session.fork.error", requestId, error: outcome.error, missing: outcome.missing });
+          ctx.reply({ type: "session.fork.error", requestId, error: outcome.error, missing: outcome.missing });
           return;
         }
-        deps.sendEvent(deps.forkDoneEvent(requestId, outcome.record, outcome.plan, outcome.missing));
+        ctx.reply(deps.forkDoneEvent(requestId, outcome.record, outcome.plan, outcome.missing));
       } catch (error) {
-        deps.sendEvent({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
+        ctx.reply({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
       }
     },
-    async "session.fork.local"(msg) {
+    async "session.fork.local"(msg, ctx) {
       // Fast path: fork a session on the SAME node and SAME runtime WITHOUT
       // round-tripping the transcript out to the client and back. We build the
       // fork bundle in-process and stand the new session
@@ -163,7 +165,7 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
       const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
       const rec = deps.resolveSession(msg.sessionId);
       if (!rec) {
-        deps.sendEvent({ type: "session.fork.error", requestId, error: "Session not found on this node." });
+        ctx.reply({ type: "session.fork.error", requestId, error: "Session not found on this node." });
         return;
       }
       try {
@@ -181,7 +183,7 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
           ? captureWorkspaceSnapshot(sourceCwd, { maxBytes: deps.forkWorkspaceMaxBytes() })
           : undefined;
         // Same runtime → the bundle carries the native payload → full fidelity.
-        const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, workspaceSnapshot, targetRuntimeId: rec.runtimeId, liveMessages: rec.session.getMessages(), state: deps.forkInFlightState(rec) });
+        const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, workspaceSnapshot, targetRuntimeId: rec.runtimeId, liveMessages: deps.forkMessages(rec), state: deps.forkInFlightState(rec) });
         // Cut a fresh fork branch (the source still holds its own); skip prereq
         // detection (same node + same runtime ⇒ agent and repo are present).
         const outcome = await deps.standUpFork({
@@ -193,12 +195,12 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
           fallback: { workspace: rec.workspace, cwd: rec.session.cwd || rec.worktree?.path || rec.workspace },
         });
         if (!outcome.ok) {
-          deps.sendEvent({ type: "session.fork.error", requestId, error: outcome.error, missing: outcome.missing });
+          ctx.reply({ type: "session.fork.error", requestId, error: outcome.error, missing: outcome.missing });
           return;
         }
-        deps.sendEvent(deps.forkDoneEvent(requestId, outcome.record, outcome.plan, outcome.missing));
+        ctx.reply(deps.forkDoneEvent(requestId, outcome.record, outcome.plan, outcome.missing));
       } catch (error) {
-        deps.sendEvent({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
+        ctx.reply({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
       }
     },
   };

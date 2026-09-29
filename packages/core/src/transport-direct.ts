@@ -906,8 +906,9 @@ export class DirectTransport implements Transport {
           break;
         }
         default:
-          // Terminal I/O rides the raw WS in direct mode.
-          if (String(obj.kind || "").startsWith("terminal.") && this.connected && this.ws?.readyState === 1) {
+          // Terminal I/O and fork/move requests ride the raw WS in direct mode
+          // (fork has no REST route; the node answers on this socket).
+          if (/^(terminal|session\.fork)\./.test(String(obj.kind || "")) && this.connected && this.ws?.readyState === 1) {
             this.ws.send(JSON.stringify(obj));
           }
       }

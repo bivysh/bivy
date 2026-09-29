@@ -40,6 +40,9 @@ export type MetadataSession = {
   sandbox?: string;
   /** Preserve the session's approval policy when reopening or rebuilding. */
   approvalMode?: string;
+  /** The model the session last ran on, restored on reopen for runtimes that
+   *  only learn it from the next reply. */
+  model?: { provider: string; id: string };
   credentialLabels?: Record<string, string>;
   agentName?: string;
   status?: string;
