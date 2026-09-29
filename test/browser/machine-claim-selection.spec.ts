@@ -27,6 +27,12 @@ test("enrollment selects the claimed machine, not another online machine", async
     if (failPolling) return route.fulfill({ status: 503, json: {} });
     return route.fulfill({ json: [{ ...claim, status: used ? "used" : "pending", ...(used ? { nodeId: "new" } : {}) }] });
   });
+  // Claims poll every 3s and nodes every 4s. Advance the clock instead of
+  // waiting on real timers, repeatedly: a poll only schedules the next one once
+  // its (real) request settles, so a single jump can land before that timer.
+  const advanceUntil = (ms: number, check: () => Promise<void>) =>
+    expect(async () => { await page.clock.runFor(ms); await check(); }).toPass();
+  await page.clock.install();
   await page.goto(origin);
   await expect(page.getByRole("button", { name: "Copy install command" })).toBeVisible();
   await page.evaluate(async () => {
@@ -35,13 +41,13 @@ test("enrollment selects the claimed machine, not another online machine", async
     controller.switchNode = (id: string) => { document.body.dataset.selectedNode = id; };
   });
   failPolling = true;
-  await expect(page.getByRole("alert")).toContainText("Retrying automatically", { timeout: 10_000 });
+  await advanceUntil(3_000, () => expect(page.getByRole("alert")).toContainText("Retrying automatically", { timeout: 500 }));
   await expect(page.getByRole("button", { name: "Copy install command" })).toBeVisible();
   failPolling = false;
   used = true;
-  await expect(page.getByText("Machine enrolled. Waiting for it to come online…")).toBeVisible({ timeout: 10_000 });
+  await advanceUntil(3_000, () => expect(page.getByText("Machine enrolled. Waiting for it to come online…")).toBeVisible({ timeout: 500 }));
   await expect(page.getByRole("button", { name: "Copy install command" })).toHaveCount(0);
   expect(await page.locator("body").getAttribute("data-selected-node")).toBeNull();
   online = true;
-  await expect(page.locator("body")).toHaveAttribute("data-selected-node", "new", { timeout: 10_000 });
+  await advanceUntil(4_000, () => expect(page.locator("body")).toHaveAttribute("data-selected-node", "new", { timeout: 500 }));
 });

@@ -1,0 +1,16 @@
+{
+  "nodeKeypair": {
+    "publicKeyB64": "wYsZ6gVVwpAB03hNFH9U4ydeLDLhCgxJuO-9Y9uIUj0",
+    "privateKeyB64": "MC4CAQAwBQYDK2VuBCIEIJDgl70aLV90s8DRbwDn0zSvqR7dKZ1HsT8eqJ4mHqZl"
+  },
+  "roomKeyB64": "ij8PiyAh2Le3c/Z2HMwrrVzf1+ig5/cDAVN/dTvuVbI=",
+  "devices": [
+    {
+      "id": "lnkdev_48704dbf-5158-4918-bdcc-ae829fd4a2ea",
+      "publicKeyB64": "MzZeHsKuKhWsNLrWDqwucq92u4tQrbh6_eNiofLKp2w",
+      "label": "Device",
+      "createdAt": "2026-09-29T04:39:38.296Z",
+      "lastSeenAt": "2026-09-29T04:39:38.296Z"
+    }
+  ]
+}

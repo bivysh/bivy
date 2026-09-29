@@ -51,6 +51,12 @@ export default defineConfig({
   // Public-repository Linux runners have four vCPUs; Playwright's default
   // uses only half of them.
   workers: process.env.CI ? "100%" : undefined,
+  // Spread a file's tests across workers, so --shard balances by test rather
+  // than by file and one long file no longer sets a shard's wall clock. Each
+  // worker keeps its own dev server (fixtures.ts), and every test already gets
+  // a fresh browser context. A file whose tests share state opts back into
+  // serial mode with test.describe.configure.
+  fullyParallel: true,
   timeout: 30_000,
   expect: { timeout: 5_000 },
   use: {

@@ -25,7 +25,22 @@ const run = (command) =>
     const child = spawn(command, { shell: true, stdio: ["ignore", "pipe", "pipe"] });
     child.stdout.on("data", (chunk) => chunks.push(chunk));
     child.stderr.on("data", (chunk) => chunks.push(chunk));
-    child.on("close", (code, signal) => {
+    // Finish when the command exits, not when its pipes close: a suite that
+    // leaves a spawned service behind would otherwise hold stdout open forever.
+    // The short grace period lets output already written drain first.
+    let finished = false;
+    child.on("exit", (code, signal) => {
+      const finish = () => {
+        if (finished) return;
+        finished = true;
+        child.stdout.destroy();
+        child.stderr.destroy();
+        report(code, signal);
+      };
+      child.on("close", finish);
+      setTimeout(finish, 1000);
+    });
+    const report = (code, signal) => {
       const ok = code === 0;
       const seconds = ((Date.now() - started) / 1000).toFixed(1);
       process.stdout.write(`::group::${ok ? "✓" : "✗"} ${command} (${seconds}s)\n`);
@@ -33,7 +48,7 @@ const run = (command) =>
       process.stdout.write("::endgroup::\n");
       if (!ok) process.stdout.write(`::error::${command} failed (${signal ?? `exit ${code}`})\n`);
       resolve(ok);
-    });
+    };
   });
 
 const results = await Promise.all(commands.map(run));

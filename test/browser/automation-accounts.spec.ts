@@ -231,7 +231,9 @@ test("unavailable accounts remain visible and can be cleared", async ({ page }) 
 
 });
 
-for (const source of ['github', 'linear']) {
+// GitHub and Linear share one editor path (continueWithSource), so one source
+// covers both.
+for (const source of ['github']) {
   test(`editing the second ${source} automation preserves its identity`, async ({page}) => {
     const current = await fixture(page, 'light', false, source, {multiple:true});
     await expect(page.getByRole('textbox',{name:'Name',exact:true})).toHaveValue('Daily review');

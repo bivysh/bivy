@@ -23,7 +23,7 @@ packages:
 # package users actually get.
 overrides:
   # Patched URI normalization/SSRF advisories; retain the existing major.
-  fast-uri: 3.1.6
+  fast-uri: 3.1.8
   # Patched query/body parsing and static-output traversal advisories.
   hono: 4.13.5
   qs: 6.16.0
