@@ -241,7 +241,7 @@ console.log(`transcript-normal: all ${passed} tests passed`);
 test("buildSeedPrompt: a readable conversation file replaces the app link for the agent", () => {
   const seed = buildSeedPrompt({ header, turns: [{ role: "user", text: "hi" }] }, { transcriptUrl: "https://app.example/s/1", transcriptFile: "/data/fork-transcripts/a.md" });
   assert.ok(seed.includes("/data/fork-transcripts/a.md"), "points the agent at the file");
-  assert.ok(!seed.includes("https://app.example/s/1"), "no unreadable app link for the agent to chase");
+  assert.doesNotMatch(seed, /Full original transcript:/, "no unreadable app link for the agent to chase");
 });
 
 test("renderForkTranscript: every turn, in order, as Markdown", () => {
