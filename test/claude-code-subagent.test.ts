@@ -125,4 +125,20 @@ async function newSession() {
   assert.equal(parent?.tool?.parentToolUseId, undefined, "reloaded delegation stays top-level");
 }
 
+// ── Informational banners (SDK 0.3.283+ system/informational): a hook's block
+//    reason or a warning shows as a chat notice and survives a reload; "info"
+//    level (transcript-mode-only upstream) stays out of the chat ──
+{
+  const { session, queries, events } = await newSession();
+  await session.prompt("edit the config");
+  await waitFor(() => queries.length === 1);
+  const q = queries[0]!;
+  q.emit({ type: "system", subtype: "informational", level: "warning", content: "PreToolUse hook blocked Edit: config is read-only" });
+  q.emit({ type: "system", subtype: "informational", level: "info", content: "Loaded 3 skills" });
+  await waitFor(() => events.some((e) => e.type === "session.notice"));
+  assert.deepEqual(events.filter((e) => e.type === "session.notice").map((e) => e.message), ["PreToolUse hook blocked Edit: config is read-only"]);
+  const reloaded = renderHistory(session.getMessages() as any[]);
+  assert.deepEqual(reloaded.filter((e) => e.role === "system").map((e) => e.text), ["PreToolUse hook blocked Edit: config is read-only"]);
+}
+
 console.log("ok claude-code sub-agent nesting");

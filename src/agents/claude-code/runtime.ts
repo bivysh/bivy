@@ -1353,6 +1353,17 @@ class ClaudeSession implements RuntimeSession {
         // for the model, not the human — don't forward them as chat. (init still
         // falls through so its capabilities/commands reach the client.)
         if (message?.subtype === "task_notification" || message?.subtype === "compact_boundary") break;
+        // Banners Claude Code shows the user: a hook's block reason, slash-command
+        // output, warnings (SDK 0.3.283+). Show them as the chat's system notice
+        // and keep them in the transcript; "info" is transcript-mode-only upstream.
+        if (message?.subtype === "informational") {
+          const text = typeof message.content === "string" ? message.content.trim() : "";
+          if (text && message.level !== "info") {
+            this.messages.push({ role: "system", content: text, timestamp: Date.now() });
+            this.emit({ type: "session.notice", level: message.level === "warning" ? "warning" : "info", message: text });
+          }
+          break;
+        }
         this.emit({ type: String(message?.type ?? "unknown"), raw: message });
         break;
       }
