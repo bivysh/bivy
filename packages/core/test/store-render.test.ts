@@ -155,3 +155,19 @@ describe("renderHistory block interleaving", () => {
     expect(entries.filter((e) => e.role === "user")).toHaveLength(1);
   });
 });
+
+describe("renderHistory entry ids", () => {
+  it("keeps every row's id across a re-render and an appended turn, and never repeats one", () => {
+    const app = { appId: "a".repeat(32), sessionId: "s", name: "Storefront" };
+    const turn = [
+      { role: "user", content: "Build the storefront" },
+      { role: "assistant", content: [{ type: "thinking", thinking: "Plan" }, { type: "text", text: "Starting." }, { type: "tool_use", name: "bash", input: { command: "ls" } }, { type: "bivy_app", app }] },
+    ];
+    const first = renderHistory(turn).map((e) => e.id);
+    const next = renderHistory([...turn, { role: "user", content: "Again" }, { role: "assistant", content: [{ type: "bivy_app", app }] }]).map((e) => e.id);
+    expect(next.slice(0, first.length)).toEqual(first);
+    // The same id the live app_published event gives the card.
+    expect(first).toContain(`app-${app.appId}`);
+    expect(new Set(next).size).toBe(next.length);
+  });
+});

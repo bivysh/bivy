@@ -3,7 +3,7 @@
 // Markdown/text/transcript-render helpers for the session store. Split out of
 // store.ts so the reducer keeps only state-folding logic. These turn raw node
 // `content`/`messages` into the TranscriptEntry[] the view renders; they hold no
-// state beyond the shared `nextId` sequence.
+// state beyond the shared `nextId` sequence (history entries use positional ids).
 
 import { isToolResultBlock, isToolUseBlock, toolCallId, toolDetail, toolInput, toolName, toolParentId } from "./tool-activity.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
@@ -147,7 +147,7 @@ function toolResultText(content: any): string {
   return contentToText(content);
 }
 
-export function toolEntriesFromContent(content: any, parentToolUseId?: string): ToolActivity[] {
+export function toolEntriesFromContent(content: any, parentToolUseId?: string, makeId: () => string = nextId): ToolActivity[] {
   if (!Array.isArray(content)) return [];
   const out: ToolActivity[] = [];
   for (const block of content) {
@@ -156,7 +156,7 @@ export function toolEntriesFromContent(content: any, parentToolUseId?: string): 
       // display grouping hint, so a missing id simply leaves the call top-level.
       const parent = toolParentId(block) || parentToolUseId || "";
       out.push({
-        callId: toolCallId(block) || nextId(),
+        callId: toolCallId(block) || makeId(),
         name: toolName(block),
         input: toolInput(block),
         status: "running",
@@ -222,7 +222,13 @@ export function embeddedAttachments(value: unknown): PromptAttachment[] {
 export function renderHistory(messages: any[]): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
   const toolImages = new Set<string>();
+  // Ids come from where an entry sits in the history, not a counter: history
+  // only grows at the end, so a re-render (after a turn, a reconnect, a
+  // resync) keeps every row's React key and nothing on screen remounts.
+  let index = -1, slot = 0;
+  const historyId = () => `h${index}.${slot++}`;
   for (const msg of messages || []) {
+    index++; slot = 0;
     const role = String(msg?.role || "assistant").toLowerCase();
     const content = msg?.content;
     const text = contentToText(content);
@@ -236,17 +242,17 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
       if (Array.isArray(content)) {
         for (const block of content) {
           if (isToolResultBlock(block)) {
-            for (const tool of toolEntriesFromContent([block])) mergeToolInto(entries, tool);
+            for (const tool of toolEntriesFromContent([block], undefined, historyId)) mergeToolInto(entries, tool, historyId);
           }
         }
       }
       const attachments = embeddedAttachments(content);
-      if ((text && !isMetaText(text)) || attachments.length) entries.push({ id: nextId(), role: "user", text, ...(attachments.length ? { attachments } : {}) });
+      if ((text && !isMetaText(text)) || attachments.length) entries.push({ id: historyId(), role: "user", text, ...(attachments.length ? { attachments } : {}) });
     } else if (role === "system") {
-      if (text && !isMetaText(text)) entries.push({ id: nextId(), role: "system", text });
+      if (text && !isMetaText(text)) entries.push({ id: historyId(), role: "system", text });
     } else if (role === "toolresult" || role === "tool_result") {
       const tool = toolEntryFromToolResultMessage(msg);
-      if (tool) mergeToolInto(entries, tool);
+      if (tool) mergeToolInto(entries, tool, historyId);
     } else {
       // Claude's Agent SDK stamps every persisted message it generated inside a
       // `Task` sub-agent with a message-level parent_tool_use_id; carry it onto
@@ -264,13 +270,13 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
         if (!trimmed) return;
         entries.push(
           looksLikeAgentError(trimmed)
-            ? { id: nextId(), role: "error", text: humanizeError(trimmed) }
-            : { id: nextId(), role: "assistant", text: trimmed },
+            ? { id: historyId(), role: "error", text: humanizeError(trimmed) }
+            : { id: historyId(), role: "assistant", text: trimmed },
         );
       };
       const pushThinking = (t: string) => {
         const trimmed = t.trim();
-        if (trimmed) entries.push({ id: nextId(), role: "thinking", text: trimmed });
+        if (trimmed) entries.push({ id: historyId(), role: "thinking", text: trimmed });
       };
       if (typeof content === "string" || !Array.isArray(content)) {
         pushText(text);
@@ -283,10 +289,11 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
         for (const block of content) {
           if (isToolUseBlock(block) || isToolResultBlock(block)) {
             flushRuns();
-            for (const tool of toolEntriesFromContent([block], msgParent)) mergeToolInto(entries, tool);
+            for (const tool of toolEntriesFromContent([block], msgParent, historyId)) mergeToolInto(entries, tool, historyId);
           } else if (block?.type === APP_PUBLICATION_BLOCK && isAppReference(block.app)) {
             flushRuns();
-            entries.push({ id: nextId(), role: "assistant", text: "", app: block.app });
+            // The live app_published event's id, so the card survives the reload.
+            entries.push({ id: `app-${block.app.appId}`, role: "assistant", text: "", app: block.app });
           } else if (block?.type === SUGGESTION_BLOCK && isTaskSuggestion(block.suggestion)) {
             flushRuns();
             entries.push({ id: block.suggestion.id, role: "assistant", text: "", suggestion: block.suggestion });
@@ -302,7 +309,7 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
             flushRuns();
             const createdAt = typeof msg?.createdAt === "number" ? msg.createdAt : undefined;
             entries.push({
-              id: nextId(),
+              id: historyId(),
               role: "assistant",
               text: typeof block.caption === "string" ? block.caption : "",
               attachments: [{ ...attachmentFromRef(block.ref, { createdAt, artifact: block.artifact }), description: typeof block.caption === "string" ? block.caption : undefined }],
@@ -328,7 +335,7 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
       // Without this it reloaded as a blank turn — the "looks done, no reply"
       // gap. Render it as an inline error so history matches the live view.
       if (msg?.stopReason === "error" && typeof msg?.errorMessage === "string" && msg.errorMessage.trim()) {
-        entries.push({ id: nextId(), role: "error", text: humanizeError(msg.errorMessage) });
+        entries.push({ id: historyId(), role: "error", text: humanizeError(msg.errorMessage) });
       }
     }
     // Raw tool results and their Bivy overlays can contain the same image.
@@ -344,9 +351,16 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
           toolImages.add(key);
           return true;
         });
-        if (attachments.length) entries.push({ id: nextId(), role: "assistant", text: "", attachments });
+        if (attachments.length) entries.push({ id: historyId(), role: "assistant", text: "", attachments });
       }
     }
+  }
+  // Cards keep their own ids (an app, a review), which history may repeat.
+  const seen = new Map<string, number>();
+  for (const entry of entries) {
+    const n = seen.get(entry.id) ?? 0;
+    seen.set(entry.id, n + 1);
+    if (n) entry.id = `${entry.id}~${n}`;
   }
   return entries;
 }
@@ -391,7 +405,7 @@ function mergeToolInput(prev: unknown, next: unknown): unknown {
   return next ?? prev;
 }
 
-export function mergeToolInto(entries: TranscriptEntry[], tool: ToolActivity): void {
+export function mergeToolInto(entries: TranscriptEntry[], tool: ToolActivity, makeId: () => string = nextId): void {
   // A few CLIs omit the call id on result events. Pair an anonymous result with
   // the newest still-running call of the same tool (or, when the tool name is
   // the generic fallback, the newest running call). This keeps the universal
@@ -419,6 +433,6 @@ export function mergeToolInto(entries: TranscriptEntry[], tool: ToolActivity): v
       input: tool.status === "running" ? mergeToolInput(existing.tool.input, tool.input) : existing.tool.input,
     };
   } else {
-    entries.push({ id: nextId(), role: "assistant", text: "", tool });
+    entries.push({ id: makeId(), role: "assistant", text: "", tool });
   }
 }
