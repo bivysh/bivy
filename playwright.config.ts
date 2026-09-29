@@ -31,6 +31,7 @@ const mobileSpecs = [
   "**/review-card.spec.ts",
   "**/notify-offer.spec.ts",
   "**/followup-new-session.spec.ts",
+  "**/suggestion-card.spec.ts",
 ];
 
 // Mobile-specific specs whose mobile run does everything the desktop run does

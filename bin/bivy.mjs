@@ -1827,7 +1827,7 @@ function cmdCompletions(args = []) {
   const shell = (args[0] || "").toLowerCase();
   const commands = [
     "run", "runs", "sessions", "ls", "resume", "promote", "rename", "nodes", "agent", "agents", "agents:install", "shim", "takeover", "token", "exec",
-    "send", "attach", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "capabilities", "logs", "login", "logout", "signout", "provider", "model",
+    "send", "attach", "suggest", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "capabilities", "logs", "login", "logout", "signout", "provider", "model",
     "update", "update:log", "audit", "automation", "config", "plugin", "open", "service", "secrets", "voice", "link", "relay:setup",
     "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
   ];
@@ -2426,6 +2426,40 @@ async function cmdAttach(args = []) {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) { console.error(c.red(`Attach failed (${res.status}): ${body?.error || "unknown error"}`)); process.exit(1); return; }
   console.log(c.green(`Attached ${body.name} (${body.kind}, ${body.size} bytes) to the chat.`));
+}
+
+// `bivy suggest "<task>" [--title "…"] [--session <id>]` — propose a task the
+// user can start in one tap, beside this session or in it. For an agent
+// offering next steps: write the task as a complete instruction.
+async function cmdSuggest(args = []) {
+  const flagsWithValue = new Set(["--session", "--title"]);
+  const flag = (name) => {
+    const i = args.indexOf(name);
+    return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
+  };
+  const text = args.filter((a, i) => !a.startsWith("-") && !(i > 0 && flagsWithValue.has(args[i - 1]))).join(" ").trim();
+  const sessionId = resolveAttachSessionId({ sessionFlag: flag("--session"), env: process.env });
+  if (!text) { console.error(c.red('Usage: bivy suggest "<task>" [--title "short label"] [--session <id>]')); process.exit(1); return; }
+  if (!sessionId) { console.error(c.red("No session id. Set --session <id> or run inside an agent session ($BIVY_SESSION_ID).")); process.exit(1); return; }
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) { console.error(c.red(`Could not reach the Bivy node at ${url(config)}.`)); process.exit(1); return; }
+  let token;
+  try { token = await localDeviceToken(config); } catch { token = undefined; }
+  let res;
+  try {
+    res = await fetch(`${url(config)}/api/session/${encodeURIComponent(sessionId)}/suggest`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ text, title: flag("--title") }),
+    });
+  } catch (error) {
+    console.error(c.red(`Could not reach the Bivy node: ${error?.message || String(error)}`));
+    process.exit(1);
+    return;
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) { console.error(c.red(`Suggest failed (${res.status}): ${body?.error || "unknown error"}`)); process.exit(1); return; }
+  console.log(c.green("Suggested in the chat. The user can start it in one tap."));
 }
 
 // Universal app publishing: every agent that can write JSON and run a command
@@ -5418,6 +5452,9 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       break;
     case "attach":
       await cmdAttach(args);
+      break;
+    case "suggest":
+      await cmdSuggest(args);
       break;
     case "completions":
     case "completion":

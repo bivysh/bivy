@@ -18,6 +18,7 @@ get shell completion.
 | Delegate one-off unattended work with checks and a Receipt | `bivy runs start "…"` |
 | Continue an existing session non-interactively | `bivy send <id> "…"` |
 | Send a file/image from the agent into the chat | `bivy attach <file>` |
+| Propose a task the user can start in one tap | `bivy suggest "<task>"` |
 | Stop a session | `bivy kill <id>` |
 | Sign this machine into my Bivy account | `bivy login` |
 | Sign this machine out | `bivy logout` |
@@ -329,6 +330,24 @@ before; the flag only adds a badge in the Artifacts sheet.
 bivy attach ./out/chart.png --caption "Revenue by month"
 bivy attach report.pdf
 bivy attach coverage/index.html --artifact --caption "Coverage report"
+```
+
+### `bivy suggest "<task>" [--title "…"] [--session <id>]`
+
+Posts a **suggested task** card into the chat: a task the agent proposes (a next
+step, an idea, one of several options). The user starts it with one tap —
+**Start in new session** runs it beside the current session (same project,
+agent, model and safety; a git checkout gets its own worktree), **Do it here**
+sends it to this session, and a run of several cards offers **Run all in
+parallel**. Like `bivy attach`, it is meant to be run by the agent itself and
+finds the session through `$BIVY_SESSION_ID`.
+
+Write the task as a complete instruction with paths relative to the project
+root: it becomes the first message of a session that works in its own copy.
+`--title` is the short label on the card.
+
+```bash
+bivy suggest "Add a GET /version endpoint that returns the package version and git commit." --title "Add /version"
 ```
 
 ### `bivy takeover <termId|session-id>`
