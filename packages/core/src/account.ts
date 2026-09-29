@@ -510,6 +510,9 @@ export interface AccountExtensionView {
   meter?: { label: string; used: number; limit: number; freesAt?: string };
   facts?: Array<{ id: string; label: string; value: string }>;
   actions?: Array<{ id: string; label: string; kind?: "primary" | "secondary" }>;
+  /** One line shown with the actions — e.g. what upgrading gets you. Hidden
+   *  wherever the actions are hidden. */
+  actionHint?: string;
 }
 
 export interface AccountMe {

@@ -2341,6 +2341,7 @@ function AccountPanel() {
               </div>
             ))}
           </div>
+          {extensionActions.length > 0 && me.extension.actionHint?.trim() && <p className="muted">{me.extension.actionHint.trim()}</p>}
           {extensionActions.length > 0 && <div className="card-actions">
             {extensionActions.map((action) => (
               <button
