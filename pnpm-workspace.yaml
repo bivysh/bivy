@@ -28,7 +28,7 @@ overrides:
   hono: 4.13.5
   qs: 6.16.0
   "@hono/node-server": 2.0.12
-  "@modelcontextprotocol/sdk": 1.30.0
+  "@modelcontextprotocol/sdk": 1.30.1
   brace-expansion: 5.0.12
   # nanoid < 3.3.18 (via postcss → vite, a build-time dep): a custom generator
   # loops forever when size is 0 (GHSA-2v37-7h3g-55p8). Not reachable through our
@@ -37,12 +37,12 @@ overrides:
   # Mermaid's Chevrotain dependencies pin vulnerable lodash-es exactly.
   # Fix GHSA-r5fr-rjxr-66jc and GHSA-f23m-r3pf-42rh across that subtree.
   lodash-es: 4.18.1
-  undici: 8.10.2
+  undici: 8.11.2
   # npm expresses these as a nested object under the parent package; pnpm uses a
   # `parent>child` selector. Same intent: pi-coding-agent ships an npm-shrinkwrap
   # pinning vulnerable copies below its own node_modules.
   "@earendil-works/pi-coding-agent>brace-expansion": 5.0.12
-  "@earendil-works/pi-coding-agent>undici": 8.10.2
+  "@earendil-works/pi-coding-agent>undici": 8.11.2
 
 # pnpm does not run a dependency's install scripts unless it is listed here.
 # Each `true` is arbitrary code we let run at install time, so every entry is a
