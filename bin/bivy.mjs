@@ -2466,7 +2466,7 @@ async function cmdSuggest(args = []) {
 // self-contained task from this session to another agent, optionally on another
 // account machine, and get its answer back. Agent-agnostic — any agent with a
 // shell can call it — and meant for when the user asks for another agent/machine.
-const DELEGATE_USAGE = `Usage: bivy delegate "<task>" [--agent <id>] [--machine <name>] [--model <model>] [--repo owner/repo] [--wait [seconds]] [--json]
+const DELEGATE_USAGE = `Usage: bivy delegate "<task>" [--agent <id>] [--machine <name>] [--model <model>] [--repo owner/repo] [--approval never|risky|always|autonomous] [--sandbox <tier>] [--wait [seconds]] [--json]
        bivy delegate "<task>" --to <agent>[@<machine>],<agent>[@<machine>],… [--wait [seconds]]
        bivy delegate machines [--json]
        bivy delegate status <run-id> [--json]
@@ -2480,7 +2480,12 @@ to several agents/machines at once (up to 3) so the results can be compared.
 
 async function cmdDelegate(args = []) {
   if (!args.length || args.some((a) => a === "-h" || a === "--help")) { console.log(DELEGATE_USAGE); return; }
-  const flagsWithValue = new Set(["--session", "--agent", "--machine", "--model", "--repo", "--timeout", "--to"]);
+  const flagsWithValue = new Set(["--session", "--agent", "--machine", "--model", "--repo", "--timeout", "--to", "--approval", "--sandbox"]);
+  // Children inherit this session's approval/sandbox unless set here.
+  const safetyFlags = () => {
+    const safety = { approval: flag("--approval"), sandbox: flag("--sandbox") };
+    return safety.approval || safety.sandbox ? { safety } : {};
+  };
   const flag = (name) => {
     const i = args.indexOf(name);
     return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
@@ -2556,7 +2561,7 @@ async function cmdDelegate(args = []) {
       const group = `fanout-${Date.now().toString(36)}`;
       const runs = [];
       for (const target of targets) {
-        runs.push({ target, run: await call("", { instructions, agent: target.agent, machine: target.machine, model: flag("--model"), repo: flag("--repo"), group }) });
+        runs.push({ target, run: await call("", { instructions, agent: target.agent, machine: target.machine, model: flag("--model"), repo: flag("--repo"), ...safetyFlags(), group }) });
       }
       if (waitIndex < 0) {
         if (json) console.log(JSON.stringify(runs.map((r) => r.run), null, 2));
@@ -2569,7 +2574,7 @@ async function cmdDelegate(args = []) {
       return;
     }
     const agent = flag("--agent");
-    const started = await call("", { instructions, agent: agent ? governedChatAgentId(agent) : undefined, machine: flag("--machine"), model: flag("--model"), repo: flag("--repo") });
+    const started = await call("", { instructions, agent: agent ? governedChatAgentId(agent) : undefined, machine: flag("--machine"), model: flag("--model"), repo: flag("--repo"), ...safetyFlags() });
     if (waitIndex < 0) {
       if (!json) console.log(`Delegated as run ${started.runId} (${started.status}). Follow it with 'bivy delegate wait ${started.runId}'.`);
       else print(started);

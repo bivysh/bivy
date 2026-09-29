@@ -636,7 +636,7 @@ const runDelegation = new RunDelegationService({
     try { return await delegatedRunRequest(`/node/automation-runs/${encodeURIComponent(runId)}`); }
     catch (error) { if (error instanceof Error && /not found/i.test(error.message)) return undefined; throw error; }
   },
-  start: async (_sessionId, input: StartRunInput, provenance) => {
+  start: async (sessionId, input: StartRunInput, provenance) => {
     const machine = input.machine?.trim() || identity.name;
     const nodes = await delegatedRunRequest("/nodes") as unknown;
     const target = Array.isArray(nodes) ? nodes.find((node) => node && typeof node === "object" && (node as Record<string, unknown>).name === machine) as Record<string, unknown> | undefined : undefined;
@@ -661,8 +661,12 @@ const runDelegation = new RunDelegationService({
         node: machine,
         runtimeId: input.agent,
         model: input.model,
-        approvalMode: input.safety?.approval,
-        sandbox: input.safety?.sandbox,
+        // A child acts for the same user in the same context as its parent, so
+        // it inherits the parent session's safety unless the caller set one. The
+        // queue's own default ("risky" with nobody to approve) denied ordinary
+        // commands, leaving children that could only describe what they'd do.
+        approvalMode: input.safety?.approval ?? openSessions.get(sessionId)?.approvalMode,
+        sandbox: input.safety?.sandbox ?? openSessions.get(sessionId)?.sandbox,
         maxAttempts: input.safety?.maxAttempts ?? 2,
         idempotencyKey: input.idempotencyKey,
         parentSessionId: provenance.parentSessionId,
