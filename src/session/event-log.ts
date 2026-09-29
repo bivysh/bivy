@@ -34,6 +34,7 @@ import { normalizedIntermediateText, thinkingTextFromContent, mergeTranscript, t
 import type { RuntimeMessage } from "../runtime/types.js";
 import type { AttachmentRef } from "./attachment-store.js";
 import { APP_PUBLICATION_BLOCK, APP_REVIEW_BLOCK, isAppReference, isAppReview, type AppReference, type AppReview } from "../apps/types.js";
+import { SUGGESTION_BLOCK, isTaskSuggestion, type TaskSuggestion } from "./suggestions.js";
 
 /** The serialization-independent atoms mergeBases folds a reopen on (see below). */
 export interface MessageContentAtoms {
@@ -280,7 +281,15 @@ export interface AppReviewLogEntry {
   id: string;
   review: AppReview;
 }
-export type LogRecord = EventLogEntry | BaseLogEntry | AttachmentLogEntry | OutboundAttachmentLogEntry | InlineImageLogEntry | AppPublicationLogEntry | AppReviewLogEntry;
+/** A task the agent proposed with `bivy suggest`, placed where it was posted. */
+export interface SuggestionLogEntry {
+  bivyKind: "suggestion";
+  createdAt: number;
+  afterMessageCount: number;
+  id: string;
+  suggestion: TaskSuggestion;
+}
+export type LogRecord = EventLogEntry | BaseLogEntry | AttachmentLogEntry | OutboundAttachmentLogEntry | InlineImageLogEntry | AppPublicationLogEntry | AppReviewLogEntry | SuggestionLogEntry;
 
 /** Content-block type carried by a folded outbound attachment. MUST match
  *  `AGENT_ATTACHMENT_BLOCK` in packages/core/src/store-render.ts — the client's
@@ -336,6 +345,12 @@ function isAppPublication(value: unknown): value is AppPublicationLogEntry {
   return entry.bivyKind === "app-publication" && typeof entry.id === "string" && typeof entry.createdAt === "number" && typeof entry.afterMessageCount === "number" && isAppReference(entry.app);
 }
 
+function isSuggestionEntry(value: unknown): value is SuggestionLogEntry {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Partial<SuggestionLogEntry>;
+  return entry.bivyKind === "suggestion" && typeof entry.id === "string" && typeof entry.createdAt === "number" && typeof entry.afterMessageCount === "number" && isTaskSuggestion(entry.suggestion);
+}
+
 function isAppReviewEntry(value: unknown): value is AppReviewLogEntry {
   if (!value || typeof value !== "object") return false;
   const entry = value as Partial<AppReviewLogEntry>;
@@ -343,7 +358,7 @@ function isAppReviewEntry(value: unknown): value is AppReviewLogEntry {
 }
 
 function isRecord(value: unknown): value is LogRecord {
-  return isOverlay(value) || isBase(value) || isAttachment(value) || isOutboundAttachment(value) || isInlineImage(value) || isAppPublication(value) || isAppReviewEntry(value);
+  return isOverlay(value) || isBase(value) || isAttachment(value) || isOutboundAttachment(value) || isInlineImage(value) || isAppPublication(value) || isAppReviewEntry(value) || isSuggestionEntry(value);
 }
 
 /**
@@ -453,7 +468,11 @@ export function replayExtras(entries: readonly LogRecord[]): SidecarMessage[] {
     role: "assistant", content: [{ type: APP_REVIEW_BLOCK, review: entry.review }],
     id: entry.id, afterMessageCount: entry.afterMessageCount, createdAt: entry.createdAt,
   }));
-  return [...foldIntermediate(intermediate), ...foldTool(tool), ...replayOutboundAttachments(entries), ...publications, ...cards];
+  const suggestions: SidecarMessage[] = entries.filter((entry): entry is SuggestionLogEntry => entry.bivyKind === "suggestion").map((entry) => ({
+    role: "assistant", content: [{ type: SUGGESTION_BLOCK, suggestion: entry.suggestion }],
+    id: entry.id, afterMessageCount: entry.afterMessageCount, createdAt: entry.createdAt,
+  }));
+  return [...foldIntermediate(intermediate), ...foldTool(tool), ...replayOutboundAttachments(entries), ...publications, ...cards, ...suggestions];
 }
 
 /**
@@ -747,6 +766,11 @@ export class EventLog {
   appendAppReview(id: string, entry: { afterMessageCount: number; createdAt?: number; review: AppReview }): void {
     this.load(id);
     this.enqueue(id, `review:${entry.review.id}`, { bivyKind: "app-review", createdAt: entry.createdAt ?? Date.now(), afterMessageCount: entry.afterMessageCount, id: entry.review.id, review: structuredClone(entry.review) });
+  }
+
+  appendSuggestion(id: string, entry: { afterMessageCount: number; suggestion: TaskSuggestion }): void {
+    this.load(id);
+    this.enqueue(id, `suggestion:${entry.suggestion.id}`, { bivyKind: "suggestion", createdAt: Date.now(), afterMessageCount: entry.afterMessageCount, id: entry.suggestion.id, suggestion: { ...entry.suggestion } });
   }
 
   appendOutboundAttachment(id: string, entry: { afterMessageCount: number; id: string; ref: AttachmentRef; caption?: string; artifact?: boolean }): void {

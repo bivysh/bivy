@@ -13,10 +13,11 @@
 export const GET_STARTED_PROMPT = [
   "I'm new to Bivy. Show me around:",
   "1. Take a quick look at this workspace (a minute, not an audit) and tell me in two or three sentences what's here.",
-  "2. Suggest three first tasks you could do for me here, as a numbered list: small enough to finish in a few minutes, " +
+  "2. Suggest three first tasks you could do for me here: small enough to finish in a few minutes, " +
     "useful enough that I'd keep the result (not chores like running the tests). Make at least one something I can see, with a live preview I can open " +
-    "on my phone. If the workspace is empty, suggest small things to build from scratch.",
-  "3. Ask me which one to start. Don't change any files until I choose.",
+    "on my phone. If the workspace is empty, suggest small things to build from scratch. Post each with `bivy suggest` " +
+    "so I can start it in one tap (if you can't run it, list them).",
+  "3. Then stop and let me pick. Don't change any files until I do.",
   "Keep this reply short; I may be on my phone. Later, only once that first task is finished, show me the result " +
     "and add one line: next time I can close the app while you work, and Bivy can notify me when you're done " +
     "(Settings → Notifications).",

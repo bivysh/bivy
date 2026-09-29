@@ -5,6 +5,7 @@ import { looksLikeAuthFailure, stripAttachmentPlaceholders, toHtml, type PromptA
 import { Spinner } from "./Spinner.js";
 import { AppMessage } from "./AppMessage.js";
 import { ReviewCard } from "./ReviewCard.js";
+import { SuggestionCard } from "./SuggestionCard.js";
 import { ToolGroup } from "./ToolGroup.js";
 import { ImageGallery } from "./ImageGallery.js";
 import { focusEntries } from "../focusTranscript.js";
@@ -499,11 +500,12 @@ const EntryView = memo(function EntryView({
   const hasAttachments = !!entry.attachments && entry.attachments.length > 0;
   const captionOnly = entry.attachments?.length === 1 && entry.attachments[0]?.description === entry.text;
   return (
-    <div className="assistant-row" id={hasAttachments || entry.app || entry.review ? `msg-${entry.id}` : undefined}>
+    <div className="assistant-row" id={hasAttachments || entry.app || entry.review || entry.suggestion ? `msg-${entry.id}` : undefined}>
       {entry.app && <AppMessage app={entry.app} />}
       {entry.review && <ReviewCard review={entry.review} />}
+      {entry.suggestion && <SuggestionCard suggestion={entry.suggestion} />}
       {hasAttachments && <MessageAttachments attachments={entry.attachments!} />}
-      {((entry.text && !captionOnly) || (!hasAttachments && !entry.app && !entry.review)) && (
+      {((entry.text && !captionOnly) || (!hasAttachments && !entry.app && !entry.review && !entry.suggestion)) && (
         <div ref={bodyRef} className="msg assistant" dangerouslySetInnerHTML={{ __html: html }} />
       )}
       {entry.text && !captionOnly && (

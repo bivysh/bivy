@@ -8,6 +8,7 @@ import { eventKind, toolCallId, toolDetail, toolInput, toolName, toolParentId } 
 import { contentThinking, contentToText, toolEntriesFromContent, embeddedAttachments } from "./store-render.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
 import { isAppReference, isAppReview, type AppReference, type AppReview } from "./apps.js";
+import { isTaskSuggestion, type TaskSuggestion } from "./suggestions.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -19,6 +20,7 @@ export interface TranscriptFoldTool {
 export interface TranscriptFoldEntry {
   app?: AppReference;
   review?: AppReview;
+  suggestion?: TaskSuggestion;
   id: string; role: "user" | "assistant" | "system" | "thinking" | "error"; text: string;
   html?: string; tool?: TranscriptFoldTool; streaming?: boolean; attachments?: PromptAttachment[];
   imageRefs?: Record<string, unknown>;
@@ -187,6 +189,12 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
       if (!value.transcript.some((entry) => entry.app?.appId === app.appId)) {
         value.transcript.push({ id: `app-${app.appId}`, role: "assistant", text: "", app });
       }
+      break;
+    }
+    case "suggestion": {
+      const suggestion = (event as any).suggestion;
+      if (!isTaskSuggestion(suggestion) || value.transcript.some((entry) => entry.suggestion?.id === suggestion.id)) break;
+      value.transcript.push({ id: suggestion.id, role: "assistant", text: "", suggestion });
       break;
     }
     case "app_review": {

@@ -50,6 +50,10 @@ export const BIVY_AGENT_NOTE = [
     "`bivy app run -- <command>` (a desktop app) gives the user a live preview; `bivy app shot` screenshots it so you " +
     "can check your work; `bivy app present` tells the user a visible change is ready to look at. " +
     "`bivy app --help` has the details.",
+  "- Proposing tasks the user could hand you (next steps, ideas, options): post each with " +
+    '`bivy suggest "<complete instruction>" [--title "short label"]` instead of only listing them. The user can ' +
+    "start each in one tap, in this session or in a parallel one that works in its own copy of the project, so " +
+    "write it to stand on its own, with paths relative to the project root.",
 ].join("\n");
 
 const PREAMBLE =

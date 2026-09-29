@@ -14,9 +14,10 @@ Changes apply to sessions started after you save.
 By default every session gets a short note from Bivy first, even when you haven't written
 any instructions. It tells the agent it runs inside Bivy, that you follow along in
 a chat and can't see its terminal or files on disk, and which commands reach you:
-`bivy attach` (or the `attach_to_chat` tool) to send a file or image, and
+`bivy attach` (or the `attach_to_chat` tool) to send a file or image,
 `bivy app publish` / `run` / `shot` / `present` to preview, check and hand over
-something with a UI ([apps.md](apps.md)). The commands find the session through
+something with a UI ([apps.md](apps.md)), and `bivy suggest` to propose a task
+you can start in one tap. The commands find the session through
 `$BIVY_SESSION_ID`, so any agent with a shell can use them. The note is
 `BIVY_AGENT_NOTE` in `src/agent-instructions.ts` and uses the channels below.
 
