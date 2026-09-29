@@ -2287,7 +2287,6 @@ function AccountPanel() {
     controller.listNodes().then(setNodes).catch(() => {});
     reloadDevices();
   }, []);
-  const counts = me?.counts;
   const extensionFacts = accountExtensionFacts(me?.extension?.facts);
   const extensionActions = showAccountExtension() ? me?.extension?.actions ?? [] : [];
   return (
@@ -2309,11 +2308,6 @@ function AccountPanel() {
           <strong>{me.account.email}</strong>
         </div>
       )}
-      <div className="stat-grid">
-        <Stat label="Machines" value={String(counts?.nodes ?? nodes.length)} />
-        <Stat label="Devices" value={String(counts?.devices ?? devices.length)} />
-        <Stat label="Visible sessions" value={counts?.sessions == null ? "—" : String(counts.sessions)} />
-      </div>
       {hasNativeSubscriptions() && (
         <div className="settings-section">
           <h4 className="settings-subhead">Subscriptions</h4>
@@ -2362,7 +2356,7 @@ function AccountPanel() {
         </div>
       )}
       <div className="settings-section">
-        <h4 className="settings-subhead">Enrolled machines</h4>
+        <h4 className="settings-subhead">Enrolled machines{nodes.length > 0 && <span className="muted"> · {nodes.length}</span>}</h4>
         <div className="picker-list">
           {nodes.length === 0 && <div className="picker-empty">No machines enrolled yet.</div>}
           {nodes.map((n) => (
@@ -2394,7 +2388,7 @@ function AccountPanel() {
       </div>
 
       <div className="settings-section">
-        <h4 className="settings-subhead">Signed-in devices</h4>
+        <h4 className="settings-subhead">Signed-in devices{devices.length > 0 && <span className="muted"> · {devices.length}</span>}</h4>
         <div className="picker-list">
           {devices.length === 0 && <div className="picker-empty">No paired devices.</div>}
           {devices.map((d) => {
@@ -2461,15 +2455,6 @@ function formatDeviceDate(iso: string): string {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return "recently";
   return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="stat">
-      <div className="stat-label">{label}</div>
-      <div className="stat-value">{value}</div>
-    </div>
-  );
 }
 
 // ---- Link a device ----

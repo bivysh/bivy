@@ -49,6 +49,7 @@ const hexRe = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/g;
 const rawZIndexRe = /z-index\s*:\s*-?\d/;
 const RETIRED_CLASSES = [
   "apps-notice", // → canonical banner in shared AppAccess controls
+  "stat-grid", "stat", "stat-label", "stat-value", // Account panel counts; the lists carry them
   "composer-starter",
   "autom-new-btn", "autom-save-btn", "autom-empty-new-btn", "pill",
   "picker-action", "repo-connect-copy", "connect-copy", "connect-refresh",
