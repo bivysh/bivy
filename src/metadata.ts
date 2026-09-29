@@ -30,6 +30,8 @@ export type MetadataSession = {
    *  bundle (see src/session/fork.ts). A bare identifier — never a prompt,
    *  transcript, or diff — so it's safe to persist and surface in the UI. */
   forkedFrom?: string;
+  /** The parent session of a delegated child (docs/agent-delegation.md). */
+  delegatedFrom?: { sessionId: string; nodeId?: string; machine?: string; title?: string };
   /** Content-free provenance for a Session created by an unattended Run. Used
    * to preserve child-Run nesting limits across daemon restarts. */
   automationRunId?: string;

@@ -210,4 +210,5 @@ export * from "./nl-cron.js";
 export * from "./artifacts.js";
 export * from "./apps.js";
 export * from "./suggestions.js";
+export * from "./delegations.js";
 export * from "./capability-routing.js";

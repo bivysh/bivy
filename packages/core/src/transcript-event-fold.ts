@@ -9,6 +9,7 @@ import { contentThinking, contentToText, toolEntriesFromContent, embeddedAttachm
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
 import { isAppReference, isAppReview, type AppReference, type AppReview } from "./apps.js";
 import { isTaskSuggestion, type TaskSuggestion } from "./suggestions.js";
+import { isDelegationCard, type DelegationCard } from "./delegations.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -21,6 +22,7 @@ export interface TranscriptFoldEntry {
   app?: AppReference;
   review?: AppReview;
   suggestion?: TaskSuggestion;
+  delegation?: DelegationCard;
   id: string; role: "user" | "assistant" | "system" | "thinking" | "error"; text: string;
   html?: string; tool?: TranscriptFoldTool; streaming?: boolean; attachments?: PromptAttachment[];
   imageRefs?: Record<string, unknown>;
@@ -189,6 +191,15 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
       if (!value.transcript.some((entry) => entry.app?.appId === app.appId)) {
         value.transcript.push({ id: `app-${app.appId}`, role: "assistant", text: "", app });
       }
+      break;
+    }
+    case "delegation": {
+      const delegation = (event as any).delegation;
+      if (!isDelegationCard(delegation)) break;
+      const entry: TranscriptFoldEntry = { id: `delegation-${delegation.id}`, role: "assistant", text: "", delegation };
+      const index = value.transcript.findIndex((e) => e.delegation?.id === delegation.id);
+      if (index >= 0) value.transcript[index] = entry;
+      else { commitThinking(value); commitProse(value); value.transcript.push(entry); }
       break;
     }
     case "suggestion": {

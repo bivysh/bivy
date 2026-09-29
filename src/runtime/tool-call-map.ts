@@ -122,7 +122,7 @@ const PATH_KEYS = ["path", "file_path", "filePath", "filename", "fileName", "fil
  */
 function bivyDelegation(command: string): { label?: string; description?: string } | undefined {
   const match = /^\s*bivy\s+delegate\b(.*)$/s.exec(command);
-  if (!match || /^\s+(status|wait|--help|-h)\b/.test(match[1]!)) return undefined;
+  if (!match || /^\s+(status|wait|machines|--help|-h)\b/.test(match[1]!)) return undefined;
   const rest = match[1]!;
   const flag = (name: string) => new RegExp(`--${name}(?:=|\\s+)("([^"]*)"|'([^']*)'|(\\S+))`).exec(rest);
   const value = (m: RegExpExecArray | null) => m ? (m[2] ?? m[3] ?? m[4]) : undefined;
@@ -130,7 +130,8 @@ function bivyDelegation(command: string): { label?: string; description?: string
   const machine = value(flag("machine"));
   const quoted = /(?:^|\s)("([^"]+)"|'([^']+)')/.exec(rest.replace(/--[a-z-]+(?:=|\s+)("[^"]*"|'[^']*'|\S+)/g, ""));
   const description = quoted ? (quoted[2] ?? quoted[3]) : undefined;
-  const label = [agent, machine && `@ ${machine}`].filter(Boolean).join(" ") || undefined;
+  const to = value(flag("to"))?.split(",").map((t) => t.trim().replace("@", " @ ")).filter(Boolean).join(", ");
+  const label = to || [agent, machine && `@ ${machine}`].filter(Boolean).join(" ") || undefined;
   return { ...(label ? { label } : {}), ...(description ? { description } : {}) };
 }
 

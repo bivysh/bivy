@@ -354,6 +354,9 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 @keyframes dot-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
 .session-row { position: relative; display: flex; align-items: center; }
 .session-row .session-item { flex: 1; min-width: 0; }
+/* A delegated child under its parent session (sessionNesting.ts). */
+.session-row.nested { padding-inline-start: var(--space-4); }
+.session-row.nested::before { content: ""; position: absolute; inset-block: var(--space-2); inset-inline-start: var(--space-2); border-inline-start: 1px solid var(--line-strong); }
 .pending-launch-actions { display: flex; flex: none; gap: 4px; padding-right: 6px; }
 .pending-launch-actions button { min-height: var(--space-7); min-width: var(--space-7); border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface-2); color: var(--ink); padding: 5px 8px; font-size: 12px; cursor: pointer; }
 .pending-launch-actions button:last-child { color: var(--muted); background: transparent; }
@@ -3107,6 +3110,26 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
 .suggestion-actions, .suggestion-all { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
 .suggestion-all { padding-top: var(--space-2); border-top: 1px solid var(--line); }
 .suggestion-status { margin: var(--space-2) 0 0; display: flex; align-items: center; gap: var(--space-2); color: var(--ok); font-size: var(--text-sm); font-weight: var(--weight-medium); }
+/* Delegation (DelegationCard.tsx): a task handed to another agent/machine.
+   Shell from .card, status from .badge; layout only here. A fan-out renders as
+   one group whose members sit side by side where there is room. */
+.delegation-card { max-inline-size: 440px; display: flex; flex-direction: column; gap: var(--space-1); }
+.delegation-eyebrow { margin: 0; color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); }
+.delegation-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.delegation-head { align-items: flex-start; }
+.delegation-target { display: flex; flex-direction: column; font-weight: var(--weight-semibold); overflow-wrap: anywhere; min-inline-size: 0; }
+.delegation-machine { color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-normal); }
+.delegation-task { margin: 0; color: var(--muted); font-size: var(--text-sm); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.delegation-failure { margin: 0; color: var(--danger); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.delegation-answer summary { cursor: pointer; color: var(--muted); font-size: var(--text-sm); }
+.delegation-answer p { margin: var(--space-1) 0 0; font-size: var(--text-sm); white-space: pre-wrap; overflow-wrap: anywhere; max-block-size: 18em; overflow-y: auto; }
+.delegation-refs { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
+.delegation-refs code { overflow-wrap: anywhere; }
+.delegation-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.delegation-group { display: flex; flex-direction: column; gap: var(--space-1); margin-block: var(--space-2); }
+.delegation-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-2); }
+.delegation-member { display: flex; flex-direction: column; gap: var(--space-1); min-inline-size: 0; }
+.delegation-member > .btn { align-self: flex-start; }
 /* Review card (ReviewCard.tsx): the app at a moment worth judging. The
    screenshot is shown whole, phone-shaped, on a quiet stage; Before/Now is the
    canonical .segmented switch; one primary action. */

@@ -2467,16 +2467,20 @@ async function cmdSuggest(args = []) {
 // account machine, and get its answer back. Agent-agnostic — any agent with a
 // shell can call it — and meant for when the user asks for another agent/machine.
 const DELEGATE_USAGE = `Usage: bivy delegate "<task>" [--agent <id>] [--machine <name>] [--model <model>] [--repo owner/repo] [--wait [seconds]] [--json]
+       bivy delegate "<task>" --to <agent>[@<machine>],<agent>[@<machine>],… [--wait [seconds]]
+       bivy delegate machines [--json]
        bivy delegate status <run-id> [--json]
        bivy delegate wait <run-id> [--timeout <seconds>] [--json]
 
 Hands a self-contained task to another agent (and/or another machine on your account) as a
 delegated Run tied to this session ($BIVY_SESSION_ID). With --wait (or 'wait'), prints the
-child's final answer and any branch/PR it produced once it finishes. 'bivy nodes' lists machines.`;
+child's final answer and any branch/PR it produced once it finishes. --to sends the same task
+to several agents/machines at once (up to 3) so the results can be compared.
+'machines' lists your machines and the agents installed on each.`;
 
 async function cmdDelegate(args = []) {
   if (!args.length || args.some((a) => a === "-h" || a === "--help")) { console.log(DELEGATE_USAGE); return; }
-  const flagsWithValue = new Set(["--session", "--agent", "--machine", "--model", "--repo", "--timeout"]);
+  const flagsWithValue = new Set(["--session", "--agent", "--machine", "--model", "--repo", "--timeout", "--to"]);
   const flag = (name) => {
     const i = args.indexOf(name);
     return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
@@ -2525,11 +2529,46 @@ async function cmdDelegate(args = []) {
   };
   try {
     const [action, runId] = positional;
+    if (action === "machines" && positional.length === 1) {
+      const res = await fetch(`${url(config)}/api/machines`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+      if (json) { console.log(JSON.stringify(data.machines, null, 2)); return; }
+      for (const m of data.machines || []) {
+        const agents = m.agents ? m.agents.map((a) => a.id).join(", ") || "none" : m.error ? `unknown (${m.error})` : "unknown while offline";
+        console.log(`${m.name}${m.self ? " (this machine)" : ""} — ${m.online ? "online" : "offline"} — agents: ${agents}`);
+      }
+      return;
+    }
     if (action === "status" && runId) return print(await call(`/${encodeURIComponent(runId)}`));
     if (action === "wait" && runId) return print(await waitFor(runId, Number(flag("--timeout") ?? 600)));
     const instructions = positional.join(" ").trim();
     if (!instructions) { console.error(c.red(DELEGATE_USAGE)); process.exit(1); return; }
-    const started = await call("", { instructions, agent: flag("--agent"), machine: flag("--machine"), model: flag("--model"), repo: flag("--repo") });
+    // Fan-out: the same task to several agent@machine targets, one group, so the
+    // parent's transcript shows them side by side to compare.
+    const to = flag("--to");
+    if (to) {
+      const targets = to.split(",").map((t) => t.trim()).filter(Boolean).map((t) => {
+        const [agent, machine] = t.split("@");
+        return { agent: agent ? governedChatAgentId(agent) : undefined, machine: machine || undefined, label: t };
+      });
+      const group = `fanout-${Date.now().toString(36)}`;
+      const runs = [];
+      for (const target of targets) {
+        runs.push({ target, run: await call("", { instructions, agent: target.agent, machine: target.machine, model: flag("--model"), repo: flag("--repo"), group }) });
+      }
+      if (waitIndex < 0) {
+        if (json) console.log(JSON.stringify(runs.map((r) => r.run), null, 2));
+        else for (const { target, run } of runs) console.log(`${target.label}: run ${run.runId} (${run.status})`);
+        return;
+      }
+      const finished = await Promise.all(runs.map(async ({ target, run }) => ({ target, run: await waitFor(run.runId, Number(waitArg ?? 600)) })));
+      if (json) { console.log(JSON.stringify(finished.map((f) => f.run), null, 2)); return; }
+      for (const { target, run } of finished) { console.log(`\n── ${target.label}`); print(run); }
+      return;
+    }
+    const agent = flag("--agent");
+    const started = await call("", { instructions, agent: agent ? governedChatAgentId(agent) : undefined, machine: flag("--machine"), model: flag("--model"), repo: flag("--repo") });
     if (waitIndex < 0) {
       if (!json) console.log(`Delegated as run ${started.runId} (${started.status}). Follow it with 'bivy delegate wait ${started.runId}'.`);
       else print(started);

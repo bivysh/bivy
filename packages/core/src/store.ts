@@ -169,6 +169,8 @@ export interface SessionSummary {
    *  session. The parent may live on a different node, so this is only ever
    *  an id to display/link, not something guaranteed resolvable locally. */
   forkedFrom?: string;
+  /** The parent session when this one was delegated to (docs/agent-delegation.md). */
+  delegatedFrom?: import("./delegations.js").DelegatedFrom;
   /** Relay/account mode: node that owns this session. Used by all-node lists. */
   nodeId?: string;
   runtimeId?: string;
@@ -275,6 +277,8 @@ export interface TranscriptEntry {
   review?: import("./apps.js").AppReview;
   /** A task the agent proposed (`bivy suggest`), startable in one tap. */
   suggestion?: import("./suggestions.js").TaskSuggestion;
+  /** A delegated child Run (another agent/machine), updated in place. */
+  delegation?: import("./delegations.js").DelegationCard;
   id: string;
   role: TranscriptRole;
   /** Raw text (already plain). Rendered to HTML lazily by the view via `html`. */
