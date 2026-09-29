@@ -33,6 +33,16 @@ export interface DeploymentDecision {
 
 /** Opaque technical facts an operator may use for admission. Core never puts
  * product tiers, prices, or commercial cap names in this contract. */
+/**
+ * A run's source is a kind plus identifiers (`agent-delegation:v1:1:<parent
+ * session>:<parent run>`, `github:owner/repo#12`). Policy needs only the kind;
+ * sending the whole string leaked parent ids and overflowed extensions that
+ * bound the field, failing every delegated-run claim.
+ */
+export function policyContext(context: DeploymentPolicyContext): DeploymentPolicyContext {
+  return context.source === undefined ? context : { ...context, source: context.source.split(":", 1)[0]!.slice(0, 64) };
+}
+
 export interface DeploymentPolicyContext {
   source?: string;
   computeSource?: "user" | "managed";
@@ -86,7 +96,7 @@ export class DeploymentExtension {
 
   async authorize(accountId: string, operation: DeploymentOperation, idempotencyKey?: string, context: DeploymentPolicyContext = {}): Promise<DeploymentDecision> {
     if (!this.url) return { allowed: true };
-    const response = await this.request("/v1/policy/check", { subject: { accountId }, operation, idempotencyKey, context });
+    const response = await this.request("/v1/policy/check", { subject: { accountId }, operation, idempotencyKey, context: policyContext(context) });
     const decision = response as Partial<DeploymentDecision>;
     if (typeof decision.allowed !== "boolean") throw new Error("Deployment extension returned an invalid policy decision");
     return decision as DeploymentDecision;

@@ -185,7 +185,12 @@ export async function fetchPendingWork(cfg: ControlPlaneTaskConfig): Promise<Wor
 /** Consume the authoritative claim snapshot, not the earlier queue listing. */
 export async function claimWork(cfg: ControlPlaneTaskConfig, id: string): Promise<WorkItem | undefined> {
   const res = await cp(cfg, "POST", `/node/work/${encodeURIComponent(id)}/claim`, randomUUID());
-  if (!res.ok) return undefined;
+  if (!res.ok) {
+    // 409 is the normal "another node won" race; anything else would otherwise
+    // leave an item silently pending forever.
+    if (res.status !== 409) console.warn(`[control-plane-tasks] claim ${id} failed: HTTP ${res.status}`);
+    return undefined;
+  }
   const data = await res.json() as { item?: WorkItem };
   return data.item ?? { id } as WorkItem; // compatibility with older control planes
 }
