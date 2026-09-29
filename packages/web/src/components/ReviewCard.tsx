@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { AppReview, ReviewCardMode, ReviewShot, SessionAppsResult } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
-import { AppsSheet, REVIEW_MODE_LABELS, notesDraft } from "./AppsSheet.js";
+import { REVIEW_MODE_LABELS, notesDraft } from "./AppsSheet.js";
+import { requestAppsSheet } from "../appsSheetRequest.js";
 import { seedSessionDraft } from "../shareTarget.js";
 import { AppRow, appInitial } from "./AppRow.js";
 import { Spinner } from "./Spinner.js";
@@ -65,7 +66,6 @@ export function ReviewCard({ review }: { review: AppReview }) {
   const now = useShot(!visible || review.expired ? undefined : review.shot);
   const before = useShot(!visible || review.expired ? undefined : review.before);
   const [side, setSide] = useState<"before" | "now">("now");
-  const [sheet, setSheet] = useState<false | "preview" | "apps">(false);
   const [mode, setMode] = useState<ReviewCardMode | null>(null);
   const [status, setStatus] = useState("");
   const [busy, setBusy] = useState(false);
@@ -110,13 +110,13 @@ export function ReviewCard({ review }: { review: AppReview }) {
     await controller.appCommand("apps.showMe", review.sessionId, { appId: review.appId });
   });
 
+  const openSheet = (preview: boolean) => requestAppsSheet({ sessionId: review.sessionId, appId: review.appId, ...(preview ? { openView: { viewId: review.viewId, path: review.path } } : {}) });
   const label = `${review.name}${review.view && review.view !== review.name ? ` · ${review.view}` : ""}`;
   const meta = `${TRIGGER_LABELS[review.trigger]} · ${review.path}`;
-  return <>
-    <section ref={card} className="apps-card review-card" aria-label={`${review.name}: ${TRIGGER_LABELS[review.trigger].toLowerCase()}`}>
+  return <section ref={card} className="apps-card review-card" aria-label={`${review.name}: ${TRIGGER_LABELS[review.trigger].toLowerCase()}`}>
       <AppRow tile={appInitial(review.name)} name={label} meta={meta}
         action={<MoreMenu label={`Preview card options for ${review.name}`} onOpen={loadMode} items={[
-          { label: "App options", onSelect: () => setSheet("apps") },
+          { label: "App options", onSelect: () => openSheet(false) },
           { heading: "Preview cards" },
           ...(["ready", "every", "off"] as const).map((item) => ({ label: REVIEW_MODE_LABELS[item], checked: mode ? mode === item : undefined, disabled: busy || !online || !mode, onSelect: () => void chooseMode(item) })),
           ...(working ? [{ label: "Mute for this run", disabled: busy || !online, separated: true, onSelect: () => void run("mute", () => controller.appCommand("apps.mute", review.sessionId), "Muted until the agent’s next run.") }] : []),
@@ -129,7 +129,7 @@ export function ReviewCard({ review }: { review: AppReview }) {
       </div> : <div className="review-stage">
         {review.expired || shown.state === "missing" || !review.shot
           ? <p className="review-gone">{review.expired || shown.state === "missing" ? "Screenshot no longer stored" : "No screenshot this time"}</p>
-          : <button type="button" className="review-shot" style={review.shot ? { aspectRatio: `${review.shot.width} / ${review.shot.height}`, blockSize: "var(--review-shot-height)", maxInlineSize: "100%" } : undefined} onClick={() => setSheet("preview")} aria-label={`Open preview of ${review.name} at ${review.path}`}>
+          : <button type="button" className="review-shot" style={review.shot ? { aspectRatio: `${review.shot.width} / ${review.shot.height}`, blockSize: "var(--review-shot-height)", maxInlineSize: "100%" } : undefined} onClick={() => openSheet(true)} aria-label={`Open preview of ${review.name} at ${review.path}`}>
               {shown.url ? <img src={shown.url} alt={`${review.name} at ${review.path}, ${side === "before" && hasBefore ? "before this run" : "now"}`} width={review.shot?.width} height={review.shot?.height} />
                 : <span className="review-loading"><Spinner size="sm" /><span className="sr-only">Loading screenshot…</span></span>}
             </button>}
@@ -144,15 +144,13 @@ export function ReviewCard({ review }: { review: AppReview }) {
         <span className="banner-text">{review.notes === 1 ? "1 note" : `${review.notes} notes`} from people with a shared link. They reach the agent only if you send them.</span>
         <span className="banner-actions">
           <button className="btn sm" disabled={busy || !online} onClick={() => void draftNotes()}>Add to message</button>
-          <button className="btn sm ghost" disabled={!online} onClick={() => setSheet("apps")}>Open in Apps</button>
+          <button className="btn sm ghost" disabled={!online} onClick={() => openSheet(false)}>Open in Apps</button>
         </span>
       </div> : null}
       {status && <p className="review-status" role="status">{status}</p>}
       <div className="review-actions">
-        <button className={`btn${review.trigger === "notes" ? "" : " primary"}`} disabled={!online} onClick={() => setSheet("preview")}>Open preview</button>
+        <button className={`btn${review.trigger === "notes" ? "" : " primary"}`} disabled={!online} onClick={() => openSheet(true)}>Open preview</button>
         <AppAccess sessionId={review.sessionId} appId={review.appId} viewId={review.viewId} name={review.view || review.name} disabled={!online} />
       </div>
-    </section>
-    {sheet && <AppsSheet sessionId={review.sessionId} appId={review.appId} openView={sheet === "preview" ? { viewId: review.viewId, path: review.path } : undefined} onClose={() => setSheet(false)} />}
-  </>;
+    </section>;
 }

@@ -76,6 +76,7 @@ import { SessionViewToggle } from "./components/SessionViewToggle.js";
 import { readSessionView, writeSessionView, type SessionView } from "./sessionView.js";
 import { CloseIcon } from "./components/UiIcons.js";
 import { controller } from "./store/useStore.js";
+import { onAppsSheetRequest, type AppsSheetRequest } from "./appsSheetRequest.js";
 import { attentionRank, isUnseen, runStatusLabel, statusClass, type SessionStatusInput } from "./sessionStatus.js";
 import { getAppIconBadgeEnabled, getNotificationPreferencesSnapshot, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "./notificationSettings.js";
 
@@ -136,11 +137,12 @@ export function App() {
   const [artifactsSheetOpen, setArtifactsSheetOpen] = useState(false);
   // Session apps sheet — opened from the run pill ("N apps"), so a published
   // app stays reachable after its inline launcher card scrolls out of the
-  // transcript. Same pure-fold approach as artifacts (see deriveApps).
-  const [appsSheetOpen, setAppsSheetOpen] = useState(false);
-  /** The app a "reviewer notes" notification opened the sheet at. */
-  const [appsSheetApp, setAppsSheetApp] = useState<string | undefined>(undefined);
-  const [appsSheetView, setAppsSheetView] = useState<{ viewId: string; path?: string } | undefined>(undefined);
+  // transcript. Same pure-fold approach as artifacts (see deriveApps). Also
+  // where transcript cards and notifications open it, at an app or a view.
+  const [appsSheet, setAppsSheet] = useState<AppsSheetRequest | null>(null);
+  useEffect(() => onAppsSheetRequest(setAppsSheet), []);
+  // Leaving the session closes it; coming back must not reopen it.
+  useEffect(() => setAppsSheet(null), [state.activeSession.activeSessionId]);
   // Fork sheet opened from an inline notice (e.g. "reached its usage limit —
   // Fork to another agent"), so the way past a limit is one tap from the chat.
   const [forkSheetOpen, setForkSheetOpen] = useState(false);
@@ -663,9 +665,7 @@ export function App() {
     if (!review) return;
     params.delete("review");
     history.replaceState(history.state, "", `${location.pathname}${params.size ? `?${params}` : ""}${location.hash}`);
-    setAppsSheetApp(review.appId);
-    setAppsSheetView({ viewId: review.viewId, path: review.path });
-    setAppsSheetOpen(true);
+    setAppsSheet({ sessionId: review.sessionId, appId: review.appId, openView: { viewId: review.viewId, path: review.path } });
   }, [state.activeSession.activeSessionId, state.activeSession.transcript, state.connection.status]);
   // A "reviewer notes" notification opens the Apps sheet at that app, once.
   useEffect(() => {
@@ -675,8 +675,7 @@ export function App() {
     params.delete("apps");
     history.replaceState(history.state, "", `${location.pathname}${params.size ? `?${params}` : ""}${location.hash}`);
     if (!/^[a-f0-9]{32}$/.test(appId)) return;
-    setAppsSheetApp(appId);
-    setAppsSheetOpen(true);
+    setAppsSheet({ sessionId: state.activeSession.activeSessionId, appId });
   }, [state.activeSession.activeSessionId]);
   // "Show me the app" on a finished notification: capture it now, once.
   useEffect(() => {
@@ -1145,8 +1144,8 @@ export function App() {
               <ArtifactsSheet artifacts={artifacts} onClose={() => setArtifactsSheetOpen(false)} />
             )}
 
-            {appsSheetOpen && activeSession && (
-              <AppsSheet sessionId={activeSession.sessionId} appId={appsSheetApp} openView={appsSheetView} onClose={() => { setAppsSheetOpen(false); setAppsSheetApp(undefined); setAppsSheetView(undefined); }} />
+            {appsSheet && appsSheet.sessionId === activeSession?.sessionId && (
+              <AppsSheet key={`${appsSheet.sessionId}:${appsSheet.appId ?? ""}:${appsSheet.openView?.viewId ?? ""}`} {...appsSheet} onClose={() => setAppsSheet(null)} />
             )}
 
             {forkSheetOpen && activeSession && (
@@ -1177,7 +1176,7 @@ export function App() {
                   onOpenArtifacts={() => setArtifactsSheetOpen(true)}
                   appsCount={liveApps.published ?? apps.length}
                   serverPorts={liveApps.offers.map((offer) => offer.port)}
-                  onOpenApps={() => setAppsSheetOpen(true)}
+                  onOpenApps={() => setAppsSheet({ sessionId: activeSession.sessionId })}
                   onOpenRun={(runId) => openRun(runId)}
                   onRecover={(kind) => {
                     // C2: recover a terminal run using existing capabilities. fix/retry

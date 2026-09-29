@@ -18,6 +18,7 @@ for (const theme of themes) {
       import { createRoot } from 'react-dom/client';
       import { ChatView } from '/src/components/ChatView.tsx';
       import { AppsSheet } from '/src/components/AppsSheet.tsx';
+      import { onAppsSheetRequest } from '/src/appsSheetRequest.ts';
       import { controller } from '/src/store/controller.ts';
       import '/@fs/${path.resolve("packages/ui/tokens.css")}';
       import '/src/styles.css';
@@ -46,7 +47,9 @@ for (const theme of themes) {
       };
       // The session menu opens the sheet unscoped, which also lists detected servers.
       window.noteArrives = note => { app.views[0].notes = [note]; controller.appsChangedListeners.forEach(fn => fn('s')); };
-      window.showSheet = () => { const host = document.body.appendChild(document.createElement('div')); const root = createRoot(host); root.render(React.createElement(AppsSheet, {sessionId:'s', onClose(){ root.unmount(); host.remove(); }})); };
+      window.showSheet = (request = {sessionId:'s'}) => { const host = document.body.appendChild(document.createElement('div')); const root = createRoot(host); root.render(React.createElement(AppsSheet, {...request, onClose(){ root.unmount(); host.remove(); }})); };
+      // The app shell owns the sheet that chat cards open; stand in for it.
+      onAppsSheetRequest(request => window.showSheet(request));
       const handlers = new Set();
       controller.onTerminal = fn => {handlers.add(fn); return () => handlers.delete(fn);};
       window.terminalEvent = event => handlers.forEach(fn => fn(event));
