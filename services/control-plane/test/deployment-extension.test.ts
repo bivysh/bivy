@@ -44,6 +44,9 @@ test("lifecycle events use the authenticated neutral extension contract", async 
   const event = { type: "ephemeral.settled" as const, attemptId: "a1", at: new Date(0).toISOString(), machineSeconds: 12, activeAgentSeconds: 5 };
   await extension.record("a", event);
   assert.deepEqual(request, { url: "https://policy.example/v1/events", body: { subject: { accountId: "a" }, event } });
+  const signIn = { type: "account.signed-in" as const, at: new Date(1).toISOString(), accountCreatedAt: new Date(0).toISOString() };
+  await extension.recordAccount("a", "a@example.com", signIn);
+  assert.deepEqual(request, { url: "https://policy.example/v1/events", body: { subject: { accountId: "a", email: "a@example.com" }, event: signIn } });
 });
 
 test("published app IDs are forwarded only when there are any", async () => {

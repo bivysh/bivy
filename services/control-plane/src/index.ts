@@ -875,6 +875,18 @@ async function sendMagicLinkEmail(email: string, loginUrl: string) {
   return { sent: true };
 }
 
+// Tell the deployment extension about every verified sign-in (GitHub or magic
+// link, never the unverified magic-link request that first creates the row).
+// The extension decides what, if anything, to do with it. Off the response
+// path and best effort: an extension outage must not block signing in.
+function recordSignIn(account: Account): void {
+  void deploymentExtension.recordAccount(account.id, account.email, {
+    type: "account.signed-in",
+    at: new Date().toISOString(),
+    accountCreatedAt: account.createdAt,
+  }).catch((error) => console.warn(`[auth] Sign-in event for account ${account.id} failed: ${error instanceof Error ? error.message : error}`));
+}
+
 function asyncHandler(fn: (req: Request, res: Response, next: NextFunction) => Promise<unknown>) {
   return (req: Request, res: Response, next: NextFunction) => {
     void fn(req, res, next).catch(next);
@@ -1036,6 +1048,7 @@ app.post("/auth/magic-link/consume", asyncHandler(async (req, res) => {
     recordFunnelEvent("sign_in_failed", "email_api");
     return res.status(401).json({ error: "Invalid or expired login token" });
   }
+  recordSignIn(account);
   const token = await store.createSession(account.id);
   recordFunnelEvent("sign_in_completed", "email_api");
   res.json({ ok: true, token, account: { id: account.id, email: account.email } });
@@ -1046,6 +1059,7 @@ app.get("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   const deviceId = String(req.query?.device ?? "").trim();
   const account = await store.consumeLoginToken(loginToken);
   if (!account) return sendSignInFailed(res, 401, "This sign-in link is invalid or has expired. Request a new one from the sign-in screen.", deviceId ? "email_device" : "email_browser");
+  recordSignIn(account);
   // Device-login flow (hands-free CLI sign-in): mark the pending device login
   // complete and tell the user to return to their terminal. No session is
   // embedded here — the CLI mints it when it polls.
@@ -1160,6 +1174,7 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
   const account = await store.findOrCreateAccount(email);
   const githubUserId = installTargetIds?.[0];
   if (githubUserId) await store.setGithubIdentity(account.id, githubUserId, installTargetIds ?? []);
+  recordSignIn(account);
   if (stored.deviceId) {
     await store.completeDeviceLogin(stored.deviceId, account.id);
     recordFunnelEvent("sign_in_completed", "github_device");
