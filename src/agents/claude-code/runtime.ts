@@ -1151,6 +1151,9 @@ class ClaudeSession implements RuntimeSession {
     const images = toolResultImages(block);
     if (!images.length) return;
     const toolUseId = String(block.tool_use_id ?? "");
+    // A file read returns an image that already exists on disk — most often
+    // one the user just uploaded — so surfacing it would repeat it in chat.
+    if (this.toolDetailsByUseId.get(toolUseId)?.kind === "read") return;
     const toolName = this.toolNamesByUseId.get(toolUseId) ?? "tool";
     for (const image of images) {
       const byteLength = Buffer.byteLength(image.data, "base64");
