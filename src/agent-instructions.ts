@@ -29,6 +29,25 @@ export interface AgentInstructions {
   updatedAt: number;
 }
 
+/**
+ * What every agent session is told about running under Bivy, whether or not the
+ * user wrote instructions: that the user is in a chat, and which `bivy` commands
+ * reach it. The commands read $BIVY_SESSION_ID (src/runtime/session-env.ts), so
+ * this works for any agent with a shell. Keep it short: it rides on every turn.
+ */
+export const BIVY_AGENT_NOTE = [
+  "You are running inside Bivy. The user follows this session in a chat app (web or phone): they cannot see your " +
+    "terminal or files you only write to disk. $BIVY_SESSION_ID identifies this session; the `bivy` commands below use it.",
+  "- Show a LOCAL file or image (report, screenshot, chart, a file they asked for): run " +
+    '`bivy attach <path> [--caption "short note"]`, or call the `attach_to_chat` tool if you have it. Images render ' +
+    "inline, other files as downloads; the path must be inside the session workspace. Markdown image syntax like " +
+    "![](path) does not render a local path. A REMOTE `https://` image in markdown does render.",
+  "- Something with a UI: `bivy app publish <manifest.json>` (a web server's port, a static build, a terminal) or " +
+    "`bivy app run -- <command>` (a desktop app) gives the user a live preview; `bivy app shot` screenshots it so you " +
+    "can check your work; `bivy app present` tells the user a visible change is ready to look at. " +
+    "`bivy app --help` has the details.",
+].join("\n");
+
 const PREAMBLE =
   "The user's global Bivy instructions follow. They apply to every workspace; where they conflict with " +
   "instructions from the current repository (AGENTS.md, CLAUDE.md, …), the repository's instructions win.";
@@ -81,27 +100,23 @@ export function mergeSyncedAgentInstructions(appDir: string, incoming: unknown):
   return "local-newer";
 }
 
-/** Wrap the user's text in the precedence preamble; "" when there is nothing to send. */
+/** The Bivy note, then the user's text (if any) under the precedence preamble. */
 export function composeAgentInstructions(text: string): string {
   const body = text.trim();
-  return body ? `${PREAMBLE}\n\n${body}\n` : "";
+  return body ? `${BIVY_AGENT_NOTE}\n\n${PREAMBLE}\n\n${body}\n` : `${BIVY_AGENT_NOTE}\n`;
 }
 
 /**
- * The instructions for a session starting now, or undefined when the user has
- * none. Keeps a composed copy on disk (rewritten only when it changes) for
- * agents that take a file path rather than text.
+ * The instructions for a session starting now: always at least the Bivy note.
+ * Keeps a composed copy on disk (rewritten only when it changes) for agents
+ * that take a file path rather than text. Undefined only if that file can't be
+ * written.
  */
 export function sessionInstructions(appDir: string): SessionInstructions | undefined {
   const text = composeAgentInstructions(readAgentInstructions(appDir).text);
   const file = composedPath(appDir);
   try {
-    if (!text) {
-      // An MCP server spec injected earlier may still point here; don't let it
-      // serve instructions the user has since cleared.
-      fs.rmSync(file, { force: true });
-      return undefined;
-    }
+    fs.mkdirSync(appDir, { recursive: true });
     let current: string | undefined;
     try { current = fs.readFileSync(file, "utf8"); } catch { /* not written yet */ }
     if (current !== text) fs.writeFileSync(file, text);

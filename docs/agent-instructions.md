@@ -9,11 +9,22 @@ win. Bivy says so to the agent in a short preamble above your text.
 Edit them in **Settings → Agent instructions** in the web app or the iOS app.
 Changes apply to sessions started after you save.
 
+## The Bivy note
+
+Every session gets a short note from Bivy first, even when you haven't written
+any instructions. It tells the agent it runs inside Bivy, that you follow along in
+a chat and can't see its terminal or files on disk, and which commands reach you:
+`bivy attach` (or the `attach_to_chat` tool) to send a file or image, and
+`bivy app publish` / `run` / `shot` / `present` to preview, check and hand over
+something with a UI ([apps.md](apps.md)). The commands find the session through
+`$BIVY_SESSION_ID`, so any agent with a shell can use them. The note is
+`BIVY_AGENT_NOTE` in `src/agent-instructions.ts` and uses the channels below.
+
 ## How each agent receives them
 
 | Agent | Channel |
 | --- | --- |
-| Claude Code | Appended to the system prompt, after Bivy's own note. |
+| Claude Code | Appended to the system prompt. |
 | Codex | `developerInstructions` on `thread/start` / `thread/resume`. |
 | Pi | Appended to the system prompt. |
 | OpenCode | An `instructions` entry in `OPENCODE_CONFIG_CONTENT` (skipped if you already set that variable). |
@@ -39,4 +50,4 @@ text as `instructions` on `session.create` and `session.resume`.
   after you loaded it. The editor then lets you load that version or keep yours.
 - The limit is 16 KB, because the text is sent on every turn of every session.
 - Hosted runners, which only hold credentials you granted for unattended runs,
-  don't receive the instructions.
+  get the Bivy note but not your instructions.

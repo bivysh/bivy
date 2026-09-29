@@ -12,6 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   agentInstructionsPath,
+  BIVY_AGENT_NOTE,
   mergeSyncedAgentInstructions,
   readAgentInstructions,
   sessionInstructions,
@@ -42,19 +43,24 @@ test("an older or missing synced copy leaves the local file and asks to republis
   assert.equal(mergeSyncedAgentInstructions(tempDir(), undefined), "unchanged");
 });
 
-test("clearing propagates: a newer empty copy clears the instructions sessions receive", () => {
+test("sessions always get the Bivy note; clearing propagates and leaves only the note", () => {
   const dir = tempDir();
+  const noteOnly = sessionInstructions(dir);
+  assert.equal(noteOnly?.text, `${BIVY_AGENT_NOTE}\n`, "no instructions written yet: just the note");
+
   writeAgentInstructions(dir, "Use pnpm.", 1_000);
   const before = sessionInstructions(dir);
   assert.ok(before);
+  assert.ok(before.text.startsWith(BIVY_AGENT_NOTE));
   assert.match(before.text, /repository's instructions win/);
   assert.match(before.text, /Use pnpm\./);
   assert.equal(fs.readFileSync(before.file, "utf8"), before.text);
 
   assert.equal(mergeSyncedAgentInstructions(dir, { text: "", updatedAt: 2_000 }), "imported");
-  assert.equal(sessionInstructions(dir), undefined);
-  // The composed file an injected MCP server may still point at is gone too.
-  assert.equal(fs.existsSync(before.file), false);
+  const after = sessionInstructions(dir);
+  // The composed file an injected MCP server may still point at drops the cleared text too.
+  assert.equal(after?.text, `${BIVY_AGENT_NOTE}\n`);
+  assert.equal(fs.readFileSync(before.file, "utf8"), after?.text);
   assert.equal(fs.existsSync(agentInstructionsPath(dir)), true, "the empty file keeps the clear's timestamp");
 });
 
