@@ -33,8 +33,9 @@ export function accountHeader(extension: AccountExtensionView | undefined, confi
     // When allowance comes back only matters once it is running out.
     const freesAt = m.freesAt ? new Date(m.freesAt) : null;
     if (state !== "ok" && freesAt && freesAt > now) header.meter.freesNote = `A slot frees up ${formatWhen(freesAt, now)}`;
-    const primary = extension.actions?.find((a) => a.kind === "primary");
-    if (state !== "ok" && primary && showAccountExtension(config)) header.action = { id: primary.id, label: primary.label };
+    const own = m.action && typeof m.action.id === "string" && typeof m.action.label === "string" && m.action.label.trim() ? m.action : undefined;
+    const remedy = own ?? extension.actions?.find((a) => a.kind === "primary");
+    if (state !== "ok" && remedy && showAccountExtension(config)) header.action = { id: remedy.id, label: remedy.label.trim() };
   }
   return header;
 }
