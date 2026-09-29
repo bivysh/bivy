@@ -35,6 +35,21 @@ export async function initSentry(): Promise<SentryFacade> {
     // reporting allowance is small. Opt in with SENTRY_TRACES_SAMPLE_RATE.
     tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE ?? 0),
     serverName: "control-plane",
+    // @sentry/node 11 collects cookies, headers, HTTP bodies, user IPs, query
+    // params, DB query data and stack-frame locals by default. Requests here
+    // carry session cookies and auth tokens, so send only the error and stack.
+    dataCollection: {
+      userInfo: false,
+      cookies: false,
+      httpHeaders: false,
+      httpBodies: [],
+      urlQueryParams: false,
+      databaseQueryData: false,
+      queues: false,
+      stackFrameVariables: false,
+      genAI: { inputs: false, outputs: false },
+      graphQL: { document: false, variables: false },
+    },
   });
 
   return {
