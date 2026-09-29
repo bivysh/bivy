@@ -653,7 +653,10 @@ const runDelegation = new RunDelegationService({
       method: "POST",
       body: JSON.stringify({
         title: "Delegated Run",
-        body: `bivy-room-v1:${targetId}:${seal(pairingStore.roomKey(), input.instructions)}`,
+        // Only the target machine can open its Run body, so seal with ITS room
+        // key: this machine's own for local work, the sibling's (learned over
+        // the sealed pairing handshake) for another machine.
+        body: `bivy-room-v1:${targetId}:${seal(targetId === identity.nodeId ? pairingStore.roomKey() : await siblingRoomKey(targetId), input.instructions)}`,
         repo: input.repo,
         node: machine,
         runtimeId: input.agent,
@@ -704,6 +707,18 @@ async function siblingRequest(nodeId: string, command: Record<string, unknown>, 
   try {
     await client.connect();
     return await client.request(command, timeoutMs);
+  } finally {
+    client.close();
+  }
+}
+
+/** Another machine's room key, from a sealed pairing with it. */
+async function siblingRoomKey(nodeId: string): Promise<Buffer> {
+  if (!sessionAdvertiseTarget) throw new Error("This machine is not signed in to an account.");
+  const client = new SiblingClient({ controlPlaneUrl: sessionAdvertiseTarget.controlPlaneUrl, enrollmentToken: sessionAdvertiseTarget.enrollmentToken, siblingNodeId: nodeId, label: "Bivy delegation" });
+  try {
+    await client.connect();
+    return client.roomKey();
   } finally {
     client.close();
   }
@@ -4997,8 +5012,14 @@ function buildConflictPrompt(base: string, conflicts: string[]): string {
 async function runSessionTurn(record: SessionRecord, prompt: string, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) throw signal.reason ?? new Error("Run cancelled");
   let unsubscribe = () => {};
+  // A turn the agent failed (usage limit, auth, crash) still ends with
+  // agent_end; remember why so the Run fails instead of reporting success.
+  let turnError = "";
   const finished = new Promise<void>((resolve) => {
     unsubscribe = record.session.subscribe((event) => {
+      const e = event as { type: string; error?: unknown; message?: { stopReason?: unknown; errorMessage?: unknown } };
+      if (e.type === "session.error" && typeof e.error === "string") turnError ||= e.error;
+      if (e.type === "message_end" && e.message?.stopReason === "error" && typeof e.message.errorMessage === "string") turnError ||= e.message.errorMessage;
       if (event.type === "agent_end") resolve();
     });
   });
@@ -5012,6 +5033,7 @@ async function runSessionTurn(record: SessionRecord, prompt: string, signal?: Ab
   try {
     await turnWatchdog.promptWithWatchdog(record, prompt);
     await (signal ? Promise.race([finished, cancelled]) : finished);
+    if (turnError) throw new Error(turnError);
   } finally {
     signal?.removeEventListener("abort", onAbort);
     unsubscribe();
@@ -5481,8 +5503,11 @@ async function delegationAnswer(sessionId: string): Promise<string | undefined> 
   }
   const messages = transcripts.forkMessages(record);
   for (let i = messages.length - 1; i >= 0; i -= 1) {
-    const message = messages[i];
+    const message = messages[i] as RuntimeMessage & { stopReason?: unknown; errorMessage?: unknown };
     if (message?.role !== "assistant") continue;
+    // A turn the agent failed (usage limit, auth) ends on an error marker, not
+    // prose: hand the parent the reason instead of an empty answer.
+    if (message.stopReason === "error" && typeof message.errorMessage === "string" && message.errorMessage.trim()) return `The delegated agent failed: ${message.errorMessage.trim()}`;
     const text = runtimeContentText(message.content).trim();
     if (text) return text;
   }

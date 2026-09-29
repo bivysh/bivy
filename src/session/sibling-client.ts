@@ -62,6 +62,7 @@ interface Pending {
 export class SiblingClient {
   private ws?: WebSocket;
   private cipher?: RoomCipher;
+  private siblingRoomKey?: Buffer;
   private readonly keypair: PairingKeypair = newDeviceKeypair();
   private readonly reassembler = new FrameReassembler({ onReject: () => this.ws?.close() });
   private readonly transfers = new EventTransferReceiver({
@@ -169,6 +170,7 @@ export class SiblingClient {
     if (k === "pair.welcome") {
       try {
         const roomKey = acceptWelcome(this.keypair, { nodePublicKeyB64: String(p.nodePublicKeyB64 ?? ""), wrapped: String(p.wrapped ?? "") });
+        this.siblingRoomKey = roomKey;
         this.cipher = new RoomCipher(roomKey);
         this.resolvePaired?.();
       } catch (err) {
@@ -189,6 +191,13 @@ export class SiblingClient {
       return;
     }
     this.opts.onEvent?.(event);
+  }
+
+  /** The sibling's room key, once paired: what seals content only it can read
+   *  (e.g. a delegated Run's instructions queued for that machine). */
+  roomKey(): Buffer {
+    if (!this.siblingRoomKey) throw new Error("sibling client not paired");
+    return this.siblingRoomKey;
   }
 
   /** Send a command and await its correlated reply event (by requestId). */
