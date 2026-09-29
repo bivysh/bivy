@@ -93,6 +93,13 @@ for (const theme of themes) {
     const preview = page.getByRole("dialog", { name: "Preview: Storefront" });
     await expect(preview.frameLocator("iframe").getByRole("heading")).toHaveText("Storefront preview");
     await page.screenshot({ path: testInfo.outputPath(`review-preview-${theme}.png`), fullPage: true, animations: "disabled" });
+    // A history snapshot re-renders the transcript under new row keys; the open preview stays.
+    await page.evaluate((r) => (window as any).c.store.apply({ type: "session.history", sessionId: "s", runtimeId: "claude", messages: [
+      { role: "user", content: "Give the pay button more room above the home bar." },
+      { role: "assistant", content: [{ type: "bivy_app_review", review: r }, { type: "text", text: "Moved it." }] },
+    ] }), review({ shot: shot("a"), before: shot("b") }));
+    await expect(page.locator(".msg.assistant").filter({ hasText: "Moved it." })).toBeVisible();
+    await expect(preview.locator("iframe")).toHaveCount(1);
     await preview.getByRole("button", { name: "Share Site" }).click();
     await page.getByRole("button", { name: "Sharing options" }).click();
     await page.getByRole("menuitem", { name: "Revoke all access…", exact: true }).click();
