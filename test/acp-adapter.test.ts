@@ -160,6 +160,34 @@ await check("acp: an approved edit's own fs write is applied without a second ap
   }
 });
 
+await check("acp: an agent's thought_level option drives the reasoning-effort picker", async () => {
+  const dump = path.join(os.tmpdir(), `bivy-acp-config-${process.pid}.json`);
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_THOUGHT_LEVELS = "1";
+  process.env.BIVY_TEST_CONFIG_DUMP = dump;
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: __dirname, piDir: __dirname, sessionsDir: __dirname });
+    const { session } = await runtime.createSession({ workspace: __dirname, toolInterceptor: async () => undefined });
+    await session.warmModels?.();
+    assert.deepEqual(session.getAvailableThinkingLevels?.(), ["high", "low"]);
+    assert.equal(session.getThinkingLevel?.(), "high", "adopts the agent's current level");
+    session.setThinkingLevel?.("low");
+    const started = Date.now();
+    while (!fs.existsSync(dump) && Date.now() - started < 5000) await new Promise((r) => setTimeout(r, 20));
+    const applied = JSON.parse(fs.readFileSync(dump, "utf8"));
+    assert.deepEqual([applied.configId, applied.value], ["reasoning_effort", "low"], "applied through session/set_config_option");
+    assert.equal(session.getThinkingLevel?.(), "low");
+    session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_THOUGHT_LEVELS;
+    delete process.env.BIVY_TEST_CONFIG_DUMP;
+    fs.rmSync(dump, { force: true });
+  }
+});
+
 await check("acp: a tool's output that streamed before the closing frame survives in the result", async () => {
   // Regression: opencode's execute tool streams stdout in an in_progress
   // tool_call_update and closes with an empty `completed` frame. The shim must
@@ -362,6 +390,30 @@ await check("acp: failed native resume is explicit and never creates an empty re
     delete process.env.BIVY_ACP_COMMAND;
     delete process.env.BIVY_ACP_ARGS;
     delete process.env.ACP_FAIL_LOAD;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
+await check("acp: the history session/load replays is not re-emitted as live output", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-acp-replay-"));
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_LOAD_REPLAY = "1";
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: tmp, piDir: tmp, sessionsDir: tmp });
+    const { session } = await runtime.openSession({ workspace: tmp, sessionFile: "native-session", toolInterceptor: async () => undefined });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    await session.prompt("continue");
+    await waitFor(events, (event) => event.type === "agent_end");
+    const shown = JSON.stringify(events.filter((e) => e.type === "message_update"));
+    assert.doesNotMatch(shown, /old thought|old reply/);
+    assert.match(shown, /Hello from ACP/, "the new turn still streams");
+    session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_LOAD_REPLAY;
     fs.rmSync(tmp, { recursive: true, force: true });
   }
 });

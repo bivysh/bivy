@@ -42,11 +42,27 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       if (process.env.BIVY_TEST_MCP_DUMP) {
         try { fs.writeFileSync(process.env.BIVY_TEST_MCP_DUMP, JSON.stringify(params?.mcpServers ?? null)); } catch { /* ignore */ }
       }
-      reply(id, { sessionId });
+      // An agent with a reasoning-effort option (Grok's shape): ACP category
+      // "thought_level" beside the model option.
+      reply(id, process.env.ACP_THOUGHT_LEVELS === "1"
+        ? { sessionId, configOptions: [
+          { id: "model", category: "model", type: "select", currentValue: "fixture/m1", options: [{ value: "fixture/m1", name: "M1" }] },
+          { id: "reasoning_effort", category: "thought_level", type: "select", currentValue: "high", options: [{ value: "high", name: "High" }, { value: "low", name: "Low" }] },
+        ] }
+        : { sessionId });
+      return;
+    case "session/set_config_option":
+      if (process.env.BIVY_TEST_CONFIG_DUMP) fs.writeFileSync(process.env.BIVY_TEST_CONFIG_DUMP, JSON.stringify(params));
+      reply(id, {});
       return;
     case "session/load":
       if (process.env.ACP_FAIL_LOAD === "1") { replyError(id, "fixture refused session/load"); return; }
       sessionId = params?.sessionId ?? sessionId;
+      // Spec behavior: replay the conversation as session/update before replying.
+      if (process.env.ACP_LOAD_REPLAY === "1") {
+        notify("session/update", { sessionId, update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "old thought" } } });
+        notify("session/update", { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "old reply" } } });
+      }
       reply(id, { sessionId });
       return;
     case "session/cancel":

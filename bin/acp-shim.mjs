@@ -136,6 +136,11 @@ let initialized = false;
 let modelConfigId = "model";
 // A model chosen before the ACP session existed, applied once it does.
 let pendingModel = null;
+// True while session/load replays history (see session.resume).
+let replayingHistory = false;
+// The config-option id carrying reasoning effort (ACP category "thought_level"),
+// when the agent advertises one.
+let thoughtConfigId = null;
 // toolCallId -> { requestId, options } so a later bivy tool.decision answers the
 // right ACP permission request with a concrete optionId.
 const permissionRequests = new Map();
@@ -369,19 +374,25 @@ function publishModels(result) {
     // ACP model ids are `provider/model`; split the provider so Bivy can group and
     // scope provider-specific settings the same way it does for other runtimes.
     .map((m) => ({ ...m, provider: m.id.includes("/") ? m.id.split("/")[0] : "agent" }));
-  if (!models.length) return;
-  modelConfigId = String(modelOption?.id ?? "model");
+  // Reasoning effort rides the same config-option surface under ACP's
+  // `thought_level` category (Grok: reasoning_effort xhigh/high/medium/low).
+  const thoughtOption = options.find((o) => String(o?.category ?? "") === "thought_level");
+  const levels = (Array.isArray(thoughtOption?.options) ? thoughtOption.options : []).map((o) => String(o?.value ?? "")).filter(Boolean);
+  if (!models.length && !levels.length) return;
+  if (models.length) modelConfigId = String(modelOption?.id ?? "model");
+  if (levels.length) thoughtConfigId = String(thoughtOption.id);
   bivy({
     type: "runtime.models",
     models,
     ...(modelOption?.currentValue ? { currentModel: String(modelOption.currentValue) } : {}),
+    ...(levels.length ? { thinking: { levels, ...(thoughtOption?.currentValue ? { current: String(thoughtOption.currentValue) } : {}) } } : {}),
   });
 }
 
 // --- ACP → bivy: streamed session/update notifications ----------------------
 function onSessionUpdate(params) {
   const u = params?.update;
-  if (!u || typeof u !== "object") return;
+  if (!u || typeof u !== "object" || replayingHistory) return;
   // Any update arriving while the turn is draining means the agent is still
   // emitting the tail of this turn (see the drain note above) — reset the quiet
   // window so session.done waits for it instead of sealing history short.
@@ -600,7 +611,14 @@ async function onBivyCommand(msg) {
           // hanging the reopen with no watchdog to recover it (resume isn't a
           // "working" turn). On timeout/failure we fall back to a fresh session so
           // the chat still opens instead of spinning on "Fetching transcript…".
-          const res = await agentRequest("session/load", { sessionId: ref, cwd, mcpServers }, { timeoutMs: 30_000 });
+          // ACP agents replay the whole conversation as session/update during
+          // session/load. Bivy already has that history; forwarding the replay
+          // re-recorded past thinking (and could fold old text onto the last
+          // reply) as if it were live.
+          replayingHistory = true;
+          let res;
+          try { res = await agentRequest("session/load", { sessionId: ref, cwd, mcpServers }, { timeoutMs: 30_000 }); }
+          finally { replayingHistory = false; }
           sessionId = res?.sessionId ?? ref;
           publishModels(res);
         } catch (error) {
@@ -681,6 +699,15 @@ async function onBivyCommand(msg) {
         }
         await setAgentModel(model);
         bivy({ replyTo: id, ok: true });
+        return;
+      }
+      case "thinking.set": {
+        const level = String(msg.level ?? "").trim();
+        if (sessionId && thoughtConfigId && level) {
+          try { await agentRequest("session/set_config_option", { sessionId, configId: thoughtConfigId, value: level }, { timeoutMs: 15_000 }); }
+          catch (e) { bivy({ type: "runtime.debug", message: `acp set thought level failed: ${e instanceof Error ? e.message : String(e)}` }); }
+        }
+        if (id !== undefined) bivy({ replyTo: id, ok: true });
         return;
       }
       case "session.abort": {

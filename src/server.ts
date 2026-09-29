@@ -7967,6 +7967,11 @@ function attachSessionListeners(record: SessionRecord) {
       // sheet for the right provider alongside the inline error bubble.
       maybeSignalAuthRequired(record, String((event as { error?: unknown }).error ?? ""));
     }
+    if (event.type === "runtime.models") {
+      // A protocol agent published its model/effort catalog late (with its
+      // session). Push it so an open picker fills in without a refresh.
+      void modelsListEventFor(record).then((listed) => broadcast(listed)).catch(() => {});
+    }
     if (event.type === "runtime.commands") {
       // The agent learned its own slash commands mid-session (e.g. Claude Code's
       // system/init reports slash_commands only after the first turn starts).

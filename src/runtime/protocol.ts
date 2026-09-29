@@ -414,6 +414,30 @@ class ProtocolSession implements RuntimeSession {
    *  applied to the spawned child and reused by the per-turn preflight. */
   private prepareEnv: Record<string, string> = {};
   getModels(): ModelInfo[] { return this.models; }
+  // Reasoning-effort levels published by the shim (see runtime.models); empty
+  // when the agent has none, which keeps the picker hidden.
+  private thinkingLevels: string[] = [];
+  private thinkingLevel?: string;
+  private thinkingChosen = false;
+  supportsThinking(): boolean { return this.thinkingLevels.length > 0; }
+  getAvailableThinkingLevels(): string[] { return this.thinkingLevels; }
+  getThinkingLevel(): string | undefined { return this.thinkingLevel; }
+  setThinkingLevel(level: string): void {
+    const next = level.trim();
+    if (!this.thinkingLevels.includes(next)) return;
+    this.thinkingLevel = next;
+    this.thinkingChosen = true;
+    this.sendThinkingLevel(next);
+  }
+  /** Fire-and-forget like the pipe runtimes' flag. With no live agent yet the
+   *  choice is kept and sent once the agent publishes its levels. */
+  private sendThinkingLevel(level: string): void {
+    try {
+      void this.command("thinking.set", { sessionId: this.id, level }).catch(() => {});
+    } catch {
+      // Agent not running; runtime.models re-applies the kept choice.
+    }
+  }
   getCurrentModel(): ModelInfo | undefined {
     if (!this.currentModelId) return undefined;
     return this.models.find((m) => m.id === this.currentModelId) ?? { provider: "agent", id: this.currentModelId, name: this.currentModelId };
@@ -733,6 +757,20 @@ class ProtocolSession implements RuntimeSession {
         this.capabilitiesRef.modelSelection = true;
         if (typeof msg.currentModel === "string") this.currentModelId = msg.currentModel;
       }
+      // Reasoning-effort levels the agent advertises (an ACP `thought_level`
+      // config option), driven by the same picker as the pipe runtimes' flags.
+      const thinking = msg.thinking as { levels?: unknown; current?: unknown } | undefined;
+      const levels = Array.isArray(thinking?.levels) ? thinking.levels.filter((l): l is string => typeof l === "string" && Boolean(l)) : [];
+      if (levels.length) {
+        this.thinkingLevels = levels;
+        // A level picked before the agent was up is applied now; otherwise adopt
+        // the agent's own current level.
+        if (this.thinkingChosen && this.thinkingLevel && levels.includes(this.thinkingLevel)) this.sendThinkingLevel(this.thinkingLevel);
+        else if (typeof thinking?.current === "string") this.thinkingLevel = thinking.current;
+      }
+      // The catalog arrived after the client asked for it (it lands with the
+      // agent's session): let the node push the fresh model/effort picker.
+      if (models.length || levels.length) this.emit({ type: "runtime.models" });
       return;
     }
     if (type === "message.delta") {
