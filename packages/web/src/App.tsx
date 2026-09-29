@@ -46,6 +46,7 @@ import { StatusDot } from "./components/StatusDot.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
 import { GetStarted, GET_STARTED_PROMPT } from "./components/GetStarted.js";
+import { NotifyOffer } from "./components/NotifyOffer.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
@@ -139,6 +140,7 @@ export function App() {
   const [appsSheetOpen, setAppsSheetOpen] = useState(false);
   /** The app a "reviewer notes" notification opened the sheet at. */
   const [appsSheetApp, setAppsSheetApp] = useState<string | undefined>(undefined);
+  const [appsSheetView, setAppsSheetView] = useState<{ viewId: string; path?: string } | undefined>(undefined);
   // Fork sheet opened from an inline notice (e.g. "reached its usage limit —
   // Fork to another agent"), so the way past a limit is one tap from the chat.
   const [forkSheetOpen, setForkSheetOpen] = useState(false);
@@ -307,11 +309,14 @@ export function App() {
     readiness: state.catalogs.activationReadiness,
   }), [state.catalogs.activationReadiness, state.catalogs.runtimes, state.connection.signedIn, state.connection.status]);
   const agentAnswered = state.activeSession.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool);
+  // Shown once: remembered as seen as soon as it appears, but it stays on
+  // screen until answered rather than vanishing on the render that showed it.
   useEffect(() => {
     if (!agentAnswered || !state.activeSession.activeSessionId || automationNextStepDismissed) return;
     localStorage.setItem("bivy:automation-next-step", "done");
-    setAutomationNextStepDismissed(true);
   }, [agentAnswered, state.activeSession.activeSessionId, automationNextStepDismissed]);
+  // One next-step card at a time: the notification offer goes first.
+  const [notifyOfferOpen, setNotifyOfferOpen] = useState(false);
   // Latch: has this client ever had a live connection this run? Once true, we
   // treat the WHOLE transient reconnect window as still-composable — not just the
   // brief "reconnecting" beat, but the redial's "connecting" and any re-pair
@@ -648,6 +653,20 @@ export function App() {
     const review = new URLSearchParams(location.search).get("review");
     if (review && state.activeSession.activeSessionId) requestMessageJump(state.activeSession.activeSessionId, { reviewId: review });
   }, [state.activeSession.activeSessionId]);
+  // …and opens its live preview straight away, once the card is loaded; closing
+  // the preview leaves you on the card.
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const reviewId = params.get("review");
+    if (!reviewId || !state.activeSession.activeSessionId || state.connection.status !== "online") return;
+    const review = state.activeSession.transcript.find((entry) => entry.review?.id === reviewId)?.review;
+    if (!review) return;
+    params.delete("review");
+    history.replaceState(history.state, "", `${location.pathname}${params.size ? `?${params}` : ""}${location.hash}`);
+    setAppsSheetApp(review.appId);
+    setAppsSheetView({ viewId: review.viewId, path: review.path });
+    setAppsSheetOpen(true);
+  }, [state.activeSession.activeSessionId, state.activeSession.transcript, state.connection.status]);
   // A "reviewer notes" notification opens the Apps sheet at that app, once.
   useEffect(() => {
     const params = new URLSearchParams(location.search);
@@ -1086,13 +1105,21 @@ export function App() {
               }
             />
 
-            {agentAnswered && activeSession && !automationNextStepDismissed && (
-              <section className="card automation-next-step" aria-label="Next step">
+            {activeSession && (
+              <NotifyOffer
+                working={state.activeSession.working}
+                machineName={activeSessionNode?.name || undefined}
+                onOpenChange={setNotifyOfferOpen}
+              />
+            )}
+
+            {agentAnswered && activeSession && !automationNextStepDismissed && !notifyOfferOpen && (
+              <section className="card next-step" aria-label="Next step">
                 <div>
                   <strong>Make this repeatable</strong>
                   <p>Create an automation to run work without you.</p>
                 </div>
-                <div className="automation-next-step-actions">
+                <div className="next-step-actions">
                   <button type="button" className="btn sm primary" onClick={() => {
                     localStorage.setItem("bivy:automation-next-step", "done");
                     setAutomationNextStepDismissed(true);
@@ -1119,7 +1146,7 @@ export function App() {
             )}
 
             {appsSheetOpen && activeSession && (
-              <AppsSheet sessionId={activeSession.sessionId} appId={appsSheetApp} onClose={() => { setAppsSheetOpen(false); setAppsSheetApp(undefined); }} />
+              <AppsSheet sessionId={activeSession.sessionId} appId={appsSheetApp} openView={appsSheetView} onClose={() => { setAppsSheetOpen(false); setAppsSheetApp(undefined); setAppsSheetView(undefined); }} />
             )}
 
             {forkSheetOpen && activeSession && (

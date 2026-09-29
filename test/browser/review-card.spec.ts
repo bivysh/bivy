@@ -136,6 +136,22 @@ for (const theme of themes) {
   });
 }
 
+test("tapping a finished notification opens the live preview, and closing it leaves you on the card", async ({ page }) => {
+  await page.route("https://preview.example.net/**", (route) => route.fulfill({ contentType: "text/html", body: "<h1>Storefront preview</h1>" }));
+  // The push lands on /sessions/<id>?review=<id>; the card arrives with the history.
+  await page.evaluate((r) => {
+    history.replaceState(history.state, "", `${location.pathname}?review=${r.id}`);
+    (window as any).c.store.apply({ type: "session.event", sessionId: "s", event: { type: "app_review", id: r.id, review: r } });
+  }, review({ shot: shot("a") }));
+  const preview = page.getByRole("dialog", { name: "Preview: Storefront" });
+  await expect(preview.frameLocator("iframe").getByRole("heading")).toHaveText("Storefront preview");
+  expect(await page.evaluate(() => (window as any).commands.find((c: any) => c.kind === "apps.open"))).toMatchObject({ viewId: "v".repeat(32), path: "/checkout" });
+  expect(await page.evaluate(() => location.search)).toBe("");
+  await preview.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Storefront: changed in this run" })).toBeVisible();
+});
+
 test("opening a published preview skips discovery and sharing can close during a request", async ({ page }) => {
   await page.evaluate((r) => {
     const w = window as any;

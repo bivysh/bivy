@@ -51,6 +51,7 @@ const RETIRED_CLASSES = [
   "apps-notice", // → canonical banner in shared AppAccess controls
   "stat-grid", "stat", "stat-label", "stat-value", // Account panel counts; the lists carry them
   "composer-starter",
+  "automation-next-step", "automation-next-step-actions", // → shared .next-step card
   "autom-new-btn", "autom-save-btn", "autom-empty-new-btn", "pill",
   "picker-action", "repo-connect-copy", "connect-copy", "connect-refresh",
   "autom-notice", "autom-banner", "autom-success", "routing-readiness",
@@ -85,7 +86,7 @@ const STYLES_FILE = "packages/web/src/styles.css";
 const LAYOUT_ONLY = [
   { shell: ".card", owns: /(?:background|border(?!-collapse)|border-radius|box-shadow)\s*:/, selectors: [
     ".tui-locked-card", ".followup-card", ".wq-status-card", ".setup-card", ".changes-card", ".readiness",
-    ".ruleset-rule-card", ".queue-card", ".autom-runner-card", ".question-card", ".account-offer"] },
+    ".ruleset-rule-card", ".queue-card", ".autom-runner-card", ".question-card", ".account-offer", ".next-step"] },
   { shell: ".toast", owns: /(?:background|border(?!-collapse)|border-radius|box-shadow|padding)\s*:/, selectors: [
     ".update-toast", ".error-toast", ".notice-toast"] },
   { shell: ".field", owns: /(?:background|border(?!-collapse)|border-radius|color|font-size|font-family)\s*:/, selectors: [
