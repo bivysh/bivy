@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.9] - 2026-09-29
+
 ### Added
 
 - Give every agent session your own instructions, on top of the repository's AGENTS.md: edit them in Settings → Agent instructions, and they sync end-to-end encrypted to all your machines.
