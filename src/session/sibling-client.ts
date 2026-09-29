@@ -48,6 +48,8 @@ export interface SiblingClientOptions {
   onEvent?: (event: Record<string, unknown>) => void;
   /** Called on transport close so the owner can reconnect/backoff. */
   onClose?: () => void;
+  /** How long to wait for the sibling's pair.welcome (default 20s). */
+  pairTimeoutMs?: number;
 }
 
 /** A single request awaiting its correlated reply. */
@@ -109,7 +111,21 @@ export class SiblingClient {
     ws.on("message", (data: unknown) => this.onMessage(String(data), grant));
     ws.on("close", () => this.handleClose());
     ws.on("error", (err: Error) => this.rejectPaired?.(err));
-    await this.paired;
+    // A sibling that never answers pairing (offline behind a stale "online",
+    // or an incompatible build) must fail, not hang its caller forever.
+    const timeoutMs = this.opts.pairTimeoutMs ?? 20_000;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        this.paired,
+        new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("sibling did not answer pairing")), timeoutMs); }),
+      ]);
+    } catch (err) {
+      this.close();
+      throw err;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   private async onMessage(raw: string, grant: string): Promise<void> {
@@ -123,11 +139,17 @@ export class SiblingClient {
       // Begin account pairing to obtain the sibling's room key.
       // `ephemeral`: a sibling replica is a node↔node bridge, not a user device —
       // authorized for the room key but never listed as a signed-in device.
-      this.sendControl({ t: "pair", p: { k: "pair.account", sessionToken: grant, devicePublicKeyB64: this.keypair.publicKeyB64, label: this.opts.label ?? "Bivy replica", ephemeral: true } });
+      // Pair payloads travel as a JSON string, as the node's relay client
+      // expects (it ignores any other shape) and as it replies.
+      this.sendControl({ t: "pair", p: JSON.stringify({ k: "pair.account", sessionToken: grant, devicePublicKeyB64: this.keypair.publicKeyB64, label: this.opts.label ?? "Bivy replica", ephemeral: true }) });
       return;
     }
     if (msg.t === "pair") {
-      this.handlePair(msg.p as unknown as Record<string, unknown>);
+      let pair: unknown = msg.p;
+      if (typeof pair === "string") {
+        try { pair = JSON.parse(pair); } catch { return; }
+      }
+      if (pair && typeof pair === "object") this.handlePair(pair as Record<string, unknown>);
       return;
     }
     if (msg.t === "frame" && typeof msg.p === "string" && this.cipher) {
