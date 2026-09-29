@@ -41,6 +41,9 @@ export interface NodeConfig {
     autoAttachToolImages?: boolean;
     /** Let agents screenshot their app previews (`bivy app shot`). Off by default. */
     appScreenshots?: boolean;
+    /** Show "Made with Bivy" under shared previews. On by default; turning it off
+     *  is honoured when the account may hide it (see the control plane). */
+    previewBadge?: boolean;
     /** Maximum bytes transferred for a machine-local workspace fork. */
     forkWorkspaceMaxBytes?: number;
     /** Minutes a turn may keep streaming raw tool output without any structural
@@ -126,7 +129,7 @@ export function validateNodeConfig(value: unknown): NodeConfigResult {
   const node = section(root, "node", ["workspace", "port", "maxConcurrentAutomations", "capabilities"], errors);
   const defaults = section(root, "defaults", ["agent", "model", "sandbox", "approval"], errors);
   const safety = section(root, "safety", ["maxSandbox", "approvalFloor"], errors);
-  const sessions = section(root, "sessions", ["sync", "worktreeSync", "standbyNodeId", "resume", "autoAttachToolImages", "appScreenshots", "forkWorkspaceMaxBytes", "wedgedTurnMinutes"], errors);
+  const sessions = section(root, "sessions", ["sync", "worktreeSync", "standbyNodeId", "resume", "autoAttachToolImages", "appScreenshots", "previewBadge", "forkWorkspaceMaxBytes", "wedgedTurnMinutes"], errors);
   const github = section(root, "github", ["issuePrompt"], errors);
   const automation = section(root, "automation", ["checks", "checkTimeoutMinutes"], errors);
   const agentsRaw = section(root, "agents", Object.keys(record(root.agents) ?? {}), errors);
@@ -174,6 +177,7 @@ export function validateNodeConfig(value: unknown): NodeConfigResult {
   if (resume !== undefined && resume !== "auto" && resume !== "manual") errors.push("sessions.resume must be auto or manual");
   const autoAttachToolImages = optionalBoolean(sessions.autoAttachToolImages, "sessions.autoAttachToolImages", errors);
   const appScreenshots = optionalBoolean(sessions.appScreenshots, "sessions.appScreenshots", errors);
+  const previewBadge = optionalBoolean(sessions.previewBadge, "sessions.previewBadge", errors);
   const forkWorkspaceMaxBytes = optionalInteger(sessions.forkWorkspaceMaxBytes, "sessions.forkWorkspaceMaxBytes", errors, 1_048_576, 1_073_741_824);
   // Upper bound is the wall-clock turn cap (60 min): a wedged window at/above it
   // would never fire before the cap. 0 disables the band.
@@ -240,7 +244,7 @@ export function validateNodeConfig(value: unknown): NodeConfigResult {
     ...(Object.keys(node).length ? { node: { workspace, port, maxConcurrentAutomations, capabilities } } : {}),
     ...(Object.keys(defaults).length ? { defaults: { agent, model, sandbox, approval } } : {}),
     ...(Object.keys(safety).length ? { safety: { maxSandbox, approvalFloor } } : {}),
-    ...(Object.keys(sessions).length ? { sessions: { sync, worktreeSync, standbyNodeId, resume, autoAttachToolImages, appScreenshots, forkWorkspaceMaxBytes, wedgedTurnMinutes } } : {}),
+    ...(Object.keys(sessions).length ? { sessions: { sync, worktreeSync, standbyNodeId, resume, autoAttachToolImages, appScreenshots, previewBadge, forkWorkspaceMaxBytes, wedgedTurnMinutes } } : {}),
     ...(Object.keys(github).length ? { github: { issuePrompt } } : {}),
     ...(Object.keys(automation).length ? { automation: { checks, checkTimeoutMinutes } } : {}),
     ...(Object.keys(agents).length ? { agents } : {}),
@@ -292,6 +296,7 @@ export function configToLegacySettings(config: NodeConfig): Record<string, unkno
     ...(config.sessions?.resume ? { sessionResumeMode: config.sessions.resume } : {}),
     ...(config.sessions?.autoAttachToolImages !== undefined ? { autoAttachToolImages: config.sessions.autoAttachToolImages } : {}),
     ...(config.sessions?.appScreenshots !== undefined ? { appScreenshots: config.sessions.appScreenshots } : {}),
+    ...(config.sessions?.previewBadge !== undefined ? { previewBadge: config.sessions.previewBadge } : {}),
     ...(config.sessions?.forkWorkspaceMaxBytes !== undefined ? { forkWorkspaceMaxBytes: config.sessions.forkWorkspaceMaxBytes } : {}),
   };
 }
@@ -348,6 +353,7 @@ export function mergeLegacyIntoNodeConfig(cli: Record<string, unknown>, settings
       resume: settings.sessionResumeMode === "manual" ? "manual" : "auto",
       autoAttachToolImages: settings.autoAttachToolImages === true,
       appScreenshots: settings.appScreenshots === true,
+      previewBadge: settings.previewBadge !== false,
       forkWorkspaceMaxBytes: Number.isInteger(settings.forkWorkspaceMaxBytes) ? Number(settings.forkWorkspaceMaxBytes) : undefined,
     },
     github: { issuePrompt: typeof settings.githubIssuePrompt === "string" ? settings.githubIssuePrompt : undefined },
@@ -374,7 +380,7 @@ export function setConfigValue(config: NodeConfig, dotted: string, value: unknow
     "node.workspace", "node.port", "node.maxConcurrentAutomations", "node.capabilities",
     "defaults.agent", "defaults.model", "defaults.sandbox", "defaults.approval",
     "safety.maxSandbox", "safety.approvalFloor",
-    "sessions.sync", "sessions.worktreeSync", "sessions.standbyNodeId", "sessions.resume", "sessions.autoAttachToolImages", "sessions.appScreenshots", "sessions.forkWorkspaceMaxBytes", "sessions.wedgedTurnMinutes",
+    "sessions.sync", "sessions.worktreeSync", "sessions.standbyNodeId", "sessions.resume", "sessions.autoAttachToolImages", "sessions.appScreenshots", "sessions.previewBadge", "sessions.forkWorkspaceMaxBytes", "sessions.wedgedTurnMinutes",
     "github.issuePrompt", "automation.checks", "automation.checkTimeoutMinutes",
   ]);
   if (!allowed.has(dotted) && !/^agents\.[a-z][a-z0-9-]{1,47}$/.test(dotted) && !/^environment\.[A-Z][A-Z0-9_]+$/.test(dotted)) throw new Error(`Unknown configuration key: ${dotted}`);

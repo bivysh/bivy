@@ -2115,8 +2115,29 @@ const captureReviewerNote: NonNullable<ConstructorParameters<typeof AppGateway>[
   const ref = attachmentStore.put(Buffer.from(image.data, "base64"), { name: "Reviewer note (approximate).png", mimeType: "image/png", kind: "image" });
   return { hash: ref.hash, size: ref.size, width: image.width, height: image.height };
 };
-const appGateway = process.env.BIVY_APPS_ORIGIN ? new AppGateway(appRegistry, process.env.BIVY_APPS_ORIGIN, appReturnOrigins, appSignIn, captureReviewerNote) : undefined;
-const remotePreview = new RemotePreview(appRegistry, appReturnOrigins, appSignIn, captureReviewerNote);
+/** "Made with Bivy" under shared previews. Shown unless this machine turned it
+ *  off (sessions.previewBadge / BIVY_PREVIEW_BADGE) and — when it belongs to an
+ *  account — the control plane allows that account to hide it. Without a
+ *  control plane the machine's owner decides. Allowance cached for 10 minutes;
+ *  if it can't be checked, the badge shows. */
+let previewBadgeAllowance: { at: number; hideAllowed: boolean } | undefined;
+async function previewBadgeShown(): Promise<boolean> {
+  const env = process.env.BIVY_PREVIEW_BADGE;
+  const off = env === "0" || env === "false" || (env === undefined && readSettings().previewBadge === false);
+  if (!off) return true;
+  if (!sessionAdvertiseTarget) return false;
+  if (!previewBadgeAllowance || Date.now() - previewBadgeAllowance.at > 10 * 60_000) {
+    try {
+      const body = await delegatedRunRequest("/node/preview-badge");
+      previewBadgeAllowance = { at: Date.now(), hideAllowed: body.hideAllowed === true };
+    } catch {
+      return true;
+    }
+  }
+  return !previewBadgeAllowance.hideAllowed;
+}
+const appGateway = process.env.BIVY_APPS_ORIGIN ? new AppGateway(appRegistry, process.env.BIVY_APPS_ORIGIN, appReturnOrigins, appSignIn, captureReviewerNote, previewBadgeShown) : undefined;
+const remotePreview = new RemotePreview(appRegistry, appReturnOrigins, appSignIn, captureReviewerNote, previewBadgeShown);
 // Desktop app views: one private display per view, started on first open.
 const appDisplays = createDisplayHost(appDir);
 /** Review cards: screenshots become encrypted attachments (fetched by hash

@@ -199,7 +199,7 @@ export class AppGateway {
 
   /** `signIn` sends a signed-out visit to a view's stable address back
    * through Bivy, which re-opens it for a signed-in device. */
-  constructor(private readonly registry: AppRegistry, originTemplate: string, private readonly returnOrigins: () => readonly string[] = () => [], private readonly signIn?: (view: RegisteredView, path: string) => string | undefined, private readonly captureNote?: NoteCapture) {
+  constructor(private readonly registry: AppRegistry, originTemplate: string, private readonly returnOrigins: () => readonly string[] = () => [], private readonly signIn?: (view: RegisteredView, path: string) => string | undefined, private readonly captureNote?: NoteCapture, private readonly badge?: () => Promise<boolean>) {
     this.template = previewOriginTemplate(originTemplate);
     this.server = http.createServer((req, res) => { void this.handle(req, res).catch(() => { if (!res.headersSent) res.writeHead(502); res.end("Preview request failed."); }); });
     this.server.maxConnections = 256;
@@ -312,7 +312,9 @@ export class AppGateway {
       const entry = this.registry.getView(id);
       if (!grant || grant.appId !== id || !entry) { res.writeHead(401); res.end(); return; }
       res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ name: entry.app.name, origin: this.origin(id), returnTo: grant.returnTo, ...(grant.reusable ? { reviewer: true } : {}), ...(entry.target.kind === "display" ? { inspect: false } : {}) })); return;
+      // Someone opening a shared link sees "Made with Bivy" under the app; the owner doesn't.
+      const badge = grant.reusable && this.badge ? await this.badge().catch(() => true) : false;
+      res.end(JSON.stringify({ name: entry.app.name, origin: this.origin(id), returnTo: grant.returnTo, ...(grant.reusable ? { reviewer: true } : {}), ...(badge ? { badge: true } : {}), ...(entry.target.kind === "display" ? { inspect: false } : {}) })); return;
     }
     res.writeHead(404); res.end("Preview shell route not found.");
   }

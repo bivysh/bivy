@@ -577,7 +577,7 @@ test("copied links open reviewer controls, are reusable until revoked and lapse 
 
 test("the trusted shell only accepts scoped launch grants and configured chat return origins", async () => {
   const dir = workspace(); const registry = new AppRegistry();
-  const gateway = new AppGateway(registry, "https://{app}.preview.example.net", () => ["https://bivy.example", "http://localhost:5173"]);
+  const gateway = new AppGateway(registry, "https://{app}.preview.example.net", () => ["https://bivy.example", "http://localhost:5173"], undefined, undefined, async () => true);
   const port = await listen(gateway.server);
   try {
     const app = registry.publish("s", dir, staticManifest); const id = app.views[0].id;
@@ -591,7 +591,11 @@ test("the trusted shell only accepts scoped launch grants and configured chat re
     assert.equal((await request(port, launch.host, "/index.html")).status, 404);
     assert.equal((await request(port, launch.host, "/__bivy/launch", { method: "POST", headers: { origin: gateway.origin(id) }, body: launch.hash.slice(1) })).status, 403);
     const response = await request(port, launch.host, "/__bivy/launch", { method: "POST", headers: { origin: launch.origin }, body: launch.hash.slice(1) });
+    // The owner's own launch never carries "Made with Bivy"; a shared link's does.
     assert.deepEqual(JSON.parse(response.body), { name: app.name, origin: gateway.origin(id), returnTo: "https://bivy.example/sessions/s" });
+    const shared = new URL(gateway.share(id).url);
+    const sharedLaunch = await request(port, shared.host, "/__bivy/launch", { method: "POST", headers: { origin: shared.origin }, body: shared.hash.slice(1) });
+    assert.deepEqual(JSON.parse(sharedLaunch.body), { name: app.name, origin: gateway.origin(id), reviewer: true, badge: true });
     gateway.revoke(id);
     assert.equal((await request(port, launch.host, "/__bivy/launch", { method: "POST", headers: { origin: launch.origin }, body: launch.hash.slice(1) })).status, 401);
   } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
