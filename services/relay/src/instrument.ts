@@ -31,6 +31,21 @@ export async function initSentry(): Promise<SentryFacade> {
     // relay has no meaningful spans to sample. Opt in with the env var.
     tracesSampleRate: Number(process.env.SENTRY_TRACES_SAMPLE_RATE ?? 0),
     serverName: process.env.RELAY_SHARD_ID ? `relay-${process.env.RELAY_SHARD_ID}` : "relay",
+    // @sentry/node 11 collects cookies, headers, HTTP bodies, user IPs, query
+    // params and stack-frame locals by default. Relay requests carry device and
+    // stream tickets, so send only the error and stack.
+    dataCollection: {
+      userInfo: false,
+      cookies: false,
+      httpHeaders: false,
+      httpBodies: [],
+      urlQueryParams: false,
+      databaseQueryData: false,
+      queues: false,
+      stackFrameVariables: false,
+      genAI: { inputs: false, outputs: false },
+      graphQL: { document: false, variables: false },
+    },
   });
 
   return {
