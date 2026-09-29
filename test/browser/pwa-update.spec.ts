@@ -11,6 +11,9 @@ interface UpdateTestWindow extends Window {
   lastMessage: unknown;
 }
 
+// One dedicated dev server with its own dependency cache: keep the file on a
+// single worker so parallel workers do not each boot and pre-bundle another.
+test.describe.configure({ mode: "default" });
 let server: ViteDevServer;
 let origin: string;
 test.beforeAll(async () => {
