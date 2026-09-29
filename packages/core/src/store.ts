@@ -244,6 +244,11 @@ export interface SessionSummary {
 
 export type ToolStatus = "running" | "done";
 
+/** Mark every still-running tool entry done (a settled turn has no live tools). */
+function closeRunningTools(entries: TranscriptEntry[]): TranscriptEntry[] {
+  return entries.map((entry) => entry.tool?.status === "running" ? { ...entry, tool: { ...entry.tool, status: "done" as const } } : entry);
+}
+
 export interface ToolActivity {
   callId: string;
   name: string;
@@ -3044,7 +3049,12 @@ export class SessionStore {
       this.historyRaw.set(sessionId, { messages: full, count, historyHash });
       if (historyHash) this.onHistoryPersist?.(sessionId, full, count, historyHash);
     }
-    const rendered = this.withCachedAttachments(renderHistory(full));
+    // A tool the log never saw finish (a stderr stream from a failed turn, a
+    // crashed agent) is not running once the session has settled — the same
+    // close the live agent_end applies. Only a working session keeps spinners.
+    const settledState = normalizeSessionState(e.sessionState ?? e.bivySession?.state);
+    const settled = !(settledState ? settledState.agent === "working" : Boolean(e.isStreaming));
+    const rendered = this.withCachedAttachments(settled ? closeRunningTools(renderHistory(full)) : renderHistory(full));
     // Record the agent attachments this snapshot carries, then re-apply any it
     // dropped: agent attachments are append-only, so a snapshot missing one the
     // session already showed (a resume-race reconcile, or a transcript built from

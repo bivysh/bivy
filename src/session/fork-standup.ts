@@ -74,6 +74,8 @@ export interface ForkStandUpDeps<R extends ForkStandUpSession> {
   createSession(cwd: string, sessionFile: string | undefined, opts: { runtimeId: string; source?: string; sandbox?: SandboxTier; makeActive?: boolean; newSession?: boolean }): Promise<R>;
   broadcast(payload: unknown): void;
   persistSessionMetadata(record: R): void;
+  /** Show the source's rendered transcript in place of a text replay (see ForkDisplayLogEntry). */
+  recordForkDisplay(record: R, messages: NonNullable<ForkBundle["display"]>, forkedAt: number): void;
   scheduleAdvertise(): void;
   bivySessionEnvelope(record: R): unknown;
   applyRequestedModel(record: R, model: ModelRef | undefined): Promise<void>;
@@ -300,6 +302,10 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
     const record = plan.kind === "resume"
       ? await deps.createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false, newSession: true })
       : await deps.createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false, newSession: true });
+    // A replayed or seeded destination resumes from a text rendering of the
+    // conversation. Show the source's own transcript (tool cards, sub-agent
+    // nesting) in its place; everything the fork does from now on follows it.
+    if (plan.fidelity !== "full" && bundle.display?.length) deps.recordForkDisplay(record, bundle.display, Date.now());
     // Mark the new session as a fork of its source, so the run card can show
     // "Forked from …" and the lineage survives a reload (persisted below).
     record.forkedFrom = bundle.record.sourceSessionId;

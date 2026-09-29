@@ -31,6 +31,8 @@ export interface ForkCommandDeps {
   /** The session's conversation as the node knows it. A reopened protocol
    *  session's runtime transcript can be empty while the node's log holds it. */
   forkMessages(rec: SessionRecord): readonly RuntimeMessage[];
+  /** The session as this node renders it (tool cards, nesting) — see ForkBundle.display. */
+  forkDisplay(rec: SessionRecord): readonly RuntimeMessage[];
   /** Emit to every connected device (server's `broadcast`). */
   broadcast(event: unknown): void;
   resolveSession(sessionId: unknown): SessionRecord | undefined;
@@ -107,7 +109,7 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
         // When the client has already picked a target agent, pass it so the
         // bundle omits the native payload for a cross-runtime fork (it could
         // never be replayed there — see buildForkBundle). Unset => keep it.
-        const bundle = buildForkBundle({ runtime: deps.getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, workspaceSnapshot, targetRuntimeId: deps.agentFrom(msg), liveMessages: deps.forkMessages(rec), state: deps.forkInFlightState(rec) });
+        const bundle = buildForkBundle({ runtime: deps.getRuntime(rec.runtimeId), sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, workspaceSnapshot, targetRuntimeId: deps.agentFrom(msg), liveMessages: deps.forkMessages(rec), display: deps.forkDisplay(rec), state: deps.forkInFlightState(rec) });
         ctx.reply({ type: "session.fork.bundle", requestId, bundle });
       } catch (error) {
         ctx.reply({ type: "session.fork.error", requestId, error: error instanceof Error ? error.message : String(error) });
@@ -183,7 +185,7 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
           ? captureWorkspaceSnapshot(sourceCwd, { maxBytes: deps.forkWorkspaceMaxBytes() })
           : undefined;
         // Same runtime → the bundle carries the native payload → full fidelity.
-        const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, workspaceSnapshot, targetRuntimeId: rec.runtimeId, liveMessages: deps.forkMessages(rec), state: deps.forkInFlightState(rec) });
+        const bundle = buildForkBundle({ runtime, sessionFile: rec.sessionFile, record: forkRecord, dirtyPatch, workspaceSnapshot, targetRuntimeId: rec.runtimeId, liveMessages: deps.forkMessages(rec), display: deps.forkDisplay(rec), state: deps.forkInFlightState(rec) });
         // Cut a fresh fork branch (the source still holds its own); skip prereq
         // detection (same node + same runtime ⇒ agent and repo are present).
         const outcome = await deps.standUpFork({

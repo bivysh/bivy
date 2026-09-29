@@ -101,7 +101,15 @@ export interface ForkBundle {
   workspaceSnapshot?: import("./fork-dirty.js").WorkspaceSnapshot;
   /** In-flight turn/approval state, carried for disclosure (see the interface). */
   state?: ForkInFlightState;
+  /** The source transcript as the source node renders it (tool cards, nesting).
+   *  Display-only: a replayed or seeded destination shows it in place of the
+   *  portable text replay its agent resumes from. Omitted when oversized. */
+  display?: RuntimeMessage[];
 }
+
+/** Cap on the display transcript a bundle carries; larger sessions fall back to
+ *  showing the destination agent's own (text) replay. */
+export const FORK_DISPLAY_MAX_BYTES = 2 * 1024 * 1024;
 
 export interface BuildForkBundleOptions {
   runtime: AgentRuntime;
@@ -132,6 +140,8 @@ export interface BuildForkBundleOptions {
   liveMessages?: readonly RuntimeMessage[];
   /** In-flight turn/approval state to carry for disclosure on the destination. */
   state?: ForkInFlightState;
+  /** The source's rendered transcript (see ForkBundle.display). */
+  display?: readonly RuntimeMessage[];
 }
 
 /**
@@ -182,7 +192,8 @@ export function buildForkBundle(opts: BuildForkBundleOptions): ForkBundle {
       // transcript below still supports replay or a seeded continuation.
     }
   }
-  return { record, normalized, ...(native ? { native } : {}), ...(opts.dirtyPatch ? { dirtyPatch: opts.dirtyPatch } : {}), ...(opts.workspaceSnapshot ? { workspaceSnapshot: opts.workspaceSnapshot } : {}), ...(opts.state ? { state: opts.state } : {}) };
+  const display = opts.display?.length && JSON.stringify(opts.display).length <= FORK_DISPLAY_MAX_BYTES ? [...opts.display] : undefined;
+  return { record, normalized, ...(native ? { native } : {}), ...(display ? { display } : {}), ...(opts.dirtyPatch ? { dirtyPatch: opts.dirtyPatch } : {}), ...(opts.workspaceSnapshot ? { workspaceSnapshot: opts.workspaceSnapshot } : {}), ...(opts.state ? { state: opts.state } : {}) };
 }
 
 /**

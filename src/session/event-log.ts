@@ -201,6 +201,20 @@ export interface BaseLogEntry {
 }
 
 /**
+ * The source transcript a cross-agent fork carries, as the source node rendered
+ * it (tool cards, sub-agent nesting). The destination agent resumes from a
+ * portable text replay of the same conversation; this record stands in for that
+ * replay on screen. Runtime messages stamped at or before `forkedAt` are the
+ * replay and are hidden behind it; later ones are the fork's own turns.
+ */
+export interface ForkDisplayLogEntry {
+  bivyKind: "fork-display";
+  createdAt: number;
+  forkedAt: number;
+  messages: RuntimeMessage[];
+}
+
+/**
  * One appended attachment record: the durable references for the attachments a
  * user sent with a prompt, keyed by the persisted prompt text (the same composed
  * caption+placeholder text the base transcript stores for that user message).
@@ -289,7 +303,7 @@ export interface SuggestionLogEntry {
   id: string;
   suggestion: TaskSuggestion;
 }
-export type LogRecord = EventLogEntry | BaseLogEntry | AttachmentLogEntry | OutboundAttachmentLogEntry | InlineImageLogEntry | AppPublicationLogEntry | AppReviewLogEntry | SuggestionLogEntry;
+export type LogRecord = EventLogEntry | BaseLogEntry | ForkDisplayLogEntry | AttachmentLogEntry | OutboundAttachmentLogEntry | InlineImageLogEntry | AppPublicationLogEntry | AppReviewLogEntry | SuggestionLogEntry;
 
 /** Content-block type carried by a folded outbound attachment. MUST match
  *  `AGENT_ATTACHMENT_BLOCK` in packages/core/src/store-render.ts — the client's
@@ -306,6 +320,12 @@ function isBase(value: unknown): value is BaseLogEntry {
   if (!value || typeof value !== "object") return false;
   const record = value as { bivyKind?: unknown; messages?: unknown; reset?: unknown };
   return record.bivyKind === "base" && Array.isArray(record.messages) && typeof record.reset === "boolean";
+}
+
+function isForkDisplay(value: unknown): value is ForkDisplayLogEntry {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Partial<ForkDisplayLogEntry>;
+  return record.bivyKind === "fork-display" && Array.isArray(record.messages) && typeof record.forkedAt === "number";
 }
 
 function isAttachment(value: unknown): value is AttachmentLogEntry {
@@ -358,7 +378,7 @@ function isAppReviewEntry(value: unknown): value is AppReviewLogEntry {
 }
 
 function isRecord(value: unknown): value is LogRecord {
-  return isOverlay(value) || isBase(value) || isAttachment(value) || isOutboundAttachment(value) || isInlineImage(value) || isAppPublication(value) || isAppReviewEntry(value) || isSuggestionEntry(value);
+  return isOverlay(value) || isBase(value) || isForkDisplay(value) || isAttachment(value) || isOutboundAttachment(value) || isInlineImage(value) || isAppPublication(value) || isAppReviewEntry(value) || isSuggestionEntry(value);
 }
 
 /**
@@ -836,7 +856,22 @@ export class EventLog {
    *  the display overlays — what a fork carries to another agent. */
   deriveBase(id: string, runtimeBase?: readonly RuntimeMessage[]): RuntimeMessage[] {
     const logged = this.readBase(id);
-    return runtimeBase && runtimeBase.length ? mergeBases(logged, runtimeBase) : logged;
+    const base = runtimeBase && runtimeBase.length ? mergeBases(logged, runtimeBase) : logged;
+    const display = this.entries(id).find(isForkDisplay);
+    if (!display) return base;
+    const replayed = (m: RuntimeMessage) => {
+      const ts = (m as { timestamp?: unknown }).timestamp;
+      return typeof ts === "number" && ts <= display.forkedAt;
+    };
+    return [...display.messages, ...base.filter((m) => !replayed(m))];
+  }
+
+  /** Record a fork's source transcript for display (see ForkDisplayLogEntry). */
+  appendForkDisplay(id: string, messages: readonly RuntimeMessage[], forkedAt: number): void {
+    if (!messages.length) return;
+    this.load(id);
+    const record: ForkDisplayLogEntry = { bivyKind: "fork-display", createdAt: Date.now(), forkedAt, messages: JSON.parse(JSON.stringify(messages)) as RuntimeMessage[] };
+    this.enqueue(id, this.syntheticKey(id), record);
   }
 
   /** Full ordered record list (already-flushed followed by pending). */

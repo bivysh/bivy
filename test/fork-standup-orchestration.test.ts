@@ -50,12 +50,13 @@ function bundle(over: any = {}) {
 }
 
 function harness(over: Partial<ForkStandUpDeps<FakeRecord>> = {}) {
-  const calls: any = { createWorktree: [], createSession: [], broadcast: [], synced: 0, appliedModel: [] };
+  const calls: any = { createWorktree: [], createSession: [], broadcast: [], synced: 0, appliedModel: [], display: [] };
   const created = over.createSession ? undefined : fakeRecord();
   const deps: ForkStandUpDeps<FakeRecord> = {
     createSession: async (cwd, sessionFile, opts) => { calls.createSession.push({ cwd, sessionFile, opts }); return created!; },
     broadcast: (p) => calls.broadcast.push(p),
     persistSessionMetadata: () => {},
+    recordForkDisplay: (_r, messages) => { calls.display.push(messages); },
     scheduleAdvertise: () => {},
     bivySessionEnvelope: () => ({}),
     applyRequestedModel: async (_r, m) => { calls.appliedModel.push(m); },
@@ -251,4 +252,13 @@ test("applies the requested model and preserves title only when the record is un
   await standUp.standUpFork(opts({ bundle: bundle({ title: "Source Title" }), model: { provider: "anthropic", id: "opus" } }));
   assert.equal(created!.session.getName(), "Source Title", "unnamed fork inherits the source title");
   assert.deepEqual(calls.appliedModel[0], { provider: "anthropic", id: "opus" });
+});
+
+test("a replayed or seeded fork shows the source transcript; a native fork does not", async () => {
+  const display = [{ role: "assistant", content: [{ type: "tool_use", id: "t1", name: "bash", input: { command: "ls" } }] }] as any;
+  for (const [plan, shown] of [[{ kind: "resume", fidelity: "replayed", sessionFile: "/r.json" }, 1], [{ kind: "seed", fidelity: "seeded", seedPrompt: "go" }, 1], [{ kind: "resume", fidelity: "full", sessionFile: "/f.json" }, 0]] as const) {
+    const { calls, standUp } = harness({ materializeFork: async () => plan as any });
+    await standUp.standUpFork(opts({ bundle: { ...bundle(), display } }));
+    assert.equal(calls.display.length, shown, `${plan.fidelity}`);
+  }
 });
