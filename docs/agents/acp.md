@@ -68,8 +68,8 @@ are validated and promoted **by default**; the rest are opt-in with
 
 | Agent | id | Launch flag | Default | Control |
 | --- | --- | --- | --- | --- |
-| OpenCode | `opencode` | `acp` | **On** (validated 1.18.32) | `BIVY_OPENCODE_ACP=0` to force the pipe |
-| Grok | `grok` | `agent stdio` | **On** (validated 1.0.41) | `BIVY_GROK_ACP=0` to force the structured pipe |
+| OpenCode | `opencode` | `acp` | **On** (validated 1.18.33) | `BIVY_OPENCODE_ACP=0` to force the pipe |
+| Grok | `grok` | `agent stdio` | **On** (validated 1.0.44) | `BIVY_GROK_ACP=0` to force the structured pipe |
 | Gemini CLI | `gemini` | `--experimental-acp` | Off | `BIVY_GEMINI_ACP=1` |
 | Qwen Code | `qwen` | `--experimental-acp` (newer builds: `--acp`) | Off | `BIVY_QWEN_ACP=1` |
 | Goose | `goose` | `acp` | Off | `BIVY_GOOSE_ACP=1` |
