@@ -4785,7 +4785,7 @@ async function runIssueTaskInner(cfg: GitHubTaskConfig, issue: GitHubIssue, sour
   sessionNamer.setSessionName(record, issueSessionTitle(issue));
   // Best-effort model selection for runtimes that support it (e.g. claude-code, pi).
   if (directives.model && typeof (record.session as any).setModel === "function") {
-    try { assertSessionModel(record, directives.model); await (record.session as any).setModel("", directives.model); } catch {}
+    await applyRequestedModel(record, { provider: "", id: directives.model });
   }
   if (!record.worktree) throw new Error("worktree was not created for the issue session");
 
@@ -5631,7 +5631,7 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
       approvalMode: safety.approval,
     });
     sessionNamer.setSessionName(record, `${issue.identifier}: ${issue.title}`);
-    if (item.model) { try { await record.session.setModel("", item.model); } catch {} }
+    if (item.model) await applyRequestedModel(record, { provider: "", id: item.model });
     await report({ output: { sessionId: record.id, branch }, events: [{ at: new Date().toISOString(), kind: "branch", summary: "Linear issue working branch and session created.", ref: branch, url: issue.url }] });
     await runSessionTurn(record, buildLinearTaskPrompt(issue, item.body), signal);
     if (signal.aborted) throw signal.reason ?? new Error("Run cancelled");
@@ -5704,7 +5704,7 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
   sessionNamer.setSessionName(record, item.title);
   persistSessionMetadata(record);
   if (item.model) {
-    try { await record.session.setModel("", item.model); } catch {}
+    await applyRequestedModel(record, { provider: "", id: item.model });
   }
   // Record the session id with the control plane BEFORE the (potentially long)
   // turn runs, not just after it completes. A machine restart mid-turn must leave
