@@ -18,10 +18,11 @@ Zero to your first agent reply. Start in your browser or phone.
    the newly enrolled machine when it comes online. If several machines are
    already connected, you can choose one explicitly.
 5. Confirm a suggested repository, browse your available GitHub repositories,
-   or use the machine's default workspace. **Use starter task** fills in a
-   request to explain the repository and its tests without changing files.
-   Review or edit the prompt, then send it. A prompt isn't a sandbox guarantee;
-   check the session's protection setting before running work.
+   or use the machine's default workspace. **Show me around** sends a short
+   first message (you'll see it in the chat) asking the agent to look at the
+   workspace, suggest three first tasks, and wait for you to pick one before
+   changing any files. Or type your own task instead. A prompt isn't a sandbox
+   guarantee; check the session's protection setting before running work.
 6. Read the answer, steer the session, and review any changes or artifacts in
    the same interface.
 

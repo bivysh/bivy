@@ -9,7 +9,7 @@ test.beforeAll(async ({ webApp }) => {
 });
 
 for (const theme of themes) {
-  test(`first machine advances to a ready composer without a starter task (${theme})`, async ({ page }, testInfo) => {
+  test(`first machine advances to an agent-led first session (${theme})`, async ({ page }, testInfo) => {
     page.on("pageerror", error => console.error(error.message));
     await page.addInitScript((theme) => {
       localStorage.setItem("bivy_session", "sess_private_never_in_command");
@@ -76,7 +76,8 @@ for (const theme of themes) {
       const { controller } = await import(module);
       controller.store.apply({ type: "activation.readiness", credential: { configured: true, probed: true, ok: true }, repository: { chosen: false, probed: true, ok: true, authed: false } });
     });
-    await expect(page.getByRole("status", { name: "Setup readiness" })).toContainText("You're all ready to send a message.");
+    await expect(page.getByRole("heading", { name: "Let your agent show you around" })).toBeVisible();
+    await expect(page.getByRole("status", { name: "Setup readiness" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Use starter task" })).toHaveCount(0);
     await expect(page.locator(".composer-input")).toHaveValue("");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
@@ -104,10 +105,18 @@ for (const theme of themes) {
       const { controller } = await import(module);
       controller.store.setDraftEphemeralConfig(null);
     });
-    await expect(page.getByRole("status", { name: "Setup readiness" })).toContainText("You're all ready to send a message.");
+    await expect(page.getByRole("heading", { name: "Let your agent show you around" })).toBeVisible();
     await page.locator(".composer-input").focus();
     await expect(page.locator(".composer-input")).toBeFocused();
     await page.locator(".composer-input").fill("Explain the API authentication flow instead.");
     await expect(page.locator(".composer-input")).toHaveValue("Explain the API authentication flow instead.");
+    // One tap sends the visible "show me around" request as the first message.
+    await page.evaluate(async () => {
+      const module = "/src/store/useStore.ts";
+      const { controller } = await import(module);
+      controller.sendPrompt = (text: string) => { (window as unknown as { sent: string[] }).sent = [text]; };
+    });
+    await page.getByRole("button", { name: "Show me around" }).click();
+    expect(await page.evaluate(() => (window as unknown as { sent?: string[] }).sent?.[0])).toMatch(/^I'm new to Bivy\. Show me around:/);
   });
 }

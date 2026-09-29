@@ -45,6 +45,7 @@ import { Spinner } from "./components/Spinner.js";
 import { StatusDot } from "./components/StatusDot.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
+import { GetStarted, GET_STARTED_PROMPT } from "./components/GetStarted.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
@@ -949,7 +950,15 @@ export function App() {
 
         {!needsNode && !state.draft.ephemeralConfig && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
           <Suspense fallback={null}>
-            <ReadinessChecklist
+            {activation.activated ? (
+              <GetStarted
+                machineName={state.connection.nodes.find((n) => n.id === state.connection.currentNodeId)?.name || undefined}
+                onStart={() => {
+                  setTurnActive(true);
+                  controller.sendPrompt(GET_STARTED_PROMPT);
+                }}
+              />
+            ) : <ReadinessChecklist
               activation={activation}
               onRemediate={{
                 connect_machine: () => (document.querySelector(".node-switcher-btn") as HTMLButtonElement | null)?.click(),
@@ -957,7 +966,7 @@ export function App() {
                 authenticate_credential: () => (document.querySelector(".model-pill") as HTMLButtonElement | null)?.click(),
                 grant_repository: () => (document.querySelector(".repo-pill") as HTMLButtonElement | null)?.click(),
               }}
-            />
+            />}
           </Suspense>
         )}
 
