@@ -194,10 +194,9 @@ reviewer notes, which come back under the view in **Apps**.
 People who open a share link see a small **Made with Bivy** strip under the app,
 linking to bivy.sh. Your own previews never show it. A machine can turn it off
 with `bivy config set sessions.previewBadge false` (or `BIVY_PREVIEW_BADGE=0`).
-On a hosted account that works on the plans the deployment allows; a control
-plane lists them in `BIVY_PREVIEW_BADGE_HIDE_PLANS` (for example
-`individual,pro,team`), and when that is unset every machine decides for itself,
-which is the self-hosted default.
+A control plane can limit that to accounts on certain plans by listing them in
+`BIVY_PREVIEW_BADGE_HIDE_PLANS` (for example `individual,pro,team`); when it is
+unset, or the machine has no control plane, every machine decides for itself.
 
 > **Security:** a share link is a bearer capability. **Anyone who has the link
 > can use the app, including its live backend, until it expires or you revoke

@@ -45,7 +45,7 @@ async function main() {
   const node = (await json(port, "POST", "/nodes/enroll", { nodeId: "badge-node", name: "laptop" }, token)).body.enrollmentToken;
   expect((await json(port, "GET", "/node/preview-badge")).status === 401, "only an enrolled machine can ask");
   const free = await json(port, "GET", "/node/preview-badge", undefined, node);
-  expect(free.status === 200 && free.body.hideAllowed === false, "a free-plan account keeps the badge when the deployment lists paid plans");
+  expect(free.status === 200 && free.body.hideAllowed === false, "an account whose plan is not listed keeps the badge");
   console.log("\nAll preview badge checks passed.");
 }
 
