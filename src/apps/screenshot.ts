@@ -9,6 +9,7 @@ import { spawn, execFileSync } from "node:child_process";
 import { WebSocket } from "ws";
 import type { RegisteredView } from "./registry.js";
 import type { ElementScroll } from "./annotate.js";
+import { contentType } from "./mime.js";
 import { captureFrame, encodePng } from "./rfb.js";
 
 export interface ShotRequest {
@@ -51,8 +52,10 @@ async function serveSnapshot(files: Map<string, Buffer>): Promise<{ origin: stri
   const server = http.createServer((req, res) => {
     let file = decodeURIComponent((req.url ?? "/").split("?")[0]!);
     if (file.endsWith("/")) file += "index.html";
-    const data = files.get(file) ?? (path.extname(file) ? undefined : files.get("/index.html"));
+    const name = files.has(file) || path.extname(file) ? file : "/index.html";
+    const data = files.get(name);
     if (!data) { res.writeHead(404); res.end(); return; }
+    res.writeHead(200, { "content-type": contentType(name) });
     res.end(data);
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening");

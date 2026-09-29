@@ -23,18 +23,23 @@ test("agent screenshots are refused while the machine setting is off", async () 
 test("screenshots cover every web view at each width and theme", { skip: !findChrome() && "no Chrome/Chromium on this machine" }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-shot-test-"));
   const schemes: string[] = [];
+  let modulesRan = 0;
   const server = http.createServer((req, res) => {
     if (req.url?.startsWith("/seen")) { schemes.push(new URL(req.url, "http://x").searchParams.get("dark")!); res.end(); return; }
+    if (req.url === "/module-ran") { modulesRan++; res.end(); return; }
     res.setHeader("content-type", "text/html");
     res.end(`<!doctype html><title>Live</title><h1>Live</h1><script>fetch("/seen?dark="+matchMedia("(prefers-color-scheme: dark)").matches)</script>`);
   });
   server.listen(0, "127.0.0.1"); await once(server, "listening");
   try {
-    fs.mkdirSync(path.join(dir, "dist")); fs.writeFileSync(path.join(dir, "dist/index.html"), "<h1>Static</h1>");
+    // A built bundle's module script only runs if served with a JavaScript MIME type.
+    const port = (server.address() as { port: number }).port;
+    fs.mkdirSync(path.join(dir, "dist")); fs.writeFileSync(path.join(dir, "dist/index.html"), `<h1>Static</h1><script type="module" src="./app.js"></script>`);
+    fs.writeFileSync(path.join(dir, "dist/app.js"), `fetch("http://127.0.0.1:${port}/module-ran", { mode: "no-cors" });`);
     const registry = new AppRegistry();
     const service = new AppService(registry, undefined, terminals, { screenshots: { enabled: () => true } });
     service.publish("s", dir, { version: 1, name: "Both", views: [
-      { kind: "web", name: "Live", source: { kind: "service", port: (server.address() as { port: number }).port } },
+      { kind: "web", name: "Live", source: { kind: "service", port } },
       { kind: "web", name: "Static", source: { kind: "static", directory: "dist" } },
       { kind: "terminal", name: "Shell", command: "sh" },
     ] });
@@ -50,6 +55,7 @@ test("screenshots cover every web view at each width and theme", { skip: !findCh
       assert.equal(png.readUInt32BE(16), shot.width < 600 ? shot.width * 2 : shot.width);
     }
     assert.deepEqual(schemes, ["false", "true", "false", "true"]);
+    assert.equal(modulesRan, 4, "the static view's module script runs in every shot");
     await assert.rejects(service.shot("s", undefined, { widths: [100] }), /between 240 and 2560/);
   } finally { server.close(); server.closeAllConnections(); fs.rmSync(dir, { recursive: true, force: true }); }
 });

@@ -17,16 +17,10 @@ import type { AppRegistry, RegisteredView } from "./registry.js";
 import type { AppService } from "./service.js";
 import type { ReviewShot } from "./types.js";
 import { readStrokes, readElementScrolls } from "./annotate.js";
+import { contentType } from "./mime.js";
 
 export type NoteCapture = (entry: RegisteredView, mark: Parameters<AppService["annotate"]>[1]) => Promise<ReviewShot | undefined>;
 
-const MIME: Record<string, string> = {
-  ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png",
-  ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp", ".ico": "image/x-icon",
-  ".woff": "font/woff", ".woff2": "font/woff2", ".ttf": "font/ttf", ".wasm": "application/wasm",
-  ".txt": "text/plain; charset=utf-8", ".pdf": "application/pdf", ".mp4": "video/mp4", ".webm": "video/webm",
-};
 
 const COOKIE = "__Host-bivy-preview";
 const OPEN_PATH = "/__bivy/open";
@@ -404,7 +398,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
       }
       if (!data) { res.writeHead(404); res.end("File not found."); return; }
       const headers = responseHeaders({}, this.ancestors(id));
-      headers["content-type"] = MIME[path.extname(file).toLowerCase()] || "application/octet-stream";
+      headers["content-type"] = contentType(file);
       if (inspect && path.extname(file).toLowerCase() === ".html" && data.length <= MAX_INJECT_BYTES) data = withInspector(data);
       sendBytes(req, res, status, headers, data); return;
     }
