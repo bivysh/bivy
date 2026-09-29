@@ -115,6 +115,26 @@ const DELEGATE = new Set([
 const PATH_KEYS = ["path", "file_path", "filePath", "filename", "fileName", "file", "target_file", "targetFile"];
 
 /**
+ * `bivy delegate "<task>" --agent codex --machine mac` run from any agent's
+ * shell hands work to another agent/machine (docs/agent-delegation.md). Show it
+ * as the delegation it is — "Delegated · codex @ mac" — not as a shell command.
+ * `status` / `wait` follow-ups stay ordinary commands.
+ */
+function bivyDelegation(command: string): { label?: string; description?: string } | undefined {
+  const match = /^\s*bivy\s+delegate\b(.*)$/s.exec(command);
+  if (!match || /^\s+(status|wait|--help|-h)\b/.test(match[1]!)) return undefined;
+  const rest = match[1]!;
+  const flag = (name: string) => new RegExp(`--${name}(?:=|\\s+)("([^"]*)"|'([^']*)'|(\\S+))`).exec(rest);
+  const value = (m: RegExpExecArray | null) => m ? (m[2] ?? m[3] ?? m[4]) : undefined;
+  const agent = value(flag("agent"));
+  const machine = value(flag("machine"));
+  const quoted = /(?:^|\s)("([^"]+)"|'([^']+)')/.exec(rest.replace(/--[a-z-]+(?:=|\s+)("[^"]*"|'[^']*'|\S+)/g, ""));
+  const description = quoted ? (quoted[2] ?? quoted[3]) : undefined;
+  const label = [agent, machine && `@ ${machine}`].filter(Boolean).join(" ") || undefined;
+  return { ...(label ? { label } : {}), ...(description ? { description } : {}) };
+}
+
+/**
  * Classify one tool call into a normalized ToolCallDetail, or undefined when it
  * doesn't map to a known kind (the caller then leaves the tool block opaque).
  * Never throws — a weird/partial input degrades to undefined rather than failing
@@ -126,6 +146,8 @@ export function mapToolCall(toolName: string, input: unknown, context: ToolCallM
 
   if (inToolSet(SHELL, toolName, key)) {
     const command = str(o, "command", "cmd", "script", "input", "args");
+    const delegated = command ? bivyDelegation(command) : undefined;
+    if (delegated) return decorate({ kind: "delegation", ...delegated }, toolName, input, context);
     return command ? decorate({ kind: "shell", command, ...(str(o, "cwd", "workdir", "workingDir", "directory") ? { cwd: str(o, "cwd", "workdir", "workingDir", "directory") } : {}) }, toolName, input, context) : undefined;
   }
 

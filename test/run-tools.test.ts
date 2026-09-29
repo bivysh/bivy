@@ -78,3 +78,28 @@ test("wait reports success, failure, cancellation, and timeout without claiming 
   assert.equal(f.runs.get(child.runId)!.status, "pending");
   await assert.rejects(f.service.waitForRun("parent", child.runId, RUN_TOOL_LIMITS.maxWaitSeconds + 1), /timeoutSeconds/);
 });
+
+test("a finished child's answer comes back once, from the machine that ran it, bounded", async () => {
+  const { service, runs, backend, advance } = fixture();
+  const asked: string[] = [];
+  backend.answer = async (raw) => { asked.push(String(raw.id)); return "x".repeat(RUN_TOOL_LIMITS.maxAnswer + 50); };
+  const started = await service.startRun("parent", { instructions: "Review this", agent: "codex", machine: "linux-box" });
+  runs.get(started.runId)!.status = "running";
+  advance(RUN_TOOL_LIMITS.minPollMs);
+  assert.equal((await service.getRunStatus("parent", started.runId)).answer, undefined, "no answer while the child works");
+  runs.get(started.runId)!.status = "succeeded";
+  runs.get(started.runId)!.output = { sessionId: "child-session" };
+  advance(RUN_TOOL_LIMITS.minPollMs);
+  const done = await service.getRunStatus("parent", started.runId);
+  assert.equal(done.answer?.length, RUN_TOOL_LIMITS.maxAnswer);
+  assert.ok(done.answer?.endsWith("…"));
+  advance(RUN_TOOL_LIMITS.minPollMs);
+  await service.getRunStatus("parent", started.runId);
+  assert.deepEqual(asked, [started.runId], "fetched once, then cached");
+  const failing = fixture();
+  failing.backend.answer = async () => { throw new Error("machine unreachable"); };
+  const child = await failing.service.startRun("parent", { instructions: "x" });
+  failing.runs.get(child.runId)!.status = "failed";
+  failing.advance(RUN_TOOL_LIMITS.minPollMs);
+  assert.equal((await failing.service.getRunStatus("parent", child.runId)).status, "failed", "an unreachable answer never hides the outcome");
+});

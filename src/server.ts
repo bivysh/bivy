@@ -192,6 +192,7 @@ import {
   inlineImageDisplayName,
 } from "./session/inline-image-fetch.js";
 import { ReplicationService } from "./session/replication-service.js";
+import { SiblingClient } from "./session/sibling-client.js";
 import type { ReplWireFrame } from "./session/replicator.js";
 import { createSessionNewDedupe } from "./session/session-new-dedupe.js";
 import { computeSessionContract, type SessionContractRuntimeFacts } from "./session/session-contract.js";
@@ -657,6 +658,27 @@ const runDelegation = new RunDelegationService({
         delegationDepth: provenance.depth,
       }),
     });
+  },
+  // The child's reply is read from the machine that ran it — locally, or over
+  // the sealed node-to-node relay channel. It never travels through the Run queue.
+  answer: async (raw) => {
+    const output = raw.output && typeof raw.output === "object" ? raw.output as Record<string, unknown> : {};
+    const sessionId = typeof output.sessionId === "string" ? output.sessionId : "";
+    if (!sessionId) return undefined;
+    const routing = raw.routing && typeof raw.routing === "object" ? raw.routing as Record<string, unknown> : {};
+    const machine = typeof routing.nodeLabel === "string" && routing.nodeLabel ? routing.nodeLabel : identity.name;
+    if (machine === identity.name) return delegationAnswer(sessionId);
+    const nodes = await delegatedRunRequest("/nodes") as unknown;
+    const target = Array.isArray(nodes) ? nodes.find((node) => node && typeof node === "object" && (node as Record<string, unknown>).name === machine) as Record<string, unknown> | undefined : undefined;
+    if (typeof target?.id !== "string" || !sessionAdvertiseTarget) return undefined;
+    const client = new SiblingClient({ controlPlaneUrl: sessionAdvertiseTarget.controlPlaneUrl, enrollmentToken: sessionAdvertiseTarget.enrollmentToken, siblingNodeId: target.id, label: "Bivy delegation" });
+    try {
+      await client.connect();
+      const reply = await client.request({ kind: "delegation.answer", sessionId }, 20_000);
+      return typeof reply.answer === "string" ? reply.answer : undefined;
+    } finally {
+      client.close();
+    }
   },
 });
 // Delegated Runs remain available through the explicit Session API, but are not
@@ -2567,6 +2589,13 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     // Reconnect recovery (onReconnected re-requests history): re-emit any
     // pending question/approval card the client missed while disconnected.
     if (record) replayPendingInteractions(record.id);
+  },
+  // A co-owned node asking for a delegated child's answer over the sealed
+  // node-to-node channel (see runDelegation.answer). Replies to the requester.
+  async "delegation.answer"(msg, ctx) {
+    const sessionId = typeof msg.sessionId === "string" ? msg.sessionId : "";
+    const answer = sessionId ? await delegationAnswer(sessionId).catch(() => undefined) : undefined;
+    ctx.reply({ type: "delegation.answer", requestId: msg.requestId, sessionId, ...(answer ? { answer } : {}) });
   },
   async "sessions.list"() {
     // Relay clients request the list on every connect/reconnect. Replay even an
@@ -5333,6 +5362,28 @@ async function waitForSessionIdle(record: SessionRecord, capMs = 2 * 60 * 60 * 1
     }
     await new Promise((resolve) => setTimeout(resolve, 2_000));
   }
+}
+
+/**
+ * A delegated child's result for its parent (docs/agent-delegation.md): the
+ * session's final assistant reply, from the node's own transcript. Opened from
+ * disk when the session isn't live. Undefined for an unknown session.
+ */
+async function delegationAnswer(sessionId: string): Promise<string | undefined> {
+  let record = resolveSession(sessionId);
+  if (!record) {
+    const summary = (await listAllSessions()).find((s) => s.id === sessionId);
+    if (!summary?.path) return undefined;
+    record = await createSession(defaultWorkspace, summary.path, { runtimeId: summary.agent, makeActive: false });
+  }
+  const messages = transcripts.forkMessages(record);
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message?.role !== "assistant") continue;
+    const text = runtimeContentText(message.content).trim();
+    if (text) return text;
+  }
+  return undefined;
 }
 
 /** Text of the most recent user message in a session's transcript, if any. */

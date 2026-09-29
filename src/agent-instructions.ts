@@ -54,6 +54,9 @@ export const BIVY_AGENT_NOTE = [
     '`bivy suggest "<complete instruction>" [--title "short label"]` instead of only listing them. The user can ' +
     "start each in one tap, in this session or in a parallel one that works in its own copy of the project, so " +
     "write it to stand on its own, with paths relative to the project root.",
+  "- Only when the user asks for another agent or another of their machines to take part: " +
+    '`bivy delegate "<self-contained task>" --agent <id> [--machine <name>] --wait` runs it there and prints ' +
+    "its answer and any branch/PR (`bivy nodes` lists machines). Use your own sub-agents for everything else.",
 ].join("\n");
 
 const PREAMBLE =
