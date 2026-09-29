@@ -501,8 +501,20 @@ export async function fetchAccountSessions(store: LocalStore, fetchImpl: typeof 
 
 export interface AccountExtensionView {
   title?: string;
+  /** Short plan/status line shown under the email in the account header. */
+  summary?: string;
+  /** One metered allowance for the account header. The client warns as `used`
+   *  nears `limit` and, where actions are allowed, offers the primary action.
+   *  `freesAt` (ISO) is when some of the allowance comes back — a rolling
+   *  window's oldest use expiring, or a fixed period resetting. */
+  meter?: { label: string; used: number; limit: number; freesAt?: string };
   facts?: Array<{ id: string; label: string; value: string }>;
   actions?: Array<{ id: string; label: string; kind?: "primary" | "secondary" }>;
+  /** Something worth moving to (e.g. a paid plan), shown as its own card
+   *  wherever actions are allowed. `action` is the id of one of `actions`; its
+   *  button lives in the card instead of the actions row. Facts whose label
+   *  matches `meter.label` are not repeated — the meter shows them. */
+  offer?: { title: string; price?: string; description?: string; points?: string[]; action: string };
 }
 
 export interface AccountMe {

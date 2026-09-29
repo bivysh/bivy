@@ -52,8 +52,18 @@ export type DeploymentLifecycleEvent =
 
 export interface AccountExtensionView {
   title?: string;
+  /** Short plan/status line shown under the email in the account header. */
+  summary?: string;
+  /** One metered allowance for the account header. The client warns as `used`
+   *  nears `limit` and, where actions are allowed, offers the primary action.
+   *  `freesAt` (ISO) is when some of the allowance comes back — a rolling
+   *  window's oldest use expiring, or a fixed period resetting. */
+  meter?: { label: string; used: number; limit: number; freesAt?: string };
   facts?: Array<{ id: string; label: string; value: string }>;
   actions?: Array<{ id: string; label: string; kind?: "primary" | "secondary" }>;
+  /** One line shown with the actions — e.g. what upgrading gets you. Hidden
+   *  wherever the actions are hidden. */
+  actionHint?: string;
 }
 
 export class DeploymentExtension {

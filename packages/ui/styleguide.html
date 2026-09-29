@@ -182,6 +182,10 @@ section > .lede { color: var(--muted); font-size: var(--text-sm); margin: 0 0 va
   border-radius: var(--radius-full); padding: 2px 9px; font-size: var(--text-xs);
   font-weight: var(--weight-bold); line-height: 1.5; white-space: nowrap;
   border: 1px solid transparent; }
+.meter { display: block; height: 6px; border-radius: var(--radius-full); background: var(--surface-3); overflow: hidden; }
+.meter-fill { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+.meter[data-state="near"] .meter-fill { background: var(--warn); }
+.meter[data-state="reached"] .meter-fill { background: var(--danger); }
 .badge.upper { text-transform: uppercase; letter-spacing: 0.03em; font-size: 11px; }
 /* outline (default) */
 .badge { color: var(--muted); border-color: var(--line-strong); }
@@ -342,7 +346,7 @@ section > .lede { color: var(--muted); font-size: var(--text-sm); margin: 0 0 va
 <div class="wrap">
   <nav class="nav">
     <a href="#color">Color</a><a href="#type">Type</a><a href="#space">Spacing &amp; radius</a>
-    <a href="#buttons">Buttons</a><a href="#badges">Badges</a><a href="#status">Status</a>
+    <a href="#buttons">Buttons</a><a href="#badges">Badges</a><a href="#meter">Meter</a><a href="#status">Status</a>
     <a href="#source">Source marks</a><a href="#cards">Cards</a><a href="#messages">Messages</a>
     <a href="#feedback">Toasts &amp; banners</a><a href="#inputs">Inputs</a><a href="#menus">Menus</a>
     <a href="#segmented">Segmented</a><a href="#loading">Loading</a>
@@ -490,6 +494,19 @@ section > .lede { color: var(--muted); font-size: var(--text-sm); margin: 0 0 va
         <span class="badge" data-variant="solid" data-tone="ok">3</span>
       </div>
       <div class="consolidates"><b>Consolidates FOUR overlapping systems:</b> outline pills (<code>.chip</code>, <code>.chk</code>, <code>.runtime-*</code>, <code>.github-pill</code>, <code>.session-pr</code>), uppercase soft/solid badges (<code>.approval-badge</code>, <code>.question-chip</code>, <code>.artifact-badge</code>, <code>.tool-fail</code>, <code>.session-filter-count</code>), and info pills. Note the app spelled “warning” three ways (<code>--accent</code> vs <code>--warn</code>) — here it's always <code>--warn</code>.</div>
+    </div>
+  </section>
+
+  <!-- METER ------------------------------------------------------------- -->
+  <section id="meter">
+    <h2>Meter</h2>
+    <p class="lede">One <code>.meter</code> for an allowance or usage bar, with <code>role="meter"</code> and an <code>aria-valuetext</code>. <code>data-state</code> tints it; always pair it with the count in text.</p>
+    <div class="spec"><div class="spec-h"><b>States</b> <code>data-state="ok" | "near" | "reached"</code></div>
+      <div class="demo" style="flex-direction: column; align-items: stretch; max-width: 280px;">
+        <div class="meter" role="meter" aria-label="ok" aria-valuenow="3" aria-valuemin="0" aria-valuemax="10"><span class="meter-fill" style="width: 30%"></span></div>
+        <div class="meter" role="meter" aria-label="near" aria-valuenow="8" aria-valuemin="0" aria-valuemax="10" data-state="near"><span class="meter-fill" style="width: 80%"></span></div>
+        <div class="meter" role="meter" aria-label="reached" aria-valuenow="10" aria-valuemin="0" aria-valuemax="10" data-state="reached"><span class="meter-fill" style="width: 100%"></span></div>
+      </div>
     </div>
   </section>
 

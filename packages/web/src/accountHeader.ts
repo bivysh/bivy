@@ -1,0 +1,88 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// What the Settings account card shows under the email: the deployment's plan
+// line, one usage meter, and — only when the allowance is nearly or fully used
+// — its primary action (e.g. upgrade). Everything comes from the opaque
+// deployment extension; Core names no tiers or limits itself.
+import type { AccountExtensionView } from "@bivy/core";
+import { accountPresentationMessage, clientConfiguration, showAccountExtension, type ClientConfiguration } from "./client-config.js";
+
+/** Share of the allowance at which the card starts nudging. */
+const NEAR_LIMIT = 0.8;
+
+export type MeterState = "ok" | "near" | "reached";
+
+export interface AccountHeader {
+  summary?: string;
+  meter?: { label: string; used: number; limit: number; state: MeterState; freesNote?: string };
+  action?: { id: string; label: string };
+}
+
+export function accountHeader(extension: AccountExtensionView | undefined, config: ClientConfiguration = clientConfiguration, now = new Date()): AccountHeader {
+  if (!extension || config.accountExtension === "hidden") return {};
+  // "facts" builds (store-distributed clients) drop anything an account message
+  // rule flags, the same way the Account panel filters its facts.
+  const allowed = (text: string) => config.accountExtension === "visible" || accountPresentationMessage(text, config) === text;
+  const header: AccountHeader = {};
+  const summary = extension.summary?.trim();
+  if (summary && allowed(summary)) header.summary = summary;
+  const m = extension.meter;
+  if (m && typeof m.label === "string" && m.label.trim() && Number.isFinite(m.used) && Number.isFinite(m.limit) && m.limit > 0 && allowed(m.label)) {
+    const used = Math.max(0, Math.min(m.used, m.limit));
+    const state: MeterState = used >= m.limit ? "reached" : used / m.limit >= NEAR_LIMIT ? "near" : "ok";
+    header.meter = { label: m.label.trim(), used, limit: m.limit, state };
+    // When allowance comes back only matters once it is running out.
+    const freesAt = m.freesAt ? new Date(m.freesAt) : null;
+    if (state !== "ok" && freesAt && freesAt > now) header.meter.freesNote = `A slot frees up ${formatWhen(freesAt, now)}`;
+    const primary = extension.actions?.find((a) => a.kind === "primary");
+    if (state !== "ok" && primary && showAccountExtension(config)) header.action = { id: primary.id, label: primary.label };
+  }
+  return header;
+}
+
+const DAY = 24 * 60 * 60 * 1000;
+
+/** "in 25 min", "today at 14:00", "tomorrow at 09:30", "Thu at 14:00", or
+ *  "Tue 6 Oct at 14:00" once the weekday alone would be ambiguous. */
+export function formatWhen(at: Date, now: Date, locale?: string): string {
+  const minutes = Math.ceil((at.getTime() - now.getTime()) / 60_000);
+  if (minutes < 60) return `in ${Math.max(1, minutes)} min`;
+  const time = at.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+  const startOf = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((startOf(at) - startOf(now)) / DAY);
+  if (days === 0) return `today at ${time}`;
+  if (days === 1) return `tomorrow at ${time}`;
+  const day = at.toLocaleDateString(locale, days < 6 ? { weekday: "short" } : { weekday: "short", day: "numeric", month: "short" });
+  return `${day} at ${time}`;
+}
+
+export interface AccountOffer {
+  title: string;
+  price?: string;
+  description?: string;
+  points: string[];
+  action: { id: string; label: string };
+}
+
+/** The extension's offer card, if it names one of its own actions and this
+ *  client may show actions at all (store builds never do). */
+export function accountOffer(extension: AccountExtensionView | undefined, config: ClientConfiguration = clientConfiguration): AccountOffer | undefined {
+  const o = extension?.offer;
+  if (!o || !showAccountExtension(config) || typeof o.title !== "string" || !o.title.trim()) return undefined;
+  const action = extension.actions?.find((a) => a.id === o.action);
+  if (!action) return undefined;
+  const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  return {
+    title: o.title.trim(),
+    price: text(o.price),
+    description: text(o.description),
+    points: Array.isArray(o.points) ? o.points.map(text).filter((p): p is string => !!p) : [],
+    action: { id: action.id, label: action.label },
+  };
+}
+
+/** Facts to list under the plan: those the meter already shows (same label)
+ *  are left to the meter. */
+export function planFacts<T extends { label: string }>(facts: readonly T[], extension: AccountExtensionView | undefined): T[] {
+  const metered = extension?.meter?.label?.trim().toLowerCase();
+  return metered ? facts.filter((f) => f.label.trim().toLowerCase() !== metered) : [...facts];
+}

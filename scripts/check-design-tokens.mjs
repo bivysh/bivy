@@ -49,6 +49,7 @@ const hexRe = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/g;
 const rawZIndexRe = /z-index\s*:\s*-?\d/;
 const RETIRED_CLASSES = [
   "apps-notice", // → canonical banner in shared AppAccess controls
+  "stat-grid", "stat", "stat-label", "stat-value", // Account panel counts; the lists carry them
   "composer-starter",
   "autom-new-btn", "autom-save-btn", "autom-empty-new-btn", "pill",
   "picker-action", "repo-connect-copy", "connect-copy", "connect-refresh",
@@ -84,7 +85,7 @@ const STYLES_FILE = "packages/web/src/styles.css";
 const LAYOUT_ONLY = [
   { shell: ".card", owns: /(?:background|border(?!-collapse)|border-radius|box-shadow)\s*:/, selectors: [
     ".tui-locked-card", ".followup-card", ".wq-status-card", ".setup-card", ".changes-card", ".readiness",
-    ".ruleset-rule-card", ".queue-card", ".autom-runner-card", ".question-card"] },
+    ".ruleset-rule-card", ".queue-card", ".autom-runner-card", ".question-card", ".account-offer"] },
   { shell: ".toast", owns: /(?:background|border(?!-collapse)|border-radius|box-shadow|padding)\s*:/, selectors: [
     ".update-toast", ".error-toast", ".notice-toast"] },
   { shell: ".field", owns: /(?:background|border(?!-collapse)|border-radius|color|font-size|font-family)\s*:/, selectors: [

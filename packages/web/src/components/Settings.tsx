@@ -19,6 +19,7 @@ import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { setCloudMachinesEnabled, useCloudMachinesEnabled } from "../cloudMachines.js";
 import { requestSignIn } from "../signInRequest.js";
 import { clientConfiguration } from "../client-config.js";
+import { accountHeader, accountOffer, planFacts, type AccountHeader as AccountHeaderView, type MeterState } from "../accountHeader.js";
 import { accountExtensionFacts, accountOrigin, hasNativeSubscriptions, isPackagedClient, openAccountAction, openNativeSubscriptions, showAccountExtension } from "../packaged-client.js";
 import { getAppIconBadgeEnabled, setAppIconBadgeEnabled, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "../notificationSettings.js";
 import { CheckIcon, ChevronRightIcon, CloseIcon, CopyIcon } from "./UiIcons.js";
@@ -125,6 +126,67 @@ function useMediaQuery(query: string): boolean {
 }
 
 type NavItem = { id: View; label: string; icon: ReactNode };
+
+/** The signed-in account for the Settings account card; null until loaded (or
+ *  when not hosted / the fetch fails — the card then just reads "Account"). */
+function useAccountMe(hosted: boolean): AccountMe | null {
+  const [me, setMe] = useState<AccountMe | null>(null);
+  useEffect(() => {
+    if (!hosted) return;
+    let live = true;
+    controller.fetchMe().then((next) => { if (live) setMe(next); }).catch(() => {});
+    return () => { live = false; };
+  }, [hosted]);
+  return me;
+}
+
+const METER_NOTE: Record<MeterState, string | null> = { ok: null, near: "Almost used up", reached: "Limit reached" };
+
+/** The account card's allowance meter, with the deployment's primary action
+ *  (e.g. upgrade) once the allowance is nearly or fully used. */
+function AccountUsage({ meter, action }: { meter: NonNullable<AccountHeaderView["meter"]>; action?: AccountHeaderView["action"] }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const note = METER_NOTE[meter.state];
+  return (
+    <div className="settings-account-usage" data-state={meter.state}>
+      <div className="settings-account-usage-row">
+        <span>{meter.label}</span>
+        <span className="settings-account-usage-count">{meter.used} of {meter.limit}</span>
+      </div>
+      <div className="meter" role="meter" aria-label={meter.label} aria-valuemin={0} aria-valuemax={meter.limit} aria-valuenow={meter.used} aria-valuetext={`${meter.used} of ${meter.limit}${note ? ` — ${note.toLowerCase()}` : ""}`} data-state={meter.state}>
+        <span className="meter-fill" style={{ width: `${(meter.used / meter.limit) * 100}%` }} />
+      </div>
+      {note && (
+        <span className="settings-account-usage-status">
+          <span className="settings-account-usage-note">{note}</span>
+          {meter.freesNote && <span>{meter.freesNote}</span>}
+        </span>
+      )}
+      {action && (
+        <button
+          type="button"
+          className="btn primary block"
+          disabled={busy}
+          onClick={() => {
+            setBusy(true);
+            setErr(null);
+            controller.invokeAccountExtensionAction(action.id)
+              .then(({ url }) => openAccountAction(url))
+              .catch((e) => setErr(String(e?.message || e)))
+              .finally(() => setBusy(false));
+          }}
+        >{busy ? "Opening…" : action.label}</button>
+      )}
+      {err && <div className="banner inline" data-tone="danger">{err}</div>}
+    </div>
+  );
+}
+
+function accountInitials(email: string): string {
+  const local = email.split("@")[0] ?? "";
+  return (local.replace(/[^a-z0-9]/gi, "") || email).slice(0, 2).toUpperCase();
+}
 type NavGroup = { label: string; items: NavItem[] };
 
 const TITLES: Record<View, string> = {
@@ -259,6 +321,9 @@ export function Settings({
         ...(cloudMachinesEnabled
           ? [{ id: "ephemeral" as View, label: "Cloud machine profiles", icon: <IconBolt /> }]
           : []),
+        // Pasting a link code is a fallback for adding a machine — signing in is
+        // the main flow — so it sits here rather than beside the account.
+        ...(hosted ? [{ id: "link" as View, label: "Link a device", icon: <IconLink /> }] : []),
       ],
     },
     // Integrations (GitHub / Linear / Slack) and automation & policy (Work Queue,
@@ -275,21 +340,21 @@ export function Settings({
       ],
     },
   ];
-  if (hosted) {
-    groups.push({
-      label: "Account",
-      items: [
-        { id: "account", label: "Account", icon: <IconUser /> },
-        { id: "link", label: "Link a device", icon: <IconLink /> },
-      ],
-    });
-  }
+  // Hosted accounts get an identity card pinned to the top of the menu (the
+  // Claude / ChatGPT pattern) instead of a group buried below App.
+  const accountMe = useAccountMe(hosted);
+  const accountEmail = accountMe?.account?.email ?? null;
+  const header = accountHeader(accountMe?.extension);
+  const accountItem: NavItem = { id: "account", label: accountEmail ?? "Account", icon: <IconUser /> };
 
   const q = query.trim().toLowerCase();
-  const matches = (item: NavItem) => !q || `${item.label} ${SEARCH_TERMS[item.id]}`.toLowerCase().includes(q);
+  const matches = (item: NavItem) => !q || `${item.label} ${TITLES[item.id]} ${SEARCH_TERMS[item.id]}`.toLowerCase().includes(q);
+  const showAccount = hosted && matches(accountItem);
   // A query matching nothing used to hide every group and leave the sidebar
   // blank — looked broken rather than "no results" (#140).
-  const hasVisibleNavItem = groups.some((group) => group.items.some(matches));
+  const hasVisibleNavItem = showAccount || groups.some((group) => group.items.some(matches));
+  const navItemClass = (id: View) =>
+    `settings-nav-item${activeView === id || (id === "providers" && activeView === "models") ? " active" : ""}`;
 
   const title = activeView ? TITLES[activeView] : "Settings";
 
@@ -329,6 +394,19 @@ export function Settings({
           </div>
           <nav className="settings-nav-groups">
             {!hasVisibleNavItem && <div className="picker-empty">No settings match "{query.trim()}"</div>}
+            {showAccount && (
+              <div className="settings-account-card">
+                <button className={navItemClass("account")} title={accountEmail ?? undefined} onClick={() => onViewChange("account")}>
+                  <span className="settings-account-avatar" aria-hidden>{accountEmail ? accountInitials(accountEmail) : accountItem.icon}</span>
+                  <span className="settings-account-text">
+                    <span className="settings-nav-label">{accountItem.label}</span>
+                    <span className="settings-account-sub">{header.summary ?? "Account"}</span>
+                  </span>
+                  <span className="settings-nav-chevron"><ChevronRightIcon size={18} /></span>
+                </button>
+                {header.meter && <AccountUsage meter={header.meter} action={header.action} />}
+              </div>
+            )}
             {groups.map((group) => {
               const visible = group.items.filter(matches);
               if (visible.length === 0) return null;
@@ -338,7 +416,7 @@ export function Settings({
                   {visible.map((it) => (
                     <button
                       key={it.id}
-                      className={`settings-nav-item${activeView === it.id || (it.id === "providers" && activeView === "models") ? " active" : ""}`}
+                      className={navItemClass(it.id)}
                       onClick={() => {
                         if (it.id === "providers") setCredentialProvider(null);
                         onViewChange(it.id);
@@ -2209,9 +2287,17 @@ function AccountPanel() {
     controller.listNodes().then(setNodes).catch(() => {});
     reloadDevices();
   }, []);
-  const counts = me?.counts;
-  const extensionFacts = accountExtensionFacts(me?.extension?.facts);
-  const extensionActions = showAccountExtension() ? me?.extension?.actions ?? [] : [];
+  const planRows = planFacts(accountExtensionFacts(me?.extension?.facts), me?.extension);
+  const usage = accountHeader(me?.extension);
+  const offer = accountOffer(me?.extension);
+  const otherActions = (showAccountExtension() ? me?.extension?.actions ?? [] : []).filter((a) => a.id !== offer?.action.id);
+  const runAction = (id: string) => {
+    setAccountAction(id);
+    controller.invokeAccountExtensionAction(id)
+      .then(({ url }) => openAccountAction(url))
+      .catch((e) => setErr(String(e?.message || e)))
+      .finally(() => setAccountAction(null));
+  };
   return (
     <div className="settings-form">
       {confirm && (
@@ -2231,11 +2317,6 @@ function AccountPanel() {
           <strong>{me.account.email}</strong>
         </div>
       )}
-      <div className="stat-grid">
-        <Stat label="Machines" value={String(counts?.nodes ?? nodes.length)} />
-        <Stat label="Devices" value={String(counts?.devices ?? devices.length)} />
-        <Stat label="Visible sessions" value={counts?.sessions == null ? "—" : String(counts.sessions)} />
-      </div>
       {hasNativeSubscriptions() && (
         <div className="settings-section">
           <h4 className="settings-subhead">Subscriptions</h4>
@@ -2249,41 +2330,59 @@ function AccountPanel() {
           <p className="muted">Purchases and restores are handled by your app store.</p>
         </div>
       )}
-      {me?.extension && (extensionFacts.length > 0 || extensionActions.length > 0) && (
+      {me?.extension && (planRows.length > 0 || usage.meter || otherActions.length > 0) && (
         <div className="settings-section">
           <h4 className="settings-subhead">{me.extension.title || "Account service"}</h4>
           {/* The extension's facts are opaque label/value pairs — render them
               through the standard settings row (label left, value right, hairline
               separators) rather than a bespoke layout. */}
           <div>
-            {extensionFacts.map((fact) => (
+            {planRows.map((fact) => (
               <div className="settings-toggle-row" key={fact.id}>
                 <span className="muted">{fact.label}</span>
                 <strong>{fact.value}</strong>
               </div>
             ))}
           </div>
-          {extensionActions.length > 0 && <div className="card-actions">
-            {extensionActions.map((action) => (
+          {/* The same allowance meter as the Settings account card. */}
+          {usage.meter && <AccountUsage meter={usage.meter} />}
+          {otherActions.length > 0 && <div className="card-actions">
+            {otherActions.map((action) => (
               <button
                 type="button"
                 key={action.id}
                 className={`btn ${action.kind === "primary" ? "primary" : ""}`}
                 disabled={accountAction !== null}
-                onClick={() => {
-                  setAccountAction(action.id);
-                  controller.invokeAccountExtensionAction(action.id)
-                    .then(({ url }) => openAccountAction(url))
-                    .catch((e) => setErr(String(e?.message || e)))
-                    .finally(() => setAccountAction(null));
-                }}
+                onClick={() => runAction(action.id)}
               >{accountAction === action.id ? "Opening…" : action.label}</button>
             ))}
           </div>}
         </div>
       )}
+      {offer && (
+        <section className="card account-offer" data-tone="accent" aria-labelledby="account-offer-title">
+          <div className="card-head">
+            <span className="card-title" id="account-offer-title">{offer.title}</span>
+            {offer.price && <span className="account-offer-price">{offer.price}</span>}
+          </div>
+          {offer.description && <p className="card-sub">{offer.description}</p>}
+          {offer.points.length > 0 && (
+            <ul className="account-offer-points">
+              {offer.points.map((point) => (
+                <li key={point}><span className="account-offer-check" aria-hidden><CheckIcon size={16} /></span>{point}</li>
+              ))}
+            </ul>
+          )}
+          <button
+            type="button"
+            className="btn primary block"
+            disabled={accountAction !== null}
+            onClick={() => runAction(offer.action.id)}
+          >{accountAction === offer.action.id ? "Opening…" : offer.action.label}</button>
+        </section>
+      )}
       <div className="settings-section">
-        <h4 className="settings-subhead">Enrolled machines</h4>
+        <h4 className="settings-subhead">Enrolled machines{nodes.length > 0 && <span className="muted"> · {nodes.length}</span>}</h4>
         <div className="picker-list">
           {nodes.length === 0 && <div className="picker-empty">No machines enrolled yet.</div>}
           {nodes.map((n) => (
@@ -2315,7 +2414,7 @@ function AccountPanel() {
       </div>
 
       <div className="settings-section">
-        <h4 className="settings-subhead">Signed-in devices</h4>
+        <h4 className="settings-subhead">Signed-in devices{devices.length > 0 && <span className="muted"> · {devices.length}</span>}</h4>
         <div className="picker-list">
           {devices.length === 0 && <div className="picker-empty">No paired devices.</div>}
           {devices.map((d) => {
@@ -2382,15 +2481,6 @@ function formatDeviceDate(iso: string): string {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return "recently";
   return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="stat">
-      <div className="stat-label">{label}</div>
-      <div className="stat-value">{value}</div>
-    </div>
-  );
 }
 
 // ---- Link a device ----
