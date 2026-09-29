@@ -83,6 +83,9 @@ test("a sub-agent tool_call persists its parentToolUseId onto the tool_use block
   assert.equal(eventLog.appended.length, 2);
   assert.equal(eventLog.appended[0].entry.content[0].parentToolUseId, undefined, "a top-level call carries no parent");
   assert.equal(eventLog.appended[1].entry.content[0].parentToolUseId, "parent-1", "the sub-agent call nests under its delegation on reload");
+  // Pi names the parent of a nested call (codemode, ctx.executeTool) parentToolCallId.
+  tp.persistToolActivityFromEvent(sess(), { type: "tool_execution_start", toolName: "read", args: { path: "a" }, toolCallId: "child-2", parentToolCallId: "parent-1" } as any);
+  assert.equal(eventLog.appended[2].entry.content[0].parentToolUseId, "parent-1", "a Pi nested call nests too");
 });
 
 test("a progress-only tool_execution_update (elapsedSeconds, no detail) does not overwrite the tool-call overlay", () => {
