@@ -82,6 +82,19 @@ function FollowupRow({
   // text can't change (it's already sealed), only the fire time, via the inline
   // editor; nothing else (reorder/send-next) applies.
   const locked = item.status !== "queued" && !scheduled;
+  const [starting, setStarting] = useState(false);
+  // A new idea needn't wait for this session: run it now in its own session
+  // (same project and agent), leaving this one working.
+  const startSeparately = async () => {
+    setStarting(true);
+    try {
+      await controller.startSessionLike(sessionId, item.text, item.attachments);
+      controller.removeFollowup(sessionId, item.id);
+    } catch (error) {
+      onError?.(error instanceof Error ? error.message : String(error));
+      setStarting(false);
+    }
+  };
 
   function startEdit() {
     if (locked) return;
@@ -331,7 +344,16 @@ function FollowupRow({
                 <button
                   type="button"
                   className="queue-action-btn"
-                  disabled={locked}
+                  disabled={locked || starting}
+                  onClick={() => void startSeparately()}
+                  title="Start this now in its own session; this one keeps working"
+                >
+                  {starting ? "Starting…" : "Run in new session"}
+                </button>
+                <button
+                  type="button"
+                  className="queue-action-btn"
+                  disabled={locked || starting}
                   onClick={() => controller.sendFollowupNow(sessionId, item.id)}
                   title={sendNowLabel}
                 >

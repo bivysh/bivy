@@ -230,6 +230,15 @@ export class SessionOrchestrator {
     if (id) port.send({ kind: "session.resume", sessionId: id });
   }
 
+  /** Start another session like `sourceSessionId` (same project, agent, model
+   *  and safety) and send it `text`, without switching to it. Resolves with the
+   *  new session's id once the node has created it. */
+  async startLike(sourceSessionId: string, text: string, attachments?: unknown[]): Promise<string> {
+    const reply = await this.request({ kind: "session.new", like: sourceSessionId, title: text, prompt: text, ...(attachments?.length ? { attachments } : {}) }, 120_000, "Starting the session timed out");
+    this.workflowPort().refreshSessions();
+    return String((reply as { sessionId?: unknown }).sessionId ?? "");
+  }
+
   async importNativeSession(runtimeId: string, ref: string, acceptDisclosure = false): Promise<ServerEvent> {
     return this.request({ kind: "session.import", runtimeId, ref, acceptDisclosure }, 60_000);
   }
@@ -402,12 +411,12 @@ export class SessionOrchestrator {
     };
   }
 
-  private request(command: Command, timeoutMs: number): Promise<ServerEvent> {
+  private request(command: Command, timeoutMs: number, timeoutMessage = "Fork request timed out"): Promise<ServerEvent> {
     const requestId = this.deps.createRequestId();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(requestId);
-        reject(new Error("Fork request timed out"));
+        reject(new Error(timeoutMessage));
       }, timeoutMs);
       this.pending.set(requestId, { resolve, reject, timer });
       this.deps.sendRequest({ ...command, requestId });

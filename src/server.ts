@@ -80,6 +80,7 @@ import { createSessionEngine } from "./session/engine.js";
 import { exportProviderAuth, exportAccountApiKeys, exportAccountOAuthCredentials, importAccountOAuthCredentials, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, setCredentialUnattended, exportUnattendedRecords, unattendedCredentialRevision, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords, reconcileHostedCredentialRecords } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
+import { sessionLikeFields } from "./session/start-like.js";
 import { BIVY_AGENT_NOTE, mergeSyncedAgentInstructions, readAgentInstructions, sessionInstructions, writeAgentInstructions, MAX_AGENT_INSTRUCTIONS_BYTES } from "./agent-instructions.js";
 import { execEphemeralRequest, type EphemeralExecRequest } from "./ephemeral-exec.js";
 import { ApprovalManager, type ApprovalRequest } from "./approval.js";
@@ -3140,12 +3141,25 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       broadcast({ type: "session.error", sessionId: record.id, error: sessionAgentError(record, error) });
     });
   },
-  async "session.new"(msg) {
+  async "session.new"(msg, ctx) {
     // Start a fresh session. With `repo` ("owner/repo"), clone it and branch
     // off origin/main (or, with `branch`, the requested remote branch) into a
     // new git worktree named from `title` (the user's first message). With an
     // explicit `workspace` path, start in that folder. Otherwise use the
     // default Bivy workspace.
+    //
+    // `like: <sessionId>` starts another session like that one (same project,
+    // agent, model and safety; explicit fields still win), and `prompt` sends
+    // it a first message — so a client can start parallel work in the
+    // background without switching to it.
+    if (typeof msg.like === "string" && msg.like) {
+      const source = openSessions.get(msg.like);
+      if (!source) {
+        relay?.sendEvent({ type: "session.error", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined, error: "Session not found" });
+        return;
+      }
+      msg = { ...sessionLikeFields(source), ...msg };
+    }
     const repoInput = typeof msg.repo === "string" ? msg.repo.trim() : "";
     const workspaceInput = typeof msg.workspace === "string" ? msg.workspace.trim() : "";
     const title = typeof msg.title === "string" ? msg.title : undefined;
@@ -3234,8 +3248,12 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       }),
       requestId,
     });
+    if (typeof msg.prompt === "string" && msg.prompt.trim()) {
+      await clientCommands.dispatch("prompt", { kind: "prompt", sessionId: record.id, text: msg.prompt, ...(msg.attachments ? { attachments: msg.attachments } : {}) }, ctx);
+    }
   },
 };
+
 const clientCommands = new CommandRegistry(RELAY_COMMANDS, CLIENT_COMMAND_SCHEMAS);
 
 // Relay transport binding: `reply` answers the requesting remote client over the
@@ -10622,6 +10640,12 @@ app.get("/api/session/history", async (req, res) => {
 
 app.post("/api/session", async (req, res, next) => {
   try {
+    // `like` / `prompt`: see the relay `session.new` handler.
+    if (typeof req.body?.like === "string" && req.body.like) {
+      const source = openSessions.get(req.body.like);
+      if (!source) return res.status(404).json({ error: "Session not found" });
+      req.body = { ...sessionLikeFields(source), ...req.body };
+    }
     // A git-workspace session: clone "owner/repo" and branch off origin/main into
     // a new worktree named from `title` (the user's first message), mirroring the
     // relay `session.new` repo path. Takes precedence over a manual workspace path.
@@ -10686,6 +10710,12 @@ app.post("/api/session", async (req, res, next) => {
     );
     persistSessionMetadata(session);
     res.json({ id: session.id, workspace: session.workspace, source: session.source, branch: session.worktree?.branch, prUrl: session.prUrl, sessionFile: session.sessionFile, name: session.session.getName(), runtimeId: session.runtimeId, agentName: getRuntime(session.runtimeId).displayName, model: publicModel(session.session.getCurrentModel(), session.session.getCurrentModel()), sessionState: sessionState(session) });
+    if (typeof req.body?.prompt === "string" && req.body.prompt.trim()) {
+      const { prompt, attachments } = req.body as { prompt: string; attachments?: unknown };
+      // The response is already sent; a failed turn reaches clients as session.error.
+      void clientCommands.dispatch("prompt", { kind: "prompt", sessionId: session.id, text: prompt, ...(attachments ? { attachments } : {}) }, { reply: broadcast, broadcast })
+        .catch((error) => console.warn("[session] first prompt failed:", error instanceof Error ? error.message : error));
+    }
   } catch (error) {
     // Creating an empty session does not contact the model provider. Failures
     // here come from workspace/repository/runtime setup (for example Git remote

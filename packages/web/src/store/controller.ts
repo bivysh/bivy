@@ -1788,6 +1788,11 @@ export class AppController {
 
   private forkInFlight = false;
 
+  /** Start `text` in a new session alongside `sourceSessionId`, in the background. */
+  startSessionLike(sourceSessionId: string, text: string, attachments?: PromptAttachment[]): Promise<string> {
+    return this.sessionCoordinator.startLike(sourceSessionId, text, attachments);
+  }
+
   /** Fork/copy/move orchestration is owned by SessionOrchestrator. */
   async forkSession(
     sourceSessionId: string,
