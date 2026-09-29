@@ -675,7 +675,8 @@ const runDelegation = new RunDelegationService({
     const sessionId = typeof output.sessionId === "string" ? output.sessionId : "";
     if (!sessionId) return undefined;
     const routing = raw.routing && typeof raw.routing === "object" ? raw.routing as Record<string, unknown> : {};
-    const machine = typeof routing.nodeLabel === "string" && routing.nodeLabel ? routing.nodeLabel : identity.name;
+    // The queue routes by label `bivy/<machine>`.
+    const machine = typeof routing.nodeLabel === "string" && routing.nodeLabel ? routing.nodeLabel.replace(/^bivy\//, "") : identity.name;
     if (machine === identity.name) return delegationAnswer(sessionId);
     const target = (await accountMachines()).find((m) => m.name === machine);
     if (!target) return undefined;

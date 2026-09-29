@@ -26,7 +26,10 @@ test("configured policy forwards opaque operations and fails closed", async () =
     actions: [{ id: "upgrade", label: "Upgrade", kind: "primary" }],
   });
   assert.deepEqual(await extension.authorize("a", "automation.run", "r1", { source: "github:issue" }), { allowed: false, code: "quota_exhausted", actions: [{ id: "upgrade", label: "Upgrade", kind: "primary" }] });
-  assert.equal(JSON.parse(String(requests[1]?.init?.body)).context.source, "github:issue");
+  assert.equal(JSON.parse(String(requests[1]?.init?.body)).context.source, "github", "policy sees the source kind, not its identifiers");
+  // A delegated run's source carries parent ids and exceeds bounded extension fields.
+  await extension.authorize("a", "automation.run", "r2", { source: `agent-delegation:v1:1:${"x".repeat(48)}:${"y".repeat(56)}` });
+  assert.equal(JSON.parse(String(requests[2]?.init?.body)).context.source, "agent-delegation");
   assert.equal(requests[0]?.url, "https://policy.example/v1/policy/check");
   assert.deepEqual(JSON.parse(String(requests[0]?.init?.body)), {
     subject: { accountId: "a" }, operation: "automation.run", idempotencyKey: "r1",
