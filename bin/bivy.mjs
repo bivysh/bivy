@@ -1827,7 +1827,7 @@ function cmdCompletions(args = []) {
   const shell = (args[0] || "").toLowerCase();
   const commands = [
     "run", "runs", "sessions", "ls", "resume", "promote", "rename", "nodes", "agent", "agents", "agents:install", "shim", "takeover", "token", "exec",
-    "send", "attach", "suggest", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "capabilities", "logs", "login", "logout", "signout", "provider", "model",
+    "send", "attach", "suggest", "delegate", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "capabilities", "logs", "login", "logout", "signout", "provider", "model",
     "update", "update:log", "audit", "automation", "config", "plugin", "open", "service", "secrets", "voice", "link", "relay:setup",
     "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
   ];
@@ -2460,6 +2460,86 @@ async function cmdSuggest(args = []) {
   const body = await res.json().catch(() => ({}));
   if (!res.ok) { console.error(c.red(`Suggest failed (${res.status}): ${body?.error || "unknown error"}`)); process.exit(1); return; }
   console.log(c.green("Suggested in the chat. The user can start it in one tap."));
+}
+
+// Cross-agent / cross-machine delegation (docs/agent-delegation.md): hand a
+// self-contained task from this session to another agent, optionally on another
+// account machine, and get its answer back. Agent-agnostic — any agent with a
+// shell can call it — and meant for when the user asks for another agent/machine.
+const DELEGATE_USAGE = `Usage: bivy delegate "<task>" [--agent <id>] [--machine <name>] [--model <model>] [--repo owner/repo] [--wait [seconds]] [--json]
+       bivy delegate status <run-id> [--json]
+       bivy delegate wait <run-id> [--timeout <seconds>] [--json]
+
+Hands a self-contained task to another agent (and/or another machine on your account) as a
+delegated Run tied to this session ($BIVY_SESSION_ID). With --wait (or 'wait'), prints the
+child's final answer and any branch/PR it produced once it finishes. 'bivy nodes' lists machines.`;
+
+async function cmdDelegate(args = []) {
+  if (!args.length || args.some((a) => a === "-h" || a === "--help")) { console.log(DELEGATE_USAGE); return; }
+  const flagsWithValue = new Set(["--session", "--agent", "--machine", "--model", "--repo", "--timeout"]);
+  const flag = (name) => {
+    const i = args.indexOf(name);
+    return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
+  };
+  const json = args.includes("--json");
+  const waitIndex = args.indexOf("--wait");
+  const waitArg = waitIndex >= 0 && /^\d+$/.test(args[waitIndex + 1] ?? "") ? args[waitIndex + 1] : undefined;
+  const positional = args.filter((a, i) => !a.startsWith("--") && !(i > 0 && flagsWithValue.has(args[i - 1])) && !(waitArg && i === waitIndex + 1));
+  const sessionId = resolveAttachSessionId({ sessionFlag: flag("--session"), env: process.env });
+  if (!sessionId) { console.error(c.red("No session id. Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.")); process.exit(1); return; }
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) { console.error(c.red(`Could not reach the Bivy node at ${url(config)}.`)); process.exit(1); return; }
+  let token;
+  try { token = await localDeviceToken(config); } catch { token = undefined; }
+  const base = `${url(config)}/api/session/${encodeURIComponent(sessionId)}/delegated-runs`;
+  const call = async (path, body) => {
+    const res = await fetch(`${base}${path}`, {
+      method: body ? "POST" : "GET",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error || `HTTP ${res.status}`);
+    return data;
+  };
+  const terminal = (run) => ["succeeded", "failed", "cancelled"].includes(run?.status);
+  // The node caps one wait at 300s; loop until the child ends or our budget does.
+  const waitFor = async (runId, seconds) => {
+    const deadline = Date.now() + seconds * 1000;
+    let run = await call(`/${encodeURIComponent(runId)}`);
+    while (!terminal(run) && Date.now() < deadline) {
+      const slice = Math.max(1, Math.min(300, Math.ceil((deadline - Date.now()) / 1000)));
+      run = await call(`/${encodeURIComponent(runId)}/wait`, { timeoutSeconds: slice });
+    }
+    return run;
+  };
+  const print = (run) => {
+    if (json) { console.log(JSON.stringify(run, null, 2)); return; }
+    console.log(`Run ${run.runId}: ${run.status}${terminal(run) ? "" : " (still running — 'bivy delegate wait " + run.runId + "')"}`);
+    const refs = run.references || {};
+    if (refs.failure) console.log(`Failure: ${refs.failure}`);
+    if (refs.branch) console.log(`Branch: ${refs.branch}`);
+    if (refs.prUrl) console.log(`PR: ${refs.prUrl}`);
+    if (refs.sessionId) console.log(`Child session: ${refs.sessionId}`);
+    if (run.answer) console.log(`\nAnswer:\n${run.answer}`);
+  };
+  try {
+    const [action, runId] = positional;
+    if (action === "status" && runId) return print(await call(`/${encodeURIComponent(runId)}`));
+    if (action === "wait" && runId) return print(await waitFor(runId, Number(flag("--timeout") ?? 600)));
+    const instructions = positional.join(" ").trim();
+    if (!instructions) { console.error(c.red(DELEGATE_USAGE)); process.exit(1); return; }
+    const started = await call("", { instructions, agent: flag("--agent"), machine: flag("--machine"), model: flag("--model"), repo: flag("--repo") });
+    if (waitIndex < 0) {
+      if (!json) console.log(`Delegated as run ${started.runId} (${started.status}). Follow it with 'bivy delegate wait ${started.runId}'.`);
+      else print(started);
+      return;
+    }
+    print(await waitFor(started.runId, Number(waitArg ?? 600)));
+  } catch (error) {
+    console.error(c.red(`Delegate failed: ${error?.message || String(error)}`));
+    process.exit(1);
+  }
 }
 
 // Universal app publishing: every agent that can write JSON and run a command
@@ -5467,6 +5547,9 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       break;
     case "suggest":
       await cmdSuggest(args);
+      break;
+    case "delegate":
+      await cmdDelegate(args);
       break;
     case "completions":
     case "completion":

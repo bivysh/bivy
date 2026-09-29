@@ -43,6 +43,10 @@ assert.deepEqual(
 );
 assert.deepEqual(shape(mapToolCall("dispatch_agent", { prompt: "audit the diff" })), { kind: "delegation", description: "audit the diff" });
 assert.deepEqual(shape(mapToolCall("agent", {})), { kind: "delegation" });
+// `bivy delegate` from any agent's shell is a delegation to another agent/machine
+// (docs/agent-delegation.md); its status/wait follow-ups stay ordinary commands.
+assert.deepEqual(shape(mapToolCall("Bash", { command: 'bivy delegate "Review the diff" --agent codex --machine linux-box --wait' })), { kind: "delegation", label: "codex @ linux-box", description: "Review the diff" });
+assert.equal(shape(mapToolCall("Bash", { command: "bivy delegate wait run-1" }))?.kind, "shell");
 // A tool that merely has "task" in a longer, unrelated name must not be misread
 // as a delegation (canon only collapses separators, it doesn't substring-match).
 assert.equal(mapToolCall("multitasker", { value: 1 }), undefined);

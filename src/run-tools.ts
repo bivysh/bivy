@@ -10,6 +10,8 @@ export const RUN_TOOL_LIMITS = {
   maxWaitSeconds: 300,
   minPollMs: 1_000,
   maxIdempotencyKey: 128,
+  /** The child's final answer returned to the parent (characters). */
+  maxAnswer: 8_000,
 } as const;
 
 export type DelegatedRunStatus = "pending" | "claimed" | "running" | "waiting" | "needs_attention" | "succeeded" | "failed" | "cancelled";
@@ -28,6 +30,9 @@ export type SafeRunResult = {
   provenance: { parentSessionId: string; parentRunId?: string; depth: number };
   references?: { sessionId?: string; branch?: string; prUrl?: string; artifactUrl?: string; failure?: string };
   checks?: Array<{ name: string; status: string; exitCode?: number }>;
+  /** The child session's final reply, once the Run is terminal. Read from the
+   *  machine that ran it (never carried by the Run queue). */
+  answer?: string;
 };
 
 type RawRun = Record<string, unknown> & { id?: unknown; status?: unknown; source?: unknown; output?: unknown; checks?: unknown };
@@ -37,6 +42,8 @@ export interface RunDelegationBackend {
   start(sessionId: string, input: StartRunInput, provenance: SafeRunResult["provenance"]): Promise<RawRun>;
   get(runId: string): Promise<RawRun | undefined>;
   listRecent(): Promise<RawRun[]>;
+  /** The finished child session's final reply, from whichever machine ran it. */
+  answer?(raw: RawRun): Promise<string | undefined>;
 }
 
 const TERMINAL = new Set<DelegatedRunStatus>(["succeeded", "failed", "cancelled"]);
@@ -117,6 +124,11 @@ export class RunDelegationService {
     const provenance = raw ? parseDelegationSource(raw.source) : undefined;
     if (!raw || provenance?.parentSessionId !== sessionId) throw new Error("delegated Run not found");
     const value = safeRun(raw, provenance);
+    if (TERMINAL.has(value.status) && this.backend.answer) {
+      // Best-effort: an unreachable machine still leaves status + references.
+      const answer = cached?.value.answer ?? await this.backend.answer(raw).catch(() => undefined);
+      if (answer) value.answer = answer.length > RUN_TOOL_LIMITS.maxAnswer ? `${answer.slice(0, RUN_TOOL_LIMITS.maxAnswer - 1)}…` : answer;
+    }
     this.cache.set(`${sessionId}:${runId}`, { at: this.now(), value });
     return value;
   }
