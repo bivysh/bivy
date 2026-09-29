@@ -50,6 +50,11 @@ export type DeploymentLifecycleEvent =
   | { type: "ephemeral.launch-failed"; attemptId: string; at: string }
   | { type: "ephemeral.settled"; attemptId: string; at: string; machineSeconds?: number; activeAgentSeconds?: number };
 
+/** Account-level facts, sent with the account's email so the operator can act
+ * on them (e.g. greet a new account) without its own copy of the account table. */
+export type DeploymentAccountEvent =
+  | { type: "account.signed-in"; at: string; accountCreatedAt: string };
+
 export interface AccountExtensionView {
   title?: string;
   /** Short plan/status line shown under the email in the account header. */
@@ -90,6 +95,11 @@ export class DeploymentExtension {
   async record(accountId: string, event: DeploymentLifecycleEvent): Promise<void> {
     if (!this.url) return;
     await this.request("/v1/events", { subject: { accountId }, event });
+  }
+
+  async recordAccount(accountId: string, email: string, event: DeploymentAccountEvent): Promise<void> {
+    if (!this.url) return;
+    await this.request("/v1/events", { subject: { accountId, email }, event });
   }
 
   async publishSessions(accountId: string, sessionIds: string[]): Promise<void> {
