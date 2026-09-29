@@ -2235,6 +2235,8 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-account-usage[data-state="near"] .settings-account-usage-note { color: var(--warn); }
 .settings-account-usage[data-state="reached"] .settings-account-usage-note { color: var(--danger); }
 .settings-account-usage .banner { margin: 0; }
+.settings-account-usage-status { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.settings-account-usage-row > .btn { flex: none; white-space: nowrap; }
 .settings-nav-version { flex: none; display: flex; flex-direction: column; gap: 1px; padding: 10px 10px 2px; color: var(--muted); font-size: 12px; letter-spacing: 0.02em; }
 .settings-nav-version-updated { font-size: 11px; opacity: 0.8; }
 

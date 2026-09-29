@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import assert from "node:assert/strict";
 import test from "node:test";
-import { accountHeader } from "../packages/web/src/accountHeader.js";
+import { accountHeader, formatWhen } from "../packages/web/src/accountHeader.js";
 import { parseClientConfiguration } from "../packages/web/src/client-config.js";
 
 const visible = parseClientConfiguration();
@@ -38,4 +38,22 @@ test("account header ignores a malformed meter", () => {
   for (const meter of [{ label: "x", used: 1, limit: 0 }, { label: "", used: 1, limit: 5 }, { label: "x", used: Number.NaN, limit: 5 }]) {
     assert.deepEqual(accountHeader({ summary: "Cloud", meter }, visible), { summary: "Cloud" });
   }
+});
+
+test("account header says when a slot frees up, once the allowance is running out", () => {
+  const now = new Date(2026, 9, 1, 10, 0);
+  const at = (freesAt: Date, used: number) => accountHeader({ meter: { label: "Sessions", used, limit: 10, freesAt: freesAt.toISOString() } }, visible, now).meter?.freesNote;
+  assert.equal(at(new Date(2026, 9, 1, 10, 25), 10), "A slot frees up in 25 min");
+  assert.match(at(new Date(2026, 9, 2, 14, 0), 8)!, /^A slot frees up tomorrow at /);
+  assert.equal(at(new Date(2026, 9, 2, 14, 0), 3), undefined, "no note while there is plenty left");
+  assert.equal(at(new Date(2026, 9, 1, 9, 0), 10), undefined, "a time already past is stale");
+});
+
+test("formatWhen names the day plainly and adds the date only when a weekday would be ambiguous", () => {
+  const now = new Date(2026, 9, 1, 10, 0); // Thu 1 Oct
+  const when = (d: Date) => formatWhen(d, now, "en-GB");
+  assert.equal(when(new Date(2026, 9, 1, 18, 30)), "today at 18:30");
+  assert.equal(when(new Date(2026, 9, 2, 9, 5)), "tomorrow at 09:05");
+  assert.equal(when(new Date(2026, 9, 5, 14, 0)), "Mon at 14:00");
+  assert.equal(when(new Date(2026, 9, 8, 9, 0)), "Thu 8 Oct at 09:00");
 });

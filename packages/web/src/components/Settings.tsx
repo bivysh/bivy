@@ -159,7 +159,10 @@ function AccountUsage({ meter, action }: { meter: NonNullable<AccountHeaderView[
       </div>
       {(note || action) && (
         <div className="settings-account-usage-row">
-          {note && <span className="settings-account-usage-note">{note}</span>}
+          <span className="settings-account-usage-status">
+            {note && <span className="settings-account-usage-note">{note}</span>}
+            {meter.freesNote && <span>{meter.freesNote}</span>}
+          </span>
           {action && (
             <button
               type="button"
