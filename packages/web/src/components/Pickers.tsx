@@ -24,6 +24,8 @@ const THINKING_LABELS: Record<string, string> = {
   low: "Light",
   medium: "Default",
   high: "Deep",
+  xhigh: "Deeper",
+  max: "Deepest",
 };
 
 /**
