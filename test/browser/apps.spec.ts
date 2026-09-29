@@ -40,7 +40,8 @@ for (const theme of themes) {
         if(kind === 'apps.adopt') return {app:{id:'b',sessionId:'s',name:'node vite · :5173',createdAt:1,views:[{id:'adopted',kind:'web',name:'Port 5173',source:'service'}]}};
         if(kind === 'apps.list') return {apps:window.mode === 'empty' ? [] : [structuredClone(app)], previewAvailable:window.mode !== 'unconfigured'};
         if(kind === 'apps.open') return fields.viewId === 'term' ? {kind:'terminal',termId:'test-terminal'} : {kind:'web',url:'https://random.preview.example.net/__bivy/open#ticket'};
-        if(kind === 'apps.share') return {url:'https://random.preview.example.net/__bivy/open#shared', expiresAt:Date.now() + 24 * 3600000};
+        if(kind === 'apps.share') { app.views[0].sharing = {links:1, expiresAt:Date.now() + 7 * 86400000}; return {url:'https://random.preview.example.net/__bivy/open#shared', expiresAt:Date.now() + 7 * 86400000, controls:fields.controls}; }
+        if(kind === 'apps.unshare') delete app.views[0].sharing;
         return {ok:true};
       };
       // The session menu opens the sheet unscoped, which also lists detected servers.
@@ -89,20 +90,30 @@ for (const theme of themes) {
     // Explain access before granting it. Opening Share must not mint a link.
     await page.getByRole("button", { name: "Share Website and invoice editor" }).click();
     expect(await page.evaluate(() => (window as any).commands.some((c: any) => c.kind === "apps.share"))).toBe(false);
+    // How long the link works and whether it carries the feedback tools.
+    await page.getByRole("radio", { name: "7 days" }).click();
+    await page.getByRole("switch", { name: "Feedback tools" }).click();
+    await expect(page.getByText("People see only the app.")).toBeVisible();
     await page.getByRole("button", { name: "Copy share link", exact: true }).click();
     await expect(page.getByRole("status").filter({ hasText: "Copied" })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: /Shared · 1 link until/ })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`apps-copied-${theme}.png`), fullPage: true });
+    // Stopping ends the links only, after saying so.
+    await page.getByRole("button", { name: "Stop sharing" }).click();
+    await page.getByRole("dialog", { name: "Stop sharing?" }).getByRole("button", { name: "Stop sharing" }).click();
+    await expect(page.getByRole("status").filter({ hasText: "Sharing stopped" })).toBeVisible();
+    await expect(page.getByRole("status").filter({ hasText: /Shared · / })).toHaveCount(0);
     // Revocation explains the effect and allows cancellation before the command.
     await page.getByRole("button", { name: "Sharing options" }).click();
-    await page.getByRole("menuitem", { name: "Revoke access…", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Revoke all access…", exact: true }).click();
     await page.getByRole("button", { name: "Cancel", exact: true }).click();
     expect(await page.evaluate(() => (window as any).commands.some((c: any) => c.kind === "apps.revoke"))).toBe(false);
     await page.getByRole("button", { name: "Sharing options" }).click();
-    await page.getByRole("menuitem", { name: "Revoke access…", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Revoke all access…", exact: true }).click();
     await page.getByRole("button", { name: "Revoke access", exact: true }).click();
     await expect(page.getByRole("status").filter({ hasText: "Access revoked" })).toBeVisible();
-    expect(await page.evaluate(() => (window as any).commands.filter((c: any) => c.kind === "apps.share" || c.kind === "apps.revoke").map((c: any) => [c.kind, c.viewId]))).toEqual([["apps.share", "web"], ["apps.revoke", "web"]]);
+    expect(await page.evaluate(() => (window as any).commands.filter((c: any) => ["apps.share", "apps.unshare", "apps.revoke"].includes(c.kind)).map((c: any) => [c.kind, c.viewId, c.duration, c.controls]))).toEqual([["apps.share", "web", "7d", false], ["apps.unshare", "web", undefined, undefined], ["apps.revoke", "web", undefined, undefined]]);
     await page.keyboard.press("Escape");
     await expect(page.getByRole("button", { name: /^Share Interactive/ })).toHaveCount(0);
     // Wait for dismissal: the lower sheet is inert during the closing motion.

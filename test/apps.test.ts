@@ -575,6 +575,34 @@ test("copied links open reviewer controls, are reusable until revoked and lapse 
   } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a share link can be view-only and time-boxed, and stopping sharing leaves the owner's preview", async () => {
+  const registry = new AppRegistry(); const gateway = new AppGateway(registry, "https://{app}.preview.example.net");
+  const dir = workspace(); const port = await listen(gateway.server);
+  try {
+    const app = registry.publish("s", dir, staticManifest); const id = app.views[0].id;
+    const origin = gateway.origin(id), host = new URL(origin).host;
+    const redeem = (url: string) => request(port, host, "/__bivy/redeem", { method: "POST", headers: { origin }, body: new URL(url).hash.slice(1) });
+    assert.throws(() => gateway.share(id, { ttl: 8 * 24 * 3_600_000 }), /at most 7 days/);
+    const shared = gateway.share(id, { ttl: 3_600_000, controls: false });
+    assert.equal(shared.controls, false);
+    assert.ok(Math.abs(shared.expiresAt - Date.now() - 3_600_000) < 5_000);
+    assert.deepEqual(gateway.sharing(id), { links: 1, expiresAt: shared.expiresAt });
+    const launch = new URL(shared.url);
+    assert.equal(JSON.parse((await request(port, launch.host, "/__bivy/launch", { method: "POST", headers: { origin: launch.origin }, body: launch.hash.slice(1) })).body).controls, false);
+    const viewer = (await redeem(shared.url)).headers["set-cookie"]![0].split(";")[0];
+    const owner = (await grant(gateway, port, id)).cookie;
+    assert.equal((await request(port, host, "/", { headers: { cookie: viewer } })).body, "<h1>Preview</h1>");
+    // View-only: no reviewer inspector, and notes are refused.
+    assert.match((await request(port, host, "/__bivy/inspector.js", { headers: { cookie: viewer } })).body, /REVIEWER=false/);
+    assert.equal((await request(port, host, "/__bivy/notes", { method: "POST", headers: { cookie: viewer, origin }, body: JSON.stringify({ note: "x" }) })).status, 403);
+    gateway.unshare(id);
+    assert.equal(gateway.sharing(id), undefined);
+    assert.equal((await redeem(shared.url)).status, 401);
+    assert.equal((await request(port, host, "/", { headers: { cookie: viewer } })).status, 401);
+    assert.equal((await request(port, host, "/", { headers: { cookie: owner } })).status, 200);
+  } finally { gateway.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("the trusted shell only accepts scoped launch grants and configured chat return origins", async () => {
   const dir = workspace(); const registry = new AppRegistry();
   const gateway = new AppGateway(registry, "https://{app}.preview.example.net", () => ["https://bivy.example", "http://localhost:5173"], undefined, undefined, async () => true);

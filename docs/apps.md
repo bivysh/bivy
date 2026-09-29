@@ -170,6 +170,7 @@ its latest card's pictures: an older card shows "Screenshot no longer stored".
 ```sh
 bivy app share                          # the web view opened last
 bivy app share Shop --view Storefront   # an app and view, by name or ID
+bivy app share --for 7d --view-only     # a week, without the feedback tools
 ```
 
 Mints the same reusable link as **Copy link** in the Apps sheet (see
@@ -187,9 +188,12 @@ and view it picked:
   "expires": "2026-09-27T18:00:00.000Z" }
 ```
 
-The link works for 24 hours, until **Revoke access** in the Apps sheet, until
-the app is removed, or until the machine restarts. People who open it can leave
-reviewer notes, which come back under the view in **Apps**.
+The link works for `--for` (`1h`, `1d` or `7d`; default `1d`), until the user
+stops sharing in the Apps sheet, until the app is removed, or until the machine
+restarts. People who open it can leave reviewer notes, which come back under the
+view in **Apps**; with `--view-only` they see just the app, without Point, Draw
+or notes. The JSON also carries `controls` (whether the link has the feedback
+tools).
 
 People who open a share link see a small **Made with Bivy** strip under the app,
 linking to bivy.sh. Your own previews never show it. A machine can turn it off
@@ -550,9 +554,16 @@ else. Addresses stay the same across node restarts, because apps keep their IDs.
 It opens the isolated preview shell in reviewer mode, with the app in its own
 frame. Every visit exchanges it for a host-only app cookie, capped so a browser
 session never outlives the link.
-It stays valid for 24 hours, until **Revoke access**, until the app is removed,
-or until the machine restarts. Revoke access ends every link, browser session and
-open connection for that view without removing the app. A copied link is a
+The Share sheet picks how long it works (1 hour, 1 day or 7 days; the choice is
+remembered per device) and whether it carries the **Feedback tools** (Point,
+Draw and notes; on by default). Off, people see only the app: the shell shows no
+Bivy controls, the reviewer inspector isn't served, and notes are refused.
+It stays valid for that long, until **Stop sharing**, until the app is removed,
+or until the machine restarts (links live in the node's memory). While links
+are live, the sheet shows how many and when the last one lapses. **Stop
+sharing** ends every copied link and the browser sessions and connections opened
+from them; your own previews keep working. **Revoke all access** (in the sheet's
+⋯ menu) also ends your own open previews, without removing the app. A copied link is a
 bearer capability: anyone holding it can use the app, including a live server's
 backend, until it lapses or is revoked. Agents mint the same link with
 [`bivy app share`](#share-links-bivy-app-share).

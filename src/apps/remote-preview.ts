@@ -50,10 +50,12 @@ export class RemotePreview {
     if (!this.available) throw new Error("Preview delivery is unavailable. Reconnect the machine and try again.");
     return this.gateway!.open(id, returnTo);
   }
-  share(id: string): { url: string; expiresAt: number } {
+  share(id: string, options?: Parameters<AppGateway["share"]>[1]): ReturnType<AppGateway["share"]> {
     if (!this.available) throw new Error("Preview delivery is unavailable. Reconnect the machine and try again.");
-    return this.gateway!.share(id);
+    return this.gateway!.share(id, options);
   }
+  sharing(id: string): ReturnType<AppGateway["sharing"]> { return this.gateway?.sharing(id); }
+  unshare(id: string): void { this.gateway?.unshare(id); }
   revoke(id: string): void { this.gateway?.revoke(id); }
   address(id: string): string | undefined { return this.available ? this.gateway!.address(id) : undefined; }
   openDirect(id: string): string {

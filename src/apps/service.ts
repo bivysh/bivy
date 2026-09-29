@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import type { AppManifest, AppOffer, AppReview, OpenAppViewResult, ReviewCardMode, ReviewerNote, SessionApp, SessionAppOffersResult, SessionAppsResult, ShareAppViewResult } from "./types.js";
+import { SHARE_DURATIONS, type AppManifest, type AppOffer, type AppReview, type OpenAppViewResult, type ReviewCardMode, type ReviewerNote, type SessionApp, type SessionAppOffersResult, type SessionAppsResult, type ShareAppViewResult, type ShareOptions } from "./types.js";
 import { randomBytes } from "node:crypto";
 import { REVIEW_MODES, shouldReview, visualChange } from "./review.js";
 import { AppRegistry, type RegisteredView } from "./registry.js";
@@ -20,7 +20,9 @@ export interface AppPreviewProvider {
   open(id: string, returnTo?: string): string;
   openDirect?(id: string): string;
   address?(id: string): string | undefined;
-  share(id: string): ShareAppViewResult;
+  share(id: string, options?: { ttl?: number; controls?: boolean }): ShareAppViewResult;
+  sharing?(id: string): { links: number; expiresAt: number } | undefined;
+  unshare?(id: string): void;
   revoke(id: string): void;
 }
 
@@ -119,6 +121,8 @@ export class AppService {
       if (entry?.notes?.length) view.notes = structuredClone(entry.notes);
       if (entry?.stats) view.stats = structuredClone(entry.stats);
       if (entry?.lastPath) view.lastPath = entry.lastPath;
+      const sharing = this.gateway?.sharing?.(view.id);
+      if (sharing) view.sharing = sharing;
     }
     return { apps, previewAvailable: available };
   }
@@ -540,16 +544,18 @@ export class AppService {
     void server.pending?.then((termId) => this.terminals.close(termId)).catch(() => {});
     this.servers.delete(id);
   }
-  share(sessionId: string, appId: string, viewId: string): ShareAppViewResult {
+  share(sessionId: string, appId: string, viewId: string, options: ShareOptions = {}): ShareAppViewResult {
     if (this.registry.requireView(sessionId, appId, viewId).view.kind !== "web") throw new Error("Only web views have preview links.");
     if (!this.gateway) throw new Error("Bivy's preview service is unavailable on this connection.");
-    return this.gateway.share(viewId);
+    const duration = options.duration === undefined ? undefined : SHARE_DURATIONS.find((row) => row.id === options.duration);
+    if (options.duration !== undefined && !duration) throw new Error(`A share link lasts ${SHARE_DURATIONS.map((row) => row.id).join(", ")}.`);
+    return this.gateway.share(viewId, { ...(duration ? { ttl: duration.ms } : {}), controls: options.controls !== false });
   }
   /** `bivy app share`: mints a share link for a web view picked by app and/or
    * view ID or name, like `present` (default: the one opened last). */
-  shareView(sessionId: string, input: { app?: string; view?: string }): ShareAppViewResult & { appId: string; viewId: string; app: string; view: string } {
+  shareView(sessionId: string, input: { app?: string; view?: string } & ShareOptions): ShareAppViewResult & { appId: string; viewId: string; app: string; view: string } {
     const entry = this.pickTarget(sessionId, input);
-    return { ...this.share(sessionId, entry.app.id, entry.view.id), appId: entry.app.id, viewId: entry.view.id, app: entry.app.name, view: entry.view.name };
+    return { ...this.share(sessionId, entry.app.id, entry.view.id, input), appId: entry.app.id, viewId: entry.view.id, app: entry.app.name, view: entry.view.name };
   }
   clearNotes(sessionId: string, appId: string, viewId: string): { ok: true } {
     this.registry.requireView(sessionId, appId, viewId);
@@ -579,6 +585,12 @@ export class AppService {
     const found = scope.find((candidate) => candidate.view.id === wanted) ?? scope.find((candidate) => candidate.view.name.toLowerCase() === wanted);
     if (!found) throw new Error(`No web view called "${input.view}"${input.app ? ` in "${input.app}"` : ""}. Run bivy app list to see them.`);
     return found;
+  }
+  /** Ends a view's share links and what people opened with them; the owner's previews and the app stay. */
+  unshare(sessionId: string, appId: string, viewId: string): { ok: true } {
+    this.registry.requireView(sessionId, appId, viewId);
+    this.gateway?.unshare?.(viewId);
+    return { ok: true };
   }
   /** Ends every link, browser session and open connection for one view; the app stays. */
   revoke(sessionId: string, appId: string, viewId: string): { ok: true } {

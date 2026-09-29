@@ -3147,6 +3147,9 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
 .apps-empty strong { color: var(--ink); font-size: var(--text-base); }
 .apps-empty p { margin: 0; max-inline-size: 34ch; }
 .apps-foot { margin: 0; padding: 0 var(--space-1); color: var(--muted); font-size: var(--text-xs); line-height: var(--lh-xs); }
+/* Share sheet (AppAccess.tsx): the sharing status sits in the sheet, not at page edge. */
+.apps-sheet > .banner { border-radius: var(--radius-md); padding: var(--space-2) var(--space-3); }
+.apps-sheet > .settings-toggle-row { padding-inline: var(--space-1); }
 /* Peek: an app preview framed in a drawer over the chat (PreviewPeek.tsx). */
 .preview-peek { display: block; inline-size: 100%; block-size: 100%; border: 0; border-radius: var(--radius-md); background: var(--bg); }
 /* Share-sheet landing (ShareDestinationSheet.tsx): what was shared, then one
