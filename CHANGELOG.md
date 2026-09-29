@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.18.10] - 2026-09-29
+
+### Added
+
+- New accounts get a **Show me around** button once setup finishes: the agent looks at your workspace and suggests a few first tasks, without changing anything until you pick one.
+- Agents can suggest tasks you start in one tap (`bivy suggest`): run one in a new session beside the current one, send it to this session, or run a whole set in parallel.
+- A follow-up you queue while the agent is busy can run right away in its own session with **Run in new session**.
+- While your first task runs, Bivy offers to turn on notifications, since the agent keeps working after you close the app.
+- Tapping a "finished" notification for a run that changed an app now opens its live preview directly.
+- Shared preview links show a small "Made with Bivy" strip under the app. A machine can turn it off with `bivy config set sessions.previewBadge false`; a control plane can limit that to certain plans with `BIVY_PREVIEW_BADGE_HIDE_PLANS`.
+
+### Fixed
+
+- The "Make this repeatable" suggestion after a first reply no longer disappears the moment it appears.
+- Queued follow-ups no longer squeeze their text into a narrow column on phones.
+
 ## [0.18.9] - 2026-09-29
 
 ### Added
