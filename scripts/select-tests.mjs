@@ -9,10 +9,9 @@
 // the suites reachable from the changed files.
 //
 // The safety property that makes this acceptable is not the graph's precision —
-// it is WHERE it is used. Only PR pushes narrow the selection. The merge queue,
-// nightly and release runs always execute the full suite, so a suite this
-// misses still gates the merge; the cost of a miss is later feedback, never a
-// regression reaching main. See .github/workflows/ci.yml.
+// it is WHERE it is used: local runs only, for fast feedback. CI always executes
+// the full suite, so a suite this misses still gates the merge; the cost of a
+// miss is later feedback, never a regression reaching main.
 //
 // It is also deliberately quick to give up. Anything that could affect suites
 // without appearing in their import graph — the lockfile, bin/, scripts/, the
