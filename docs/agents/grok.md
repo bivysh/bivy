@@ -7,7 +7,7 @@ older binary without the ACP mode falls back to one headless prompt per turn
 (`grok -p` / `--single`); force that path with `BIVY_GROK_ACP=0`.
 
 - **Runtime id:** `grok` · **Tier:** Supported · **In picker:** Yes
-- **Release-tested against:** Grok CLI 1.0.41 (the governed ACP path)
+- **Release-tested against:** Grok CLI 1.0.44 (the governed ACP path)
 
 ## Install
 

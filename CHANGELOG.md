@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Refresh the release-tested agent pins to the current upstream builds: Claude Agent SDK `0.3.284`, Codex `0.159.0`, OpenCode `1.18.33`, and Grok CLI `1.0.44` (previously `0.3.281` / `0.156.1` / `1.18.32` / `1.0.41`; Pi stays on `0.87.1`, still the latest).
+
 ## [0.18.10] - 2026-09-29
 
 ### Added
