@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-09-29
+
+### Fixed
+
+- An open app preview no longer closes when the chat refreshes after a turn, a reconnect or a resync.
+- The transcript no longer redraws every message when its history refreshes, so scroll position and expanded cards are kept.
+
 ## [0.19.0] - 2026-09-29
 
 ### Changed
