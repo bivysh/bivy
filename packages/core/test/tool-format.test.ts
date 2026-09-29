@@ -162,6 +162,14 @@ describe("tool-result outcome (exitCode / isError / truncated)", () => {
   });
 });
 
+describe("write classification", () => {
+  it("renders an edit tool classified as a write as Created with its lines", () => {
+    const f = formatTool("edit", { filePath: "/w/hello.py", content: "a\nb\n" }, { kind: "write", path: "/w/hello.py" });
+    expect(f.verb).toBe("Created");
+    expect(f.added).toBe(2);
+  });
+});
+
 describe("toolGroupSummary", () => {
   it("appends a failure count when any call errored", () => {
     const s = toolGroupSummary([
@@ -179,6 +187,14 @@ describe("toolGroupSummary", () => {
       { name: "Edit", input: { path: "c", old_string: "x", new_string: "y" } },
     ]);
     expect(s).toBe("Read 2 files, ran a command, edited a file");
+  });
+
+  it("counts a file once however often it was written and edited", () => {
+    const s = toolGroupSummary([
+      { name: "edit", input: { filePath: "/w/hello.py", content: "print(1)\n" }, detail: { kind: "write", path: "/w/hello.py" } },
+      { name: "edit", input: { filePath: "/w/hello.py", oldString: "1", newString: "2" }, detail: { kind: "edit", path: "/w/hello.py", oldText: "1", newText: "2" } },
+    ]);
+    expect(s).toBe("Edited a file");
   });
 
   it("counts delegated tasks as their own phrase", () => {

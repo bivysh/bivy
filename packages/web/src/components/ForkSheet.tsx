@@ -62,9 +62,30 @@ export function ForkSheet({ sessionId, intent = "fork", onClose }: {
   const crossNode = managedDestination || (Boolean(currentNodeId) && destNodeId !== currentNodeId);
   // Context-aware default until the user picks: move across nodes, copy in place.
   const willRetire = retireTouched ? retire : crossNode;
-  // A model only round-trips within one agent; only offer it when the agent is
-  // unchanged (a different agent resolves its own model on the destination).
+  // A model only round-trips within one agent. A different agent lists its own
+  // models (fetched for that agent, leaving the composer's list alone) and
+  // starts on its default unless the user picks one.
   const agentUnchanged = !agentId || agentId === sourceAgentId;
+  const [targetModels, setTargetModels] = useState<{ agentId: string; models: ModelInfo[] } | null>(null);
+  const [targetModelKey, setTargetModelKey] = useState("");
+  useEffect(() => {
+    setTargetModelKey("");
+    if (agentUnchanged || !agentId || crossNode) return;
+    let live = true;
+    void controller.modelsForRuntime(agentId).then((list) => {
+      if (live) setTargetModels({ agentId, models: list.filter((m) => (m as { configured?: boolean }).configured !== false) });
+    });
+    return () => { live = false; };
+  }, [agentId, agentUnchanged, crossNode]);
+  const targetList = !agentUnchanged && targetModels?.agentId === agentId ? targetModels.models : null;
+  const targetModel = targetList?.find((m) => modelKey(m) === targetModelKey);
+
+  // On this machine only agents that can run here are real targets; another
+  // machine has its own set, so the full catalog stays for a cross-node fork.
+  const forkTargets = useMemo(
+    () => crossNode ? runtimes : runtimes.filter((rt) => rt.id === sourceAgentId || String((rt as { status?: unknown }).status || "available") === "available"),
+    [crossNode, runtimes, sourceAgentId],
+  );
 
   const nodeList = useMemo(() => {
     const rows = [...nodes];
@@ -86,7 +107,9 @@ export function ForkSheet({ sessionId, intent = "fork", onClose }: {
       // made the target ambiguous and allowed forks to fall back to the source.
       agentId: agentId ?? undefined,
       sourceAgentId: sourceAgentId ?? undefined,
-      model: agentUnchanged && model ? { provider: String(model.provider), id: String(model.id) } : undefined,
+      model: agentUnchanged
+        ? model ? { provider: String(model.provider), id: String(model.id) } : undefined
+        : targetModel ? { provider: String(targetModel.provider), id: String(targetModel.id) } : undefined,
       retireSource: willRetire,
     }, () => new Promise<void>((resolve) => dismiss(resolve))).then((result) => {
       const warning = result.missing.map((item) => item.detail || item.label).find(Boolean);
@@ -131,7 +154,7 @@ export function ForkSheet({ sessionId, intent = "fork", onClose }: {
       <div className="picker-section fork-select-field">
         <label htmlFor="fork-agent">Agent</label>
         <select id="fork-agent" value={agentId ?? ""} disabled={busy} onChange={(e) => setAgentId(e.target.value)}>
-          {runtimes.map((rt) => (
+          {forkTargets.map((rt) => (
             <option key={rt.id} value={rt.id}>
               {rt.displayName || rt.name || rt.id}{rt.id === sourceAgentId ? " (current)" : ""}
             </option>
@@ -154,6 +177,23 @@ export function ForkSheet({ sessionId, intent = "fork", onClose }: {
             {!selectedModelKey && <option value="">Keep the session&rsquo;s model</option>}
             {models.map((m) => (
               <option key={modelKey(m)} value={modelKey(m)}>{String(m.name || m.id)}</option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {!agentUnchanged && !crossNode && (
+        <div className="picker-section fork-select-field">
+          <label htmlFor="fork-target-model">Model</label>
+          <select
+            id="fork-target-model"
+            value={targetModelKey}
+            disabled={busy || !targetList}
+            onChange={(e) => setTargetModelKey(e.target.value)}
+          >
+            <option value="">{targetList ? "The agent\u2019s default model" : "Loading models\u2026"}</option>
+            {targetList?.map((m) => (
+              <option key={modelKey(m)} value={modelKey(m)}>{String(m.name || m.id)}{m.provider ? ` \u00b7 ${String(m.provider)}` : ""}</option>
             ))}
           </select>
         </div>

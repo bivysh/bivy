@@ -84,6 +84,18 @@ export function parseResetsAt(raw: string): string | undefined {
 }
 
 /**
+ * Parse a calendar reset date — Codex's ChatGPT limits read "try again at Oct
+ * 4th, 2026 5:18 AM". The CLI formats it in the machine's local time, and it
+ * runs on the node, so the local-time parse is the intended one.
+ */
+export function parseResetDate(raw: string): string | undefined {
+  const m = /(?:try again|resets?)\s+(?:at|on|after)?\s*([A-Z][a-z]{2,8}\.?\s+\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4}),?\s+(\d{1,2}:\d{2}\s*(?:[AP]M)?)/i.exec(raw);
+  if (!m) return undefined;
+  const ms = Date.parse(`${m[1]!.replace(".", "")} ${m[2]} ${m[3]!.replace(/\s*([AP]M)$/i, " $1")}`);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : undefined;
+}
+
+/**
  * Parse a bare wall-clock reset time — the shape Claude's subscription limits
  * surface, e.g. `resets 12am (UTC)`, `resets at 3pm UTC`, `resets 09:00 UTC` —
  * into the ISO timestamp of its NEXT occurrence (interpreted as UTC, which is
@@ -178,7 +190,7 @@ export function classifyFailure(error: unknown, opts: ClassifyOptions = {}): Cla
     // supplied (the provider's own usage snapshot), then an ISO stamp in the
     // text, then a bare wall-clock ("resets 12am (UTC)") resolved to its next
     // occurrence.
-    const resetsAt = opts.resetsAtHint ?? parseResetsAt(raw) ?? parseResetClock(raw, opts.now ?? Date.now());
+    const resetsAt = opts.resetsAtHint ?? parseResetsAt(raw) ?? parseResetDate(raw) ?? parseResetClock(raw, opts.now ?? Date.now());
     if (resetsAt !== undefined) out.resetsAt = resetsAt;
   }
   return out;

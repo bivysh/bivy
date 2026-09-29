@@ -160,6 +160,33 @@ await check("acp: an approved edit's own fs write is applied without a second ap
   }
 });
 
+await check("acp: an auto-run edit's fs write is gated under the edit's own card", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-acp-autoedit-"));
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_AUTO_EDIT_PATH = path.join(tmp, "math.js");
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: tmp, piDir: tmp, sessionsDir: tmp, sandbox: "workspace-write" });
+    const decisions: string[] = [];
+    const { session } = await runtime.createSession({ workspace: tmp, toolInterceptor: async (ctx) => { decisions.push(ctx.toolName); } });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    await session.prompt("edit");
+    await waitFor(events, (event) => event.type === "agent_end");
+    assert.deepEqual(decisions, ["edit"], "the write was still gated, as the edit");
+    assert.equal(fs.readFileSync(path.join(tmp, "math.js"), "utf8"), "auto edited");
+    const cards = new Set(events.filter((e) => e.type === "tool_call").map((e) => (e as any).toolCallId));
+    assert.deepEqual([...cards], ["autoedit1"], "one card for the edit, no separate write card");
+    assert.equal(events.filter((e) => e.type === "tool_result").length, 1, "the edit's card closes once");
+    session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_AUTO_EDIT_PATH;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 await check("acp: an agent's thought_level option drives the reasoning-effort picker", async () => {
   const dump = path.join(os.tmpdir(), `bivy-acp-config-${process.pid}.json`);
   process.env.BIVY_ACP_COMMAND = process.execPath;

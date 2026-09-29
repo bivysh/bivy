@@ -3,6 +3,7 @@ import {
   normalizeMessages,
   buildSeedPrompt,
   buildForkHistory,
+  renderForkTranscript,
   type ForkFidelity,
   type NormalizedTranscript,
   type SeedPromptOptions,
@@ -252,6 +253,9 @@ export interface MaterializeForkOptions {
   ctx: ForkImportContext;
   /** Seed prompt shaping for the cross-runtime path (transcript URL, target name…). */
   seed?: SeedPromptOptions;
+  /** Store the full conversation where the seeded agent can read it; returns
+   *  the path, or undefined when it couldn't be written. Seed path only. */
+  saveTranscript?: (markdown: string) => string | undefined;
 }
 
 /**
@@ -299,9 +303,18 @@ export async function materializeFork(opts: MaterializeForkOptions): Promise<For
     }
   }
 
+  // The seed only inlines the recent tail. Give the agent the rest as a file
+  // its tools can read — an app URL is a web page it can't fetch.
+  let transcriptFile: string | undefined;
+  try {
+    transcriptFile = opts.saveTranscript?.(renderForkTranscript(bundle.normalized));
+  } catch {
+    transcriptFile = undefined;
+  }
   const seedPrompt = buildSeedPrompt(bundle.normalized, {
     targetAgent: targetRuntime.displayName,
     context: { repoSlug: bundle.record.repoSlug, branch: bundle.record.branch, prUrl: bundle.record.prUrl },
+    ...(transcriptFile ? { transcriptFile } : {}),
     ...opts.seed,
   });
   return { kind: "seed", fidelity: "seeded", seedPrompt };

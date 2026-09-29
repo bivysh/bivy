@@ -171,6 +171,11 @@ export function mapToolCall(toolName: string, input: unknown, context: ToolCallM
     if (!path) return undefined;
     const oldText = str(o, "old_string", "oldString", "old", "before", "search");
     const newText = str(o, "new_string", "newString", "new", "after", "replace", "replacement");
+    // An edit tool handed the whole file (OpenCode's and Grok's `edit` when
+    // creating one) is a write, not an edit with nothing to diff.
+    if (!oldText && !newText && !o.changes && str(o, "content", "contents", "file_text")) {
+      return decorate({ kind: "write", path }, toolName, input, context);
+    }
     return decorate({ kind: "edit", path, ...(oldText ? { oldText } : {}), ...(newText ? { newText } : {}) }, toolName, input, context);
   }
 

@@ -669,6 +669,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .tool-detail-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
 .tool-detail-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; max-width: 100%; overflow-x: auto; white-space: pre; }
 .tool-detail-value.output { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; }
+.handoff-seed-text { max-height: none; }
 .tool-detail-value.output pre,
 .tool-detail-value.output code { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
 

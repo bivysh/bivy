@@ -9343,6 +9343,14 @@ const forkStandUp = createForkStandUp<SessionRecord>({
   applyDirtyPatch,
   gitRepoRoot,
   materializeFork,
+  saveForkTranscript: (markdown) => {
+    // Outside the worktree, so the hand-off never shows up as a repo change.
+    const dir = path.join(appDir, "fork-transcripts");
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const file = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}.md`);
+    fs.writeFileSync(file, markdown, { mode: 0o600 });
+    return file;
+  },
   getRuntime,
   listRuntimes,
   reposRoot,
@@ -10056,7 +10064,7 @@ app.get("/api/models", async (req, res, next) => {
     const current = session.getCurrentModel();
     const models = await publicModelsList(session, current);
     const thinking = publicThinkingInfo(session);
-    res.json({ sessionId: record.id, modelSelection: getRuntime(record.runtimeId).capabilities.modelSelection !== false, current: current ? publicModel(current, current) : null, models, thinking });
+    res.json({ sessionId: record.id, runtimeId: record.runtimeId, modelSelection: getRuntime(record.runtimeId).capabilities.modelSelection !== false, current: current ? publicModel(current, current) : null, models, thinking });
   } catch (error) {
     next(error);
   }

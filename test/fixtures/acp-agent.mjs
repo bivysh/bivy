@@ -91,6 +91,19 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         });
         return;
       }
+      // An edit the agent auto-runs (no permission asked) that performs its
+      // change through fs/write_text_file (Grok's autonomous shape).
+      if (process.env.ACP_AUTO_EDIT_PATH) {
+        const file = process.env.ACP_AUTO_EDIT_PATH;
+        notify("session/update", { sessionId, update: { sessionUpdate: "tool_call", toolCallId: "autoedit1", title: "search_replace", kind: "edit", locations: [{ path: file }], rawInput: { file_path: file } } });
+        const written = new Promise((resolve) => clientResponses.set(9201, resolve));
+        send({ jsonrpc: "2.0", id: 9201, method: "fs/write_text_file", params: { sessionId, path: file, content: "auto edited" } });
+        written.then(() => {
+          notify("session/update", { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: "autoedit1", status: "completed" } });
+          reply(id, { stopReason: "end_turn" });
+        });
+        return;
+      }
       if (process.env.ACP_FS_WRITE_PATH) {
         const requestId = 8001;
         const response = new Promise((resolve) => clientResponses.set(requestId, resolve));

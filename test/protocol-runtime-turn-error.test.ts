@@ -46,10 +46,12 @@ session.subscribe((event) => events.push(event));
 
 await session.prompt("do something that fails");
 const errorEvent = (await waitFor(events, (event) => event.type === "session.error")) as RuntimeEvent & { error?: string };
-await waitFor(events, (event) => event.type === "agent_end");
+const endEvent = (await waitFor(events, (event) => event.type === "agent_end")) as RuntimeEvent & { error?: string };
 
-// (1) The failure surfaced live.
+// (1) The failure surfaced live, and agent_end carries it so the daemon's
+// turn-end recovery (limit offers, reroute, failed state) runs for this agent.
 assert.match(String(errorEvent.error), /insufficient funds/, "the live session.error carried the upstream error text");
+assert.match(String(endEvent.error), /insufficient funds/, "agent_end carries the turn's failure");
 
 // (2) + (3) The persisted transcript keeps the partial reply AND a terminal error marker.
 const messages = session.getMessages() as Array<Record<string, unknown>>;

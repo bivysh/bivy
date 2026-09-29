@@ -11,6 +11,7 @@ export * from "./relay-frame.js";
 export * from "./markdown.js";
 export * from "./tool-activity.js";
 export * from "./tool-format.js";
+export * from "./handoff-seed.js";
 export * from "./approval-format.js";
 export * from "./inbox.js";
 export * from "./outcome.js";

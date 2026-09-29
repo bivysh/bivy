@@ -94,11 +94,12 @@ const assistantBlocks = history[1].content as Array<Record<string, unknown>>;
 assert.ok(Array.isArray(assistantBlocks));
 assert.deepEqual(
   assistantBlocks.map((b) => b.type),
-  ["text", "bivy_message_boundary", "tool_use", "text"],
-  "assistant-item boundaries, text, and tool_use blocks persist in streamed order",
+  ["thinking", "text", "bivy_message_boundary", "tool_use", "text"],
+  "reasoning, assistant-item boundaries, text, and tool_use blocks persist in streamed order",
 );
-assert.equal(assistantBlocks[0]?.text, "hello ");
-assert.equal(assistantBlocks[3]?.text, "world");
+assert.match(String(assistantBlocks[0]?.thinking), /^thinking with /);
+assert.equal(assistantBlocks[1]?.text, "hello ");
+assert.equal(assistantBlocks[4]?.text, "world");
 const toolUse = assistantBlocks.find((b) => b.type === "tool_use");
 assert.equal(toolUse?.name, "shell");
 assert.equal(toolUse?.id, "tc_fixture");
