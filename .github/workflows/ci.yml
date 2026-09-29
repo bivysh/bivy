@@ -27,7 +27,7 @@ concurrency:
 permissions:
   contents: read
 
-# Three tiers. Gate and full respect the changed-path filters below.
+# Four tiers. Gate and full respect the changed-path filters below.
 #
 #   gate   every PR push AND the merge queue, with identical checks: the queue
 #          only re-validates the PR against the latest main, it never adds a
@@ -42,6 +42,10 @@ permissions:
 #          CHANGELOG.md (scripts/release-only-diff.mjs), such as the version
 #          bump after a release: policy checks and release-notes validation.
 #          The code it carries already passed CI on main.
+#   verified  a queue entry whose exact tree already passed on a PR run of the
+#          PR's current head (scripts/find-ci-receipt.sh): main has not moved
+#          since, so every lane would repeat that result. Nothing runs but
+#          ci-ok. When main has moved, the tree differs and the queue runs gate.
 jobs:
   # Detect which areas a change actually touches so we only run relevant jobs,
   # and which tier this run is. Changing ci.yml itself runs the full tier so CI
@@ -52,16 +56,23 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+      actions: read # look up a PR run's receipt for the queued tree
     outputs:
       tier: ${{ steps.tier.outputs.tier }}
-      # A release tier touches only versions and notes, so no area filter fires.
-      root: ${{ steps.tier.outputs.tier != 'release' && steps.filter.outputs.root || 'false' }}
-      web: ${{ steps.tier.outputs.tier != 'release' && steps.filter.outputs.web || 'false' }}
-      installer: ${{ steps.tier.outputs.tier != 'release' && steps.filter.outputs.installer || 'false' }}
-      relay: ${{ steps.tier.outputs.tier != 'release' && steps.filter.outputs.relay || 'false' }}
-      control_plane: ${{ steps.tier.outputs.tier != 'release' && steps.filter.outputs.control_plane || 'false' }}
-      e2e: ${{ steps.tier.outputs.tier != 'release' && steps.filter.outputs.e2e || 'false' }}
-      docs: ${{ steps.filter.outputs.docs }}
+      # The tree this run tests; a green PR run records it as its receipt.
+      tree: ${{ steps.tier.outputs.tree }}
+      # Policy checks run in every tier but verified, and in gate only when
+      # root-level inputs change.
+      policy: ${{ steps.tier.outputs.policy }}
+      # Area filters apply to gate and full. A release tier touches only
+      # versions and notes, and a verified tier runs nothing, so none fires.
+      root: ${{ steps.tier.outputs.areas == 'true' && steps.filter.outputs.root || 'false' }}
+      web: ${{ steps.tier.outputs.areas == 'true' && steps.filter.outputs.web || 'false' }}
+      installer: ${{ steps.tier.outputs.areas == 'true' && steps.filter.outputs.installer || 'false' }}
+      relay: ${{ steps.tier.outputs.areas == 'true' && steps.filter.outputs.relay || 'false' }}
+      control_plane: ${{ steps.tier.outputs.areas == 'true' && steps.filter.outputs.control_plane || 'false' }}
+      e2e: ${{ steps.tier.outputs.areas == 'true' && steps.filter.outputs.e2e || 'false' }}
+      docs: ${{ steps.tier.outputs.tier != 'verified' && steps.filter.outputs.docs || 'false' }}
     steps:
       # Actions execute privileged workflow code; pin them to immutable commits
       # rather than mutable major-version tags.
@@ -149,7 +160,10 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           CI_CHANGED: ${{ steps.filter.outputs.common }}
+          ROOT_CHANGED: ${{ steps.filter.outputs.root }}
           QUEUE_BASE: ${{ github.event.merge_group.base_sha }}
+          QUEUE_REF: ${{ github.event.merge_group.head_ref }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           # A version bump (manifest versions + CHANGELOG.md only) carries code
           # main already tested, so it runs the light release tier: policy
@@ -164,14 +178,29 @@ jobs:
           if [ -n "$base" ]; then
             release_only="$(node scripts/release-only-diff.mjs "$base" HEAD)"
           fi
-          if [ "$release_only" = true ]; then
+          if [ "$EVENT" = merge_group ] && [ "$(bash scripts/find-ci-receipt.sh "$QUEUE_REF")" = true ]; then
+            tier=verified
+          elif [ "$release_only" = true ]; then
             tier=release
           elif [ "$EVENT" = schedule ] || [ "$EVENT" = workflow_dispatch ] || [ "$CI_CHANGED" = true ]; then
             tier=full
           else
             tier=gate
           fi
-          echo "tier=$tier" >> "$GITHUB_OUTPUT"
+          case "$tier" in
+            gate|full) areas=true ;;
+            *) areas=false ;;
+          esac
+          policy=false
+          if [ "$tier" = full ] || [ "$tier" = release ] || { [ "$tier" = gate ] && [ "$ROOT_CHANGED" = true ]; }; then
+            policy=true
+          fi
+          {
+            echo "tier=$tier"
+            echo "areas=$areas"
+            echo "policy=$policy"
+            echo "tree=$(git rev-parse 'HEAD^{tree}')"
+          } >> "$GITHUB_OUTPUT"
           echo "CI tier: $tier" >> "$GITHUB_STEP_SUMMARY"
 
   # Lanes are sized around two limits. A free plan runs at most 20 jobs at once
@@ -189,7 +218,7 @@ jobs:
   # these takes longer than the setup it shares.
   static:
     needs: changes
-    if: needs.changes.outputs.tier != 'gate' || needs.changes.outputs.root == 'true' || needs.changes.outputs.docs == 'true'
+    if: needs.changes.outputs.policy == 'true' || needs.changes.outputs.docs == 'true'
     name: Static checks
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -201,7 +230,7 @@ jobs:
         if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.docs == 'true'
         run: node scripts/check-links.mjs
       - uses: ./.github/actions/setup
-        if: needs.changes.outputs.tier != 'gate' || needs.changes.outputs.root == 'true'
+        if: needs.changes.outputs.policy == 'true'
         with:
           cache-name: static
       # check:pins verifies the transitive security pins actually took effect on
@@ -212,7 +241,7 @@ jobs:
       # scripts/audit-prod.mjs. Release notes collect under [Unreleased] until
       # `pnpm release` tags main; release.yml publishes that section.
       - name: Policy checks
-        if: needs.changes.outputs.tier != 'gate' || needs.changes.outputs.root == 'true'
+        if: needs.changes.outputs.policy == 'true'
         run: >-
           node scripts/ci-parallel.mjs
           "pnpm run check:pins"
@@ -236,10 +265,11 @@ jobs:
 
   # The node unit suites, split across runners. The whole set is ~300 suites and
   # parallelises almost perfectly (it measured 98% efficient on one 4-core box),
-  # so it scales with runners. On a pull request each shard first narrows to the
-  # suites the change can actually reach; the merge queue and nightly always run
-  # everything, so a suite the selection misses still gates the merge. The core
-  # package's vitest suite rides along on the first shard.
+  # so it scales with runners. Every run executes every suite: on three shards
+  # the whole set costs ~20s of test time per shard, about what narrowing a PR
+  # to the suites it can reach used to, and it makes a green PR run a complete
+  # receipt the merge queue can reuse. The core package's vitest suite rides
+  # along on the first shard.
   unit:
     needs: changes
     if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.root == 'true'
@@ -258,34 +288,15 @@ jobs:
       TEST_SHARD: ${{ matrix.shard }}/3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # Change selection diffs against the merge base, which needs history
-          # but only file names, so skip downloading every old blob.
-          fetch-depth: 0
-          filter: blob:none
       - uses: ./.github/actions/setup
         with:
           cache-name: unit-${{ matrix.shard }}
-      - name: Select suites for this shard
-        id: select
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-        run: |
-          # Only a pull-request push narrows; every other event runs the lot.
-          if [ "${{ github.event_name }}" = pull_request ] && [ "${{ needs.changes.outputs.tier }}" != full ]; then
-            # checkout already fetched full history; make sure the base tip is
-            # present even if the branch moved since this run was queued.
-            git fetch --no-tags origin "$BASE_REF"
-            echo "args=--changed-since origin/$BASE_REF" >> "$GITHUB_OUTPUT"
-          else
-            echo "args=" >> "$GITHUB_OUTPUT"
-          fi
       # Desktop app views run on TigerVNC's X server; with it installed the
       # display test drives a real one instead of skipping. Only the shard that
       # actually got that suite pays the apt install.
       - name: Install TigerVNC if this shard runs the display suite
         run: |
-          if pnpm run test:unit -- --list ${{ steps.select.outputs.args }} | grep -qx 'app-display.test.ts'; then
+          if pnpm run test:unit -- --list | grep -qx 'app-display.test.ts'; then
             sudo apt-get update -qq
             sudo apt-get install -y -qq --no-install-recommends tigervnc-standalone-server
           else
@@ -293,7 +304,7 @@ jobs:
           fi
       # Within the runner, independent suites run across its CPUs while suites
       # with a shared port are serialized (scripts/run-tests.mjs).
-      - run: pnpm run test:unit -- ${{ steps.select.outputs.args }}
+      - run: pnpm run test:unit
       - run: pnpm run test:core
         if: matrix.core
       # The loader's transform cache is content-addressed, so entries accumulate
@@ -580,6 +591,10 @@ jobs:
   # Single gate for branch protection. Always runs, and passes only if no needed
   # job failed or was cancelled. A skipped job means its area was untouched or
   # its tier did not run it. Keep this as the sole required status check.
+  #
+  # A green pull-request run also records the tree it tested as a receipt. If
+  # main has not moved by the time the PR is queued, the queue builds the same
+  # tree and reuses this result (the verified tier) instead of repeating it.
   ci-ok:
     if: ${{ always() }}
     needs:
@@ -605,3 +620,13 @@ jobs:
             exit 1
           fi
           echo "CI passed (skipped jobs are expected when their area was untouched)."
+      - name: Write receipt
+        if: github.event_name == 'pull_request'
+        run: echo "${{ github.run_id }}" > ci-receipt.txt
+      - name: Record receipt for the merge queue
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ci-receipt-${{ needs.changes.outputs.tree }}
+          path: ci-receipt.txt
+          retention-days: 7

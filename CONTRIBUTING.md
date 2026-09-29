@@ -44,12 +44,10 @@ areas your change touches:
   the core suite, the web build, the release package and a fresh npm consumer on
   Linux, the browser suite when the app changes (split across three), and the
   packaging, clean-installer and remote e2e lanes when their inputs change.
-- **One difference between the two**, and it is deliberate: on a pull request the
-  unit lanes run only the suites your change can reach through the import graph
-  (`scripts/select-tests.mjs`), while the merge queue always runs every suite. So
-  a green PR can still meet a failure in the queue if the selection was too
-  narrow — that is the trade for fast feedback, and it cannot let a regression
-  through, because nothing merges without the full run.
+- **The queue reuses a green PR run** when it would test the exact same tree —
+  that is, when main has not moved since the PR's last run. It then passes in
+  seconds (the `verified` tier). If main has moved, the queue runs the checks
+  again on the combined result.
 - **Nightly, releases, queued release commits, and any change to `ci.yml`** run
   everything, adding the macOS certification and npm-consumer lanes. A failed
   nightly opens or updates a "Nightly full CI is failing" issue.

@@ -26,8 +26,7 @@
 //   npm run test:unit -- config-cli plugin-cli
 // CI can distribute the suite across machines with TEST_SHARD=1/2, 2/2, etc.
 // `--changed-since <ref>` runs only the suites a change can reach through the
-// import graph; see scripts/select-tests.mjs for why that is safe and where CI
-// applies it.
+// import graph, for fast local feedback; see scripts/select-tests.mjs.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { availableParallelism, cpus } from "node:os";
@@ -204,9 +203,9 @@ function assignShards(suites, count) {
 }
 
 // --changed-since <ref> narrows the run to the suites a change can reach, via
-// the import graph (scripts/select-tests.mjs). Only PR pushes use it; the merge
-// queue and nightly always run everything, so a suite it misses still gates the
-// merge. The shell suites are not in the graph, so they only run in a full run.
+// the import graph (scripts/select-tests.mjs). It is a local tool; CI always
+// runs everything, so a suite it misses still gates the merge. The shell suites
+// are not in the graph, so they only run in a full run.
 let changedSinceSuites = null;
 if (changedSinceIndex !== -1) {
   const baseRef = cliArgs[changedSinceIndex + 1];
