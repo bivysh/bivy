@@ -125,6 +125,24 @@ function useMediaQuery(query: string): boolean {
 }
 
 type NavItem = { id: View; label: string; icon: ReactNode };
+
+/** The signed-in email for the Settings account card; null until loaded (or
+ *  when not hosted / the fetch fails — the card then just reads "Account"). */
+function useAccountEmail(hosted: boolean): string | null {
+  const [email, setEmail] = useState<string | null>(null);
+  useEffect(() => {
+    if (!hosted) return;
+    let live = true;
+    controller.fetchMe().then((me) => { if (live) setEmail(me.account?.email ?? null); }).catch(() => {});
+    return () => { live = false; };
+  }, [hosted]);
+  return email;
+}
+
+function accountInitials(email: string): string {
+  const local = email.split("@")[0] ?? "";
+  return (local.replace(/[^a-z0-9]/gi, "") || email).slice(0, 2).toUpperCase();
+}
 type NavGroup = { label: string; items: NavItem[] };
 
 const TITLES: Record<View, string> = {
@@ -275,21 +293,24 @@ export function Settings({
       ],
     },
   ];
-  if (hosted) {
-    groups.push({
-      label: "Account",
-      items: [
-        { id: "account", label: "Account", icon: <IconUser /> },
+  // Hosted accounts get an identity card pinned to the top of the menu (the
+  // Claude / ChatGPT pattern) instead of a group buried below App.
+  const accountEmail = useAccountEmail(hosted);
+  const accountItems: NavItem[] = hosted
+    ? [
+        { id: "account", label: accountEmail ?? "Account", icon: <IconUser /> },
         { id: "link", label: "Link a device", icon: <IconLink /> },
-      ],
-    });
-  }
+      ]
+    : [];
 
   const q = query.trim().toLowerCase();
-  const matches = (item: NavItem) => !q || `${item.label} ${SEARCH_TERMS[item.id]}`.toLowerCase().includes(q);
+  const matches = (item: NavItem) => !q || `${item.label} ${TITLES[item.id]} ${SEARCH_TERMS[item.id]}`.toLowerCase().includes(q);
+  const visibleAccountItems = accountItems.filter(matches);
   // A query matching nothing used to hide every group and leave the sidebar
   // blank — looked broken rather than "no results" (#140).
-  const hasVisibleNavItem = groups.some((group) => group.items.some(matches));
+  const hasVisibleNavItem = visibleAccountItems.length > 0 || groups.some((group) => group.items.some(matches));
+  const navItemClass = (id: View) =>
+    `settings-nav-item${activeView === id || (id === "providers" && activeView === "models") ? " active" : ""}`;
 
   const title = activeView ? TITLES[activeView] : "Settings";
 
@@ -329,6 +350,29 @@ export function Settings({
           </div>
           <nav className="settings-nav-groups">
             {!hasVisibleNavItem && <div className="picker-empty">No settings match "{query.trim()}"</div>}
+            {visibleAccountItems.length > 0 && (
+              <div className="settings-account-card" role="group" aria-label="Account">
+                {visibleAccountItems.map((it) => (
+                  <button key={it.id} className={navItemClass(it.id)} title={it.id === "account" ? accountEmail ?? undefined : undefined} onClick={() => onViewChange(it.id)}>
+                    {it.id === "account" ? (
+                      <>
+                        <span className="settings-account-avatar" aria-hidden>{accountEmail ? accountInitials(accountEmail) : it.icon}</span>
+                        <span className="settings-account-text">
+                          <span className="settings-nav-label">{it.label}</span>
+                          <span className="settings-account-sub">Account</span>
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <span className="settings-nav-icon">{it.icon}</span>
+                        <span className="settings-nav-label">{it.label}</span>
+                      </>
+                    )}
+                    <span className="settings-nav-chevron"><ChevronRightIcon size={18} /></span>
+                  </button>
+                ))}
+              </div>
+            )}
             {groups.map((group) => {
               const visible = group.items.filter(matches);
               if (visible.length === 0) return null;
@@ -338,7 +382,7 @@ export function Settings({
                   {visible.map((it) => (
                     <button
                       key={it.id}
-                      className={`settings-nav-item${activeView === it.id || (it.id === "providers" && activeView === "models") ? " active" : ""}`}
+                      className={navItemClass(it.id)}
                       onClick={() => {
                         if (it.id === "providers") setCredentialProvider(null);
                         onViewChange(it.id);
