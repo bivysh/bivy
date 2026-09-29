@@ -114,3 +114,12 @@ test("a child parked by its machine's policy ends the wait and explains why", as
   assert.equal(waited.timedOut, undefined, "returned at once, not after the timeout");
   assert.equal(waited.answer, "The delegated agent failed: missing credentials");
 });
+
+test("parked children don't hold the parent's concurrent slots", async () => {
+  const { service, runs } = fixture();
+  for (let i = 0; i < RUN_TOOL_LIMITS.maxConcurrentChildren; i++) {
+    const child = await service.startRun("parent", { instructions: `child ${i}` });
+    runs.get(child.runId)!.status = "needs_attention";
+  }
+  assert.ok(await service.startRun("parent", { instructions: "one more" }), "parked children leave room for a new one");
+});
