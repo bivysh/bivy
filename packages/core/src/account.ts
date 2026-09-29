@@ -506,10 +506,8 @@ export interface AccountExtensionView {
   /** One metered allowance for the account header. The client warns as `used`
    *  nears `limit` and, where actions are allowed, offers the primary action.
    *  `freesAt` (ISO) is when some of the allowance comes back — a rolling
-   *  window's oldest use expiring, or a fixed period resetting. `action` is
-   *  this allowance's own remedy (e.g. a more specific upgrade label) and wins
-   *  over the view's primary action. */
-  meter?: { label: string; used: number; limit: number; freesAt?: string; action?: { id: string; label: string } };
+   *  window's oldest use expiring, or a fixed period resetting. */
+  meter?: { label: string; used: number; limit: number; freesAt?: string };
   facts?: Array<{ id: string; label: string; value: string }>;
   actions?: Array<{ id: string; label: string; kind?: "primary" | "secondary" }>;
 }

@@ -57,10 +57,3 @@ test("formatWhen names the day plainly and adds the date only when a weekday wou
   assert.equal(when(new Date(2026, 9, 5, 14, 0)), "Mon at 14:00");
   assert.equal(when(new Date(2026, 9, 8, 9, 0)), "Thu 8 Oct at 09:00");
 });
-
-test("the meter's own action wins over the primary action, and is still gated by client policy", () => {
-  const extension = { ...ext(9), meter: { ...ext(9).meter, action: { id: "checkout", label: "Get unlimited sessions" } } };
-  assert.deepEqual(accountHeader(extension, visible).action, { id: "checkout", label: "Get unlimited sessions" });
-  assert.equal(accountHeader({ ...extension, meter: { ...extension.meter, used: 2 } }, visible).action, undefined);
-  assert.equal(accountHeader(extension, parseClientConfiguration(JSON.stringify({ accountExtension: "facts" }))).action, undefined);
-});
