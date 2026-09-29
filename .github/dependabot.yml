@@ -16,15 +16,24 @@ updates:
       - dependency-name: typescript
         update-types: ['version-update:semver-major']
 
+  # @sentry/node 11 hard-depends on @sentry/bundler-plugins, which pulls the
+  # FSL-licensed `sentry` CLI (fails check:licenses) plus Babel into the
+  # service runtime images. Take the major by hand once that edge is gone.
   - package-ecosystem: npm
     directory: /services/control-plane
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: '@sentry/node'
+        update-types: ['version-update:semver-major']
 
   - package-ecosystem: npm
     directory: /services/relay
     schedule:
       interval: weekly
+    ignore:
+      - dependency-name: '@sentry/node'
+        update-types: ['version-update:semver-major']
 
   - package-ecosystem: github-actions
     directory: /

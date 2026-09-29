@@ -191,9 +191,13 @@ try {
     }
     throw new Error(`could not find ${name}'s resolved package manifest`);
   }
+  // Expect whatever the root package.json overrides pin for Pi's subtree, so a
+  // security bump only has to change the pin, not this check.
+  const piPins = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"))
+    .overrides["@earendil-works/pi-coding-agent"];
   const braceVersion = resolvedPackageVersion("brace-expansion");
   const undiciVersion = resolvedPackageVersion("undici");
-  if (braceVersion !== "5.0.12" || undiciVersion !== "8.10.2") {
+  if (braceVersion !== piPins["brace-expansion"] || undiciVersion !== piPins.undici) {
     throw new Error(`unsafe bundled dependency versions: brace-expansion ${braceVersion}, undici ${undiciVersion}`);
   }
 
