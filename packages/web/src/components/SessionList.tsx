@@ -145,6 +145,9 @@ function queueSourceMeta(source: string | undefined): string {
     if (rest === "slack") return "Slack";
     if (rest === "github:comment") return "GitHub @-mention";
     if (rest === "github:issue") return "GitHub issue";
+    // A delegated child: "Delegated" in the meta already says so; the rest of
+    // the source is internal provenance, not something to show.
+    if (rest.startsWith("agent-delegation:")) return "";
     return rest || "Queue";
   }
   return "";

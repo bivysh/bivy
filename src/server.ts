@@ -5514,6 +5514,13 @@ async function delegationAnswer(sessionId: string): Promise<string | undefined> 
   return undefined;
 }
 
+/** A delegated task's first line, bounded, as its child session's title. */
+function delegatedSessionTitle(instructions: string | undefined): string | undefined {
+  const line = instructions?.split(/\r?\n/).map((l) => l.trim()).find(Boolean);
+  if (!line) return undefined;
+  return line.length > 80 ? `${line.slice(0, 79).trimEnd()}…` : line;
+}
+
 /** Text of the most recent user message in a session's transcript, if any. */
 function lastUserMessageText(record: SessionRecord): string {
   const messages = record.session.getMessages();
@@ -5726,7 +5733,10 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
   // sends after the Run is mistaken for the Session's first naming prompt (the
   // internal Run turn does not pass through the interactive prompt handler), so
   // rows named after the Run suddenly become "status", "continue", etc.
-  sessionNamer.setSessionName(record, item.title);
+  // A delegated child's queue title is generic ("Delegated Run": the task is
+  // sealed, the queue never sees it). Name it after the task itself, which
+  // only this machine can read, so it's recognizable in the session list.
+  sessionNamer.setSessionName(record, delegatedProvenance ? delegatedSessionTitle(item.body) ?? item.title : item.title);
   persistSessionMetadata(record);
   if (item.model) {
     await applyRequestedModel(record, { provider: "", id: item.model });
