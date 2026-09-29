@@ -2215,12 +2215,11 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .settings-nav-chevron { display: none; flex: none; color: var(--muted); font-size: 18px; }
 /* Account identity card pinned to the top of the nav (Claude/ChatGPT pattern):
-   avatar + email row, then Link a device, grouped on one raised surface. */
+   avatar + email on one raised surface. */
 .settings-account-card {
   display: flex; flex-direction: column; gap: 1px; padding: var(--space-1);
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-md);
 }
-.settings-account-card .settings-nav-item + .settings-nav-item { border-top: 1px solid var(--line); }
 .settings-account-avatar {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 36px; height: 36px; border-radius: var(--radius-full);

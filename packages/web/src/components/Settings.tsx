@@ -277,6 +277,9 @@ export function Settings({
         ...(cloudMachinesEnabled
           ? [{ id: "ephemeral" as View, label: "Cloud machine profiles", icon: <IconBolt /> }]
           : []),
+        // Pasting a link code is a fallback for adding a machine — signing in is
+        // the main flow — so it sits here rather than beside the account.
+        ...(hosted ? [{ id: "link" as View, label: "Link a device", icon: <IconLink /> }] : []),
       ],
     },
     // Integrations (GitHub / Linear / Slack) and automation & policy (Work Queue,
@@ -296,19 +299,14 @@ export function Settings({
   // Hosted accounts get an identity card pinned to the top of the menu (the
   // Claude / ChatGPT pattern) instead of a group buried below App.
   const accountEmail = useAccountEmail(hosted);
-  const accountItems: NavItem[] = hosted
-    ? [
-        { id: "account", label: accountEmail ?? "Account", icon: <IconUser /> },
-        { id: "link", label: "Link a device", icon: <IconLink /> },
-      ]
-    : [];
+  const accountItem: NavItem = { id: "account", label: accountEmail ?? "Account", icon: <IconUser /> };
 
   const q = query.trim().toLowerCase();
   const matches = (item: NavItem) => !q || `${item.label} ${TITLES[item.id]} ${SEARCH_TERMS[item.id]}`.toLowerCase().includes(q);
-  const visibleAccountItems = accountItems.filter(matches);
+  const showAccount = hosted && matches(accountItem);
   // A query matching nothing used to hide every group and leave the sidebar
   // blank — looked broken rather than "no results" (#140).
-  const hasVisibleNavItem = visibleAccountItems.length > 0 || groups.some((group) => group.items.some(matches));
+  const hasVisibleNavItem = showAccount || groups.some((group) => group.items.some(matches));
   const navItemClass = (id: View) =>
     `settings-nav-item${activeView === id || (id === "providers" && activeView === "models") ? " active" : ""}`;
 
@@ -350,27 +348,16 @@ export function Settings({
           </div>
           <nav className="settings-nav-groups">
             {!hasVisibleNavItem && <div className="picker-empty">No settings match "{query.trim()}"</div>}
-            {visibleAccountItems.length > 0 && (
-              <div className="settings-account-card" role="group" aria-label="Account">
-                {visibleAccountItems.map((it) => (
-                  <button key={it.id} className={navItemClass(it.id)} title={it.id === "account" ? accountEmail ?? undefined : undefined} onClick={() => onViewChange(it.id)}>
-                    {it.id === "account" ? (
-                      <>
-                        <span className="settings-account-avatar" aria-hidden>{accountEmail ? accountInitials(accountEmail) : it.icon}</span>
-                        <span className="settings-account-text">
-                          <span className="settings-nav-label">{it.label}</span>
-                          <span className="settings-account-sub">Account</span>
-                        </span>
-                      </>
-                    ) : (
-                      <>
-                        <span className="settings-nav-icon">{it.icon}</span>
-                        <span className="settings-nav-label">{it.label}</span>
-                      </>
-                    )}
-                    <span className="settings-nav-chevron"><ChevronRightIcon size={18} /></span>
-                  </button>
-                ))}
+            {showAccount && (
+              <div className="settings-account-card">
+                <button className={navItemClass("account")} title={accountEmail ?? undefined} onClick={() => onViewChange("account")}>
+                  <span className="settings-account-avatar" aria-hidden>{accountEmail ? accountInitials(accountEmail) : accountItem.icon}</span>
+                  <span className="settings-account-text">
+                    <span className="settings-nav-label">{accountItem.label}</span>
+                    <span className="settings-account-sub">Account</span>
+                  </span>
+                  <span className="settings-nav-chevron"><ChevronRightIcon size={18} /></span>
+                </button>
               </div>
             )}
             {groups.map((group) => {
