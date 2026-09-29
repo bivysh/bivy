@@ -83,10 +83,10 @@ async function waitFor(cond: () => boolean, ms = 1000): Promise<void> {
  *  the SDK produces for a completed tool call. `imageParts` become the
  *  tool_result's own `content` array entries of type "image"; pass [] for a
  *  text-only result. */
-function emitToolCallWithResult(query: FakeQuery, toolUseId: string, toolName: string, imageParts: any[]): void {
+function emitToolCallWithResult(query: FakeQuery, toolUseId: string, toolName: string, imageParts: any[], input: Record<string, unknown> = {}): void {
   query.emit({
     type: "assistant",
-    message: { model: "claude-opus-4-8", content: [{ type: "tool_use", id: toolUseId, name: toolName, input: {} }] },
+    message: { model: "claude-opus-4-8", content: [{ type: "tool_use", id: toolUseId, name: toolName, input }] },
   });
   query.emit({
     type: "user",
@@ -159,6 +159,22 @@ async function newSession() {
 
   session.dispose();
   console.log("url-sourced image skipped OK");
+}
+
+// ── A file read's image already exists on disk (often the user's own upload) ──
+{
+  setConfiguredAutoAttachToolImages(true);
+  const { session, queries, events } = await newSession();
+
+  await session.prompt("look at the image I attached");
+  await waitFor(() => queries.length === 1);
+  emitToolCallWithResult(queries[0], "tu1", "Read", [base64Image()], { file_path: ".bivy-attachments/shot.png" });
+  await waitFor(() => events.some((e) => e.type === "tool_result"));
+
+  assert.ok(!events.some((e) => e.type === "tool_image"), "a file read's image is not re-surfaced");
+
+  session.dispose();
+  console.log("file-read image skipped OK");
 }
 
 // ── Per-turn cap: a chatty tool result can't flood the transcript ──
