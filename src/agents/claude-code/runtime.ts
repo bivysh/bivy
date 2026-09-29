@@ -358,6 +358,12 @@ function hasMetaFlag(entry: any): boolean {
   return entry?.isMeta === true || entry?.isCompactSummary === true || entry?.isSynthetic === true;
 }
 
+/** True when an assistant message is the CLI's stand-in for a failed API call
+ *  (SDK `error`, transcript `isApiErrorMessage`) rather than the model's reply. */
+function isApiErrorMessage(message: any): boolean {
+  return Boolean(message?.error) || message?.isApiErrorMessage === true;
+}
+
 /** True when a role:"user" turn is a model-only meta injection (see
  *  DROP_META_TEXT) rather than a real human prompt. Callers must exclude
  *  tool_result-bearing turns first — those carry real tool output, never meta. */
@@ -1190,9 +1196,12 @@ class ClaudeSession implements RuntimeSession {
         if (hasMetaFlag(message)) break;
         // Claude Code sometimes reports auth failures as an ordinary assistant
         // text message rather than throwing. Intercept it before it is persisted
-        // or shown, refresh, and transparently continue the same prompt.
+        // or shown, refresh, and transparently continue the same prompt. Only a
+        // message the SDK flags as an API error qualifies: matching the model's
+        // own prose (an answer that mentions "no … token") re-drove the prompt
+        // after the turn had already answered it.
         const assistantText = extractText(message.message);
-        if (assistantText && await this.recoverFromAuthError(assistantText)) break;
+        if (isApiErrorMessage(message) && assistantText && await this.recoverFromAuthError(assistantText)) break;
         const model = message.message?.model;
         if (model) this.currentModel = toModelInfo({ id: model });
         // The SDK stamps every message it generates inside a `Task` sub-agent

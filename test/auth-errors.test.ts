@@ -41,6 +41,8 @@ check("matches an invalid x-api-key error", () => {
 check("does not match benign prose or other failures", () => {
   assert.equal(isModelAuthError("Tool exited with code 1: file not found"), false);
   assert.equal(isModelAuthError("Rate limited (429), please retry"), false);
+  assert.equal(isModelAuthError("Bivy has no general way to give agents extra instructions. Reuse the existing token."), false);
+  assert.equal(isModelAuthError("It's not a smooth onboarding: you paste a bot token."), false);
   assert.equal(isModelAuthError(""), false);
 });
 

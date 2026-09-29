@@ -23,8 +23,9 @@ export function isModelAuthError(raw: string): boolean {
   const text = String(raw || "");
   const lower = text.toLowerCase();
   // Generic: an explicit 401, "unauthorized"/"authentication", or a
-  // missing/invalid bearer/api-key/token phrase.
-  if (/\b401\b|unauthorized|authentication|invalid x-api-key|(missing|no|invalid)[\s\S]*(bearer|api[\s_-]?key|token)/i.test(text))
+  // missing/invalid bearer/api-key/token phrase — whole words within one clause,
+  // so prose like "no general way … the existing token" doesn't qualify.
+  if (/\b401\b|unauthorized|authentication|invalid x-api-key|\b(missing|no|invalid)\b[^.\n]{0,40}\b(bearer|api[\s_-]?key|token)\b/i.test(text))
     return true;
   // Codex app-server: websocket connect rejected with an HTTP 401/403.
   const websocketFailure = lower.indexOf("failed to connect to websocket");

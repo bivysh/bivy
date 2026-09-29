@@ -161,6 +161,7 @@ function tokenOf(q: FakeQuery): string | undefined {
   // error. Recovery must intercept this shape before it reaches the transcript.
   queries[0].emit({
     type: "assistant",
+    error: "authentication_failed",
     message: { content: [{ type: "text", text: "Failed to authenticate. API Error: 401 OAuth access token has been revoked." }] },
   });
 
@@ -173,6 +174,37 @@ function tokenOf(q: FakeQuery): string | undefined {
   console.log("revoked-token forced refresh OK");
 }
 
+// ── The model's own answer is never mistaken for an auth failure ──
+// An ordinary reply that happens to read like one ("no general way … the
+// existing token") used to restart the query and re-send the user's prompt
+// after the turn had already answered it.
+{
+  const { sdk, queries } = makeSdk();
+  const store = new RotatingStore("tok-a", "tok-b");
+  const runtime = new ClaudeCodeRuntime({ credentials: store, sdkLoader: async () => sdk });
+  const { session } = await runtime.createSession({ workspace: process.cwd() });
+
+  const events: any[] = [];
+  session.subscribe((e) => events.push(e));
+
+  await session.prompt("how should this work?");
+  await waitFor(() => queries.length === 1);
+  const answer = "Bivy has no general way to do this today. Reuse the existing token. A 401 means sign in again.";
+  queries[0].emit({ type: "assistant", message: { content: [{ type: "text", text: answer }] } });
+  queries[0].emit({ type: "result", subtype: "success" });
+  await waitFor(() => events.some((e) => e.type === "agent_end"));
+
+  assert.equal(queries.length, 1, "no reload for an ordinary answer");
+  assert.ok(events.some((e) => e.type === "message_end" && e.message?.content === answer), "the answer is shown");
+  const prompts = queries[0].prompt![Symbol.asyncIterator]();
+  assert.equal((await prompts.next()).value?.message?.content, "how should this work?");
+  const again = await Promise.race([prompts.next().then(() => true), new Promise((r) => setTimeout(() => r(false), 50))]);
+  assert.equal(again, false, "the prompt is not sent again");
+
+  session.dispose();
+  console.log("answer mentioning auth not re-driven OK");
+}
+
 // ── A self-woken turn (background-task notification, no prompt in flight) that
 //    401s refreshes and continues too — even after an earlier turn reloaded ──
 {
@@ -183,7 +215,7 @@ function tokenOf(q: FakeQuery): string | undefined {
 
   const events: any[] = [];
   session.subscribe((e) => events.push(e));
-  const revoked = { type: "assistant", message: { content: [{ type: "text", text: "Failed to authenticate. API Error: 401 OAuth access token has been revoked." }] } };
+  const revoked = { type: "assistant", error: "authentication_failed", message: { content: [{ type: "text", text: "Failed to authenticate. API Error: 401 OAuth access token has been revoked." }] } };
 
   await session.prompt("start background work");
   await waitFor(() => queries.length === 1);
