@@ -2472,7 +2472,7 @@ async function cmdApp(args = []) {
        bivy app remove <app-id> [--session <id>]
        bivy app shot [app-id] [--widths 390,1280] [--themes light,dark] [--path /page] [--session <id>]
        bivy app present [view] [--path /page] [--note "…"] [--session <id>]
-       bivy app share [app-id] [--view <view>] [--session <id>]
+       bivy app share [app-id] [--view <view>] [--for 1h|1d|7d] [--view-only] [--session <id>]
        bivy app notes [app-id] [--view <view>] [--since <time>] [--session <id>]
        bivy app run [--name <name>] [--restart-on-change] [--session <id>] -- <command> [args…]
        bivy app click <x> <y> [--right|--middle] [--double] [--app <app>]
@@ -2518,9 +2518,10 @@ the chat with the app at phone width (and before/after), and it opens the live
 preview. Use it when you finish a visible change, or when the user asks to see
 it. [view] is an app or view name or ID (default: the one opened last).
 "share" mints a reusable link to one web view and prints its URL and expiry
-(24 hours, or until Revoke access in Apps, the app is removed or the machine
-restarts). [app-id] is an app ID or name, --view a view ID or name (default: the
-one opened last). Anyone who has the link can use the app, including a live
+(--for: 1h, 1d or 7d, default 1d; sooner if the user stops sharing in Apps, the
+app is removed or the machine restarts). [app-id] is an app ID or name, --view
+a view ID or name (default: the one opened last). --view-only leaves out the
+reviewer tools (Point, Draw, notes): people see just the app. Anyone who has the link can use the app, including a live
 server's backend, until it expires or is revoked: only post it where everyone
 who can read it may use the app.
 "notes" prints the notes people left through share links (Leave a note), as
@@ -2556,6 +2557,17 @@ Web previews require operator setup; see docs/apps.md.`);
       shot.view = value;
       rest.splice(i, 2);
     }
+  }
+  if (action === "share") {
+    const i = rest.indexOf("--for");
+    if (i >= 0) {
+      const value = rest[i + 1];
+      if (!["1h", "1d", "7d"].includes(value)) throw new Error("--for takes 1h, 1d or 7d.");
+      shot.duration = value;
+      rest.splice(i, 2);
+    }
+    const viewOnly = rest.indexOf("--view-only");
+    if (viewOnly >= 0) { shot.controls = false; rest.splice(viewOnly, 1); }
   }
   if (action === "notes") {
     const i = rest.indexOf("--since");
@@ -2656,7 +2668,7 @@ async function appRequest(action, body, { print = true } = {}) {
   if (action === "share") {
     const { type: _type, requestId: _requestId, ...link } = result;
     console.log(JSON.stringify({ ...link, expires: new Date(link.expiresAt).toISOString() }, null, 2));
-    console.error("Anyone with this link can use the app, including its live backend, until it expires or you revoke it (Apps → Revoke access).");
+    console.error("Anyone with this link can use the app, including its live backend, until it expires or the user stops sharing (Apps → Share → Stop sharing).");
     return;
   }
   if (print) console.log(JSON.stringify(result, null, 2));

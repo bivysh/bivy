@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import type { AppManifest, ReviewCardMode, SessionApp } from "../apps/types.js";
+import type { AppManifest, ReviewCardMode, SessionApp, ShareDuration } from "../apps/types.js";
 import type { CommandEntries } from "../protocol/command-registry.js";
 import type { AppService } from "../apps/service.js";
 
@@ -40,9 +40,13 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
     "apps.notes": (msg) => service.notes(String(msg.sessionId), { app: typeof msg.appId === "string" ? msg.appId : undefined, view: typeof msg.view === "string" ? msg.view : undefined, since: typeof msg.since === "number" ? msg.since : undefined }),
     "apps.logs": (msg) => service.logs(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
     // The app UI passes exact IDs; `bivy app share` passes an app and/or view by ID or name.
-    "apps.share": (msg) => typeof msg.viewId === "string" && typeof msg.appId === "string"
-      ? service.share(String(msg.sessionId), msg.appId, msg.viewId)
-      : service.shareView(String(msg.sessionId), { app: typeof msg.appId === "string" ? msg.appId : undefined, view: typeof msg.view === "string" ? msg.view : undefined }),
+    "apps.share": (msg) => {
+      const options = { duration: msg.duration as ShareDuration | undefined, controls: msg.controls !== false };
+      return typeof msg.viewId === "string" && typeof msg.appId === "string"
+        ? service.share(String(msg.sessionId), msg.appId, msg.viewId, options)
+        : service.shareView(String(msg.sessionId), { app: typeof msg.appId === "string" ? msg.appId : undefined, view: typeof msg.view === "string" ? msg.view : undefined, ...options });
+    },
+    "apps.unshare": (msg) => service.unshare(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
     "apps.revoke": (msg) => service.revoke(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
     "apps.remove": (msg) => { service.remove(String(msg.sessionId), String(msg.appId)); return { ok: true }; },
   };

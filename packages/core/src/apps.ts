@@ -21,7 +21,9 @@ export type AppView =
       /** How a desktop app's stream performed in the last viewer's browser. */
       stats?: DisplayStats;
       /** The page last open in the preview, e.g. "/checkout". */
-      lastPath?: string }
+      lastPath?: string;
+      /** Public share links that still work. */
+      sharing?: AppViewSharing }
   | { id: string; kind: "terminal"; name: string; command: string; args: string[] };
 export interface SessionApp {
   id: string;
@@ -102,5 +104,19 @@ export type OpenAppViewResult = { kind: "web"; url: string } | { kind: "terminal
  * An offer grants nothing; adopting it publishes a service view. */
 export interface AppOffer { port: number; pid: number; command: string }
 export interface SessionAppOffersResult { offers: AppOffer[] }
-/** A reusable preview link; a bearer capability until `expiresAt` or revoke. */
-export interface ShareAppViewResult { url: string; expiresAt: number }
+/** A reusable preview link; a bearer capability until `expiresAt` or revoke.
+ * `controls`: people who open it get the reviewer tools (Point, Draw, notes). */
+export interface ShareAppViewResult { url: string; expiresAt: number; controls: boolean }
+/** How long a new share link works. Links live in the machine's memory, so a
+ * restart ends them sooner. Adding a choice means adding a row. */
+export const SHARE_DURATIONS = [
+  { id: "1h", label: "1 hour", ms: 3_600_000 },
+  { id: "1d", label: "1 day", ms: 86_400_000 },
+  { id: "7d", label: "7 days", ms: 7 * 86_400_000 },
+] as const;
+export type ShareDuration = typeof SHARE_DURATIONS[number]["id"];
+export const DEFAULT_SHARE_DURATION: ShareDuration = "1d";
+export interface ShareOptions { duration?: ShareDuration; controls?: boolean }
+/** Share links to a web view that still work: how many, and when the last one
+ * lapses. Never the links themselves (agents can list apps). */
+export interface AppViewSharing { links: number; expiresAt: number }

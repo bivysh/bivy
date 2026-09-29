@@ -120,6 +120,10 @@ const poll=async()=>{try{const r=await fetch(location.href,{method:'HEAD',cache:
 }
 /** Copied links are reusable until revoked, capped so a forgotten one lapses. */
 export const SHARE_TTL = 24 * HOUR;
+/** The longest a copied link may be asked to last. */
+export const SHARE_TTL_MAX = 7 * 24 * HOUR;
+/** `viewOnly`: a copied link without the reviewer tools. */
+type Grant = { appId: string; expires: number; returnTo?: string; reusable?: boolean; viewOnly?: boolean };
 /** Bivy's packaged apps load the client from their own scheme, so a preview
  * framed there has this ancestor instead of a web origin. (Node's URL gives
  * these "null" origins, so they cannot be configured as return origins.) */
@@ -184,15 +188,19 @@ function responseHeaders(headers: IncomingMessage["headers"], ancestors: string,
 export class AppGateway {
   readonly server: http.Server;
   private readonly template: string;
-  private readonly tickets = new Map<string, { appId: string; expires: number; returnTo?: string; reusable?: boolean }>();
+  private readonly tickets = new Map<string, Grant>();
   private readonly styles = new Map([
     ["/__bivy/tokens.css", readFileSync(new URL("./tokens.css", import.meta.url))],
     ["/__bivy/styles.css", readFileSync(new URL("./styles.css", import.meta.url))],
   ]);
   /** `reviewer`: the browser session came from a copied (shared) link.
+   *  `viewOnly`: that link came without the reviewer tools.
    *  `embedded`: it runs framed inside a Bivy client (a third-party frame). */
-  private readonly sessions = new Map<string, { appId: string; expires: number; reviewer?: boolean; embedded?: boolean }>();
+  private readonly sessions = new Map<string, { appId: string; expires: number; reviewer?: boolean; viewOnly?: boolean; embedded?: boolean }>();
   private readonly sockets = new Map<string, Set<Duplex>>();
+  /** Connections opened by people with a copied link, so Stop sharing can end
+   * theirs and leave the owner's. */
+  private readonly shared = new WeakSet<Duplex>();
   private captureAfter = 0;
   private capturing = false;
   private readonly displays = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024, perMessageDeflate: false });
@@ -235,11 +243,26 @@ export class AppGateway {
     return `${this.origin(id)}${OPEN_PATH}#${this.grant({ appId: id, expires: Date.now() + 60_000 })}`;
   }
   /** Public reviewers use the same isolated controls as the owner, but can
-   * only submit notes. Valid until revoked or SHARE_TTL. */
-  share(id: string): { url: string; expiresAt: number } {
+   * only submit notes; without `controls` they only see the app. Valid until
+   * revoked, sharing stops, or `ttl` (SHARE_TTL by default). */
+  share(id: string, { ttl = SHARE_TTL, controls = true }: { ttl?: number; controls?: boolean } = {}): { url: string; expiresAt: number; controls: boolean } {
     this.requireWeb(id);
-    const expiresAt = Date.now() + SHARE_TTL;
-    return { url: `${this.shellOrigin(id)}${OPEN_PATH}#${this.grant({ appId: id, expires: expiresAt, reusable: true })}`, expiresAt };
+    if (!Number.isFinite(ttl) || ttl <= 0 || ttl > SHARE_TTL_MAX) throw new Error("A share link can last at most 7 days.");
+    const expiresAt = Date.now() + ttl;
+    return { url: `${this.shellOrigin(id)}${OPEN_PATH}#${this.grant({ appId: id, expires: expiresAt, reusable: true, ...(controls ? {} : { viewOnly: true }) })}`, expiresAt, controls };
+  }
+  /** Copied links that still work: how many, and when the last one lapses. */
+  sharing(id: string): { links: number; expiresAt: number } | undefined {
+    this.sweep();
+    const links = [...this.tickets.values()].filter((grant) => grant.appId === id && grant.reusable);
+    return links.length ? { links: links.length, expiresAt: Math.max(...links.map((grant) => grant.expires)) } : undefined;
+  }
+  /** Ends every copied link and the browser sessions and connections opened
+   * from them. The owner's own previews keep working. */
+  unshare(id: string): void {
+    for (const [key, grant] of this.tickets) if (grant.appId === id && grant.reusable) this.tickets.delete(key);
+    for (const [key, session] of this.sessions) if (session.appId === id && session.reviewer) this.sessions.delete(key);
+    for (const socket of this.sockets.get(id) ?? []) if (this.shared.has(socket)) socket.destroy();
   }
   revoke(id: string): void {
     for (const map of [this.tickets, this.sessions]) for (const [key, grant] of map) if (grant.appId === id) map.delete(key);
@@ -258,7 +281,7 @@ export class AppGateway {
     if (entry?.view.kind !== "web") throw new Error("Web view not found.");
     return entry;
   }
-  private grant(grant: { appId: string; expires: number; returnTo?: string; reusable?: boolean }): string {
+  private grant(grant: Grant): string {
     this.sweep();
     if (this.tickets.size >= 500 || this.sessions.size >= 500) throw new Error("Too many preview grants. Try again later.");
     const ticket = randomBytes(32).toString("hex");
@@ -275,16 +298,17 @@ export class AppGateway {
     const entry = this.registry.getView(id);
     return entry?.view.kind === "web" ? entry : undefined;
   }
-  private session(req: IncomingMessage, id: string): { expires: number; reviewer?: boolean; embedded?: boolean } | undefined {
+  private session(req: IncomingMessage, id: string): { expires: number; reviewer?: boolean; viewOnly?: boolean; embedded?: boolean } | undefined {
     this.sweep();
     const token = (req.headers.cookie ?? "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
     const session = token ? this.sessions.get(token) : undefined;
     return session?.appId === id ? session : undefined;
   }
-  private authorize(req: IncomingMessage, id: string): number | undefined { return this.session(req, id)?.expires; }
-  private track(id: string, socket: Duplex, expires: number): void {
+  private track(id: string, socket: Duplex, session: { expires: number; reviewer?: boolean }): void {
+    const expires = session.expires;
     let sockets = this.sockets.get(id);
     if (!sockets) { sockets = new Set(); this.sockets.set(id, sockets); }
+    if (session.reviewer) this.shared.add(socket);
     if (sockets.has(socket)) return;
     sockets.add(socket);
     const timer = setTimeout(() => socket.destroy(), Math.max(1, expires - Date.now()));
@@ -314,7 +338,7 @@ export class AppGateway {
       res.setHeader("Content-Type", "application/json");
       // Someone opening a shared link sees "Made with Bivy" under the app; the owner doesn't.
       const badge = grant.reusable && this.badge ? await this.badge().catch(() => true) : false;
-      res.end(JSON.stringify({ name: entry.app.name, origin: this.origin(id), returnTo: grant.returnTo, ...(grant.reusable ? { reviewer: true } : {}), ...(badge ? { badge: true } : {}), ...(entry.target.kind === "display" ? { inspect: false } : {}) })); return;
+      res.end(JSON.stringify({ name: entry.app.name, origin: this.origin(id), returnTo: grant.returnTo, ...(grant.reusable ? { reviewer: true } : {}), ...(grant.viewOnly ? { controls: false } : {}), ...(badge ? { badge: true } : {}), ...(entry.target.kind === "display" ? { inspect: false } : {}) })); return;
     }
     res.writeHead(404); res.end("Preview shell route not found.");
   }
@@ -354,31 +378,35 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
       // A browser session never outlives the link that created it.
       const expires = Math.min(Date.now() + HOUR, grant.expires);
       const token = randomBytes(32).toString("hex");
-      this.sessions.set(token, { appId: id, expires, reviewer: grant.reusable === true, ...(embedded ? { embedded } : {}) });
+      this.sessions.set(token, { appId: id, expires, reviewer: grant.reusable === true, ...(grant.viewOnly ? { viewOnly: true } : {}), ...(embedded ? { embedded } : {}) });
       // Framed inside Bivy, the cookie is third-party: it must be SameSite=None,
       // and Partitioned keys it to Bivy's top-level site so no other site can use it.
       const scope = embedded ? "SameSite=None; Partitioned" : "SameSite=Lax";
       res.setHeader("Set-Cookie", `${COOKIE}=${token}; Secure; HttpOnly; ${scope}; Path=/; Max-Age=${Math.max(1, Math.floor((expires - Date.now()) / 1000))}`);
       res.writeHead(204); res.end(); return;
     }
-    const session = this.session(req, id), expires = session?.expires;
+    const session = this.session(req, id);
     // A home-screen visit without access goes through Bivy to sign in, then
     // comes back to the same page. Framed loads keep the plain message.
-    const signIn = !expires && req.method === "GET" && req.headers["sec-fetch-dest"] === "document" && req.url?.startsWith("/") ? this.signIn?.(entry, req.url) : undefined;
+    const signIn = !session && req.method === "GET" && req.headers["sec-fetch-dest"] === "document" && req.url?.startsWith("/") ? this.signIn?.(entry, req.url) : undefined;
     if (signIn) { res.writeHead(303, { location: signIn }); res.end(); return; }
-    if (!expires) { res.writeHead(401); res.end("Preview access expired. Open a new preview link from Bivy."); return; }
+    if (!session) { res.writeHead(401); res.end("Preview access expired. Open a new preview link from Bivy."); return; }
     // Block cross-site mutations even if a client sends the preview cookie.
     if (!["GET", "HEAD"].includes(req.method ?? "") && req.headers.origin !== this.origin(id)) { res.writeHead(403); res.end("Forbidden origin."); return; }
     if (req.headers["sec-fetch-dest"] === "serviceworker") { res.writeHead(403); res.end(); return; }
     if (!req.url?.startsWith("/") || req.url.startsWith("//")) { res.writeHead(400); res.end(); return; }
-    this.track(id, req.socket, expires);
+    this.track(id, req.socket, session);
     if (req.url.startsWith(`${REVISION_PATH}?`) && req.method === "GET") { this.revision(req, res, entry); return; }
     if ((req.url === COMPARE_PATH || req.url.startsWith(`${COMPARE_PATH}/`)) && req.method === "GET") { this.compare(req, res, entry); return; }
     if (req.url === INSPECTOR_PATH && req.method === "GET") {
       res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
-      res.end(inspectorScript(this.shellOrigin(id), session?.reviewer === true, session?.embedded === true)); return;
+      res.end(inspectorScript(this.shellOrigin(id), session.reviewer === true && !session.viewOnly, session.embedded === true)); return;
     }
-    if (req.url === NOTES_PATH && req.method === "POST") { await this.note(req, res, entry); return; }
+    if (req.url === NOTES_PATH && req.method === "POST") {
+      // A view-only link shows the app and nothing else.
+      if (session.viewOnly) { res.writeHead(403); res.end(); return; }
+      await this.note(req, res, entry); return;
+    }
     if (entry.target.kind === "display") { await this.display(req, res, entry); return; }
     const inspect = isPageLoad(req);
     // Remember the framed page so a turn reload lands where the user was.
@@ -588,12 +616,12 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
   }
   private upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): void {
     const entry = this.entry(req);
-    const expires = entry && this.authorize(req, entry.view.id);
+    const session = entry && this.session(req, entry.view.id);
     const display = entry?.target.kind === "display";
-    if (!entry || !expires || (entry.target.kind !== "service" && !(display && req.url === DISPLAY_SOCKET_PATH)) || req.headers.origin !== this.origin(entry.view.id) || req.headers.upgrade?.toLowerCase() !== "websocket" || !req.url?.startsWith("/") || req.url.startsWith("//")) {
+    if (!entry || !session || (entry.target.kind !== "service" && !(display && req.url === DISPLAY_SOCKET_PATH)) || req.headers.origin !== this.origin(entry.view.id) || req.headers.upgrade?.toLowerCase() !== "websocket" || !req.url?.startsWith("/") || req.url.startsWith("//")) {
       socket.end("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); return;
     }
-    this.track(entry.view.id, socket, expires);
+    this.track(entry.view.id, socket, session);
     if (display) { this.displaySocket(req, socket, head, entry); return; }
     if (entry.target.kind !== "service") return;
     const port = entry.target.port;
@@ -601,7 +629,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     upstream.setTimeout(10_000, () => upstream.destroy());
     upstream.on("upgrade", (response, peer, upstreamHead) => {
       peer.setTimeout(0);
-      this.track(entry.view.id, peer, expires);
+      this.track(entry.view.id, peer, session);
       const headers = cleanHeaders(response.headers);
       delete headers["set-cookie"];
       socket.write(`HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n${Object.entries(headers).filter(([, value]) => value !== undefined).map(([key, value]) => `${key}: ${value}\r\n`).join("")}\r\n`);

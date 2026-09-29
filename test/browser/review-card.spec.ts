@@ -95,7 +95,7 @@ for (const theme of themes) {
     await page.screenshot({ path: testInfo.outputPath(`review-preview-${theme}.png`), fullPage: true, animations: "disabled" });
     await preview.getByRole("button", { name: "Share Site" }).click();
     await page.getByRole("button", { name: "Sharing options" }).click();
-    await page.getByRole("menuitem", { name: "Revoke access…", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Revoke all access…", exact: true }).click();
     await page.getByRole("button", { name: "Revoke access", exact: true }).click();
     await expect(page.getByRole("status").filter({ hasText: /^Access revoked\.$/ })).toBeVisible();
     await page.keyboard.press("Escape");

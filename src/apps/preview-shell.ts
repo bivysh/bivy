@@ -163,6 +163,8 @@ function show(data,launch){
     $('draft-text').maxLength=1000;
     $('send-errors').textContent='Leave a note…';
   }
+  // A view-only share link shows the app without Bivy's tools.
+  $('dock').hidden=data.controls===false;
   $('made-with').hidden=!data.badge;
   document.body.classList.toggle('badged',Boolean(data.badge));
   $('title').textContent=data.name;
