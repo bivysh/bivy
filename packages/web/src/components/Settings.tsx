@@ -19,6 +19,7 @@ import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { setCloudMachinesEnabled, useCloudMachinesEnabled } from "../cloudMachines.js";
 import { requestSignIn } from "../signInRequest.js";
 import { clientConfiguration } from "../client-config.js";
+import { accountHeader, type AccountHeader as AccountHeaderView, type MeterState } from "../accountHeader.js";
 import { accountExtensionFacts, accountOrigin, hasNativeSubscriptions, isPackagedClient, openAccountAction, openNativeSubscriptions, showAccountExtension } from "../packaged-client.js";
 import { getAppIconBadgeEnabled, setAppIconBadgeEnabled, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "../notificationSettings.js";
 import { CheckIcon, ChevronRightIcon, CloseIcon, CopyIcon } from "./UiIcons.js";
@@ -126,17 +127,59 @@ function useMediaQuery(query: string): boolean {
 
 type NavItem = { id: View; label: string; icon: ReactNode };
 
-/** The signed-in email for the Settings account card; null until loaded (or
+/** The signed-in account for the Settings account card; null until loaded (or
  *  when not hosted / the fetch fails — the card then just reads "Account"). */
-function useAccountEmail(hosted: boolean): string | null {
-  const [email, setEmail] = useState<string | null>(null);
+function useAccountMe(hosted: boolean): AccountMe | null {
+  const [me, setMe] = useState<AccountMe | null>(null);
   useEffect(() => {
     if (!hosted) return;
     let live = true;
-    controller.fetchMe().then((me) => { if (live) setEmail(me.account?.email ?? null); }).catch(() => {});
+    controller.fetchMe().then((next) => { if (live) setMe(next); }).catch(() => {});
     return () => { live = false; };
   }, [hosted]);
-  return email;
+  return me;
+}
+
+const METER_NOTE: Record<MeterState, string | null> = { ok: null, near: "Almost used up", reached: "Limit reached" };
+
+/** The account card's allowance meter, with the deployment's primary action
+ *  (e.g. upgrade) once the allowance is nearly or fully used. */
+function AccountUsage({ meter, action }: { meter: NonNullable<AccountHeaderView["meter"]>; action?: AccountHeaderView["action"] }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const note = METER_NOTE[meter.state];
+  return (
+    <div className="settings-account-usage" data-state={meter.state}>
+      <div className="settings-account-usage-row">
+        <span>{meter.label}</span>
+        <span className="settings-account-usage-count">{meter.used} of {meter.limit}</span>
+      </div>
+      <div className="meter" role="meter" aria-label={meter.label} aria-valuemin={0} aria-valuemax={meter.limit} aria-valuenow={meter.used} aria-valuetext={`${meter.used} of ${meter.limit}${note ? ` — ${note.toLowerCase()}` : ""}`} data-state={meter.state}>
+        <span className="meter-fill" style={{ width: `${(meter.used / meter.limit) * 100}%` }} />
+      </div>
+      {(note || action) && (
+        <div className="settings-account-usage-row">
+          {note && <span className="settings-account-usage-note">{note}</span>}
+          {action && (
+            <button
+              type="button"
+              className="btn sm primary"
+              disabled={busy}
+              onClick={() => {
+                setBusy(true);
+                setErr(null);
+                controller.invokeAccountExtensionAction(action.id)
+                  .then(({ url }) => openAccountAction(url))
+                  .catch((e) => setErr(String(e?.message || e)))
+                  .finally(() => setBusy(false));
+              }}
+            >{busy ? "Opening…" : action.label}</button>
+          )}
+        </div>
+      )}
+      {err && <div className="banner inline" data-tone="danger">{err}</div>}
+    </div>
+  );
 }
 
 function accountInitials(email: string): string {
@@ -298,7 +341,9 @@ export function Settings({
   ];
   // Hosted accounts get an identity card pinned to the top of the menu (the
   // Claude / ChatGPT pattern) instead of a group buried below App.
-  const accountEmail = useAccountEmail(hosted);
+  const accountMe = useAccountMe(hosted);
+  const accountEmail = accountMe?.account?.email ?? null;
+  const header = accountHeader(accountMe?.extension);
   const accountItem: NavItem = { id: "account", label: accountEmail ?? "Account", icon: <IconUser /> };
 
   const q = query.trim().toLowerCase();
@@ -354,10 +399,11 @@ export function Settings({
                   <span className="settings-account-avatar" aria-hidden>{accountEmail ? accountInitials(accountEmail) : accountItem.icon}</span>
                   <span className="settings-account-text">
                     <span className="settings-nav-label">{accountItem.label}</span>
-                    <span className="settings-account-sub">Account</span>
+                    <span className="settings-account-sub">{header.summary ?? "Account"}</span>
                   </span>
                   <span className="settings-nav-chevron"><ChevronRightIcon size={18} /></span>
                 </button>
+                {header.meter && <AccountUsage meter={header.meter} action={header.action} />}
               </div>
             )}
             {groups.map((group) => {

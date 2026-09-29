@@ -2228,6 +2228,13 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-account-avatar svg { width: 20px; height: 20px; }
 .settings-account-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .settings-account-sub { font-size: var(--text-xs); color: var(--muted); font-weight: normal; }
+.settings-account-usage { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-1) 10px var(--space-2); font-size: var(--text-xs); color: var(--muted); }
+.settings-account-usage-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); min-height: 20px; }
+.settings-account-usage-count { color: var(--ink); font-variant-numeric: tabular-nums; }
+.settings-account-usage-note { font-weight: var(--weight-semibold); }
+.settings-account-usage[data-state="near"] .settings-account-usage-note { color: var(--warn); }
+.settings-account-usage[data-state="reached"] .settings-account-usage-note { color: var(--danger); }
+.settings-account-usage .banner { margin: 0; }
 .settings-nav-version { flex: none; display: flex; flex-direction: column; gap: 1px; padding: 10px 10px 2px; color: var(--muted); font-size: 12px; letter-spacing: 0.02em; }
 .settings-nav-version-updated { font-size: 11px; opacity: 0.8; }
 
@@ -2241,6 +2248,13 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-x:hover { color: var(--ink); }
 .settings-body { flex: 1; overflow-y: auto; min-height: 0; padding: 14px 18px 28px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; animation: settings-panel-in var(--dur) var(--ease-standard); }
 .settings-body .settings-form { padding: 0; }
+
+/* Canonical meter — a thin allowance/usage bar (role="meter"). data-state
+   near/reached tints it warn/danger. Reflects the styleguide (.meter). */
+.meter { display: block; height: 6px; border-radius: var(--radius-full); background: var(--surface-3); overflow: hidden; }
+.meter-fill { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width var(--dur) var(--ease-standard); }
+.meter[data-state="near"] .meter-fill { background: var(--warn); }
+.meter[data-state="reached"] .meter-fill { background: var(--danger); }
 
 /* Canonical selectable — the shared "active-accent-tint" choice control. Its
    selected state (accent border + soft accent fill) is the one that used to be

@@ -52,6 +52,11 @@ export type DeploymentLifecycleEvent =
 
 export interface AccountExtensionView {
   title?: string;
+  /** Short plan/status line shown under the email in the account header. */
+  summary?: string;
+  /** One metered allowance for the account header. The client warns as `used`
+   *  nears `limit` and, where actions are allowed, offers the primary action. */
+  meter?: { label: string; used: number; limit: number };
   facts?: Array<{ id: string; label: string; value: string }>;
   actions?: Array<{ id: string; label: string; kind?: "primary" | "secondary" }>;
 }
