@@ -80,7 +80,7 @@ import { createSessionEngine } from "./session/engine.js";
 import { exportProviderAuth, exportAccountApiKeys, exportAccountOAuthCredentials, importAccountOAuthCredentials, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, setCredentialUnattended, exportUnattendedRecords, unattendedCredentialRevision, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords, reconcileHostedCredentialRecords } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
-import { mergeSyncedAgentInstructions, readAgentInstructions, sessionInstructions, writeAgentInstructions, MAX_AGENT_INSTRUCTIONS_BYTES } from "./agent-instructions.js";
+import { BIVY_AGENT_NOTE, mergeSyncedAgentInstructions, readAgentInstructions, sessionInstructions, writeAgentInstructions, MAX_AGENT_INSTRUCTIONS_BYTES } from "./agent-instructions.js";
 import { execEphemeralRequest, type EphemeralExecRequest } from "./ephemeral-exec.js";
 import { ApprovalManager, type ApprovalRequest } from "./approval.js";
 import { QuestionManager, validQuestions, isAskUserQuestionTool, formatQuestionResult } from "./question.js";
@@ -1516,8 +1516,9 @@ type NodeSettings = {
    *  headless browser. Off by default: it needs Chrome/Chromium and a few
    *  hundred MB of memory while it runs. */
   appScreenshots: boolean;
-  /** Account-wide instructions every agent session receives (src/agent-instructions.ts). */
-  agentInstructions: { text: string; updatedAt: number; maxBytes: number };
+  /** Account-wide instructions every agent session receives (src/agent-instructions.ts),
+   *  plus whether the Bivy note goes ahead of them and that note's text. */
+  agentInstructions: { text: string; updatedAt: number; maxBytes: number; bivyNote: boolean; bivyNoteText: string };
   forkWorkspaceMaxBytes: number;
 };
 
@@ -1589,7 +1590,7 @@ function nodeSettingsSnapshot(): NodeSettings {
     autoAttachToolImages: readSettings().autoAttachToolImages === true,
     appScreenshots: appScreenshotsEnabled(),
     forkWorkspaceMaxBytes: Number.isInteger(readSettings().forkWorkspaceMaxBytes) ? Number(readSettings().forkWorkspaceMaxBytes) : 50 * 1024 * 1024,
-    agentInstructions: { ...readAgentInstructions(appDir), maxBytes: MAX_AGENT_INSTRUCTIONS_BYTES },
+    agentInstructions: { ...readAgentInstructions(appDir), maxBytes: MAX_AGENT_INSTRUCTIONS_BYTES, bivyNoteText: BIVY_AGENT_NOTE },
   };
 }
 
@@ -1603,6 +1604,11 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
       throw new Error("These instructions were changed on another device. Reload them before saving.");
     }
     writeAgentInstructions(appDir, patch.agentInstructions);
+    void pushModelAuthToControlPlane();
+  }
+  // The Bivy-note switch syncs with the text: keep the text, stamp a new time.
+  if (typeof patch.agentInstructionsBivyNote === "boolean") {
+    writeAgentInstructions(appDir, readAgentInstructions(appDir).text, Date.now(), patch.agentInstructionsBivyNote);
     void pushModelAuthToControlPlane();
   }
   const settings = readSettings();
@@ -3440,10 +3446,10 @@ type ModelAuthEnvelope = {
   localModels?: Record<string, unknown>;
   records?: Record<string, unknown>;
   recordsDeletedAt?: Record<string, number>;
-  // The user's account-wide agent instructions ({ text, updatedAt }, last writer
-  // wins — see src/agent-instructions.ts). Additive and optional: an older peer
-  // drops it on re-push, and a newer peer holding a newer copy re-publishes.
-  agentInstructions?: { text: string; updatedAt: number };
+  // The user's account-wide agent instructions ({ text, updatedAt, bivyNote },
+  // last writer wins — see src/agent-instructions.ts). Additive and optional: an
+  // older peer drops it on re-push, and a newer peer holding a newer copy re-publishes.
+  agentInstructions?: { text: string; updatedAt: number; bivyNote?: boolean };
 };
 
 function encryptModelAuthProviders(
@@ -3453,7 +3459,7 @@ function encryptModelAuthProviders(
   vaultKeyB64: string,
   records: Record<string, unknown> = {},
   recordsDeletedAt: Record<string, number> = {},
-  agentInstructions?: { text: string; updatedAt: number },
+  agentInstructions?: { text: string; updatedAt: number; bivyNote: boolean },
 ): string {
   const envelope: ModelAuthEnvelope = { v: MODEL_AUTH_ENVELOPE_VERSION, providers, deletedAt, localModels, records, recordsDeletedAt, ...(agentInstructions ? { agentInstructions } : {}) };
   return seal(Buffer.from(vaultKeyB64, "base64"), JSON.stringify(envelope));

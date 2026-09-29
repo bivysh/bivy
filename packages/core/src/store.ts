@@ -732,8 +732,10 @@ export interface NodeSettings {
   /** Account-wide instructions handed to every agent session, alongside the
    *  workspace's own AGENTS.md. Synced to all the account's machines; save with
    *  `agentInstructionsBaseUpdatedAt` so an edit made elsewhere isn't overwritten.
-   *  Absent on nodes that predate the feature. */
-  agentInstructions?: { text: string; updatedAt: number; maxBytes: number };
+   *  Absent on nodes that predate the feature. `bivyNote` says whether Bivy's own
+   *  note (`bivyNoteText`) goes ahead of them; set it with `agentInstructionsBivyNote`.
+   *  Both are absent on nodes that predate the switch. */
+  agentInstructions?: { text: string; updatedAt: number; maxBytes: number; bivyNote?: boolean; bivyNoteText?: string };
 }
 
 export interface ConnectionAccountState {

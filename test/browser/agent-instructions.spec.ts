@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Settings → Agent instructions: editing, saving against the loaded version, a
-// save rejected because another device changed them, and the size limit — in
-// the real Settings modal with real styles.
+// save rejected because another device changed them, the size limit, and the
+// switch + viewer for Bivy's own note — in the real Settings modal with real styles.
 import { expect, test, themes, type WebApp } from "./fixtures.js";
 import path from "node:path";
 
@@ -25,7 +25,10 @@ for (const theme of themes) {
       controller.getNodeSettings = () => {};
       let state = structuredClone(controller.store.getState());
       state.connection.status = 'online';
+      let current;
       const setInstructions = (agentInstructions) => {
+        current = { bivyNote: true, bivyNoteText: 'You are running inside Bivy.', ...agentInstructions };
+        agentInstructions = current;
         state = { ...state, settings: { ...state.settings, nodeSettings: { name: 'studio', agentInstructions } } };
         render();
       };
@@ -36,6 +39,7 @@ for (const theme of themes) {
         window.saves.push(patch);
         await new Promise(resolve => setTimeout(resolve, 100));
         if (window.rejectSave) throw new Error('These instructions were changed on another device. Reload them before saving.');
+        if ('agentInstructionsBivyNote' in patch) return setInstructions({ ...current, bivyNote: patch.agentInstructionsBivyNote, updatedAt: current.updatedAt + 500 });
         setInstructions({ text: patch.agentInstructions, updatedAt: patch.agentInstructionsBaseUpdatedAt + 1000, maxBytes: 64 });
       };
       const root = createRoot(document.getElementById('root'));
@@ -74,6 +78,26 @@ for (const theme of themes) {
     await save.click();
     await expect(page.getByRole("button", { name: "Saved" })).toBeVisible();
     expect(await page.evaluate(() => (window as any).saves.at(-1))).toEqual({ agentInstructions: "my draft", agentInstructionsBaseUpdatedAt: 9000 });
+    // The Bivy-note switch saves on its own; an unsaved draft rides over its restamp.
+    await editor.fill("draft during toggle");
+    const noteSwitch = page.getByRole("switch", { name: "Send Bivy's system instructions" });
+    await expect(noteSwitch).toHaveAttribute("aria-checked", "true");
+    await noteSwitch.click();
+    await expect(noteSwitch).toHaveAttribute("aria-checked", "false");
+    expect(await page.evaluate(() => (window as any).saves.at(-1))).toEqual({ agentInstructionsBivyNote: false });
+    await expect(editor).toHaveValue("draft during toggle");
+    await expect(page.getByRole("status")).toHaveCount(0);
+    await expect(save).toBeEnabled();
+    // The note itself is one tap away.
+    await page.getByRole("button", { name: "View system instructions" }).click();
+    const sheet = page.getByRole("dialog", { name: "Bivy's system instructions" });
+    await expect(sheet).toContainText("You are running inside Bivy.");
+    await expect(sheet).toContainText("Turned off");
+    await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished.catch(() => {}))));
+    await page.screenshot({ path: testInfo.outputPath("agent-instructions-note.png"), fullPage: true });
+    await page.keyboard.press("Escape");
+    await expect(sheet).toHaveCount(0);
+
     // Load latest discards the draft; a save the node rejects is reported.
     await editor.fill("another draft");
     await page.evaluate(() => (window as any).setInstructions({ text: "from phone", updatedAt: 20000, maxBytes: 64 }));

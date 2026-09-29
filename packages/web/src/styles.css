@@ -2863,6 +2863,8 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .node-menu-glyph { color: var(--accent); flex: none; }
 .eph-steps { margin: 4px 0; padding-left: 18px; color: var(--muted); font-size: 13px; display: grid; gap: 4px; }
 .code-snippet { margin: 6px 0 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-md); padding: 10px; background: var(--surface); font-size: 12px; }
+/* Settings → Agent instructions: Bivy's note, wrapped to the sheet's width. */
+.agent-note-text { white-space: pre-wrap; overflow-wrap: anywhere; }
 select.picker-search { appearance: auto; }
 .node-menu-sep { height: 1px; background: var(--line); margin: 4px 0; }
 /* PrToast, UpdatePrompt (both `.update-toast`), and ErrorToast used to each

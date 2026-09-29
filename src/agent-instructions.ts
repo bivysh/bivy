@@ -14,7 +14,9 @@ import type { SessionInstructions } from "./runtime/types.js";
  * account-wide copy rides in the E2E model-auth vault envelope (see server.ts),
  * and a synced import stamps the file with the writer's timestamp so every
  * machine compares like with like. Clearing is an empty file, not a delete, so
- * the empty state carries a timestamp and propagates too.
+ * the empty state carries a timestamp and propagates too. The one switch beside
+ * the text — whether sessions also get the Bivy note — lives in a small sidecar
+ * file and shares that clock: flipping it rewrites AGENTS.md's timestamp.
  *
  * Delivery is the caller's business; this module only produces the composed
  * text (and a file holding it, for agents that take a path).
@@ -27,6 +29,8 @@ export interface AgentInstructions {
   text: string;
   /** Epoch ms of the last write; 0 when no file exists yet. */
   updatedAt: number;
+  /** Send BIVY_AGENT_NOTE ahead of the text. On unless the user turned it off. */
+  bivyNote: boolean;
 }
 
 /**
@@ -56,25 +60,40 @@ export function agentInstructionsPath(appDir: string): string {
   return path.join(appDir, "AGENTS.md");
 }
 
+function optionsPath(appDir: string): string {
+  return path.join(appDir, "agent-instructions.json");
+}
+
+function readBivyNote(appDir: string): boolean {
+  try {
+    return (JSON.parse(fs.readFileSync(optionsPath(appDir), "utf8")) as { bivyNote?: unknown }).bivyNote !== false;
+  } catch {
+    return true;
+  }
+}
+
 function composedPath(appDir: string): string {
   return path.join(appDir, "agent-instructions.composed.md");
 }
 
 export function readAgentInstructions(appDir: string): AgentInstructions {
+  const bivyNote = readBivyNote(appDir);
   try {
     const file = agentInstructionsPath(appDir);
-    return { text: fs.readFileSync(file, "utf8"), updatedAt: Math.trunc(fs.statSync(file).mtimeMs) };
+    return { text: fs.readFileSync(file, "utf8"), updatedAt: Math.trunc(fs.statSync(file).mtimeMs), bivyNote };
   } catch {
-    return { text: "", updatedAt: 0 };
+    return { text: "", updatedAt: 0, bivyNote };
   }
 }
 
-export function writeAgentInstructions(appDir: string, text: string, updatedAt = Date.now()): AgentInstructions {
+/** Write the text (and optionally the Bivy-note switch), stamped `updatedAt`. */
+export function writeAgentInstructions(appDir: string, text: string, updatedAt = Date.now(), bivyNote?: boolean): AgentInstructions {
   if (Buffer.byteLength(text, "utf8") > MAX_AGENT_INSTRUCTIONS_BYTES) {
     throw new Error(`Agent instructions are limited to ${MAX_AGENT_INSTRUCTIONS_BYTES / 1024} KB.`);
   }
   const file = agentInstructionsPath(appDir);
   fs.mkdirSync(appDir, { recursive: true });
+  if (bivyNote !== undefined) fs.writeFileSync(optionsPath(appDir), `${JSON.stringify({ bivyNote })}\n`);
   fs.writeFileSync(file, text);
   fs.utimesSync(file, new Date(updatedAt), new Date(updatedAt));
   return readAgentInstructions(appDir);
@@ -85,6 +104,8 @@ export function writeAgentInstructions(appDir: string, text: string, updatedAt =
  * - "imported": the synced copy was newer and is now the local file.
  * - "local-newer": this machine holds a newer copy the account should get.
  * - "unchanged": nothing to do.
+ * A synced copy without `bivyNote` comes from a peer that predates the switch,
+ * where the note was always on.
  */
 export function mergeSyncedAgentInstructions(appDir: string, incoming: unknown): "imported" | "local-newer" | "unchanged" {
   const local = readAgentInstructions(appDir);
@@ -92,30 +113,38 @@ export function mergeSyncedAgentInstructions(appDir: string, incoming: unknown):
   if (typeof synced?.text !== "string" || typeof synced.updatedAt !== "number") {
     return local.updatedAt > 0 ? "local-newer" : "unchanged";
   }
-  if (synced.text === local.text) return "unchanged";
+  const bivyNote = synced.bivyNote !== false;
+  if (synced.text === local.text && bivyNote === local.bivyNote) return "unchanged";
   if (synced.updatedAt > local.updatedAt) {
-    writeAgentInstructions(appDir, synced.text, synced.updatedAt);
+    writeAgentInstructions(appDir, synced.text, synced.updatedAt, bivyNote);
     return "imported";
   }
   return "local-newer";
 }
 
-/** The Bivy note, then the user's text (if any) under the precedence preamble. */
-export function composeAgentInstructions(text: string): string {
+/** The Bivy note (unless switched off), then the user's text (if any) under the precedence preamble. */
+export function composeAgentInstructions(text: string, bivyNote = true): string {
   const body = text.trim();
-  return body ? `${BIVY_AGENT_NOTE}\n\n${PREAMBLE}\n\n${body}\n` : `${BIVY_AGENT_NOTE}\n`;
+  return [bivyNote ? BIVY_AGENT_NOTE : "", body ? `${PREAMBLE}\n\n${body}` : ""].filter(Boolean).map((part) => `${part}\n`).join("\n");
 }
 
 /**
- * The instructions for a session starting now: always at least the Bivy note.
- * Keeps a composed copy on disk (rewritten only when it changes) for agents
- * that take a file path rather than text. Undefined only if that file can't be
- * written.
+ * The instructions for a session starting now, or undefined when there is
+ * nothing to send (no text and the Bivy note switched off) or the file can't be
+ * written. Keeps a composed copy on disk (rewritten only when it changes) for
+ * agents that take a file path rather than text.
  */
 export function sessionInstructions(appDir: string): SessionInstructions | undefined {
-  const text = composeAgentInstructions(readAgentInstructions(appDir).text);
+  const { text: userText, bivyNote } = readAgentInstructions(appDir);
+  const text = composeAgentInstructions(userText, bivyNote);
   const file = composedPath(appDir);
   try {
+    if (!text) {
+      // An MCP server spec injected earlier may still point here; don't let it
+      // serve instructions the user has since cleared.
+      fs.rmSync(file, { force: true });
+      return undefined;
+    }
     fs.mkdirSync(appDir, { recursive: true });
     let current: string | undefined;
     try { current = fs.readFileSync(file, "utf8"); } catch { /* not written yet */ }

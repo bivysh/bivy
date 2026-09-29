@@ -11,7 +11,7 @@ Changes apply to sessions started after you save.
 
 ## The Bivy note
 
-Every session gets a short note from Bivy first, even when you haven't written
+By default every session gets a short note from Bivy first, even when you haven't written
 any instructions. It tells the agent it runs inside Bivy, that you follow along in
 a chat and can't see its terminal or files on disk, and which commands reach you:
 `bivy attach` (or the `attach_to_chat` tool) to send a file or image, and
@@ -19,6 +19,12 @@ a chat and can't see its terminal or files on disk, and which commands reach you
 something with a UI ([apps.md](apps.md)). The commands find the session through
 `$BIVY_SESSION_ID`, so any agent with a shell can use them. The note is
 `BIVY_AGENT_NOTE` in `src/agent-instructions.ts` and uses the channels below.
+
+To turn the note off, switch off **Send Bivy's system instructions** in
+**Settings → Agent instructions**. **View system instructions** there shows the
+exact text. The switch syncs to your other machines along with your
+instructions. With the note off and no instructions of your own, sessions get
+nothing extra.
 
 ## How each agent receives them
 
