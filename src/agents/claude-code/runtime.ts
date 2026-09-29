@@ -370,6 +370,10 @@ function extractText(message: any): string {
  *  meaning a human wants to see. */
 const DROP_META_TEXT = /^\s*<(?:task-notification|system-reminder)[\s>/]/;
 
+/** Re-drives a self-woken turn after a credential reload (see recoverFromAuthError).
+ *  Wrapped as a system-reminder so DROP_META_TEXT keeps it out of the chat. */
+const AUTH_RECOVERY_CONTINUE = "<system-reminder>Your last request failed because the sign-in expired; it has been refreshed. Continue exactly where you left off.</system-reminder>";
+
 /** The CLI writes this synthetic user-role marker whenever a turn is aborted —
  *  by a real user Stop OR by any teardown of the streaming query (our shutdown,
  *  a mid-flight credential reload, a TUI refresh). We don't drop it: we surface
@@ -1137,13 +1141,17 @@ class ClaudeSession implements RuntimeSession {
   /** Recover a provider 401 regardless of whether the SDK throws it, emits it as
    * assistant text, or puts it in an error result. The latter is how revoked
    * OAuth tokens commonly arrive, so only handling consume()'s catch would leave
-   * the turn stopped until the user sent another message. */
+   * the turn stopped until the user sent another message.
+   *
+   * A turn the agent woke into on its own (a background task's notification,
+   * with no user prompt in flight) recovers too: its trigger lived in the torn-down
+   * query, so the resumed one is nudged with a hidden continuation instead. */
   private async recoverFromAuthError(raw: string): Promise<boolean> {
-    if (!isAnthropicAuthError(raw) || this.reloadedThisTurn || this.inFlightPrompt === undefined) return false;
+    if (!isAnthropicAuthError(raw) || this.reloadedThisTurn) return false;
     this.reloadedThisTurn = true;
     if (!(await this.restartWithFreshCredential(this.spawnedToken))) return false;
     this.streaming = true;
-    this.input.push({ type: "user", message: { role: "user", content: this.inFlightPrompt }, parent_tool_use_id: null });
+    this.input.push({ type: "user", message: { role: "user", content: this.inFlightPrompt ?? AUTH_RECOVERY_CONTINUE }, parent_tool_use_id: null });
     return true;
   }
 
@@ -1334,6 +1342,10 @@ class ClaudeSession implements RuntimeSession {
         // Turn completed — the prompt is on disk now, so drop the copy kept for a
         // mid-flight reload re-drive (see inFlightPrompt / consume's catch).
         this.inFlightPrompt = undefined;
+        // Re-arm the one-reload-per-turn guard only after a clean turn, so the
+        // next (possibly self-woken) turn can recover, while a failed turn that
+        // already reloaded surfaces its error instead of looping.
+        if (!resultError) this.reloadedThisTurn = false;
         if (message.subtype && message.subtype !== "success") {
           this.emit({ type: "tool_result", error: message.subtype, message: message.result });
         }

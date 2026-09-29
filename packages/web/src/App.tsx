@@ -463,6 +463,12 @@ export function App() {
       else openSettings("providers");
       return;
     }
+    // A new turn makes the agent re-read its credential (refreshing an expired
+    // sign-in on the way), then picks the interrupted work back up.
+    if (name === "retry-auth") {
+      controller.sendPrompt("Continue — your previous request failed to authenticate. Pick up exactly where you left off.");
+      return;
+    }
     if (name.startsWith("retry-at-reset:")) { controller.setLimitRetry(true); return; }
     switch (name) {
       case "/new": controller.newSession(); break;

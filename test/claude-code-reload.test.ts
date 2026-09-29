@@ -173,6 +173,38 @@ function tokenOf(q: FakeQuery): string | undefined {
   console.log("revoked-token forced refresh OK");
 }
 
+// ── A self-woken turn (background-task notification, no prompt in flight) that
+//    401s refreshes and continues too — even after an earlier turn reloaded ──
+{
+  const { sdk, queries } = makeSdk();
+  const store = new RotatingStore("tok-a", "tok-b");
+  const runtime = new ClaudeCodeRuntime({ credentials: store, sdkLoader: async () => sdk });
+  const { session } = await runtime.createSession({ workspace: process.cwd() });
+
+  const events: any[] = [];
+  session.subscribe((e) => events.push(e));
+  const revoked = { type: "assistant", message: { content: [{ type: "text", text: "Failed to authenticate. API Error: 401 OAuth access token has been revoked." }] } };
+
+  await session.prompt("start background work");
+  await waitFor(() => queries.length === 1);
+  queries[0].emit(revoked);
+  await waitFor(() => queries.length === 2, 2000);
+  queries[1].emit({ type: "result", subtype: "success" });
+  await waitFor(() => events.some((e) => e.type === "agent_end"));
+
+  // The agent wakes on its own later and the rotated token is revoked in turn.
+  (store as any).refreshTo = "tok-c";
+  queries[1].emit(revoked);
+  await waitFor(() => queries.length === 3, 2000);
+  assert.equal(tokenOf(queries[2]), "tok-c", "the self-woken turn's 401 refreshes the credential");
+  const nudge = await nextWithin(queries[2].prompt!);
+  assert.match(String(nudge?.message?.content), /^<system-reminder>/, "the resumed query is nudged with a hidden continuation");
+  assert.ok(!events.some((e) => e.type === "session.error"), "the recoverable 401 is not shown as an error");
+
+  session.dispose();
+  console.log("self-woken turn reload OK");
+}
+
 // ── No fresher token: the 401 surfaces instead of looping ──
 {
   const { sdk, queries } = makeSdk();

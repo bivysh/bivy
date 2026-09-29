@@ -178,6 +178,7 @@ function actionLabel(action: string): string {
   if (action === "fork") return "Fork to another agent";
   if (action === "cancel-resume") return "Cancel auto-retry";
   if (action === "fix-auth" || action.startsWith("fix-auth:")) return "Fix sign-in";
+  if (action === "retry-auth") return "Refresh and retry";
   if (action.startsWith("connect-provider:")) return "Connect a provider";
   if (action.startsWith("retry-at-reset:")) return `Retry automatically at ${formatResetTime(action.slice("retry-at-reset:".length))}`;
   return `Run ${action}`;
@@ -449,8 +450,10 @@ const EntryView = memo(function EntryView({
     // OAuth session expired…") carries no structured provider, so nothing points
     // the user at the one screen that fixes it. Offer the sign-in route whenever
     // the error reads like a credential problem and the node named no action of
-    // its own.
-    const actions = entry.actions?.length ? entry.actions : (authAction && looksLikeAuthFailure(entry.text) ? [authAction] : undefined);
+    // its own. Refresh-and-retry sits beside it: the agent normally refreshes an
+    // expired sign-in by itself, and a new turn re-reads the credential, so a
+    // retry often recovers without signing in again.
+    const actions = entry.actions?.length ? entry.actions : (authAction && looksLikeAuthFailure(entry.text) ? [authAction, "retry-auth"] : undefined);
     return (
       <div className="card" data-tone="danger" role="alert">
         <strong>{summary}</strong>
