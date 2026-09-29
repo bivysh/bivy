@@ -14,6 +14,7 @@ import { rowHint } from "../runEvidence.js";
 import { sessionDateGroup } from "../sessionPresentation.js";
 import { CheckIcon, SearchIcon } from "./UiIcons.js";
 import { ConfirmDialog } from "./AppDialog.js";
+import { nestDelegatedSessions } from "../sessionNesting.js";
 
 /** Row states loud enough to earn a visible dot. The calm majority (idle /
  *  saved) carries none, so a dot in the list always means "look here". */
@@ -105,7 +106,7 @@ function sessionRepo(s: { source?: string }): string {
 }
 
 function sessionMeta(
-  s: { name?: string; source?: string; branch?: string; agentName?: string; nodeId?: string; forkedFrom?: string },
+  s: { name?: string; source?: string; branch?: string; agentName?: string; nodeId?: string; forkedFrom?: string; delegatedFrom?: { sessionId: string } },
   nodeLabel: string | null,
 ): string {
   // Keep the title row for the human title + state badges. Agent/runtime names
@@ -129,7 +130,7 @@ function sessionMeta(
   // descriptor that would only repeat that trigger name is dropped.
   const src = classifySource(s.source);
   const context = repo || (src.automation ? "" : queueSourceMeta(s.source));
-  const parts = [src.automation ? shortSourceLabel(src.kind) : null, s.forkedFrom ? "Forked" : null, s.agentName, nodeLabel, context, usefulBranch];
+  const parts = [src.automation ? shortSourceLabel(src.kind) : null, s.forkedFrom ? "Forked" : null, s.delegatedFrom ? "Delegated" : null, s.agentName, nodeLabel, context, usefulBranch];
   return parts.filter(Boolean).join(" · ");
 }
 
@@ -267,9 +268,9 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
     // you. Within the same attention rank it's newest-activity-first, so the
     // calm majority still reads like the legacy drawer. Sort a copy so the
     // store's array identity is untouched.
-    return [...matched].sort(
+    return nestDelegatedSessions([...matched].sort(
       (a, b) => attentionRank(b) - attentionRank(a) || toMs(b.updatedAt) - toMs(a.updatedAt),
-    );
+    ));
   }, [sessions, runTerminals, nodes, query, repoFilter, nodeFilter]);
 
   // Search spans every session; pagination only bounds the unfiltered list, so a
@@ -474,12 +475,12 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
           );
         })}
         {visible.map((s, index) => {
-          const group = attentionRank(s) > 0 ? "Needs attention" : sessionDateGroup(s.updatedAt);
-          const previous = index > 0 ? visible[index - 1] : undefined;
-          const previousGroup = previous
-            ? attentionRank(previous) > 0 ? "Needs attention" : sessionDateGroup(previous.updatedAt)
-            : null;
-          const groupHeading = group !== previousGroup
+          // A nested child belongs to its parent's group, never opens a new one.
+          const groupOf = (row: typeof s) => attentionRank(row) > 0 ? "Needs attention" : sessionDateGroup(row.updatedAt);
+          const group = s.nestedUnder ? null : groupOf(s);
+          const previous = index > 0 ? visible.slice(0, index).reverse().find((row) => !row.nestedUnder) : undefined;
+          const previousGroup = previous ? groupOf(previous) : null;
+          const groupHeading = group && group !== previousGroup
             ? <li className="session-group-label">{group}</li>
             : null;
           const meta = sessionMeta(s, rowNodeName(s.nodeId) || s.pendingNodeName || null);
@@ -503,7 +504,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
           return (
             <Fragment key={s.sessionId}>
               {groupHeading}
-              <li className="session-row">
+              <li className={`session-row${s.nestedUnder ? " nested" : ""}`}>
               <button
                 className={`session-item${s.sessionId === activeSessionId ? " active" : ""}`}
                 aria-current={s.sessionId === activeSessionId ? "page" : undefined}

@@ -594,3 +594,22 @@ test("a fork's display transcript stands in for the runtime's replay and survive
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("a delegation card replays at its first position with its latest state", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-eventlog-"));
+  try {
+    const pathFor = (id: string) => path.join(dir, `${encodeURIComponent(id)}.jsonl`);
+    const log = new EventLog(dir, pathFor, (t) => t, 0);
+    log.appendDelegation("p", { afterMessageCount: 1, delegation: { id: "r1", status: "running", task: "t" } });
+    log.appendDelegation("p", { afterMessageCount: 5, delegation: { id: "r1", status: "succeeded", task: "t", answer: "done" } });
+    log.flush("p");
+    const reloaded = new EventLog(dir, pathFor, (t) => t, 0);
+    const cards = reloaded.read("p").filter((m) => String(m.id).startsWith("delegation-"));
+    assert.equal(cards.length, 1);
+    assert.equal(cards[0]!.afterMessageCount, 1);
+    assert.equal((cards[0]!.content as any)[0].delegation.status, "succeeded");
+    assert.deepEqual(reloaded.delegations("p").map((c) => c.status), ["succeeded"]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

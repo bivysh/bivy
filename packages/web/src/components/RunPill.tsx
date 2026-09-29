@@ -23,6 +23,7 @@ import { Sheet } from "./Sheet.js";
 import { PrBadge, GhMark } from "./SessionList.js";
 import { shortSourceLabel, type SourceInfo } from "../sessionSource.js";
 import { checkCounts, retryReason, runDuration, artifactRef, recoveryActions, type RecoveryKind } from "../runEvidence.js";
+import { controller } from "../store/useStore.js";
 
 const RECOVERY_LABEL: Record<RecoveryKind, string> = { fix: "Fix", retry: "Retry checks", fork: "Fork" };
 
@@ -124,6 +125,7 @@ export function RunPill({
   finishedAt,
   usage,
   forkedFrom,
+  delegatedFrom,
   filesEdited,
   onOpenChanges,
   artifactsCount,
@@ -156,6 +158,8 @@ export function RunPill({
    *  local session list — the parent may live on another node or be gone by
    *  now, so it's best-effort and falls back to a shortened id. */
   forkedFrom?: { sessionId: string; name?: string };
+  /** The session that delegated this one (`bivy delegate`), maybe on another machine. */
+  delegatedFrom?: { sessionId: string; nodeId?: string; machine?: string; title?: string };
   /** Unique files touched this session (across turns). Shown on the pill and as
    *  a sheet row that opens the full changes view — replaces the bulky
    *  above-composer ChangesCard. */
@@ -271,6 +275,16 @@ export function RunPill({
             {forkedFrom && (
               <div className="run-sheet-rows">
                 <Row k="Forked from">{forkedFromLabel}</Row>
+              </div>
+            )}
+
+            {delegatedFrom && (
+              <div className="run-sheet-rows">
+                <Row k="Delegated from">
+                  <button type="button" className="btn sm ghost" onClick={() => controller.openSessionOnNode(delegatedFrom.sessionId, undefined, delegatedFrom.nodeId)}>
+                    {delegatedFrom.title || `session ${delegatedFrom.sessionId.slice(0, 8)}`}{delegatedFrom.machine ? ` · ${delegatedFrom.machine}` : ""}
+                  </button>
+                </Row>
               </div>
             )}
 
@@ -407,7 +421,7 @@ export function RunPill({
                 ))}
               </div>
             )}
-            {actions.length === 0 && !evidence && !hasUsage && !forkedFrom && !filesLabel && (
+            {actions.length === 0 && !evidence && !hasUsage && !forkedFrom && !delegatedFrom && !filesLabel && (
               <div className="sheet-action-empty">This session has nothing to report yet.</div>
             )}
           </>}

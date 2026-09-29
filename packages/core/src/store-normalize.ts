@@ -260,6 +260,7 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
       source: s?.source,
       bivyCreated: s?.bivyCreated === true,
       forkedFrom: s?.forkedFrom || undefined,
+      delegatedFrom: s?.delegatedFrom && typeof s.delegatedFrom.sessionId === "string" ? s.delegatedFrom : undefined,
       nodeId: s?.nodeId || undefined,
       runtimeId: s?.runtimeId,
       agentName: s?.agentName,

@@ -56,7 +56,8 @@ export const BIVY_AGENT_NOTE = [
     "write it to stand on its own, with paths relative to the project root.",
   "- Only when the user asks for another agent or another of their machines to take part: " +
     '`bivy delegate "<self-contained task>" --agent <id> [--machine <name>] --wait` runs it there and prints ' +
-    "its answer and any branch/PR (`bivy nodes` lists machines). Use your own sub-agents for everything else.",
+    "its answer and any branch/PR; `--to codex,grok@<machine>` asks several to compare, `bivy delegate machines` " +
+    "lists machines and their agents. Use your own sub-agents for everything else.",
 ].join("\n");
 
 const PREAMBLE =

@@ -234,7 +234,9 @@ import {
 import { synthesizeOpenAiSpeech } from "./tts.js";
 import { seal, open } from "./e2e.js";
 import { recoverModelAuthKey } from "./model-auth-key-recovery.js";
-import { RunDelegationService, parseDelegationSource, type StartRunInput } from "./run-tools.js";
+import { RunDelegationService, parseDelegationSource, type SafeRunResult, type StartRunInput } from "./run-tools.js";
+import { delegationCard, type DelegationStart } from "./session/delegation-cards.js";
+import { TERMINAL_DELEGATION, isDelegatedFrom, type DelegatedFrom, type DelegationCard } from "./session/delegations.js";
 import {
   ControlPlaneTaskPoller,
   resolveControlPlaneTaskConfig,
@@ -640,6 +642,13 @@ const runDelegation = new RunDelegationService({
     const target = Array.isArray(nodes) ? nodes.find((node) => node && typeof node === "object" && (node as Record<string, unknown>).name === machine) as Record<string, unknown> | undefined : undefined;
     const targetId = typeof target?.id === "string" ? target.id : machine === identity.name ? identity.nodeId : undefined;
     if (!targetId) throw new Error(`Machine not found on this account: ${machine}`);
+    // Fail up front, with what IS there, rather than when the machine claims the Run.
+    if (input.agent) {
+      const agents = targetId === identity.nodeId ? localAgents() : await siblingAgents(targetId).catch(() => undefined);
+      if (agents && !agents.some((agent) => agent.id === input.agent)) {
+        throw new Error(`Agent "${input.agent}" is not installed on ${machine} (it has: ${agents.map((agent) => agent.id).join(", ") || "none"})`);
+      }
+    }
     return delegatedRunRequest("/node/automation-runs", {
       method: "POST",
       body: JSON.stringify({
@@ -668,19 +677,102 @@ const runDelegation = new RunDelegationService({
     const routing = raw.routing && typeof raw.routing === "object" ? raw.routing as Record<string, unknown> : {};
     const machine = typeof routing.nodeLabel === "string" && routing.nodeLabel ? routing.nodeLabel : identity.name;
     if (machine === identity.name) return delegationAnswer(sessionId);
-    const nodes = await delegatedRunRequest("/nodes") as unknown;
-    const target = Array.isArray(nodes) ? nodes.find((node) => node && typeof node === "object" && (node as Record<string, unknown>).name === machine) as Record<string, unknown> | undefined : undefined;
-    if (typeof target?.id !== "string" || !sessionAdvertiseTarget) return undefined;
-    const client = new SiblingClient({ controlPlaneUrl: sessionAdvertiseTarget.controlPlaneUrl, enrollmentToken: sessionAdvertiseTarget.enrollmentToken, siblingNodeId: target.id, label: "Bivy delegation" });
-    try {
-      await client.connect();
-      const reply = await client.request({ kind: "delegation.answer", sessionId }, 20_000);
-      return typeof reply.answer === "string" ? reply.answer : undefined;
-    } finally {
-      client.close();
-    }
+    const target = (await accountMachines()).find((m) => m.name === machine);
+    if (!target) return undefined;
+    const reply = await siblingRequest(target.id, { kind: "delegation.answer", sessionId });
+    return typeof reply.answer === "string" ? reply.answer : undefined;
   },
 });
+/** The account's machines (id, name, online), briefly cached. */
+let machinesCache: { at: number; machines: Array<{ id: string; name: string; online: boolean }> } | undefined;
+async function accountMachines(): Promise<Array<{ id: string; name: string; online: boolean }>> {
+  if (machinesCache && Date.now() - machinesCache.at < 20_000) return machinesCache.machines;
+  const nodes = await delegatedRunRequest("/nodes") as unknown;
+  const machines = (Array.isArray(nodes) ? nodes : []).flatMap((node) => {
+    const n = node && typeof node === "object" ? node as Record<string, unknown> : {};
+    return typeof n.id === "string" && typeof n.name === "string" ? [{ id: n.id, name: n.name, online: n.online === true }] : [];
+  });
+  machinesCache = { at: Date.now(), machines };
+  return machines;
+}
+
+/** One sealed request to a co-owned machine over the relay (node as client). */
+async function siblingRequest(nodeId: string, command: Record<string, unknown>, timeoutMs = 20_000): Promise<Record<string, unknown>> {
+  if (!sessionAdvertiseTarget) throw new Error("This machine is not signed in to an account.");
+  const client = new SiblingClient({ controlPlaneUrl: sessionAdvertiseTarget.controlPlaneUrl, enrollmentToken: sessionAdvertiseTarget.enrollmentToken, siblingNodeId: nodeId, label: "Bivy delegation" });
+  try {
+    await client.connect();
+    return await client.request(command, timeoutMs);
+  } finally {
+    client.close();
+  }
+}
+
+/** Agents this machine can run a delegated task with (installed ones). */
+function localAgents(): Array<{ id: string; name: string }> {
+  return runtimeList().filter((rt) => (rt as { status?: string }).status === "available").map((rt) => ({ id: rt.id, name: String(rt.displayName || rt.id) }));
+}
+
+async function siblingAgents(nodeId: string): Promise<Array<{ id: string; name: string }>> {
+  const reply = await siblingRequest(nodeId, { kind: "agents.available" }, 10_000);
+  return Array.isArray(reply.agents) ? (reply.agents as unknown[]).flatMap((a) => {
+    const agent = a && typeof a === "object" ? a as Record<string, unknown> : {};
+    return typeof agent.id === "string" ? [{ id: agent.id, name: typeof agent.name === "string" ? agent.name : agent.id }] : [];
+  }) : [];
+}
+
+async function machinesWithAgents() {
+  const machines = await accountMachines();
+  return Promise.all(machines.map(async (m) => {
+    const self = m.id === identity.nodeId;
+    if (self) return { ...m, online: true, self, agents: localAgents() };
+    if (!m.online) return { ...m, self };
+    try { return { ...m, self, agents: await siblingAgents(m.id) }; }
+    catch (error) { return { ...m, self, error: error instanceof Error ? error.message : String(error) }; }
+  }));
+}
+
+/** Fold a delegated Run's latest status into its card in the parent session. */
+function recordDelegation(parentSessionId: string, run: SafeRunResult, start?: DelegationStart): SafeRunResult {
+  const record = resolveSession(parentSessionId);
+  if (!record) return run;
+  const prev = eventLog.delegations(record.id).find((card) => card.id === run.runId);
+  const card = delegationCard(prev, run, start);
+  if (prev && JSON.stringify(prev) === JSON.stringify(card)) return run;
+  eventLog.appendDelegation(record.id, { afterMessageCount: record.session.getMessages().length, delegation: card });
+  broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "delegation", delegation: card } }));
+  if (card.childSessionId && !prev?.childSessionId) void linkDelegatedChild(record, card).catch(() => {});
+  return run;
+}
+
+/** Tell the child session where it came from — locally, or on its machine. */
+async function linkDelegatedChild(parent: SessionRecord, card: DelegationCard): Promise<void> {
+  const from: DelegatedFrom = { sessionId: parent.id, nodeId: identity.nodeId, machine: identity.name, ...(parent.session.getName() ? { title: parent.session.getName()!.slice(0, 256) } : {}) };
+  if (!card.nodeId || card.nodeId === identity.nodeId) { applyDelegationLink(card.childSessionId!, from); return; }
+  await siblingRequest(card.nodeId, { kind: "delegation.link", childSessionId: card.childSessionId, parent: from }, 10_000);
+}
+
+function applyDelegationLink(childSessionId: string, from: DelegatedFrom): boolean {
+  const record = resolveSession(childSessionId);
+  if (!record && !metadata.getSession(childSessionId)) return false;
+  if (record) record.delegatedFrom = from;
+  metadata.upsertSession({ id: childSessionId, delegatedFrom: from });
+  if (record) broadcast({ type: "session.updated", sessionId: record.id, sessionFile: record.sessionFile, bivySession: bivySessionEnvelope(record) });
+  scheduleAdvertise();
+  return true;
+}
+
+// Children rarely finish while someone is polling them: keep the parent's open
+// cards current in the background (cheap: cached, and only non-terminal ones).
+setInterval(() => {
+  for (const record of new Set(openSessions.values())) {
+    for (const card of eventLog.delegations(record.id)) {
+      if (TERMINAL_DELEGATION.has(card.status)) continue;
+      void runDelegation.getRunStatus(record.id, card.id).then((run) => recordDelegation(record.id, run)).catch(() => {});
+    }
+  }
+}, 15_000).unref();
+
 // Delegated Runs remain available through the explicit Session API, but are not
 // exposed as agent tools. Coding agents should use their own native sub-agent
 // facilities; advertising Runs here caused routine work to create noisy,
@@ -2592,6 +2684,16 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   },
   // A co-owned node asking for a delegated child's answer over the sealed
   // node-to-node channel (see runDelegation.answer). Replies to the requester.
+  // Discovery: which agents this machine can run (docs/agent-delegation.md).
+  "agents.available"(msg, ctx) {
+    ctx.reply({ type: "agents.available", requestId: msg.requestId, machine: identity.name, agents: localAgents() });
+  },
+  // The parent of a delegated child session on this machine introduces itself,
+  // so the child can show and link where it came from.
+  "delegation.link"(msg, ctx) {
+    const linked = typeof msg.childSessionId === "string" && isDelegatedFrom(msg.parent) ? applyDelegationLink(msg.childSessionId, msg.parent) : false;
+    ctx.reply({ type: "delegation.link", requestId: msg.requestId, linked });
+  },
   async "delegation.answer"(msg, ctx) {
     const sessionId = typeof msg.sessionId === "string" ? msg.sessionId : "";
     const answer = sessionId ? await delegationAnswer(sessionId).catch(() => undefined) : undefined;
@@ -6547,6 +6649,7 @@ async function sessionListRows() {
       source: rec?.source ?? meta?.source,
       bivyCreated: Boolean(meta),
       forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
+      delegatedFrom: rec?.delegatedFrom ?? meta?.delegatedFrom,
       branch: rec?.worktree?.branch ?? meta?.branch,
       sandbox: rec?.sandbox ?? normalizeSandboxTier(meta?.sandbox),
       approvalMode: rec?.approvalMode,
@@ -6873,6 +6976,7 @@ function persistSessionMetadata(record: SessionRecord, status = sessionStatus(re
     workspace: record.workspace,
     source: record.source ?? "manual",
     forkedFrom: record.forkedFrom,
+    delegatedFrom: record.delegatedFrom,
     automationRunId: record.automationRunId,
     delegationDepth: record.delegationDepth,
     runtimeId: record.runtimeId,
@@ -8672,7 +8776,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // Rehydrating (rather than leaving this undefined for a resumed session)
   // also avoids a persistSessionMetadata call later silently clobbering the
   // stored contract with undefined via its `{...prev, ...input}` merge.
-  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, credentialLabels, sandbox: sessionSandbox, approvalMode: sessionSafety.approval, automationRunId: storedMeta?.automationRunId, delegationDepth: storedMeta?.delegationDepth, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, contract: storedMeta?.contract, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral, workspaceState: runGit(["status", "--porcelain", "--untracked-files=normal"], sessionWorkspace) ? "dirty" : "clean" };
+  const record: SessionRecord = { id: sessionId, session, runtimeId: rt.id, credentialLabels, sandbox: sessionSandbox, approvalMode: sessionSafety.approval, automationRunId: storedMeta?.automationRunId, delegationDepth: storedMeta?.delegationDepth, workspace: sessionWorkspace, sessionFile: session.sessionFile, agentServiceAddress: attachedAddress ?? (rt as { agentServiceAddress?: string }).agentServiceAddress, worktree, source, prUrl: storedMeta?.prUrl, prs: storedMeta?.prs, delegatedFrom: storedMeta?.delegatedFrom, contract: storedMeta?.contract, lastTouchedAt: resumedLastActive ?? Date.now(), warning: modelFallbackMessage, ephemeral: opts.ephemeral, workspaceState: runGit(["status", "--porcelain", "--untracked-files=normal"], sessionWorkspace) ? "dirty" : "clean" };
   // Migration: a session resumed/reopened from before this feature (or from a
   // node that predates it) has no stored contract. Stamp an honest one now
   // from currently-observed facts rather than leaving it blank forever or
@@ -10634,6 +10738,7 @@ app.get("/api/sessions", async (_req, res, next) => {
         source: rec?.source ?? meta?.source,
         bivyCreated: Boolean(meta),
         forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
+        delegatedFrom: rec?.delegatedFrom ?? meta?.delegatedFrom,
         branch: rec?.worktree?.branch ?? meta?.branch,
         prUrl: rec?.prUrl ?? meta?.prUrl,
         prs: rec?.prs ?? meta?.prs,
@@ -11558,15 +11663,29 @@ app.post("/api/session/:id/suggest", (req, res) => {
 // are intentionally not advertised to agents as tools; the service still
 // authorizes every status lookup against this parent Session's provenance.
 app.post("/api/session/:id/delegated-runs", async (req, res) => {
-  try { res.status(201).json(await runDelegation.startRun(String(req.params.id), req.body as StartRunInput)); }
+  try {
+    const input = req.body as StartRunInput & { group?: unknown };
+    const result = await runDelegation.startRun(String(req.params.id), input);
+    const machine = input.machine?.trim() || identity.name;
+    const nodeId = (await accountMachines().catch(() => [])).find((m) => m.name === machine)?.id ?? (machine === identity.name ? identity.nodeId : undefined);
+    recordDelegation(String(req.params.id), result, { instructions: input.instructions, agent: input.agent, machine, nodeId, group: typeof input.group === "string" ? input.group.slice(0, 64) : undefined });
+    res.status(201).json(result);
+  }
   catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 app.get("/api/session/:id/delegated-runs/:runId", async (req, res) => {
-  try { res.json(await runDelegation.getRunStatus(String(req.params.id), String(req.params.runId))); }
+  try { res.json(recordDelegation(String(req.params.id), await runDelegation.getRunStatus(String(req.params.id), String(req.params.runId)))); }
   catch (error) { res.status(404).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 app.post("/api/session/:id/delegated-runs/:runId/wait", async (req, res) => {
-  try { res.json(await runDelegation.waitForRun(String(req.params.id), String(req.params.runId), Number(req.body?.timeoutSeconds), AbortSignal.timeout(305_000))); }
+  try { res.json(recordDelegation(String(req.params.id), await runDelegation.waitForRun(String(req.params.id), String(req.params.runId), Number(req.body?.timeoutSeconds), AbortSignal.timeout(305_000)))); }
+  catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
+});
+// The account's machines and the agents installed on each (asked of every
+// online machine over the sealed node-to-node channel), for `bivy delegate
+// machines` and for picking a valid agent @ machine up front.
+app.get("/api/machines", async (_req, res) => {
+  try { res.json({ machines: await machinesWithAgents() }); }
   catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 

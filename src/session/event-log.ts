@@ -33,6 +33,7 @@ import path from "node:path";
 import { normalizedIntermediateText, thinkingTextFromContent, mergeTranscript, type SidecarMessage } from "./transcript-merge.js";
 import type { RuntimeMessage } from "../runtime/types.js";
 import type { AttachmentRef } from "./attachment-store.js";
+import { DELEGATION_BLOCK, isDelegationCard, type DelegationCard } from "./delegations.js";
 import { APP_PUBLICATION_BLOCK, APP_REVIEW_BLOCK, isAppReference, isAppReview, type AppReference, type AppReview } from "../apps/types.js";
 import { SUGGESTION_BLOCK, isTaskSuggestion, type TaskSuggestion } from "./suggestions.js";
 
@@ -303,7 +304,16 @@ export interface SuggestionLogEntry {
   id: string;
   suggestion: TaskSuggestion;
 }
-export type LogRecord = EventLogEntry | BaseLogEntry | ForkDisplayLogEntry | AttachmentLogEntry | OutboundAttachmentLogEntry | InlineImageLogEntry | AppPublicationLogEntry | AppReviewLogEntry | SuggestionLogEntry;
+/** A delegated child Run's card in its parent session (see session/delegations.ts). */
+export interface DelegationLogEntry {
+  bivyKind: "delegation";
+  id: string;
+  createdAt: number;
+  afterMessageCount: number;
+  delegation: DelegationCard;
+}
+
+export type LogRecord = DelegationLogEntry | EventLogEntry | BaseLogEntry | ForkDisplayLogEntry | AttachmentLogEntry | OutboundAttachmentLogEntry | InlineImageLogEntry | AppPublicationLogEntry | AppReviewLogEntry | SuggestionLogEntry;
 
 /** Content-block type carried by a folded outbound attachment. MUST match
  *  `AGENT_ATTACHMENT_BLOCK` in packages/core/src/store-render.ts — the client's
@@ -371,6 +381,12 @@ function isSuggestionEntry(value: unknown): value is SuggestionLogEntry {
   return entry.bivyKind === "suggestion" && typeof entry.id === "string" && typeof entry.createdAt === "number" && typeof entry.afterMessageCount === "number" && isTaskSuggestion(entry.suggestion);
 }
 
+function isDelegationEntry(value: unknown): value is DelegationLogEntry {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Partial<DelegationLogEntry>;
+  return entry.bivyKind === "delegation" && typeof entry.id === "string" && typeof entry.createdAt === "number" && typeof entry.afterMessageCount === "number" && isDelegationCard(entry.delegation);
+}
+
 function isAppReviewEntry(value: unknown): value is AppReviewLogEntry {
   if (!value || typeof value !== "object") return false;
   const entry = value as Partial<AppReviewLogEntry>;
@@ -378,7 +394,7 @@ function isAppReviewEntry(value: unknown): value is AppReviewLogEntry {
 }
 
 function isRecord(value: unknown): value is LogRecord {
-  return isOverlay(value) || isBase(value) || isForkDisplay(value) || isAttachment(value) || isOutboundAttachment(value) || isInlineImage(value) || isAppPublication(value) || isAppReviewEntry(value) || isSuggestionEntry(value);
+  return isDelegationEntry(value) || isOverlay(value) || isBase(value) || isForkDisplay(value) || isAttachment(value) || isOutboundAttachment(value) || isInlineImage(value) || isAppPublication(value) || isAppReviewEntry(value) || isSuggestionEntry(value);
 }
 
 /**
@@ -488,11 +504,22 @@ export function replayExtras(entries: readonly LogRecord[]): SidecarMessage[] {
     role: "assistant", content: [{ type: APP_REVIEW_BLOCK, review: entry.review }],
     id: entry.id, afterMessageCount: entry.afterMessageCount, createdAt: entry.createdAt,
   }));
+  // A delegation card keeps the place it was created and shows its latest state.
+  const delegations = new Map<string, DelegationLogEntry>();
+  for (const entry of entries) {
+    if (entry.bivyKind !== "delegation") continue;
+    const first = delegations.get(entry.id);
+    delegations.set(entry.id, first ? { ...first, delegation: entry.delegation } : entry);
+  }
+  const delegationCards: SidecarMessage[] = [...delegations.values()].map((entry) => ({
+    role: "assistant", content: [{ type: DELEGATION_BLOCK, delegation: entry.delegation }],
+    id: `delegation-${entry.id}`, afterMessageCount: entry.afterMessageCount, createdAt: entry.createdAt,
+  }));
   const suggestions: SidecarMessage[] = entries.filter((entry): entry is SuggestionLogEntry => entry.bivyKind === "suggestion").map((entry) => ({
     role: "assistant", content: [{ type: SUGGESTION_BLOCK, suggestion: entry.suggestion }],
     id: entry.id, afterMessageCount: entry.afterMessageCount, createdAt: entry.createdAt,
   }));
-  return [...foldIntermediate(intermediate), ...foldTool(tool), ...replayOutboundAttachments(entries), ...publications, ...cards, ...suggestions];
+  return [...foldIntermediate(intermediate), ...foldTool(tool), ...replayOutboundAttachments(entries), ...publications, ...cards, ...delegationCards, ...suggestions];
 }
 
 /**
@@ -783,6 +810,19 @@ export class EventLog {
   }
 
   /** `createdAt`/`afterMessageCount` place the card; an expired card keeps its original place. */
+  /** Record a delegation card's latest state; replay keeps its first position. */
+  appendDelegation(id: string, entry: { afterMessageCount: number; delegation: DelegationCard }): void {
+    this.load(id);
+    this.enqueue(id, this.syntheticKey(id), { bivyKind: "delegation", createdAt: Date.now(), afterMessageCount: entry.afterMessageCount, id: entry.delegation.id, delegation: structuredClone(entry.delegation) });
+  }
+
+  /** The delegation cards this session holds, latest state each. */
+  delegations(id: string): DelegationCard[] {
+    const byId = new Map<string, DelegationCard>();
+    for (const entry of this.entries(id)) if (entry.bivyKind === "delegation") byId.set(entry.id, entry.delegation);
+    return [...byId.values()];
+  }
+
   appendAppReview(id: string, entry: { afterMessageCount: number; createdAt?: number; review: AppReview }): void {
     this.load(id);
     this.enqueue(id, `review:${entry.review.id}`, { bivyKind: "app-review", createdAt: entry.createdAt ?? Date.now(), afterMessageCount: entry.afterMessageCount, id: entry.review.id, review: structuredClone(entry.review) });

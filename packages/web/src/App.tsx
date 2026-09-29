@@ -1170,6 +1170,7 @@ export function App() {
                   finishedAt={activeSession.finishedAt}
                   usage={state.activeSession.usage}
                   forkedFrom={activeForkedFrom}
+                  delegatedFrom={activeSession?.delegatedFrom}
                   filesEdited={countUniqueEditedFiles(state.activeSession.changesHistory)}
                   onOpenChanges={() => setChangesSheetOpen(true)}
                   artifactsCount={artifacts.length}

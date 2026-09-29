@@ -22,6 +22,7 @@ import type { ToolActivity, TranscriptEntry } from "./store.js";
 export const AGENT_ATTACHMENT_BLOCK = "bivy_attachment";
 import { APP_PUBLICATION_BLOCK, APP_REVIEW_BLOCK, isAppReference, isAppReview } from "./apps.js";
 import { SUGGESTION_BLOCK, isTaskSuggestion } from "./suggestions.js";
+import { DELEGATION_BLOCK, isDelegationCard } from "./delegations.js";
 
 interface AgentAttachmentBlock {
   type: typeof AGENT_ATTACHMENT_BLOCK;
@@ -289,6 +290,9 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
           } else if (block?.type === SUGGESTION_BLOCK && isTaskSuggestion(block.suggestion)) {
             flushRuns();
             entries.push({ id: block.suggestion.id, role: "assistant", text: "", suggestion: block.suggestion });
+          } else if (block?.type === DELEGATION_BLOCK && isDelegationCard(block.delegation)) {
+            flushRuns();
+            entries.push({ id: `delegation-${block.delegation.id}`, role: "assistant", text: "", delegation: block.delegation });
           } else if (block?.type === APP_REVIEW_BLOCK && isAppReview(block.review)) {
             flushRuns();
             entries.push({ id: block.review.id, role: "assistant", text: "", review: block.review });
