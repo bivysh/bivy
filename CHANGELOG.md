@@ -7,9 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-09-29
+
 ### Changed
 
 - Refresh the release-tested agent pins to the current upstream builds: Claude Agent SDK `0.3.284`, Codex `0.159.0`, OpenCode `1.18.33`, and Grok CLI `1.0.44` (previously `0.3.281` / `0.156.1` / `1.18.32` / `1.0.41`; Pi stays on `0.87.1`, still the latest).
+
+### Added
+
+- **`bivy delegate`**: an agent can hand a self-contained task to another agent, optionally on another of your machines, and get its answer, branch and PR back. Any agent with a shell can use it. `--to codex@mac,grok,claude@linux` sends one task to several agents and shows the results side by side, with **Use this** to continue from one of them. `bivy delegate machines` lists your machines and the agents each one has installed.
+- Delegated work appears as a live card in the parent's transcript, with its status, answer and a link to the child session. The child session is named after its task, links back to its parent, and nests under it in the session list. Children inherit the parent session's approval mode and sandbox unless you pass `--approval` / `--sandbox`. The target machine's own policy still applies.
+- App sharing: choose how long a share link works (1 hour, 1 day or 7 days), make view-only links without the feedback tools, and **Stop sharing** to end every live link at once.
+- A reasoning-effort picker for ACP agents that offer one, such as Grok.
+- Claude Code's hook blocks and warnings now show in the chat as notices.
+- After a fork to a different agent, the new session shows the original transcript with its tool cards, not a raw text replay.
+
+### Fixed
+
+- Claude Code no longer re-sends your prompt when an answer happens to mention tokens.
+- An image the agent reads with its file-read tool no longer shows up a second time in the chat.
+- ACP agents (Grok, OpenCode): sub-agents nest under the call that started them, tool cards no longer get stuck on "Working", tool calls appear in the right order, and reopening a session no longer replays its history as new output.
+- A session's model is kept when it is reopened, and bare model names (`--model gpt-5.6-sol`) now bind for agents that need a provider.
+- `bivy prune` removes sessions and their worktrees together, so no session is left pointing at a deleted checkout.
+- A Run whose agent turn failed is now reported as failed, not succeeded.
 
 ## [0.18.10] - 2026-09-29
 
