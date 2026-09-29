@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import assert from "node:assert/strict";
 import test from "node:test";
-import { accountHeader, formatWhen } from "../packages/web/src/accountHeader.js";
+import { accountHeader, accountOffer, formatWhen, planFacts } from "../packages/web/src/accountHeader.js";
 import { parseClientConfiguration } from "../packages/web/src/client-config.js";
 
 const visible = parseClientConfiguration();
@@ -56,4 +56,22 @@ test("formatWhen names the day plainly and adds the date only when a weekday wou
   assert.equal(when(new Date(2026, 9, 2, 9, 5)), "tomorrow at 09:05");
   assert.equal(when(new Date(2026, 9, 5, 14, 0)), "Mon at 14:00");
   assert.equal(when(new Date(2026, 9, 8, 9, 0)), "Thu 8 Oct at 09:00");
+});
+
+test("the offer card needs one of the extension's own actions and a client that may show actions", () => {
+  const extension = {
+    actions: [upgrade],
+    offer: { title: "Bivy Cloud", price: "$15/month", description: " ", points: ["Unlimited sessions", ""], action: "checkout" },
+  };
+  assert.deepEqual(accountOffer(extension, visible), {
+    title: "Bivy Cloud", price: "$15/month", description: undefined, points: ["Unlimited sessions"], action: { id: "checkout", label: "Upgrade" },
+  });
+  assert.equal(accountOffer({ ...extension, offer: { ...extension.offer, action: "nope" } }, visible), undefined);
+  assert.equal(accountOffer(extension, parseClientConfiguration(JSON.stringify({ accountExtension: "facts" }))), undefined);
+});
+
+test("facts the meter already shows are left to the meter", () => {
+  const facts = [{ id: "plan", label: "Plan", value: "Free" }, { id: "s", label: "Sessions this week", value: "8 of 10 used" }];
+  assert.deepEqual(planFacts(facts, ext(8)).map((f) => f.id), ["plan"]);
+  assert.deepEqual(planFacts(facts, { summary: "Cloud" }).map((f) => f.id), ["plan", "s"]);
 });

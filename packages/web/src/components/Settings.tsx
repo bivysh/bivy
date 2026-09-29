@@ -19,7 +19,7 @@ import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { setCloudMachinesEnabled, useCloudMachinesEnabled } from "../cloudMachines.js";
 import { requestSignIn } from "../signInRequest.js";
 import { clientConfiguration } from "../client-config.js";
-import { accountHeader, type AccountHeader as AccountHeaderView, type MeterState } from "../accountHeader.js";
+import { accountHeader, accountOffer, planFacts, type AccountHeader as AccountHeaderView, type MeterState } from "../accountHeader.js";
 import { accountExtensionFacts, accountOrigin, hasNativeSubscriptions, isPackagedClient, openAccountAction, openNativeSubscriptions, showAccountExtension } from "../packaged-client.js";
 import { getAppIconBadgeEnabled, setAppIconBadgeEnabled, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "../notificationSettings.js";
 import { CheckIcon, ChevronRightIcon, CloseIcon, CopyIcon } from "./UiIcons.js";
@@ -2287,8 +2287,17 @@ function AccountPanel() {
     controller.listNodes().then(setNodes).catch(() => {});
     reloadDevices();
   }, []);
-  const extensionFacts = accountExtensionFacts(me?.extension?.facts);
-  const extensionActions = showAccountExtension() ? me?.extension?.actions ?? [] : [];
+  const planRows = planFacts(accountExtensionFacts(me?.extension?.facts), me?.extension);
+  const usage = accountHeader(me?.extension);
+  const offer = accountOffer(me?.extension);
+  const otherActions = (showAccountExtension() ? me?.extension?.actions ?? [] : []).filter((a) => a.id !== offer?.action.id);
+  const runAction = (id: string) => {
+    setAccountAction(id);
+    controller.invokeAccountExtensionAction(id)
+      .then(({ url }) => openAccountAction(url))
+      .catch((e) => setErr(String(e?.message || e)))
+      .finally(() => setAccountAction(null));
+  };
   return (
     <div className="settings-form">
       {confirm && (
@@ -2321,39 +2330,56 @@ function AccountPanel() {
           <p className="muted">Purchases and restores are handled by your app store.</p>
         </div>
       )}
-      {me?.extension && (extensionFacts.length > 0 || extensionActions.length > 0) && (
+      {me?.extension && (planRows.length > 0 || usage.meter || otherActions.length > 0) && (
         <div className="settings-section">
           <h4 className="settings-subhead">{me.extension.title || "Account service"}</h4>
           {/* The extension's facts are opaque label/value pairs — render them
               through the standard settings row (label left, value right, hairline
               separators) rather than a bespoke layout. */}
           <div>
-            {extensionFacts.map((fact) => (
+            {planRows.map((fact) => (
               <div className="settings-toggle-row" key={fact.id}>
                 <span className="muted">{fact.label}</span>
                 <strong>{fact.value}</strong>
               </div>
             ))}
           </div>
-          {extensionActions.length > 0 && me.extension.actionHint?.trim() && <p className="muted">{me.extension.actionHint.trim()}</p>}
-          {extensionActions.length > 0 && <div className="card-actions">
-            {extensionActions.map((action) => (
+          {/* The same allowance meter as the Settings account card. */}
+          {usage.meter && <AccountUsage meter={usage.meter} />}
+          {otherActions.length > 0 && <div className="card-actions">
+            {otherActions.map((action) => (
               <button
                 type="button"
                 key={action.id}
                 className={`btn ${action.kind === "primary" ? "primary" : ""}`}
                 disabled={accountAction !== null}
-                onClick={() => {
-                  setAccountAction(action.id);
-                  controller.invokeAccountExtensionAction(action.id)
-                    .then(({ url }) => openAccountAction(url))
-                    .catch((e) => setErr(String(e?.message || e)))
-                    .finally(() => setAccountAction(null));
-                }}
+                onClick={() => runAction(action.id)}
               >{accountAction === action.id ? "Opening…" : action.label}</button>
             ))}
           </div>}
         </div>
+      )}
+      {offer && (
+        <section className="card account-offer" data-tone="accent" aria-labelledby="account-offer-title">
+          <div className="card-head">
+            <span className="card-title" id="account-offer-title">{offer.title}</span>
+            {offer.price && <span className="account-offer-price">{offer.price}</span>}
+          </div>
+          {offer.description && <p className="card-sub">{offer.description}</p>}
+          {offer.points.length > 0 && (
+            <ul className="account-offer-points">
+              {offer.points.map((point) => (
+                <li key={point}><span className="account-offer-check" aria-hidden><CheckIcon size={16} /></span>{point}</li>
+              ))}
+            </ul>
+          )}
+          <button
+            type="button"
+            className="btn primary block"
+            disabled={accountAction !== null}
+            onClick={() => runAction(offer.action.id)}
+          >{accountAction === offer.action.id ? "Opening…" : offer.action.label}</button>
+        </section>
       )}
       <div className="settings-section">
         <h4 className="settings-subhead">Enrolled machines{nodes.length > 0 && <span className="muted"> · {nodes.length}</span>}</h4>

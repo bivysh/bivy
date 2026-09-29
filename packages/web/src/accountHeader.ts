@@ -54,3 +54,35 @@ export function formatWhen(at: Date, now: Date, locale?: string): string {
   const day = at.toLocaleDateString(locale, days < 6 ? { weekday: "short" } : { weekday: "short", day: "numeric", month: "short" });
   return `${day} at ${time}`;
 }
+
+export interface AccountOffer {
+  title: string;
+  price?: string;
+  description?: string;
+  points: string[];
+  action: { id: string; label: string };
+}
+
+/** The extension's offer card, if it names one of its own actions and this
+ *  client may show actions at all (store builds never do). */
+export function accountOffer(extension: AccountExtensionView | undefined, config: ClientConfiguration = clientConfiguration): AccountOffer | undefined {
+  const o = extension?.offer;
+  if (!o || !showAccountExtension(config) || typeof o.title !== "string" || !o.title.trim()) return undefined;
+  const action = extension.actions?.find((a) => a.id === o.action);
+  if (!action) return undefined;
+  const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  return {
+    title: o.title.trim(),
+    price: text(o.price),
+    description: text(o.description),
+    points: Array.isArray(o.points) ? o.points.map(text).filter((p): p is string => !!p) : [],
+    action: { id: action.id, label: action.label },
+  };
+}
+
+/** Facts to list under the plan: those the meter already shows (same label)
+ *  are left to the meter. */
+export function planFacts<T extends { label: string }>(facts: readonly T[], extension: AccountExtensionView | undefined): T[] {
+  const metered = extension?.meter?.label?.trim().toLowerCase();
+  return metered ? facts.filter((f) => f.label.trim().toLowerCase() !== metered) : [...facts];
+}

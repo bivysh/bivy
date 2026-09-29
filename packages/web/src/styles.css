@@ -2237,6 +2237,19 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-account-usage .banner { margin: 0; }
 .settings-account-usage-status { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .settings-account-usage > .btn.block { margin-top: 0; }
+/* The same meter on the Account page, aligned with the plan rows. */
+.settings-section > .settings-account-usage { padding: var(--space-1) 0 0; font-size: var(--text-sm); }
+
+/* Account page offer (e.g. upgrade): a .card, layout only. */
+.account-offer { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4); margin-top: var(--space-4); }
+.account-offer .card-head { margin-bottom: 0; align-items: baseline; }
+.account-offer .card-sub { margin: calc(-1 * var(--space-2)) 0 0; }
+.account-offer-price { font-size: var(--text-base); font-weight: var(--weight-semibold); color: var(--ink); white-space: nowrap; }
+.account-offer-points { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); font-size: var(--text-sm); }
+.account-offer-points li { display: flex; align-items: flex-start; gap: var(--space-2); }
+.account-offer-check { flex: none; display: inline-flex; color: var(--accent); margin-top: 1px; }
+.account-offer > .btn.block { margin-top: var(--space-1); }
+.account-offer + .settings-section { margin-top: var(--space-5); }
 .settings-nav-version { flex: none; display: flex; flex-direction: column; gap: 1px; padding: 10px 10px 2px; color: var(--muted); font-size: 12px; letter-spacing: 0.02em; }
 .settings-nav-version-updated { font-size: 11px; opacity: 0.8; }
 

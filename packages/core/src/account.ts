@@ -510,9 +510,11 @@ export interface AccountExtensionView {
   meter?: { label: string; used: number; limit: number; freesAt?: string };
   facts?: Array<{ id: string; label: string; value: string }>;
   actions?: Array<{ id: string; label: string; kind?: "primary" | "secondary" }>;
-  /** One line shown with the actions — e.g. what upgrading gets you. Hidden
-   *  wherever the actions are hidden. */
-  actionHint?: string;
+  /** Something worth moving to (e.g. a paid plan), shown as its own card
+   *  wherever actions are allowed. `action` is the id of one of `actions`; its
+   *  button lives in the card instead of the actions row. Facts whose label
+   *  matches `meter.label` are not repeated — the meter shows them. */
+  offer?: { title: string; price?: string; description?: string; points?: string[]; action: string };
 }
 
 export interface AccountMe {
