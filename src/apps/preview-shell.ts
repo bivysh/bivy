@@ -26,6 +26,15 @@ iframe { width:100%; height:100%; border:0; background:var(--bg); }
 nav, #draw-bar { display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:var(--space-1); max-width:100%; padding:var(--space-1); background:var(--surface); border:thin solid var(--line); border-radius:var(--radius-xl); box-shadow:var(--shadow-lg); }
 nav .btn, #draw-bar .btn { flex-shrink:0; border-radius:var(--radius-full); }
 nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); }
+/* One row, however narrow: a bar that wraps doubles what it covers. Past the
+   edge it scrolls sideways instead. */
+nav { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
+nav::-webkit-scrollbar { display:none; }
+/* The grip hides the bar on a tap and moves it to the other edge on a drag. */
+#hide { color:var(--muted); cursor:grab; touch-action:none; }
+#dock.dragging, #dock.dragging #hide { cursor:grabbing; }
+#dock[data-edge="top"] { top:calc(var(--space-2) + env(safe-area-inset-top)); bottom:auto; flex-direction:column-reverse; }
+#show[data-edge="top"] { top:calc(var(--space-3) + env(safe-area-inset-top)); bottom:auto; }
 #name { display:flex; flex-direction:column; min-width:0; padding:0 var(--space-2); }
 #title { font-size:var(--text-sm); font-weight:var(--weight-semibold); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:14em; }
 #stamp { font-size:var(--text-xs); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -81,11 +90,11 @@ nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accen
 #compare[data-drawing] #compare-stage img { max-height:min(60vh, 560px); }
 #compare[data-drawing] #compare-slider, #compare[data-drawing] #compare-hint, #compare[data-drawing] #compare-draw { display:none; }
 .label-narrow { display:none; }
-@media (max-width: 699px) { #lens { display:none; } #name { display:none; } .label-wide { display:none; } .label-narrow { display:inline; } }
+@media (max-width: 699px) { #lens { display:none; } #name { display:none; } .label-wide { display:none; } .label-narrow { display:inline; } nav { gap:0; } nav .btn { padding-inline:var(--space-2); } }
 /* "Made with Bivy": a quiet strip under a shared app, never over it. */
 #made-with { flex-shrink:0; display:flex; align-items:center; justify-content:center; gap:var(--space-1); min-height:var(--space-6); padding:0 var(--space-3) env(safe-area-inset-bottom); box-sizing:border-box; background:var(--surface); border-top:thin solid var(--line); color:var(--muted); font-size:var(--text-xs); text-decoration:none; }
 #made-with:hover, #made-with:focus-visible { color:var(--ink); }
-body.badged #dock { bottom:calc(var(--space-2) + var(--space-6) + env(safe-area-inset-bottom)); }
+body.badged #dock:not([data-edge="top"]) { bottom:calc(var(--space-2) + var(--space-6) + env(safe-area-inset-bottom)); }
 [hidden] { display:none !important; }
 </style></head><body>
 <div class="banner" data-tone="warn" id="down" hidden><span class="banner-text" id="down-text" role="status"></span><span class="banner-actions"><button class="btn sm" id="ask" hidden>Ask agent to fix</button></span></div>
@@ -128,9 +137,9 @@ body.badged #dock { bottom:calc(var(--space-2) + var(--space-6) + env(safe-area-
     <button class="btn sm primary" id="draw-done" type="button" disabled>Done</button>
   </div>
   <nav aria-label="Bivy preview controls">
+    <button class="btn sm ghost" id="hide" aria-label="Hide Bivy controls" title="Tap to hide · Drag to move" aria-keyshortcuts="ArrowUp ArrowDown"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></button>
     <button class="btn sm ghost" id="back" aria-label="Back to chat">‹ <span class="label-wide">Back to chat</span><span class="label-narrow">Chat</span></button>
     <span id="name"><span id="title">App preview</span><span id="stamp" class="muted" role="status"></span></span>
-    <button class="btn sm ghost" id="hide" aria-label="Hide Bivy controls" title="Hide controls">⌄</button>
     <button class="btn sm ghost" id="point" aria-pressed="false" disabled>Point</button>
     <button class="btn sm ghost" id="draw" type="button" hidden>Draw</button>
     <button class="btn sm ghost" id="compare-btn" aria-pressed="false" hidden>Compare</button>
@@ -469,8 +478,28 @@ compareBtn.onclick=async()=>{
 };
 const split=()=>{$('compare-before').style.clipPath='inset(0 '+(100-Number($('compare-slider').value))+'% 0 0)';};
 $('compare-slider').oninput=split;
-// The pill can cover an app's own bottom bar; collapse it to a corner button.
-$('hide').onclick=()=>{if(point.getAttribute('aria-pressed')==='true')pointing(false);$('dock').hidden=true;$('show').hidden=false;$('show').focus();};
+// The pill can cover an app's own bars: drag its grip to the other edge (kept
+// for next time), or tap it to collapse the pill to a corner button.
+const dock=$('dock'),grip=$('hide'),edgeKey='bivy-preview-edge';
+function edge(to,keep){
+  dock.dataset.edge=to;$('show').dataset.edge=to;
+  if(keep)try{localStorage.setItem(edgeKey,to);}catch{}
+}
+try{edge(localStorage.getItem(edgeKey)==='top'?'top':'bottom');}catch{edge('bottom');}
+let drag=null,dragged=false;
+grip.onpointerdown=e=>{drag={y:e.clientY,moved:false};try{grip.setPointerCapture(e.pointerId);}catch{}};
+grip.onpointermove=e=>{
+  if(!drag)return;const dy=e.clientY-drag.y;
+  if(!drag.moved&&Math.abs(dy)<8)return;
+  drag.moved=true;dock.classList.add('dragging');dock.style.transform='translateY('+dy+'px)';
+};
+grip.onpointerup=grip.onpointercancel=e=>{
+  if(!drag)return;const {moved}=drag;drag=null;
+  if(moved){const r=grip.getBoundingClientRect();edge(r.top+r.height/2<innerHeight/2?'top':'bottom',true);dragged=true;setTimeout(()=>{dragged=false;});}
+  dock.classList.remove('dragging');dock.style.transform='';
+};
+grip.onkeydown=e=>{if(e.key==='ArrowUp'||e.key==='ArrowDown'){e.preventDefault();edge(e.key==='ArrowUp'?'top':'bottom',true);}};
+grip.onclick=()=>{if(dragged){dragged=false;return;}if(point.getAttribute('aria-pressed')==='true')pointing(false);dock.hidden=true;$('show').hidden=false;$('show').focus();};
 $('show').onclick=()=>{$('dock').hidden=false;$('show').hidden=true;$('hide').focus();};
 // Device lens (desktop widths)
 for(const b of $('lens').querySelectorAll('button'))b.onclick=()=>{
