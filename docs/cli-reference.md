@@ -412,22 +412,30 @@ bivy attach coverage/index.html --artifact --caption "Coverage report"
 
 `--json` prints `{"ok","name","kind","size","mimeType","hash"}`.
 
-### `bivy suggest "<task>" [--title "…"] [--session <id>] [--json]`
+### `bivy suggest "<task>" [--title "…"] [--run here|subagents|new] [--session <id>] [--json]`
 
 Posts a **suggested task** card into the chat: a task the agent proposes (a next
-step, an idea, one of several options). The user starts it with one tap —
-**Start in new session** runs it beside the current session (same project,
-agent, model and safety; a git checkout gets its own worktree), **Do it here**
-sends it to this session, and a run of several cards offers **Run all in
-parallel**. Like `bivy attach`, it is meant to be run by the agent itself and
-finds the session through `$BIVY_SESSION_ID`.
+step, an idea, one of several options). The user starts it with one tap:
+
+- **Do it here** sends it to this session's agent.
+- **Use sub-agents** sends it here too, asking the agent to run it through its
+  own sub-agents. It only appears when the agent recommends it.
+- **Start in new session** runs it beside the current session (same project,
+  agent, model and safety; a git checkout gets its own worktree).
+
+`--run` names the one the agent recommends, which becomes the card's main
+button. Without it, a single card recommends `here` and a run of several
+recommends `new`. In a run, each card has a checkbox and the last card starts
+the selected ones together (`Do 3 here` sends them as one message). Like `bivy
+attach`, it is meant to be run by the agent itself and finds the session
+through `$BIVY_SESSION_ID`.
 
 Write the task as a complete instruction with paths relative to the project
 root: it becomes the first message of a session that works in its own copy.
 `--title` is the short label on the card.
 
 ```bash
-bivy suggest "Add a GET /version endpoint that returns the package version and git commit." --title "Add /version"
+bivy suggest "Add a GET /version endpoint that returns the package version and git commit." --title "Add /version" --run new
 ```
 
 `--json` prints `{"ok","id"}`.

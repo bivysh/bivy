@@ -2521,18 +2521,18 @@ async function cmdContext(args = []) {
   console.log(`\nEverything else: ${c.cyan("bivy help")} (or ${c.cyan("bivy help --json")}).`);
 }
 
-// `bivy suggest "<task>" [--title "…"] [--session <id>]` — propose a task the
-// user can start in one tap, beside this session or in it. For an agent
+// `bivy suggest "<task>" [--title "…"] [--run here|subagents|new] [--session <id>]`
+// — propose a task the user can start in one tap, in this session or beside it. For an agent
 // offering next steps: write the task as a complete instruction.
 async function cmdSuggest(args = []) {
-  const usage = 'Usage: bivy suggest "<task>" [--title "short label"] [--session <id>] [--json]';
+  const usage = 'Usage: bivy suggest "<task>" [--title "short label"] [--run here|subagents|new] [--session <id>] [--json]';
   if (args.includes("-h") || args.includes("--help")) {
-    console.log(`${usage}\n\nPost a task the user can start in one tap, in this session or in a parallel one that works in its own copy of the project. Write it as a complete instruction, with paths relative to the project root. --json prints {"ok","id"}.`);
+    console.log(`${usage}\n\nPost a task the user can start in one tap: in this session, through your sub-agents, or in a parallel session that works in its own copy of the project. Write it as a complete instruction, with paths relative to the project root.\n\n--run says where you recommend running it, which becomes the card's main button: here (builds on this conversation), subagents (independent tasks you can split across your own sub-agents; only if you have them), or new (bigger independent work the user will want to follow in its own session). Without it, one card recommends here and several recommend new.\n\n--json prints {"ok","id"}.`);
     return;
   }
   const json = wantsJson(args);
   const fail = (error) => cliError(error, { json, paint: c.red });
-  const flagsWithValue = new Set(["--session", "--title"]);
+  const flagsWithValue = new Set(["--session", "--title", "--run"]);
   const flag = (name) => {
     const i = args.indexOf(name);
     return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
@@ -2540,10 +2540,12 @@ async function cmdSuggest(args = []) {
   const text = args.filter((a, i) => !a.startsWith("-") && !(i > 0 && flagsWithValue.has(args[i - 1]))).join(" ").trim();
   const sessionId = resolveAttachSessionId({ sessionFlag: flag("--session"), env: process.env });
   if (!text) return fail({ code: "usage", message: usage, exit: EXIT.usage });
+  const run = flag("--run");
+  if (run !== undefined && !["here", "subagents", "new"].includes(run)) return fail({ code: "usage", message: `--run is here, subagents or new (got "${run}").`, exit: EXIT.usage });
   if (!sessionId) return fail({ code: "no_session", message: "No session id.", hint: "Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.", next: "bivy sessions --json", exit: EXIT.usage });
   const config = loadConfig();
   if (!(await ensureNodeRunning(config))) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable });
-  const res = await sessionPost(config, sessionId, "suggest", { text, title: flag("--title") }).catch((error) => error);
+  const res = await sessionPost(config, sessionId, "suggest", { text, title: flag("--title"), run }).catch((error) => error);
   if (res instanceof Error) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node: ${res.message}`, next: "bivy status", exit: EXIT.unavailable });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) return fail(sessionHttpError("Suggest", res.status, body));
