@@ -156,11 +156,38 @@ export function isLoopbackAddress(address: string | undefined | null): boolean {
 // Sockets accepted by a listener that fronts remote callers through a local
 // proxy (`tailscale serve` forwards tailnet traffic from 127.0.0.1). Their peer
 // address is loopback, but the caller is not, so they never get loopback trust.
-const remoteSockets = new WeakSet<object>();
+const remoteSockets = new WeakMap<object, RemoteListenerOptions>();
+
+export interface RemoteListenerOptions {
+  /**
+   * The tailnet login allowed in without a device token. `tailscale serve` sets
+   * Tailscale-User-Login to the requester's login on tailnet traffic and strips
+   * any value a client sends, so a request carrying the owner's login came from
+   * one of the owner's own devices. Tagged devices and Funnel get no identity.
+   */
+  trustedLogin?: () => string | null | undefined;
+}
 
 /** Treat every connection `server` accepts as remote, whatever its peer address. */
-export function markRemoteListener(server: { on(event: "connection", listener: (socket: object) => void): unknown }): void {
-  server.on("connection", (socket) => remoteSockets.add(socket));
+export function markRemoteListener(
+  server: { on(event: "connection", listener: (socket: object) => void): unknown },
+  options: RemoteListenerOptions = {},
+): void {
+  server.on("connection", (socket) => remoteSockets.set(socket, options));
+}
+
+/**
+ * `tailnet:<login>` when a request reached a remote listener from a device
+ * signed in to the tailnet as the machine's owner. The listener binds loopback,
+ * so another local account could forge the header; honor it only where local
+ * callers are trusted anyway (the same rule as the loopback bypass).
+ */
+function tailnetDevice(req: IncomingMessage): string | null {
+  const options = req.socket ? remoteSockets.get(req.socket) : undefined;
+  const owner = options?.trustedLogin?.()?.toLowerCase();
+  const login = req.headers["tailscale-user-login"];
+  if (!owner || typeof login !== "string" || login.toLowerCase() !== owner) return null;
+  return loopbackAllowed() ? `tailnet:${owner}` : null;
 }
 
 /** True when a request physically arrived over loopback from a local caller. */
@@ -197,7 +224,7 @@ export function tokenFromRequest(req: IncomingMessage): string | null {
  * `isAuthorized` is off. */
 export function resolveAuth(identity: NodeIdentity, req: IncomingMessage): AuthContext {
   const loopback = isLoopbackRequest(req);
-  const deviceId = identity.verifyToken(tokenFromRequest(req));
+  const deviceId = identity.verifyToken(tokenFromRequest(req)) ?? tailnetDevice(req);
   return { deviceId, loopback };
 }
 

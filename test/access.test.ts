@@ -13,16 +13,17 @@ const next = (report: ReturnType<typeof accessReport>) => report.next.map((n) =>
 test("this machine only: every remote setup is a next step", () => {
   const report = accessReport({ hostedControlPlane: hosted });
   assert.deepEqual(report.active, ["local"]);
-  assert.deepEqual(next(report), ["tailscale:devices", "hosted:devices,machines,push,sharing", "server:devices,machines,push,sharing"]);
+  assert.deepEqual(next(report), ["tailscale:devices,machines", "hosted:devices,machines,push,sharing", "server:devices,machines,push,sharing"]);
   assert.equal(accessLine(report), "This machine only — next: Tailscale or Bivy hosted ('bivy access')");
 });
 
-test("Tailscale reaches your tailnet, and hosted would add reach from anywhere", () => {
+test("Tailscale reaches your devices and machines on your tailnet, and hosted widens that to anywhere", () => {
   const report = accessReport({ tailscaleHostname: "box.tail1.ts.net", hostedControlPlane: hosted });
   assert.equal(report.reach.devices, 1);
+  assert.equal(report.reach.machines, 1);
   assert.equal(report.tailscaleUrl, "https://box.tail1.ts.net");
   assert.deepEqual(next(report), ["hosted:devices,machines,push,sharing", "server:devices,machines,push,sharing"]);
-  assert.match(report.next[0]!.addsText, /^your phone and other devices from anywhere, /);
+  assert.equal(report.next[0]!.addsText, "your phone and other devices and all your machines in one app from anywhere, push notifications and shareable app previews");
 });
 
 test("a relay link is hosted or your own server by its control plane", () => {

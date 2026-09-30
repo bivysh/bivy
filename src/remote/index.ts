@@ -16,3 +16,5 @@ export { soloCredentials, buildDialUrl } from "./solo.js";
 export type { SoloCredentials } from "./solo.js";
 export { loadDirectListenerConfig, DIRECT_CONFIG_FILE } from "./direct.js";
 export type { DirectListenerConfig } from "./direct.js";
+export { discoverTailnetMachines, parseTailnetPeers } from "./tailnet.js";
+export type { TailnetMachine, TailnetPeer } from "./tailnet.js";

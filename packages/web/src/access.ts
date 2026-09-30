@@ -19,6 +19,16 @@ export interface AccessReport {
   controlPlaneUrl?: string;
 }
 
+/** A machine on the tailnet running Bivy over Tailscale, at its own address. */
+export interface TailnetMachine {
+  name: string;
+  url: string;
+  nodeId?: string;
+  os?: string;
+  online: boolean;
+  self: boolean;
+}
+
 /** "Tailscale + Bivy hosted", or the local setup's label. */
 export function activeLabel(report: AccessReport): string {
   const on = report.setups.filter((s) => s.active && s.id !== "local");

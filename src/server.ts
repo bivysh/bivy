@@ -99,7 +99,7 @@ import { accessReport, type AccessReport } from "./access.js";
 import { hostedEndpoints } from "./hosted-endpoints.mjs";
 import http from "node:http";
 import { webAppDirs, webAppRouter } from "./web-app.js";
-import { RelayConnector, loadRelayConfig, loadDirectListenerConfig, soloCredentials, type ClientMessage } from "./remote/index.js";
+import { RelayConnector, loadRelayConfig, loadDirectListenerConfig, discoverTailnetMachines, soloCredentials, type ClientMessage, type TailnetMachine } from "./remote/index.js";
 import { readEphemeralTeardownConfig, shouldSelfTeardown, snapshotsDurableForTeardown, performSelfTeardown, type SnapshotFlushResult } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
 import { clearTurnActivity } from "./session/turn-activity.js";
@@ -2456,6 +2456,16 @@ appRegistry.on("notes", (viewId: string) => {
   }, NOTES_NOTIFY_MS).unref?.();
 });
 
+// Asking every peer takes a moment; a short cache keeps switcher opens instant.
+let tailnetCache: { at: number; machines: Promise<TailnetMachine[]> } | null = null;
+async function tailnetMachines(): Promise<TailnetMachine[]> {
+  const direct = loadDirectListenerConfig(appDir);
+  if (!direct?.hostname) return [];
+  if (!tailnetCache || Date.now() - tailnetCache.at > 15_000) tailnetCache = { at: Date.now(), machines: discoverTailnetMachines() };
+  const self: TailnetMachine = { name: identity.name, url: `https://${direct.hostname}`, nodeId: identity.nodeId, os: process.platform, online: true, self: true };
+  return [self, ...(await tailnetCache.machines).filter((m) => m.url !== self.url)];
+}
+
 function currentAccess(): AccessReport {
   const relay = loadRelayConfig(appDir);
   return accessReport({
@@ -2481,6 +2491,10 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   // (see runBivyUpdate). The node restarts itself when the update lands, so the
   // client just sees the socket reconnect on the new build; a failure to even
   // start reports back so the banner can show the manual command.
+  // The machines on this machine's tailnet that run Bivy, this one first.
+  async "tailnet.machines"(msg, ctx) {
+    ctx.reply({ type: "tailnet.machines.ok", requestId: msg.requestId, machines: await tailnetMachines() });
+  },
   // How this machine can be reached and what the next setup would add (src/access.ts).
   "access.get"(msg, ctx) {
     ctx.reply({ type: "access.get.ok", requestId: msg.requestId, ...currentAccess() });
@@ -9682,6 +9696,13 @@ app.post("/api/auth/pair", sensitiveRateLimiter, (req, res) => {
   res.json({ ok: true, device, token });
 });
 
+// Identifies a Bivy node to the other machines on its tailnet, so each can list
+// the rest (tailnet.machines). Public, like /healthz: it says only that Bivy
+// runs here and under which name; the direct listener is tailnet-only.
+app.get("/api/direct/hello", (_req, res) => {
+  res.json({ bivy: true, name: identity.name, nodeId: identity.nodeId });
+});
+
 // All other /api routes require auth (loopback may bypass, per config and host
 // — see loopbackAllowed()/isMultiUserHost() in src/auth.ts).
 app.use("/api", authMiddleware(identity, {
@@ -12331,8 +12352,10 @@ const wss = new WebSocketServer({ server, path: "/ws" });
 // getting loopback trust; every caller needs a device token.
 const directWebApp = webAppRouter(webAppDirs(repoRoot));
 let directListener: { port: number; server: http.Server; wss: WebSocketServer } | null = null;
+let directOwner: string | undefined;
 async function reloadDirectListener(): Promise<{ enabled: boolean; port?: number; webApp: boolean }> {
   const config = loadDirectListenerConfig(appDir);
+  directOwner = config?.owner;
   if (directListener && directListener.port !== config?.port) {
     const previous = directListener;
     directListener = null;
@@ -12347,7 +12370,8 @@ async function reloadDirectListener(): Promise<{ enabled: boolean; port?: number
     if (directWebApp) directApp.use(directWebApp);
     directApp.use(app);
     const listener = http.createServer(directApp);
-    markRemoteListener(listener);
+    // The owner's own tailnet devices come in on their Tailscale identity.
+    markRemoteListener(listener, { trustedLogin: () => directOwner });
     const directWss = new WebSocketServer({ server: listener, path: "/ws" });
     directWss.on("connection", (socket, req) => wss.emit("connection", socket, req));
     await new Promise<void>((resolve, reject) => {

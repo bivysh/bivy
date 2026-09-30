@@ -12,6 +12,7 @@ import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { useCloudMachinesEnabled } from "../cloudMachines.js";
 import { ephemeralCatalogEntry, type EphemeralNodeConfig, type HostedMachineSummary } from "@bivy/core";
+import type { TailnetMachine } from "../access.js";
 
 /**
  * Header control (relay mode): shows the current node and a menu to switch nodes,
@@ -217,6 +218,67 @@ export function NodeSwitcher() {
         />
       )}
       {addNodeOpen && <AddNodeSheet onClose={() => setAddNodeOpen(false)} />}
+    </div>
+  );
+}
+
+/**
+ * Header control when this machine serves the app over Tailscale: the machine
+ * you're on, and the others on your tailnet running Bivy. Each has its own
+ * address, so picking one opens it there; your own devices need no pairing.
+ */
+export function TailnetSwitcher() {
+  const { connection: { status } } = useAppState();
+  const [open, setOpen] = useState(false);
+  const [machines, setMachines] = useState<TailnetMachine[] | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+  useModalEscape(() => setOpen(false), open);
+  useEffect(() => {
+    if (status !== "online") return;
+    controller.listTailnetMachines().then(setMachines).catch(() => setMachines([]));
+  }, [status, open]);
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener("click", onDoc);
+    return () => document.removeEventListener("click", onDoc);
+  }, [open]);
+  const self = machines?.find((m) => m.self);
+  const others = machines?.filter((m) => !m.self) ?? [];
+  const online = status === "online";
+  return (
+    <div className="node-switcher" ref={ref}>
+      <button className="node-switcher-btn" aria-haspopup="menu" aria-expanded={open} onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}>
+        <StatusDot status={online ? "online" : "idle"} label={`${online ? "Online" : "Offline"} — `} />
+        <span className="node-switcher-name">{self?.name || location.hostname.split(".")[0]}</span>
+        <span className="node-switcher-caret">▾</span>
+      </button>
+      {open && (
+        <div className="menu node-menu" role="menu">
+          <div className="node-menu-head">Your machines</div>
+          {machines === null && <div className="node-menu-status" role="status"><Spinner size="xs" />Looking…</div>}
+          {self && (
+            <div className="node-menu-row">
+              <span className="menu-item node-menu-item active" role="menuitem" aria-current="true">
+                <StatusDot status="online" label="Online — " />
+                <span className="node-menu-name">{self.name}</span>
+                <span className="node-menu-check">✓</span>
+              </span>
+            </div>
+          )}
+          {others.map((m) => (
+            <div className="node-menu-row" key={m.url}>
+              <a className="menu-item node-menu-item" role="menuitem" href={m.url}>
+                <StatusDot status="online" label="Online — " />
+                <span className="node-menu-name">{m.name}</span>
+              </a>
+            </div>
+          ))}
+          {machines !== null && others.length === 0 && (
+            <div className="node-menu-empty">No other machines yet. Run <code>bivy tailscale</code> on another machine and it shows up here.</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -12,7 +12,8 @@ import { QuestionStack } from "./components/QuestionCard.js";
 import { TurnAttentionCard } from "./components/TurnAttentionCard.js";
 import { UpdatePrompt } from "./components/UpdatePrompt.js";
 import { SetupNotice } from "./components/SetupNotice.js";
-import { NodeSwitcher } from "./components/NodeSwitcher.js";
+import { NodeSwitcher, TailnetSwitcher } from "./components/NodeSwitcher.js";
+import { runtimeBoolean } from "./runtime-config.js";
 import { closeSettings, getSettingsRoute, openSettings, setSettingsView, subscribeSettingsRoute } from "./settingsRoute.js";
 import { closeAutomations, getAutomationsRoute, openAutomations, setAutomationsSection, subscribeAutomationsRoute } from "./automationsRoute.js";
 import { closeLibrary, getLibraryRoute, openLibrary, subscribeLibraryRoute } from "./libraryRoute.js";
@@ -402,7 +403,9 @@ export function App() {
   // the TUI lock, so the view we launched isn't swapped out for the lock banner
   // once `terminal.tui {active:true}` arrives from our own TUI.
   const showSessionTerminal = canToggleSessionView && sessionView === "terminal";
-  const showNodeSwitcher = !controller.direct && !controller.solo;
+  // Served by the node over Tailscale: switch between your tailnet's machines.
+  const showTailnetSwitcher = controller.direct && runtimeBoolean("directNode", false);
+  const showNodeSwitcher = (!controller.direct && !controller.solo) || showTailnetSwitcher;
   // When the node is an offline-but-resumable ephemeral machine (a suspended
   // Sprite we hold the key for), keep the composer usable: sending IS the resume
   // gesture — controller.sendPrompt wakes the machine and replays the message.
@@ -899,7 +902,7 @@ export function App() {
                 the full first line on a phone. */}
             {(showNodeSwitcher || canToggleSessionView) && (
               <div className="topbar-subline">
-                {showNodeSwitcher && <NodeSwitcher />}
+                {showNodeSwitcher && (showTailnetSwitcher ? <TailnetSwitcher /> : <NodeSwitcher />)}
                 {canToggleSessionView && <SessionViewToggle value={sessionView} onChange={setSessionView} />}
               </div>
             )}

@@ -14,6 +14,7 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
   "apps.list": Type.Object({ ...request, ...optionalSession }),
   "artifacts.list": Type.Object(request),
   "access.get": Type.Object(request),
+  "tailnet.machines": Type.Object(request),
   "session.fork.local": Type.Object({ ...request, ...session, model: Type.Optional(Type.Object({ provider: Type.Optional(Type.String({ maxLength: 200 })), id: Type.String({ maxLength: 200 }) })) }),
   "apps.publish": Type.Object({ ...request, ...session, manifest: Type.Unknown() }),
   "apps.offers": Type.Object({ ...request, ...session }),

@@ -934,13 +934,14 @@ bivy access --json
 
 Serves this machine's Bivy on `https://<machine>.<tailnet>.ts.net` through
 `tailscale serve`, reachable only from your tailnet, with no control plane or
-relay in between. The node serves the web app itself on that address. Prints a
-one-time pairing link (and QR); each device opens one once to get its token.
-See [Tailscale](tailscale.md).
+relay in between. The node serves the web app itself on that address. Your own
+devices (signed in to Tailscale as you) get in without pairing, and the app's
+machine menu lists your other machines running it. Other people's devices pair
+once with a link from `bivy tailscale pair`. See [Tailscale](tailscale.md).
 
 ```bash
-bivy tailscale            # turn it on and pair the first device
-bivy tailscale pair       # a pairing link for another device
+bivy tailscale            # turn it on
+bivy tailscale pair       # a pairing link for someone else's device
 bivy tailscale devices    # who holds a token
 bivy tailscale revoke <id>
 bivy tailscale off
