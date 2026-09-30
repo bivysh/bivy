@@ -97,3 +97,23 @@ test("annotated screenshots restore app panel scrolling beneath the marks", { sk
     assert.throws(() => readElementScrolls(Array(51).fill(input.elementScrolls[0])), /Invalid scroll/);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// `scroll-behavior: smooth` must not leave the retake mid-scroll, with the
+// marks placed for a position the picture isn't at.
+test("annotated screenshots of a smooth-scrolling page keep the marks on what was marked", { skip: !findChrome() && "no Chrome/Chromium on this machine" }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-smooth-annotation-"));
+  try {
+    fs.writeFileSync(path.join(dir, "index.html"), `<!doctype html><style>
+      html { scroll-behavior:smooth; } body { margin:0; height:5000px; position:relative; }
+      #target { position:absolute; left:100px; top:3000px; width:100px; height:100px; background:blue; }
+      </style><div id="target"></div>`);
+    const service = new AppService(new AppRegistry(), undefined, { start: async () => "t", has: () => true, close: () => {} }, { screenshots: { enabled: () => true } });
+    const app = service.publish("s", dir, { version: 1, name: "Landing", views: [{ kind: "web", name: "App", source: { kind: "static", directory: "." } }] });
+    const result = await service.annotate("s", { appId: app.id, viewId: app.views[0]!.id, viewport: { width: 800, height: 600 }, dpr: 1,
+      scroll: { x: 0, y: 2800 }, strokes: [{ tool: "box", points: [[80, 2980], [220, 3120]] }] });
+    const png = Buffer.from(result.image!.data, "base64");
+    assert.deepEqual(pixel(png, 150, 250), [0, 0, 255], "the picture is at the scroll the user drew at");
+    assert.deepEqual(pixel(png, 150, 180), INK, "the box surrounds the marked content");
+    assert.equal(result.approximate, false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
