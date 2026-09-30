@@ -4,13 +4,12 @@
 [![license: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-2b6cb0)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-2b6cb0)](https://nodejs.org)
 
-**Your local coding agents, from anywhere. Showing their work.**
+**Local coding agents that show their work. Anywhere.**
 
-Bivy is the open-source workspace for coding agents. Claude Code, Codex, Pi,
-OpenCode and other agents run on your own machine, and you reach them remotely
-from a browser or your phone: the live session, its terminal, its approvals,
-and the app it's building, right in the chat. Try the app, mark what's wrong,
-and send it back to the agent, wherever you are.
+Bivy is the open-source workspace for coding agents. It runs Claude Code, Codex,
+Pi, OpenCode and other agents on your own machine. Reach them from a browser or
+your phone, with the live session, its terminal, its approvals, and the app
+they're building right in the chat. Try it, mark what's wrong, and send it back.
 
 Bivy is not another coding agent and not a cloud development machine. The agent
 stays local and does the coding with your model provider. Your repos, tools,
@@ -23,7 +22,7 @@ of it, plus live previews, automations, and review.
   webhooks start the work. It comes back as a preview link or a pull request.
 - **Any agent.** Hit a usage limit? Fork the session to another agent, or let
   Bivy retry when the limit resets.
-- **Your machine, remotely.** Start at your desk, pick the session up on your
+- **Your machine, anywhere.** Start at your desk, pick the session up on your
   phone. The machine dials out, so there are no ports to open, and session
   traffic is end-to-end encrypted.
 
