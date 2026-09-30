@@ -63,15 +63,15 @@ export function PinCard({ pin }: { pin: AppPin }) {
     finally { setBusy(false); }
   };
   const openPreview = () => requestAppsSheet({ sessionId: pin.sessionId, appId: pin.appId, openView: { viewId: pin.viewId, path: pin.path } });
-  return <section ref={card} className="apps-card review-card pin-card" aria-label={`Pinned on ${pin.name}: ${state.label.toLowerCase()}`}>
+  return <section ref={card} className="apps-card review-card pin-card" aria-label={`${pin.number ? `Note ${pin.number} p` : "P"}inned on ${pin.name}: ${state.label.toLowerCase()}`}>
     <AppRow tile={appInitial(pin.name)} name={`${pin.name}${pin.view && pin.view !== pin.name ? ` · ${pin.view}` : ""}`}
-      meta={`Pinned · ${pin.path}`}
+      meta={`${pin.number ? `Note ${pin.number} · ` : ""}Pinned · ${pin.path}`}
       action={<Badge tone={state.tone}>{state.label}</Badge>} />
     {pin.shot && !missing
       ? <div className="review-stage">
           <button type="button" className="review-shot" style={{ aspectRatio: `${pin.shot.width} / ${pin.shot.height}`, blockSize: "var(--review-shot-height)", maxInlineSize: "100%" }}
             onClick={openPreview} aria-label={`Open the preview of ${pin.name} at ${pin.path}`}>
-            {url ? <img src={url} alt={`What you marked on ${pin.name} at ${pin.path}`} width={pin.shot.width} height={pin.shot.height} />
+            {url ? <img src={url} alt={`What you marked on ${pin.name} at ${pin.path}${pin.number ? `, note ${pin.number}` : ""}`} width={pin.shot.width} height={pin.shot.height} />
               : <span className="review-loading"><Spinner size="sm" /><span className="sr-only">Loading what you marked…</span></span>}
           </button>
         </div>

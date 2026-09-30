@@ -70,6 +70,12 @@ for (const theme of themes) {
     await expect.poll(() => page.evaluate(() => (window as any).commands.at(-1)))
       .toMatchObject({ kind: "apps.pinState", sessionId: "s", pinId: "pin-0123456789abcdef", state: "done" });
 
+    // One message can carry several notes; each is its own card, numbered.
+    await page.evaluate((p) => (window as any).c.store.apply({ type: "session.event", sessionId: "s", event: { type: "app_pin", id: p.id, pin: p } }),
+      pin({ id: "pin-second0123456789", number: 2, words: "The total is misaligned.", state: "open" }));
+    await expect(page.getByRole("region", { name: "Note 2 pinned on Storefront: open" })).toBeVisible();
+    await expect(page.getByRole("region", { name: /pinned on Storefront|Pinned on Storefront/ })).toHaveCount(2);
+
     // What it named leaving the page is its own answer, and says so in words.
     await send({ state: "gone", stateAt: 3 });
     await expect(page.getByRole("region", { name: "Pinned on Storefront: element gone" })

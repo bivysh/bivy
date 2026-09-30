@@ -286,7 +286,7 @@ test("inspector reports console errors and pointed elements to the pill", async 
     await page.keyboard.type("Make the title bigger");
     await page.getByRole("button", { name: "Add to chat" }).click();
     await expect(page).toHaveURL(/^https:\/\/bivy\.example\/share\?session=s&text=/);
-    expect(new URL(page.url()).searchParams.get("text")).toMatch(/^Make the title bigger[\s\S]*page \/saved/);
+    expect(new URL(page.url()).searchParams.get("text")).toMatch(/^In the app preview "Ledger" \(page \/saved[\s\S]*1\. “Make the title bigger”/);
   } finally { app.close(); app.closeAllConnections(); fixture.close(); }
 });
 
@@ -320,7 +320,7 @@ test("the preview works framed inside Bivy and hands drafts to it", async ({ pag
     await expect(shell.getByRole("textbox", { name: "What should change?" })).toBeFocused();
     await page.keyboard.type("Use a plus icon");
     await shell.getByRole("button", { name: "Add to chat" }).click();
-    await expect.poll(() => page.evaluate(() => (window as any).drafts)).toEqual([expect.objectContaining({ type: "annotation", text: expect.stringMatching(/^Use a plus icon\n\nIn the app preview "Ledger"[\s\S]*- #save \("Add transaction"\)/), mark: expect.objectContaining({ selector: "#save", selectors: ["#save"] }) })]);
+    await expect.poll(() => page.evaluate(() => (window as any).drafts)).toEqual([expect.objectContaining({ type: "annotation", text: expect.stringMatching(/^In the app preview "Ledger"[\s\S]*1\. “Use a plus icon”[\s\S]*- #save \("Add transaction"\)/), mark: expect.objectContaining({ selector: "#save", notes: [expect.objectContaining({ n: 1, words: "Use a plus icon", selectors: ["#save"] })] }) })]);
     await expect(page).toHaveURL("https://bivy.example/chat");
 
     // A browser that refuses the framed cookie is detected and reported, so
@@ -381,7 +381,7 @@ test("point and speak: hold the mic or long-press while pointing, and the words 
     await page.screenshot({ path: testInfo.outputPath("point-and-speak-draft.png") });
     expect((await page.evaluate(() => (window as any).transcribed))[0].bytes).toBeGreaterThan(0);
     await shell.getByRole("button", { name: "Add to chat" }).click();
-    await expect.poll(() => page.evaluate(() => (window as any).drafts)).toEqual([expect.stringMatching(/^give it more room above the home bar\n\nIn the app preview "Checkout"[\s\S]*- #pay \("Pay now"\)/)]);
+    await expect.poll(() => page.evaluate(() => (window as any).drafts)).toEqual([expect.stringMatching(/^In the app preview "Checkout"[\s\S]*1\. “give it more room above the home bar”[\s\S]*- #pay \("Pay now"\)/)]);
 
     // A long press that lifts where it landed opens the note already listening
     // — what holding to point and speak did — and never reaches the app.
@@ -472,7 +472,7 @@ test("draw on the preview: marks freeze the app, name what's under them, and rea
     await expect.poll(() => page.evaluate(() => (window as any).drafts.length)).toBe(1);
     const [draft] = await page.evaluate(() => (window as any).drafts);
     // Top to bottom: everything inside the circle, and nothing it only crossed.
-    expect(draft.text).toMatch(/^Give this more room\n\nIn the app preview "Checkout" \(page \/, viewport \d+×\d+\), marked:\n- #total \("Total \$102"\)\n- #promo \("Promo code"\)\n- #pay \("Pay now"\)\nMarks \(page px\): pen /);
+    expect(draft.text).toMatch(/^In the app preview "Checkout" \(page \/, viewport \d+×\d+\):\n\n1\. “Give this more room”\n {3}- #total \("Total \$102"\)\n {3}- #promo \("Promo code"\)\n {3}- #pay \("Pay now"\)\n {3}Marks \(page px\): pen /);
     expect(draft.attachments).toEqual([expect.objectContaining({ kind: "image", mimeType: "image/png", name: "Checkout marked.png", bytes: expect.any(Number) })]);
     expect(draft.text).not.toContain("approximate");
     // The attachment delivered to the composer contains the actual pen pixels,
@@ -496,7 +496,7 @@ test("draw on the preview: marks freeze the app, name what's under them, and rea
     await expect.poll(() => page.evaluate(() => (window as any).drafts.length)).toBe(2);
     const second = (await page.evaluate(() => (window as any).drafts))[1];
     expect(second.attachments[0].name).toBe("Checkout marked (approximate).png");
-    expect(second.text).toMatch(/^In the app preview[\s\S]*- #pay \("Pay now"\)\nMarks \(page px\): box [\s\S]*\nPicture: retaken on the machine/);
+    expect(second.text).toMatch(/^In the app preview[\s\S]*- #pay \("Pay now"\)\n {3}Marks \(page px\): box [\s\S]*\nPicture: retaken on the machine/);
     expect(requests.at(-1)?.scroll).toEqual({ x: 0, y: 0 });
 
     // Compare: mark the "after" screenshot itself — the exact frame, no retake.

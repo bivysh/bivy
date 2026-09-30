@@ -75,6 +75,12 @@ nav::-webkit-scrollbar { display:none; }
 #ink.frozen { pointer-events:none; cursor:default; }
 #ink .halo { fill:none; stroke:var(--annotate-halo); stroke-width:7; stroke-linecap:round; stroke-linejoin:round; }
 #ink .mark { fill:none; stroke:var(--annotate); stroke-width:4; stroke-linecap:round; stroke-linejoin:round; }
+/* A saved mark keeps its place while the next one is made, and wears its
+   number, so a note and the thing it is about stay paired. */
+#ink .saved { opacity:0.75; }
+#ink .pip { fill:var(--annotate); stroke:var(--annotate-halo); stroke-width:2; }
+#ink .pip-text { fill:var(--annotate-halo); font:var(--weight-semibold) 13px/1 var(--font-sans); text-anchor:middle; dominant-baseline:central; }
+#mark-count { flex-shrink:0; }
 /* Hints float over the app, whose page may be any colour: back them solidly. */
 #dock > .banner.inline[data-tone="accent"] { background:color-mix(in srgb, var(--accent) 14%, var(--surface)); box-shadow:var(--shadow-sm); }
 #dock .btn, #show, #down .btn, #dock .menu-item { min-block-size:var(--space-7); font-size:var(--text-sm); }
@@ -126,11 +132,12 @@ body.badged #dock:not([data-edge="top"]) { bottom:calc(var(--space-2) + var(--sp
     <p class="muted" id="note-status" role="status"></p>
     <details id="draft-details"><summary>Preview context</summary><pre id="draft-context"></pre></details>
     </div>
-    <div class="panel-actions"><button class="btn sm ghost" id="draft-cancel">Cancel</button><button class="btn sm primary" id="draft-add">Add to chat</button></div>
+    <div class="panel-actions"><button class="btn sm ghost" id="draft-cancel">Cancel</button><button class="btn sm" id="draft-more" type="button">Mark another</button><button class="btn sm primary" id="draft-add">Add to chat</button></div>
   </section>
   <p class="banner inline" data-tone="accent" id="hint" role="status" hidden>Press and hold anything in the app to mark what’s wrong.</p>
   <p class="banner inline" data-tone="accent" id="drawing" role="status" hidden>Tap what’s wrong, or circle it. Then Done. Two fingers scroll the page.</p>
   <div id="draw-bar" role="toolbar" aria-label="Marking tools" tabindex="-1" hidden>
+    <span id="mark-count" class="badge" data-tone="accent" hidden></span>
     <button class="btn sm ghost" id="draw-undo" type="button" disabled>Undo</button>
     <button class="btn sm ghost" id="draw-clear" type="button" disabled>Clear</button>
     <button class="btn sm ghost" id="draw-cancel" type="button" aria-label="Stop marking">✕</button>
@@ -277,14 +284,19 @@ function toChat(text){
   const to=new URL(metadata.returnTo),session=to.pathname.split('/').pop();
   location.assign(to.origin+'/share?session='+encodeURIComponent(session)+'&text='+encodeURIComponent(text));
 }
-let pendingNote=null,noteSequence=0;
+let pendingNote=null,noteSequence=0,pending=null;
 function draft(context,listen){
   panels(null);
   $('draft-add').disabled=false;
   $('note-status').textContent='';
   $('draft-hint').textContent=metadata.reviewer?'Feedback only — no agent runs. Pictures are approximate; if screenshots are off, we save text and mark details.':'Review in chat before sending.';
   $('draft').hidden=false;
-  $('draft-add').textContent=metadata.reviewer?'Send note':metadata.returnTo?'Add to chat':'Copy';
+  // Several marks, several notes: each keeps its own words and its own number.
+  // A reviewer sends one note at a time, as the notes endpoint takes them.
+  $('draft-more').hidden=!pending||Boolean(metadata.reviewer);
+  $('draft-title').textContent=metadata.reviewer?'Note for the app’s owner':pending?'Note '+pending.n:'Note for the agent';
+  const waiting=notes.length+(pending?1:0);
+  $('draft-add').textContent=metadata.reviewer?'Send note':metadata.returnTo?(waiting>1?'Add '+waiting+' notes to chat':'Add to chat'):'Copy';
   $('draft-context').textContent=context;
   $('draft-details').open=false;
   const box=$('draft-text');box.value='';
@@ -323,24 +335,66 @@ function fromBivy(d){
   else if(d.type==='transcript'){setListening(false);if(typeof d.error==='string')sayVoice(d.error.slice(0,200));else addSpoken(d.text);}
   else if(d.type==='listening'&&d.on===false&&listening){setListening(false);if(voiceStatus.textContent.startsWith('Listening'))sayVoice('');}
 }
-$('draft-cancel').onclick=()=>{cancelListening();$('draft').hidden=true;endDraw();$('more').focus();};
+/** Saves the words for the mark in hand, and hands back the mark layer. */
+function keepNote(){
+  if(!pending)return false;
+  notes.push({...pending,words:$('draft-text').value.trim().slice(0,2000)});
+  pending=null;
+  return true;
+}
+/** Back to marking with the notes so far still on the page. */
+function resumeMarking(){
+  const target=draw?.target??'frame',seed=draw?.state&&{scroll:draw.scroll,viewport:draw.state.viewport,dpr:draw.state.dpr,theme:draw.state.theme,path:draw.state.path,elementScrolls:draw.state.elementScrolls,signals:draw.state.signals};
+  const keep=notes;
+  cancelListening();
+  $('draft').hidden=true;
+  draw=null;notes=[];
+  startDraw(target,seed);
+  notes=keep;
+  updateDrawBar();renderInk();
+}
+$('draft-more').onclick=()=>{if(keepNote())resumeMarking();};
+// Cancelling drops the mark in hand; the notes before it are still yours.
+$('draft-cancel').onclick=()=>{
+  cancelListening();pending=null;
+  $('draft').hidden=true;
+  if(notes.length)resumeMarking();else{endDraw();$('more').focus();}
+};
+/** What goes to the machine: the page's state, every stroke, and which note
+ *  each stroke belongs to, so the picture can be numbered and each note can
+ *  become a pin of its own. */
+function markPayload(d,list){
+  const st=d.state,first=list[0]?.els?.[0];
+  return Object.assign({path:st.path,viewport:st.viewport,dpr:st.dpr,signals:st.signals,
+    strokes:list.flatMap(note=>note.strokes),
+    notes:list.map(note=>({n:note.n,words:note.words||'',selectors:note.selectors,strokes:note.strokes})),
+    selector:first?.selector||'',text:first?.text||''},
+    d.target==='frame'?{scroll:d.scroll,elementScrolls:st.elementScrolls,theme:st.theme}:{compare:compareAfter});
+}
+/** The notes as words: where they are, once, then one numbered entry each. */
+function composeText(d,list){
+  return placeContext(d)+':\\n\\n'+list.map(note=>note.n+'. '+(note.words?'“'+note.words+'”\\n   ':'')+note.context.replace(/\\n/g,'\\n   ')).join('\\n\\n');
+}
 $('draft-add').onclick=async()=>{
   cancelListening();
-  const note=$('draft-text').value.trim();
+  const words=$('draft-text').value.trim();
+  const d=draw;
   if(metadata.reviewer){
-    if(!note){$('note-status').textContent='Write a note before sending.';$('draft-text').focus();return;}
-    const mark=marks,id=++noteSequence;
+    if(!words){$('note-status').textContent='Write a note before sending.';$('draft-text').focus();return;}
+    const mark=pending&&d?markPayload(d,[{...pending,words}]):null,id=++noteSequence;
     $('draft-add').disabled=true;$('draft-cancel').disabled=true;$('draft-text').disabled=true;
     $('note-status').textContent='Sending note…';$('draft-add').textContent='Sending…';
     const timer=setTimeout(()=>finishNote({id,error:'No reply yet. Your note may have arrived; check the connection before retrying.'}),60000);
     pendingNote={id,timer};
-    frame.contentWindow?.postMessage({type:'bivy:note',id,note:{note,context:$('draft-context').textContent,selector:mark?.selector||'',text:mark?.text||'',path:mark?.path||currentPath,viewport:mark?.viewport||{width:frame.clientWidth,height:frame.clientHeight},...(mark?{mark}:{})}},metadata.origin);
+    frame.contentWindow?.postMessage({type:'bivy:note',id,note:{note:words,context:$('draft-context').textContent,selector:mark?.selector||'',text:mark?.text||'',path:mark?.path||currentPath,viewport:mark?.viewport||{width:frame.clientWidth,height:frame.clientHeight},...(mark?{mark}:{})}},metadata.origin);
     return;
   }
-  const text=(note?note+'\\n\\n':'')+$('draft-context').textContent;
-  // Marks go to the Bivy client, which adds a picture made on the machine.
-  if(marks&&embedded){const mark=marks;$('draft').hidden=true;endDraw();return toBivy({type:'annotation',text,mark});}
-  if(metadata.returnTo){$('draft').hidden=true;return toChat(text);}
+  keepNote();
+  const list=notes;
+  const text=list.length&&d?composeText(d,list):(words?words+'\\n\\n':'')+$('draft-context').textContent;
+  // Marks go to the Bivy client, which adds a numbered picture from the machine.
+  if(list.length&&d&&embedded){const mark=markPayload(d,list);$('draft').hidden=true;endDraw();return toBivy({type:'annotation',text,mark});}
+  if(metadata.returnTo){$('draft').hidden=true;endDraw();return toChat(text);}
   try{await navigator.clipboard.writeText(text);$('draft-add').textContent='Copied';}catch{$('draft-text').select();}
 };
 $('draft-text').addEventListener('input',()=>{if(!pendingNote)$('note-status').textContent='';});
@@ -387,7 +441,12 @@ $('send-errors').onclick=()=>draft('Console output in the app preview "'+metadat
 const markBtn=$('mark');
 markBtn.onclick=()=>{if(draw&&!draw.done)endDraw();else startDraw('frame');};
 const ink=$('ink'),inkMarks=$('ink-marks'),SVG='http://www.w3.org/2000/svg';
-let draw=null,marks=null,drawOk=false,nextStroke=0,speakNext=false;
+// One mark, one note, one number. Several marks used to collapse into a single
+// note, so "the button is too small" and "the total is misaligned" arrived as
+// one lump that could only be answered as a lump. Each mark now carries its own
+// words and becomes its own pin, and the picture wears the numbers so a note and
+// the thing it is about stay paired.
+let draw=null,notes=[],drawOk=false,nextStroke=0,speakNext=false;
 const pos=v=>({x:Number(v?.x)||0,y:Number(v?.y)||0});
 /** Applies a page's report of where it is and what state it holds. */
 function applyState(current,d){
@@ -418,6 +477,7 @@ function startDraw(target,seed){
       frame.contentWindow?.postMessage({type:'bivy:draw'},metadata.origin);
     }
   }
+  space=draw;
   $('draw-bar').focus();
   updateDrawBar();renderInk();
 }
@@ -479,22 +539,50 @@ function placeInk(target){
 // the frame are in page pixels, so they follow; the size in use is kept.)
 addEventListener('resize',()=>{if(draw&&!draw.done)draw.rect=Object.assign(placeInk(draw.target),{});});
 function endDraw(){
-  if(!draw)return;
+  if(!draw&&!notes.length)return;
   delete $('compare').dataset.drawing;
-  draw=null;marks=null;ink.toggleAttribute('hidden',true);inkMarks.replaceChildren();
-  $('drawing').hidden=true;$('draw-bar').hidden=true;document.querySelector('nav').hidden=false;
+  draw=null;space=null;notes=[];pending=null;ink.toggleAttribute('hidden',true);inkMarks.replaceChildren();
+  $('drawing').hidden=true;$('draw-bar').hidden=true;$('mark-count').hidden=true;document.querySelector('nav').hidden=false;
 }
-function updateDrawBar(){const has=Boolean(draw?.strokes.length);for(const id of ['draw-undo','draw-clear','draw-done'])$(id).disabled=!has;}
-const onScreen=([x,y])=>draw.target==='frame'?[x-draw.scroll.x,y-draw.scroll.y]:[x,y];
+function updateDrawBar(){
+  const has=Boolean(draw?.strokes.length);
+  $('draw-done').disabled=!has;
+  $('draw-clear').disabled=!has;
+  // Undo walks back through this mark's strokes, then through the marks before it.
+  $('draw-undo').disabled=!has&&!notes.length;
+  $('draw-undo').setAttribute('aria-label',has||!notes.length?'Undo':'Remove note '+notes.length);
+  $('mark-count').hidden=!notes.length;
+  $('mark-count').textContent=notes.length===1?'1 note':notes.length+' notes';
+}
+// Page pixels to screen pixels. Saved marks are drawn between marks, when
+// there is no mark in hand, so the page's position is kept beside them.
+let space=null;
+const onScreen=([x,y])=>{const d=draw||space;return d&&d.target==='frame'?[x-d.scroll.x,y-d.scroll.y]:[x,y];};
 function shape(stroke){
   const pts=stroke.points.map(onScreen);
   if(stroke.tool==='box'){const [a,b]=[pts[0],pts[pts.length-1]];const el=document.createElementNS(SVG,'rect');el.setAttribute('x',Math.min(a[0],b[0]));el.setAttribute('y',Math.min(a[1],b[1]));el.setAttribute('width',Math.abs(b[0]-a[0]));el.setAttribute('height',Math.abs(b[1]-a[1]));el.setAttribute('rx','3');return el;}
   const el=document.createElementNS(SVG,'polyline');el.setAttribute('points',pts.map(p=>p.join(',')).join(' '));return el;
 }
+/** The number a saved mark wears, at the top-left of what it covers. */
+function pip(note){
+  const xs=note.strokes.flatMap(s=>s.points.map(p=>p[0])),ys=note.strokes.flatMap(s=>s.points.map(p=>p[1]));
+  const [x,y]=onScreen([Math.min(...xs),Math.min(...ys)]);
+  const g=document.createElementNS(SVG,'g');
+  const disc=document.createElementNS(SVG,'circle');
+  disc.setAttribute('cx',x);disc.setAttribute('cy',y);disc.setAttribute('r','11');disc.setAttribute('class','pip');
+  const text=document.createElementNS(SVG,'text');
+  text.setAttribute('x',x);text.setAttribute('y',y);text.setAttribute('class','pip-text');text.textContent=String(note.n);
+  g.append(disc,text);
+  return g;
+}
 function renderInk(){
-  if(!draw)return;
-  const all=[...draw.strokes,...(draw.current?[draw.current]:[])];
-  inkMarks.replaceChildren(...all.flatMap(s=>['halo','mark'].map(c=>{const el=shape(s);el.setAttribute('class',c);return el;})));
+  if(!draw&&!notes.length)return;
+  const paint=(s,saved)=>['halo','mark'].map(c=>{const el=shape(s);el.setAttribute('class',saved?c+' saved':c);return el;});
+  const done=notes.flatMap(note=>[...note.strokes.flatMap(s=>paint(s,true)),pip(note)]);
+  const live=draw?[...draw.strokes,...(draw.current?[draw.current]:[])].flatMap(s=>paint(s,false)):[];
+  // The mark being written about wears its number too, so the note on screen
+  // and the thing it is about are paired while the words are still being typed.
+  inkMarks.replaceChildren(...done,...live,...(pending&&notes.length?[pip(pending)]:[]));
 }
 function local(e){const x=e.clientX-draw.rect.left,y=e.clientY-draw.rect.top;return draw.target==='frame'?[Math.round(x+draw.scroll.x),Math.round(y+draw.scroll.y)]:[Math.round(x),Math.round(y)];}
 let scrollAsk=null;
@@ -536,29 +624,41 @@ ink.onpointerup=ink.onpointercancel=e=>{
   updateDrawBar();renderInk();
 };
 ink.onwheel=e=>{if(!draw||draw.done)return;e.preventDefault();scrollPage(e.deltaX,e.deltaY);};
-$('draw-undo').onclick=()=>{if(!draw)return;const s=draw.strokes.pop();if(s)delete draw.elements[s.id];updateDrawBar();renderInk();};
+$('draw-undo').onclick=()=>{
+  if(!draw)return;
+  // Back through this mark's strokes first, then through the notes before it.
+  const s=draw.strokes.pop();
+  if(s)delete draw.elements[s.id];else notes.pop();
+  updateDrawBar();renderInk();
+};
 $('draw-clear').onclick=()=>{if(!draw)return;draw.strokes=[];draw.elements={};updateDrawBar();renderInk();};
 $('draw-cancel').onclick=()=>endDraw();
 $('compare-draw').onclick=()=>startDraw('compare');
-$('draw-done').onclick=()=>{
-  if(!draw||!draw.strokes.length)return;
-  const d=draw,st=d.state,seen=new Set(),els=[];
-  for(const s of d.strokes)for(const el of d.elements[s.id]||[]){const key=String(el.selector);if(!seen.has(key)){seen.add(key);els.push(el);}}
+/** What one mark names, and where it is, in words. */
+function markContext(d,els){
   const bounds=s=>{const xs=s.points.map(p=>p[0]),ys=s.points.map(p=>p[1]);return s.tool+' '+Math.min(...xs)+','+Math.min(...ys)+'–'+Math.max(...xs)+','+Math.max(...ys);};
+  return (els.length?els.map(el=>'- '+String(el.selector).slice(0,300)+(el.text?' ("'+String(el.text).slice(0,120)+'")':'')).join('\\n')+'\\n':'')
+    +'Marks ('+(d.target==='compare'?'screenshot':'page')+' px): '+d.strokes.map(bounds).join('; ');
+}
+/** Where all the notes are, said once, above them. */
+function placeContext(d){
+  const st=d.state;
   const where=d.target==='compare'?'On the Compare screenshot after the agent’s last change in "'+metadata.name+'"':metadata.inspect===false?'On the desktop app "'+metadata.name+'"':'In the app preview "'+metadata.name+'"';
   const scrolled=d.target==='frame'&&(d.scroll.x||d.scroll.y)?', scrolled to '+d.scroll.x+','+d.scroll.y:'';
-  const context=where+' (page '+st.path+', viewport '+st.viewport.width+'×'+st.viewport.height+scrolled+'), marked:\\n'
-    +(els.length?els.map(el=>'- '+String(el.selector).slice(0,300)+(el.text?' ("'+String(el.text).slice(0,120)+'")':'')).join('\\n')+'\\n':'')
-    +'Marks ('+(d.target==='compare'?'screenshot':'page')+' px): '+d.strokes.map(bounds).join('; ');
-  // The first element a mark names is what the note is "on", as pointing at one used to be.
-  const mark=Object.assign({path:st.path,viewport:st.viewport,dpr:st.dpr,strokes:d.strokes.map(s=>({tool:s.tool,points:s.points})),signals:st.signals,selector:els[0]?.selector||'',text:els[0]?.text||'',selectors:els.map(el=>String(el.selector).slice(0,300)).slice(0,8)},
-    d.target==='frame'?{scroll:d.scroll,elementScrolls:st.elementScrolls,theme:st.theme}:{compare:compareAfter});
-  // The marks stay on screen, frozen, while you add your words.
+  return where+' (page '+st.path+', viewport '+st.viewport.width+'×'+st.viewport.height+scrolled+')';
+}
+$('draw-done').onclick=()=>{
+  if(!draw||!draw.strokes.length)return;
+  const d=draw,seen=new Set(),els=[];
+  for(const s of d.strokes)for(const el of d.elements[s.id]||[]){const key=String(el.selector);if(!seen.has(key)){seen.add(key);els.push(el);}}
+  pending={n:notes.length+1,strokes:d.strokes.map(s=>({tool:s.tool,points:s.points})),els,context:markContext(d,els),
+    selectors:els.map(el=>String(el.selector).slice(0,300)).slice(0,8)};
+  // The marks stay on screen, frozen, while the words for this one are added.
   d.done=true;draw=null;
   const speak=speakNext;speakNext=false;
-  draft(context,speak);
-  draw=d;marks=mark;ink.classList.add('frozen');
-  // Compare closed for the draft box: its marks go with it (they're in the context).
+  draft(placeContext(d)+', note '+pending.n+':\\n'+pending.context,speak);
+  draw=d;ink.classList.add('frozen');renderInk();
+  // Compare closed for the note box: its marks go with it (they're in the context).
   if(d.target==='compare')ink.toggleAttribute('hidden',true);$('drawing').hidden=true;$('draw-bar').hidden=true;document.querySelector('nav').hidden=false;
 };
 // Compare: screenshots around the agent's last change (agent screenshots on).

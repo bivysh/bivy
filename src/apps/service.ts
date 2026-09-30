@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { scanListeners } from "./listeners.js";
 import { takeShots, type Shot, type ShotRequest } from "./screenshot.js";
-import { approximate, composite, crop, readStrokes, readElementScrolls, type ElementScroll, type PageSignals } from "./annotate.js";
+import { approximate, composite, crop, noteAnchor, readNotes, readStrokes, readElementScrolls, type ElementScroll, type MarkNote, type PageSignals, type Stroke } from "./annotate.js";
 import { captureFrame, encodePng, sendInput } from "./rfb.js";
 import { inputEvents, readAction } from "./input.js";
 import { pressMenu, readMenuPath, readMenus, type AppMenu } from "./menu.js";
@@ -105,7 +105,8 @@ export class AppService {
   private pins: AppPin[] = [];
   /** The last picture drawn on a view, kept briefly for the pin that may
    *  follow it: the person is still typing their words when it is made. */
-  private lastMark = new Map<string, { at: number; png: Buffer; path: string; selectors: string[]; region: AppPin["region"]; viewport: AppPin["viewport"] }>();
+  private lastMark = new Map<string, { at: number; png: Buffer; path: string; viewport: AppPin["viewport"];
+    notes: { n: number; words: string; selectors: string[]; region: AppPin["region"] }[] }>();
   private readonly settleMs: number;
   private runs = new Map<string, Run>();
   /** The latest card per view: a newer one expires its images. */
@@ -463,10 +464,16 @@ export class AppService {
     scroll?: { x: number; y: number }; elementScrolls?: ElementScroll[]; dpr?: number; theme?: "light" | "dark"; strokes: unknown; compare?: number; signals?: PageSignals;
     /** What the marks named, for a pin to find again later. Untrusted strings. */
     selectors?: unknown;
+    /** One entry per note: its number, its words, and the strokes it owns. When
+     * present it is the source of both the strokes and the numbers drawn. */
+    notes?: unknown;
   }): Promise<{ image?: { data: string; mimeType: "image/png"; name: string; width: number; height: number }; approximate: boolean; screenshotsOff?: true }> {
     const entry = this.registry.requireView(sessionId, input.appId, input.viewId);
     if (entry.view.kind !== "web") throw new Error("Only previews can be drawn on.");
-    const strokes = readStrokes(input.strokes);
+    // Several notes, each owning its strokes; one unnumbered mark is the same
+    // thing with a single entry, so there is one path through here.
+    const grouped = readNotes(input.notes);
+    const strokes = grouped.length ? grouped.flatMap((note) => note.strokes) : readStrokes(input.strokes);
     const elementScrolls = readElementScrolls(input.elementScrolls);
     const whole = (n: unknown, min: number, max: number) => typeof n === "number" && Number.isFinite(n) && n >= min && n <= max;
     // Compare's shot is drawn on at its on-screen size, which can be small.
@@ -475,16 +482,22 @@ export class AppService {
     const page = typeof input.path === "string" && input.path.startsWith("/") && !input.path.startsWith("//") && input.path.length <= 2048 ? input.path : entry.lastPath ?? "/";
     const scroll = { x: whole(input.scroll?.x, 0, 1e6) ? input.scroll!.x : 0, y: whole(input.scroll?.y, 0, 1e6) ? input.scroll!.y : 0 };
     const name = `${entry.app.name} ${page === "/" ? "" : page} marked.png`.replace(/[^\w .()-]+/g, "-").replace(/\s+/g, " ").trim();
-    // What the marks cover, in the page pixels they were drawn in, so a later
+    const box = (of: Stroke[]) => {
+      const xs = of.flatMap((stroke) => stroke.points.map(([x]) => x));
+      const ys = of.flatMap((stroke) => stroke.points.map(([, y]) => y));
+      return { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+    };
+    const loose = (Array.isArray(input.selectors) ? input.selectors : []).filter((value): value is string => typeof value === "string" && value.length > 0 && value.length <= 300).slice(0, 8);
+    // What each note covers, in the page pixels it was drawn in, so a later
     // screenshot can be compared exactly there (see resolvePins).
-    const xs = strokes.flatMap((stroke) => stroke.points.map(([x]) => x));
-    const ys = strokes.flatMap((stroke) => stroke.points.map(([, y]) => y));
-    const region = { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
-    const selectors = (Array.isArray(input.selectors) ? input.selectors : []).filter((value): value is string => typeof value === "string" && value.length > 0 && value.length <= 300).slice(0, 8);
+    const held = grouped.length
+      ? grouped.map((note) => ({ n: note.n, words: note.words, selectors: note.selectors, region: box(note.strokes) }))
+      : [{ n: 1, words: "", selectors: loose, region: box(strokes) }];
+    const badges = grouped.length > 1 ? grouped.map((note) => ({ n: note.n, ...noteAnchor(note) })) : [];
     const finish = (base: Buffer, offset: { x: number; y: number }, approx: boolean) => {
-      const png = composite(base, strokes, { scale: pngSize(base).width / viewport.width, offset });
-      // Keep it for the pin that may follow: the person is still writing.
-      this.lastMark.set(entry.view.id, { at: Date.now(), png, path: page, selectors, region, viewport });
+      const png = composite(base, strokes, { scale: pngSize(base).width / viewport.width, offset }, badges);
+      // Keep it for the pins that may follow: the person is still writing.
+      this.lastMark.set(entry.view.id, { at: Date.now(), png, path: page, viewport, notes: held });
       return { image: { data: png.toString("base64"), mimeType: "image/png" as const, name, ...pngSize(png) }, approximate: approx };
     };
     // Compare: the exact frame they drew on, in its own coordinates.
@@ -518,23 +531,29 @@ export class AppService {
    * rather than a paragraph in a message. Made only when the message is
    * actually sent, so nothing appears in the chat that the person didn't send.
    * The picture is the one `annotate` already made for the message. */
-  pin(sessionId: string, input: { appId: string; viewId: string; words: string }): { pin: AppPin } {
+  pin(sessionId: string, input: { appId: string; viewId: string; words?: string }): { pins: AppPin[] } {
     const entry = this.registry.requireView(sessionId, input.appId, input.viewId);
     const mark = this.lastMark.get(input.viewId);
     if (!mark || Date.now() - mark.at > MARK_TTL_MS) throw new Error("That mark is no longer held. Mark the preview again.");
     this.lastMark.delete(input.viewId);
-    // The card shows what they marked, not the whole page it sat on. The
-    // message keeps the full picture; this is the pin's own thumbnail.
-    let picture = mark.png;
-    try { picture = crop(mark.png, mark.region, pngSize(mark.png).width / mark.viewport.width); } catch { /* the whole picture still tells the story */ }
-    const pin = this.pinSink.publish({
-      id: `pin-${randomBytes(8).toString("hex")}`, sessionId, appId: entry.app.id, viewId: entry.view.id,
-      name: entry.app.name, view: entry.view.name, path: mark.path,
-      words: String(input.words ?? "").trim().slice(0, 2000), at: Date.now(),
-      selectors: mark.selectors, region: mark.region, viewport: mark.viewport, state: "open",
-    }, picture);
-    this.pins = [...this.pins, pin].slice(-200);
-    return { pin };
+    const scale = pngSize(mark.png).width / mark.viewport.width;
+    const fallback = String(input.words ?? "").trim().slice(0, 2000);
+    const made = mark.notes.map((note) => {
+      // The card shows what that note marked, not the whole page it sat on.
+      // The message keeps the full picture; this is the pin's own thumbnail.
+      let picture = mark.png;
+      try { picture = crop(mark.png, note.region, scale); } catch { /* the whole picture still tells the story */ }
+      const pin = this.pinSink.publish({
+        id: `pin-${randomBytes(8).toString("hex")}`, sessionId, appId: entry.app.id, viewId: entry.view.id,
+        name: entry.app.name, view: entry.view.name, path: mark.path,
+        words: note.words || fallback, at: Date.now(),
+        ...(mark.notes.length > 1 ? { number: note.n } : {}),
+        selectors: note.selectors, region: note.region, viewport: mark.viewport, state: "open",
+      }, picture);
+      this.pins = [...this.pins, pin].slice(-200);
+      return pin;
+    });
+    return { pins: made };
   }
   /** The person's own verdict on a pin. Only they can say "done". */
   setPinState(sessionId: string, pinId: string, state: AppPinState): { pin: AppPin } {

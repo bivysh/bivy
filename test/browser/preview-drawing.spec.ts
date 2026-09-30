@@ -104,6 +104,32 @@ for (const theme of themes) test(`preview marking captures gestures (${theme})`,
   expect(await page.evaluate(() => (window as any).annotation.text)).toContain('Keep these pen marks');
   await expect(ink).toBeHidden();
 
+  // Several marks, several notes: each keeps its own words and its own number,
+  // and they travel together in one message.
+  await openMenu();
+  await markControl.click();
+  await page.mouse.move(60, 200); await page.mouse.down(); await page.mouse.move(150, 260, { steps: 6 }); await page.mouse.up();
+  await shell.getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(shell.getByRole('heading', { name: 'Note 1' })).toBeVisible();
+  await shell.getByRole('textbox', { name: 'What should change?' }).fill('The header is too tight');
+  await shell.getByRole('button', { name: 'Mark another', exact: true }).click();
+  // The first note stays on the page, wearing its number, while the next is made.
+  await expect(ink.locator('.pip-text')).toHaveText(['1']);
+  await expect(shell.locator('#mark-count')).toHaveText('1 note');
+  await page.mouse.move(60, 400); await page.mouse.down(); await page.mouse.move(150, 460, { steps: 6 }); await page.mouse.up();
+  await shell.getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(shell.getByRole('heading', { name: 'Note 2' })).toBeVisible();
+  await shell.getByRole('textbox', { name: 'What should change?' }).fill('This total is misaligned');
+  // Both numbers are on the page while the second note is being written.
+  await expect(ink.locator('.pip-text')).toHaveText(['1', '2']);
+  await page.screenshot({ path: info.outputPath(`notes-${theme}.png`) });
+  await shell.getByRole('button', { name: 'Add 2 notes to chat', exact: true }).click();
+  const second = await page.evaluate(() => (window as any).annotation);
+  expect(second.mark.notes.map((note: any) => [note.n, note.words]))
+    .toEqual([[1, 'The header is too tight'], [2, 'This total is misaligned']]);
+  expect(second.text).toMatch(/1\. “The header is too tight”[\s\S]*2\. “This total is misaligned”/);
+  await expect(ink).toBeHidden();
+
   // A long press in the app marks what it lands on and opens the note, with no
   // mode to enter first. A plain tap is left alone, so the app stays usable.
   await app.evaluate(() => { (window as any).taps = 0; document.body.addEventListener('click', () => { (window as any).taps++; }); });

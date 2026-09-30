@@ -89,6 +89,9 @@ export interface AppPin {
   name: string; view: string; path: string;
   /** What the person wrote or said. Their words, shown as text. */
   words: string;
+  /** Which note it was, when a message carried several. The picture wears the
+   * same number, so a note and the thing it is about stay paired. */
+  number?: number;
   at: number;
   /** The marked-up picture, as an end-to-end encrypted attachment. */
   shot?: ReviewShot;
@@ -116,6 +119,7 @@ export function isAppPin(value: unknown): value is AppPin {
   return typeof pin.id === "string" && typeof pin.sessionId === "string" && typeof pin.appId === "string" && /^[a-f0-9]{32}$/.test(pin.appId)
     && typeof pin.viewId === "string" && typeof pin.name === "string" && typeof pin.view === "string" && typeof pin.path === "string"
     && typeof pin.words === "string" && typeof pin.at === "number"
+    && (pin.number === undefined || (Number.isInteger(pin.number) && pin.number >= 1))
     && Array.isArray(pin.selectors) && pin.selectors.every((s) => typeof s === "string")
     && box(pin.region, ["x", "y", "width", "height"]) && box(pin.viewport, ["width", "height"])
     && APP_PIN_STATES.includes(pin.state as AppPinState)

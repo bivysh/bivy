@@ -55,7 +55,8 @@ test("marks sent to the agent become a pin, which a later run answers from evide
     const mark = async (selectors: string[]) => {
       await service.annotate("s", { appId: app.id, viewId: view.id, viewport: { width: 390, height: 200 }, selectors,
         strokes: [{ tool: "box", points: [[10, 10], [70, 30]] }] });
-      return service.pin("s", { appId: app.id, viewId: view.id, words: "This button is too small" });
+      const { pins: made } = service.pin("s", { appId: app.id, viewId: view.id, words: "This button is too small" });
+      return { pin: made[0]! };
     };
     const edit = (html: string, shot: Buffer) => {
       fs.writeFileSync(path.join(dir, "dist/index.html"), html);
@@ -100,5 +101,27 @@ test("marks sent to the agent become a pin, which a later run answers from evide
     assert.equal(service.setPinState("s", pin.id, "done").pin.state, "done");
     assert.equal(service.setPinState("s", pin.id, "open").pin.state, "open");
     assert.throws(() => service.setPinState("s", "pin-missing", "done"), /no longer held/);
+
+    // Several marks in one message: each keeps its own words, its own crop and
+    // its own number, and each answers on its own evidence.
+    await service.annotate("s", { appId: app.id, viewId: view.id, viewport: { width: 390, height: 200 },
+      notes: [
+        { n: 1, words: "This button is too small", selectors: ["#buy"], strokes: [{ tool: "box", points: [[10, 10], [70, 30]] }] },
+        { n: 2, words: "The total is misaligned", selectors: ["#total"], strokes: [{ tool: "box", points: [[10, 150], [200, 180]] }] },
+      ] });
+    const { pins: pair } = service.pin("s", { appId: app.id, viewId: view.id });
+    assert.deepEqual(pair.map((item) => [item.number, item.words, item.selectors]), [
+      [1, "This button is too small", ["#buy"]],
+      [2, "The total is misaligned", ["#total"]],
+    ]);
+    assert.notDeepEqual(pair[0]!.region, pair[1]!.region);
+    missing = [];
+    service.runStarted("s"); await settle();
+    // A change under note 2 only: note 1 has not been answered.
+    edit("<h1>v4</h1>", page(152, 172));
+    await service.runEnded("s");
+    const latest = (id: string) => published.filter((item) => item.id === id).at(-1)!.state;
+    assert.equal(latest(pair[0]!.id), "open");
+    assert.equal(latest(pair[1]!.id), "changed");
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Several notes in one message.** **Mark another** keeps the words you just wrote and hands the marking layer back, so "the button is too small" and "the total is misaligned" stay separate thoughts. Each mark keeps its number on the page and in the picture, and each becomes its own pin — so they are answered one at a time instead of as a lump.
 - **Pins.** Marks you send from a preview now stay in the chat as a card with a state, instead of vanishing into a paragraph of selectors and coordinates. A pin holds a crop of what you marked and the words you sent, and answers itself: **Changed** when a later run changed the pixels you marked, **Element gone** when what you marked left the page, **Done** when you say so. Only evidence moves a pin — a run that changes nothing there leaves it open.
 
 ### Changed

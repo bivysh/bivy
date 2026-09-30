@@ -168,7 +168,9 @@ its latest card's pictures: an older card shows "Screenshot no longer stored".
 ### Pins
 
 Marks sent from a preview become a **pin**: a card in the chat holding the crop
-of what was marked, the words that were sent with it, and a state. The message
+of what was marked, the words that were sent with it, and a state. A message
+carrying several numbered notes makes one pin per note, each with its own crop,
+its own number and its own answer. The message
 they travelled in is unchanged — the agent still reads the words, the context
 and the full picture — but a message says nothing about itself afterwards, and a
 pin does.
@@ -679,7 +681,16 @@ top/bottom**, and **Hide controls**, which collapses the pill to a small
   and marks stay on the content. Done opens the note box: its context names the
   elements your marks cover (by their content, so circling "Total $102" names
   that line, not the whole row), the page and viewport, and each mark's bounds.
-  **Add to chat** puts your words and that context in the composer with a
+- **One mark, one note, one number.** **Mark another** keeps what you have
+  written and hands the layer back, so "the button is too small" and "the total
+  is misaligned" stay separate thoughts instead of one lump. Each saved mark
+  stays on the page wearing its number, **Undo** walks back through the current
+  mark's strokes and then through the notes before it, and the picture carries
+  the same numbers, so a note and the thing it is about stay paired. **Add N
+  notes to chat** sends them together, as one message and one picture — and each
+  note becomes a [pin](#pins) of its own, so they are answered one at a time. A
+  reviewer on a shared link sends one note at a time.
+- **Add to chat** puts your words and that context in the composer with a
   picture of what you marked, as an ordinary image attachment you can open or
   remove. A long press inside a field, or over text you are selecting, is left
   to the app — a long press already means something there. **Hide controls**
