@@ -167,6 +167,8 @@ import { createArtifactCommands } from "./controllers/artifact-commands.js";
 import { PresenceBook, deviceFrom, type DeviceRef, type DriveVia, type SessionPresence } from "./session/presence.js";
 import { buildAgentContext } from "./session/agent-context.js";
 import { AgentQuestions, askQuestionsFrom } from "./session/agent-questions.js";
+import { createSessionTokenCodec, isSessionToken, sessionTokenAllows } from "./session/session-tokens.js";
+import { setSessionTokenSigner } from "./runtime/session-env.js";
 import { MAX_NOTICE_TEXT, isAgentNotice, noticePush } from "./session/notices.js";
 import { createForkCommands } from "./controllers/fork-commands.js";
 import { createGithubCommands } from "./controllers/github-commands.js";
@@ -513,6 +515,9 @@ const sessionAllowRules = new SessionAllowRules();
 // `bivy audit --verify` can prove it — the basis of an attested Receipt (2A).
 const auditKey = loadOrCreateAuditKey(path.join(appDir, "audit"));
 const auditLog = createAuditLog(path.join(appDir, "audit"), { signer: auditKey.signer });
+// Agent sessions get a token for their own routes in their env (BIVY_SESSION_TOKEN).
+const sessionTokens = createSessionTokenCodec();
+setSessionTokenSigner(sessionTokens.sign);
 
 // Bivy owns the AskUserQuestion → question-card feature at the guardian layer,
 // runtime-agnostically (see src/question.ts). The manager holds every pending
@@ -9591,7 +9596,13 @@ app.post("/api/auth/bootstrap", sensitiveRateLimiter, (req, res) => {
 
 // All other /api routes require auth (loopback may bypass, per config and host
 // — see loopbackAllowed()/isMultiUserHost() in src/auth.ts).
-app.use("/api", authMiddleware(identity));
+app.use("/api", authMiddleware(identity, {
+  verify: sessionTokens.verify,
+  claims: isSessionToken,
+  allows: sessionTokenAllows,
+  // What an agent did through Bivy, per session (`bivy audit --session <id>`).
+  used: (sessionId, call) => { if (call.method !== "GET") auditLog.record({ kind: "agent.call", session: sessionId, tool: `${call.method} ${call.path}` }); },
+}));
 
 // Reload relay.json without forcing the user to restart the whole node. This is
 // used by `bivy relay:setup` after it enrolls the node.

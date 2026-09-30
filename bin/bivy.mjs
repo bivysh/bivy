@@ -511,7 +511,19 @@ function nativeAgentAuthDetected(choice) {
 }
 
 function url(config) {
-  return `http://localhost:${config.port}`;
+  // BIVY_NODE_URL: set by `bivy mcp-serve` for the CLI it runs, so tools reach
+  // the node that started the agent whatever data dir this process resolves.
+  const override = process.env.BIVY_NODE_URL?.trim().replace(/\/+$/, "");
+  return override || `http://localhost:${config.port}`;
+}
+
+// The credential for a request about `sessionId`: the agent's own session token
+// ($BIVY_SESSION_TOKEN) when it is that session, else a device token when this
+// user can mint one, else none (loopback on a single-user host needs none).
+async function sessionAuth(config, sessionId) {
+  const own = resolveAttachSessionId({ env: process.env });
+  if (process.env.BIVY_SESSION_TOKEN && sessionId && sessionId === own) return process.env.BIVY_SESSION_TOKEN;
+  try { return await localDeviceToken(config); } catch { return undefined; }
 }
 
 // The host the node will bind (mirrors src/server.ts). We probe on this same
@@ -2424,8 +2436,7 @@ async function cmdAttach(args = []) {
 // (loopback bypasses auth), but include one when available so multi-user
 // hosts work too.
 async function sessionPost(config, sessionId, action, body) {
-  let token;
-  try { token = await localDeviceToken(config); } catch { token = undefined; }
+  const token = await sessionAuth(config, sessionId);
   return fetch(`${url(config)}/api/session/${encodeURIComponent(sessionId)}/${action}`, {
     method: "POST",
     headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
@@ -2437,7 +2448,7 @@ async function sessionPost(config, sessionId, action, body) {
 function sessionHttpError(what, status, body) {
   const message = `${what} failed (${status}): ${body?.error || "unknown error"}`;
   if (status === 404) return { code: "session_not_found", message, hint: "The session must be open on this node.", next: "bivy context", exit: EXIT.notFound };
-  if (status === 401 || status === 403) return { code: "denied", message, exit: EXIT.denied };
+  if (status === 401 || status === 403) return { code: "denied", message, hint: "A session's token only reaches that session; run it from the session's own shell, or from a terminal signed in to this node.", exit: EXIT.denied };
   if (status === 400) return { code: "invalid", message, exit: EXIT.usage };
   return { code: "failed", message, exit: EXIT.failed };
 }
@@ -2472,8 +2483,7 @@ async function cmdContext(args = []) {
   let node = { session: null };
   if (sessionId) {
     const config = loadConfig();
-    let token;
-    try { token = await localDeviceToken(config); } catch { token = undefined; }
+    const token = await sessionAuth(config, sessionId);
     try {
       const res = await fetch(`${url(config)}/api/session/${encodeURIComponent(sessionId)}/context`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
       const body = await res.json().catch(() => ({}));
@@ -2631,8 +2641,7 @@ answer later and 'bivy ask status <id>' checks without waiting.
   if (!Number.isFinite(timeout) || timeout < 1) return fail({ code: "usage", message: "--timeout takes seconds or a duration like 90s, 10m or 2h.", exit: EXIT.usage });
   const config = loadConfig();
   if (!(await ensureNodeRunning(config))) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable });
-  let token;
-  try { token = await localDeviceToken(config); } catch { token = undefined; }
+  const token = await sessionAuth(config, sessionId);
   const base = `${url(config)}/api/session/${encodeURIComponent(sessionId)}/ask`;
   const call = async (suffix, body) => {
     const res = await fetch(`${base}${suffix}`, {
@@ -2686,11 +2695,10 @@ answer later and 'bivy ask status <id>' checks without waiting.
 
 // One JSON request to the local node for the commands below: starts the node if
 // needed and returns { status, body }, or fails in the shared error shape.
-async function nodeRequest(method, pathname, body, { json = false } = {}) {
+async function nodeRequest(method, pathname, body, { json = false, sessionId } = {}) {
   const config = loadConfig();
   if (!(await ensureNodeRunning(config))) return cliError({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable }, { json, paint: c.red });
-  let token;
-  try { token = await localDeviceToken(config); } catch { token = undefined; }
+  const token = await sessionAuth(config, sessionId);
   const res = await fetch(`${url(config)}${pathname}`, {
     method,
     headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
@@ -2719,7 +2727,7 @@ async function cmdFork(args = []) {
   const modelArg = parsed.one("--model");
   const slash = modelArg?.indexOf("/") ?? -1;
   const model = modelArg ? (slash > 0 ? { provider: modelArg.slice(0, slash), id: modelArg.slice(slash + 1) } : { provider: "", id: modelArg }) : undefined;
-  const { status, body } = await nodeRequest("POST", "/api/session/fork", { sessionId, ...(model ? { model } : {}) }, { json });
+  const { status, body } = await nodeRequest("POST", "/api/session/fork", { sessionId, ...(model ? { model } : {}) }, { json, sessionId });
   if (status === 404) return fail({ code: "node_outdated", message: "This node is older than 'bivy fork'.", next: "bivy update", exit: EXIT.unavailable });
   if (status >= 400 || body.error) return fail({ code: /not found/i.test(body.error ?? "") ? "session_not_found" : "failed", message: `Fork failed: ${body.error || `HTTP ${status}`}`, exit: /not found/i.test(body.error ?? "") ? EXIT.notFound : EXIT.failed });
   if (json) { console.log(JSON.stringify({ sessionId: body.sessionId, fidelity: body.fidelity, ...(body.missing?.length ? { missing: body.missing } : {}) })); return; }
@@ -2854,8 +2862,7 @@ async function cmdDelegate(args = []) {
   if (!sessionId) { console.error(c.red("No session id. Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.")); process.exit(1); return; }
   const config = loadConfig();
   if (!(await ensureNodeRunning(config))) { console.error(c.red(`Could not reach the Bivy node at ${url(config)}.`)); process.exit(1); return; }
-  let token;
-  try { token = await localDeviceToken(config); } catch { token = undefined; }
+  const token = await sessionAuth(config, sessionId);
   const base = `${url(config)}/api/session/${encodeURIComponent(sessionId)}/delegated-runs`;
   const call = async (path, body) => {
     const res = await fetch(`${base}${path}`, {
@@ -3136,9 +3143,9 @@ async function appMenu(rest, { json = false } = {}) {
 async function appRequest(action, body, { print = true } = {}) {
   const config = loadConfig();
   if (!(await ensureNodeRunning(config))) throw new Error("Could not reach the Bivy node.");
-  const token = await localDeviceToken(config);
+  const token = await sessionAuth(config, body.sessionId);
   const response = await fetch(`${url(config)}/api/apps/${action}`, {
-    method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body),
+    method: "POST", headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), "content-type": "application/json" }, body: JSON.stringify(body),
   });
   const result = await response.json();
   if (!response.ok || result.error) throw new Error(result.error || `App command failed (${response.status}).`);

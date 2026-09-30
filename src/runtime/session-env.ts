@@ -19,8 +19,17 @@ import type { SessionInstructions } from "./types.js";
 // has no hook to inject this into its bash tool's env the same way — see the
 // comment on PiSession.interactiveTuiCommand and bin/attach-session-id.mjs for
 // how that gap is closed instead.
-export function bivySessionEnv(sessionId: string): { BIVY_SESSION_ID: string } {
-  return { BIVY_SESSION_ID: sessionId };
+//
+// With a signer registered (the daemon does at startup), the env also carries
+// BIVY_SESSION_TOKEN: a credential for that session's own routes only (see
+// src/session/session-tokens.ts), which the `bivy` CLI and MCP tools prefer.
+let signSessionToken: ((sessionId: string) => string) | undefined;
+export function setSessionTokenSigner(sign: ((sessionId: string) => string) | undefined): void {
+  signSessionToken = sign;
+}
+
+export function bivySessionEnv(sessionId: string): { BIVY_SESSION_ID: string; BIVY_SESSION_TOKEN?: string } {
+  return { BIVY_SESSION_ID: sessionId, ...(signSessionToken ? { BIVY_SESSION_TOKEN: signSessionToken(sessionId) } : {}) };
 }
 
 /**
