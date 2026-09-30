@@ -61,7 +61,8 @@ export const BIVY_AGENT_NOTE = [
     '`bivy delegate "<self-contained task>" --agent <id> [--machine <name>] --wait` runs it there and prints ' +
     "its answer and any branch/PR; `--to codex,grok@<machine>` asks several to compare, `bivy delegate machines` " +
     "lists machines and their agents. Use your own sub-agents for everything else.",
-  "- `bivy context` shows your session, workspace and published apps; `bivy help` lists every command (`--json` for all).",
+  "- `bivy context` shows your session, workspace and published apps; `bivy guide` has short playbooks; " +
+    "`bivy help` lists every command (`--json` for all).",
 ].join("\n");
 
 const PREAMBLE =

@@ -24,6 +24,7 @@ get shell completion. Agents in a session should start with `bivy context`.
 | Show the user a live preview of an app | `bivy app publish <manifest.json>`, then `bivy app present` |
 | Hand a task to another agent or machine | `bivy delegate "<task>" --agent <id> --wait` |
 | List every command as JSON | `bivy help --json` |
+| Read the playbooks for agents | `bivy guide` |
 | Propose a task the user can start in one tap | `bivy suggest "<task>"` |
 | Tell the user something when they're away | `bivy notify "<message>"` |
 | Ask the user a question and wait for the answer | `bivy ask "<question>" --option A --option B` |
@@ -134,6 +135,18 @@ subcommands, plus the exit codes above.
 bivy help
 bivy help app
 bivy help --json | jq '.commands[] | select(.scope == "session") | .usage'
+```
+
+### `bivy guide [topic] [--json]`
+
+Short playbooks for agents working in Bivy, one screen each: `show-the-user`,
+`talk-to-the-user`, `long-work`, `more-hands` and `automate`. Without a topic it
+lists them. They are markdown files in `bin/guides/`, and `bivy mcp-serve` also
+serves them as MCP resources (`bivy://guide/<topic>`).
+
+```bash
+bivy guide
+bivy guide talk-to-the-user
 ```
 
 ### `bivy version`
@@ -1232,8 +1245,23 @@ hand.
 ### `bivy mcp-serve`
 
 Bivy's own MCP server for agents (stdio), injected into the MCP configuration
-of agents that don't run through an SDK. It exposes `attach_to_chat` and serves
-the Bivy agent note as the MCP `instructions`. Not intended to be run by hand.
+of agents that don't run through an SDK. It serves the Bivy agent note as the
+MCP `instructions`, the guides as resources, and these tools:
+
+| Tool | Runs |
+| --- | --- |
+| `attach_to_chat` | `bivy attach` |
+| `bivy_context` | `bivy context` |
+| `notify_user` | `bivy notify` |
+| `ask_user` | `bivy ask` |
+| `suggest_task` | `bivy suggest` |
+| `app_publish`, `app_screenshot`, `app_present` | `bivy app publish`, `shot`, `present` |
+| `bivy_guide` | `bivy guide` |
+
+Apart from `attach_to_chat`, the tools are declared next to their commands in
+`bin/cli-commands.mjs` (listed by `bivy help --json`) and run as the command
+with `--json`, so a tool and its command behave the same. Delegation and Runs
+have no tool on purpose. Not intended to be run by hand.
 
 ## Notes on requirements
 

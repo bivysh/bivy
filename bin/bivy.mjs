@@ -43,7 +43,7 @@ import { findAvailablePort, reconcilePort } from "./port-picker.mjs";
 import { resolveAttachSessionId } from "./attach-session-id.mjs";
 import { detectInstallKind as classifyInstallKind, npmGlobalPrefix } from "./install-kind.mjs";
 import { hasConfiguredService as configuredServiceExists } from "./service-state.mjs";
-import { COMMANDS, EXIT, cliError, completionWords, describeCli, describeCommand, renderHelp, resolveCommand, subcommandTable, suggestCommands, wantsJson } from "./cli-commands.mjs";
+import { COMMANDS, EXIT, cliError, completionWords, describeCli, describeCommand, describeTools, renderHelp, resolveCommand, subcommandTable, suggestCommands, toolArgv, wantsJson } from "./cli-commands.mjs";
 
 const selfScript = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(selfScript);
@@ -5713,6 +5713,57 @@ function cmdHelp(args = []) {
   console.log(`Usage: ${row.usage}\n\n${row.summary}${row.aliases.length ? `\nAliases: ${row.aliases.join(", ")}` : ""}${row.subcommands.length ? `\nSubcommands: ${row.subcommands.join(", ")}` : ""}\n\nFull options: ${row.help}`);
 }
 
+// `bivy guide [topic]` — short playbooks for agents, one markdown file per
+// topic in bin/guides (a "# Title" line, then "Summary: …").
+function readGuides() {
+  const dir = path.join(__dirname, "guides");
+  return fs.readdirSync(dir).filter((file) => file.endsWith(".md")).sort().map((file) => {
+    const markdown = fs.readFileSync(path.join(dir, file), "utf8");
+    return {
+      topic: file.slice(0, -3),
+      title: markdown.match(/^# (.+)$/m)?.[1] ?? file,
+      summary: markdown.match(/^Summary: (.+)$/m)?.[1] ?? "",
+      markdown: markdown.replace(/^Summary: .+\n\n?/m, ""),
+    };
+  });
+}
+
+// `bivy tool <name> '<json>'` — how `bivy mcp-serve` runs a tool: map the input
+// to the command's words and run it with --json, so a tool and its command can't
+// behave differently.
+function cmdTool(args = []) {
+  const [name, raw = "{}"] = args;
+  const tool = describeTools().find((t) => t.name === name);
+  if (!tool) return cliError({ code: "unknown_tool", message: `No tool called "${name}".`, next: "bivy help --json", exit: EXIT.usage }, { json: true });
+  let input;
+  try { input = JSON.parse(raw); } catch { return cliError({ code: "usage", message: "Tool input must be a JSON object.", exit: EXIT.usage }, { json: true }); }
+  const result = spawnSync(process.execPath, [selfScript, ...toolArgv(tool.argv, input ?? {}), "--json"], { stdio: "inherit", env: process.env });
+  process.exit(result.status ?? EXIT.failed);
+}
+
+function cmdGuide(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy guide [topic] [--json]\n\nShort playbooks for agents working in Bivy. Without a topic, lists them.");
+    return;
+  }
+  const json = wantsJson(args);
+  const guides = readGuides();
+  const topic = args.find((a) => !a.startsWith("-"));
+  if (!topic) {
+    if (json) { console.log(JSON.stringify({ guides: guides.map(({ topic: t, title, summary }) => ({ topic: t, title, summary })) }, null, 2)); return; }
+    console.log(`${c.bold("Guides")}  (bivy guide <topic>)\n`);
+    for (const guide of guides) console.log(`  ${c.cyan(guide.topic.padEnd(18))} ${guide.summary}`);
+    return;
+  }
+  const guide = guides.find((g) => g.topic === topic);
+  if (!guide) {
+    cliError({ code: "unknown_guide", message: `No guide called "${topic}".`, hint: `Guides: ${guides.map((g) => g.topic).join(", ")}.`, next: "bivy guide", exit: EXIT.notFound }, { json, paint: c.red });
+    return;
+  }
+  if (json) { console.log(JSON.stringify({ topic: guide.topic, title: guide.title, markdown: guide.markdown }, null, 2)); return; }
+  console.log(guide.markdown.trimEnd());
+}
+
 async function main() {
   await hydrateCanonicalConfig();
   const argv = process.argv.slice(2);
@@ -6079,6 +6130,12 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       break;
     case "context":
       await cmdContext(args);
+      break;
+    case "guide":
+      cmdGuide(args);
+      break;
+    case "tool":
+      cmdTool(args);
       break;
     case "version":
       console.log(readSelfVersion());
