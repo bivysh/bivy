@@ -3128,8 +3128,9 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
 .suggestion-title { margin: 0; font-size: var(--text-base); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
 .suggestion-text { margin: 0; color: var(--muted); font-size: var(--text-sm); white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .suggestion-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
-.suggestion-all { display: flex; flex-direction: column; gap: var(--space-1); margin-top: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--line); }
-.suggestion-all .suggestion-actions { margin-top: 0; }
+.suggestion-bar, .suggestion-all { display: flex; flex-direction: column; gap: var(--space-1); margin-top: var(--space-2); }
+.suggestion-all { padding-top: var(--space-2); border-top: 1px solid var(--line); }
+.suggestion-bar .suggestion-actions, .suggestion-all .suggestion-actions { margin-top: 0; }
 .suggestion-hint { margin: 0; color: var(--muted); font-size: var(--text-xs); }
 /* In a set, the title is the checkbox's label, so the whole line is the tap target. */
 .suggestion-pick { display: flex; align-items: flex-start; gap: var(--space-2); cursor: pointer; }
