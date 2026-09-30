@@ -35,6 +35,9 @@ import { AppRegistry } from "./apps/registry.js";
 import { AppGateway } from "./apps/gateway.js";
 import { RemotePreview } from "./apps/remote-preview.js";
 import { AppService, type PinSink, type ReviewSink } from "./apps/service.js";
+import { scanListeners, scanMachineListeners } from "./apps/listeners.js";
+import type { AppOffer } from "./apps/types.js";
+import { AGENT_PROFILES } from "./agents/profiles.js";
 import { pngSize, reviewHint } from "./apps/review.js";
 import type { AppPin, AppReview, ReviewShot } from "./apps/types.js";
 import { createDisplayHost } from "./apps/display.js";
@@ -2412,6 +2415,10 @@ function createPinSink(): PinSink {
     },
   };
 }
+// An agent CLI's own server is not an app the user runs: OpenCode's ACP process
+// listens on :4096 in the workspace, and was offered as a preview in every session.
+const agentCommands = new Set(Object.values(AGENT_PROFILES).map((profile) => profile.command));
+const notAgentServers = (offers: AppOffer[]) => offers.filter((offer) => !agentCommands.has(offer.command.split(" ")[0]!));
 const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   start: async (spec) => {
     let failure = "Could not start the app terminal.";
@@ -2424,7 +2431,11 @@ const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   },
   has: (id) => terminals.has(id),
   close: (id) => { terminals.close(id); },
-}, { screenshots: { enabled: appScreenshotsEnabled }, displays: appDisplays, reviews: createReviewSink(), pins: createPinSink() });
+}, {
+  scan: async (workspace) => notAgentServers(await scanListeners(workspace)),
+  scanMachine: async (root) => notAgentServers(await scanMachineListeners(root)),
+  screenshots: { enabled: appScreenshotsEnabled }, displays: appDisplays, reviews: createReviewSink(), pins: createPinSink(),
+});
 // A reviewer's note shows up in an open Apps sheet without reopening it, and
 // the owner gets one push per burst of notes on a view ("2 notes on
 // Storefront"), which opens the Apps sheet at that app. Counts, names and IDs

@@ -160,6 +160,16 @@ function emitToolObserved(itemId, name, input) {
   bivy({ type: "tool.observe", toolCallId: itemId, name, input });
 }
 
+// `turn/plan/updated` (the update_plan tool) carries the whole plan with a
+// status per step. Forward it as a finished `plan` tool call, which clients
+// render as a checklist (@bivy/core plan.ts), the same as an ACP plan.
+let planSeq = 0;
+function emitPlan(plan, explanation) {
+  const toolCallId = `plan-${Date.now().toString(36)}-${++planSeq}`;
+  bivy({ type: "tool.observe", toolCallId, name: "plan", input: { plan, ...(explanation ? { explanation } : {}) } });
+  bivy({ type: "tool.result", toolCallId, name: "plan", result: "Plan updated" });
+}
+
 function emitReasoning(itemId, delta) {
   const body = text(delta);
   if (!body) return;
@@ -363,6 +373,9 @@ function onNotification(m) {
     }
     case "item/plan/delta":
       if (fromCurrentThread) emitReasoning(paramsItemId(params), params.delta);
+      return;
+    case "turn/plan/updated":
+      if (fromCurrentThread && Array.isArray(params?.plan)) emitPlan(params.plan, params.explanation);
       return;
     case "item/reasoning/summaryTextDelta":
     case "item/reasoning/textDelta":

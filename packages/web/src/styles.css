@@ -689,6 +689,22 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .tool-detail-value.output pre,
 .tool-detail-value.output code { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
 
+/* Agent plan: the work-line (progress) over a quiet checklist. */
+.plan-chevron { transition: transform var(--dur-fast) var(--ease-standard); }
+.plan-card .tool-group-line[aria-expanded="true"] .plan-chevron { transform: rotate(90deg); }
+.plan-steps { list-style: none; margin: 0 0 var(--space-1); padding: 0; display: grid; gap: var(--space-1); font-size: var(--text-sm); }
+.plan-step { display: flex; align-items: baseline; gap: var(--space-2); color: var(--ink); }
+.plan-mark {
+  flex: none; width: 14px; height: 14px; box-sizing: border-box; align-self: center; display: inline-flex; align-items: center; justify-content: center;
+  border: 1.5px solid var(--line-strong); border-radius: var(--radius-full); font-size: 9px; font-weight: 700; line-height: 1; color: var(--muted);
+}
+.plan-step.is-completed .plan-mark { border-color: var(--ok); background: var(--ok); color: var(--bg); }
+.plan-step.is-completed .plan-mark::before { content: "\2713"; }
+.plan-step.is-completed .plan-text { color: var(--muted); }
+.plan-step.is-in_progress .plan-mark { border-color: var(--accent); box-shadow: inset 0 0 0 2.5px var(--bg), inset 0 0 0 7px var(--accent); }
+.plan-step.is-in_progress .plan-text { font-weight: var(--weight-medium); }
+.plan-step.is-cancelled .plan-text { color: var(--muted); text-decoration: line-through; }
+
 .diff-viewer { max-width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-2); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; line-height: 1.45; }
 .diff-hunk + .diff-hunk { border-top: 1px solid var(--line); }
 .diff-hunk-title { position: sticky; top: 0; z-index: var(--z-base); display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px; color: var(--muted); background: var(--surface-3); border-bottom: 1px solid var(--line); font-family: inherit; font-size: 12px; font-weight: 700; }

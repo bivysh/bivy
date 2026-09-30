@@ -29,6 +29,7 @@ rl.on("line", (line) => {
     send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: "child-thread", turnId: "child-turn", itemId: "child-message", delta: "CHILD_PROSE_MUST_NOT_LEAK" } });
     send({ jsonrpc: "2.0", method: "item/reasoning/textDelta", params: { threadId: "child-thread", turnId: "child-turn", itemId: "child-reasoning", delta: "CHILD_REASONING_MUST_NOT_LEAK" } });
     send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: "thread-fixture", turnId: "turn-fixture", itemId: "parent-message", delta: "Parent answer." } });
+    send({ jsonrpc: "2.0", method: "turn/plan/updated", params: { threadId: "thread-fixture", turnId: "turn-fixture", explanation: null, plan: [{ step: "Inspect", status: "completed" }, { step: "Delegate", status: "inProgress" }] } });
     const collab = {
       type: "collabAgentToolCall", id: "collab-1", tool: "spawnAgent", status: "inProgress",
       senderThreadId: "thread-fixture", receiverThreadIds: ["child-thread"], agentsStates: {},

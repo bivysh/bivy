@@ -79,6 +79,17 @@ test("a transcript shows words and one line per tool call, once, without harness
   ]);
 });
 
+test("a turn's plan is one progress line, updated in place", () => {
+  const plan = (id: string, input: object) => ({ role: "assistant", content: [{ type: "tool_use", id, name: "todo_write", input }] });
+  const entries = transcriptEntries([
+    { role: "user", content: "Go" },
+    plan("p1", { todos: [{ content: "Read", status: "in_progress" }, { content: "Edit", status: "pending" }] }),
+    plan("p2", { merge: true, todos: [{ id: "1", status: "completed" }] }),
+    plan("p3", { todos: [{ content: "Read", status: "completed" }, { content: "Edit", status: "in_progress" }] }),
+  ]);
+  assert.deepEqual(entries.map((e: { text: string }) => e.text), ["Go", "plan · 1 of 2 done · Edit"]);
+});
+
 test("styled and wide text is measured, cut and wrapped by terminal cells", () => {
   assert.equal(width("\x1b[1mbivy\x1b[0m 日本"), 9);
   assert.equal(width(truncate("\x1b[32mhello world\x1b[0m", 6)), 6);

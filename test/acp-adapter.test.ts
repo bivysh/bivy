@@ -87,6 +87,30 @@ await check("acp: drives a stub ACP agent — streaming, governed tool call, res
   }
 });
 
+await check("acp: a plan update is a plan tool call, not reasoning", async () => {
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_PLAN = "1";
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: __dirname, piDir: __dirname, sessionsDir: __dirname });
+    const { session } = await runtime.createSession({ workspace: __dirname, toolInterceptor: async () => undefined });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    await session.prompt("plan it");
+    await waitFor(events, (event) => event.type === "agent_end");
+    const call = events.find((event) => event.type === "tool_call" && (event as any).toolName === "plan") as any;
+    assert.equal(call?.detail?.kind, "plan", "the plan reaches clients as a plan tool call");
+    assert.deepEqual(call.input.entries.map((e: { status: string }) => e.status), ["completed", "in_progress"], "with each entry's status");
+    const reasoning = events.filter((e) => e.type === "message_update").map((e) => JSON.stringify((e as any).message ?? "")).join("");
+    assert.doesNotMatch(reasoning, /Read the README/, "the plan is not folded into the reasoning text");
+    session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_PLAN;
+  }
+});
+
 await check("acp: observed tool activity never opens a misleading approval", async () => {
   process.env.BIVY_ACP_COMMAND = process.execPath;
   process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
