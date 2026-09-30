@@ -8,6 +8,7 @@ import { Sheet } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { MoreMenu } from "./MoreMenu.js";
 import { Toggle } from "./Toggle.js";
+import { AccessNudge } from "./AccessCard.js";
 import { CheckIcon, LinkIcon } from "./UiIcons.js";
 
 /** The last share options chosen on this device. */
@@ -79,6 +80,7 @@ export function AppAccess({ sessionId, appId, viewId, name, nodeId, address, dis
         { label: "Revoke all access…", danger: true, separated: true, disabled: busy || !online || disabled, onSelect: () => setConfirm(true) },
       ]} />}>
       <div className="apps-sheet">
+        <AccessNudge feature="sharing" />
         {sharing && <div className="banner" data-tone="accent">
           <span className="banner-text" role="status">Shared · {sharing.links === 1 ? "1 link" : `${sharing.links} links`} until {until(sharing.expiresAt)}</span>
           <span className="banner-actions"><button className="btn sm danger-ghost" disabled={busy || !online} onClick={() => setStopping(true)}>Stop sharing</button></span>

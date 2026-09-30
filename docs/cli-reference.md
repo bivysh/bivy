@@ -915,6 +915,21 @@ the relay to be configured.
 bivy link
 ```
 
+### `bivy access [local|tailscale|hosted|server <url>]`
+
+Shows how this machine can be reached (this machine only, Tailscale, Bivy
+hosted, or your own server), what that gives you, and the next step. With an
+argument it adds that setup, or with `local` turns remote access off. See
+[Remote access](remote-access.md#which-setup-you-have-and-the-next-step).
+
+```bash
+bivy access                          # where you are and what's next
+bivy access tailscale                # same as bivy tailscale
+bivy access hosted                   # same as bivy relay:setup
+bivy access server bivy.example.com  # your own server; relay at wss://bivy.example.com/relay
+bivy access --json
+```
+
 ### `bivy tailscale [on|pair|status|devices|revoke|off]`
 
 Serves this machine's Bivy on `https://<machine>.<tailnet>.ts.net` through

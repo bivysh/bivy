@@ -40,6 +40,7 @@ import { nativeResumeRef, resolveSessionsLimit, truncateSavedSessions } from "./
 import { renderManagedBlock, upsertManagedBlock, removeManagedBlock, rcFileForShell } from "./shim-path.mjs";
 import { removeInstallAndState } from "./uninstall-paths.mjs";
 import { findAvailablePort, reconcilePort } from "./port-picker.mjs";
+import { accessLine, accessScreen } from "./access-view.mjs";
 import { parseTailscaleStatus, serveConflict, serveFailureHint, serveOffArgs, serveOnArgs, serveState } from "./tailscale.mjs";
 import { resolveAttachSessionId } from "./attach-session-id.mjs";
 import { detectInstallKind as classifyInstallKind, managedInstall, npmGlobalPrefix } from "./install-kind.mjs";
@@ -4527,6 +4528,8 @@ async function cmdTokenSetup() {
 }
 
 async function cmdSetup(args = []) {
+  // Set by the access question; `bivy tailscale` runs once the node is up.
+  let wantTailscale = false;
   if (args.includes("-h") || args.includes("--help")) {
     console.log("Usage: bivy setup\n\nFirst-run wizard: agent choice, model login, remote access + sign-in, and background service. Workspace and port get safe defaults. Re-run later to change the default agent or remote access.");
     return;
@@ -4634,18 +4637,22 @@ async function cmdSetup(args = []) {
     // (BIVY_CONTROL_PLANE_URL / BIVY_RELAY_URL then pre-fill the URL prompts below).
     const nodeClaimCode = process.env.BIVY_NODE_CLAIM_CODE?.trim();
     const selfHostEnv = !nodeClaimCode && Boolean((process.env.BIVY_CONTROL_PLANE_URL || "").trim() || (process.env.BIVY_RELAY_URL || "").trim());
+    // Tailscale is offered only where it's installed; it needs no account.
+    const tailscaleInstalled = runTailscale(["version"]) !== null;
     const syncChoice = nodeClaimCode ? "h" : await askChoice(
-      "Remote access",
+      "How will you reach this machine?",
       [
-        { key: "h", label: "hosted (recommended — sign in with GitHub or email; nothing caps your local usage)" },
-        { key: "s", label: "self-hosted (your own control plane + relay)" },
-        { key: "l", label: "local only for now (terminal CLI only; run 'bivy relay:setup' later)" },
+        { key: "h", label: "Bivy hosted (recommended — sign in with GitHub or email; every machine, from anywhere)" },
+        ...(tailscaleInstalled ? [{ key: "t", label: "Tailscale (your devices over your tailnet; no account, nothing in between)" }] : []),
+        { key: "s", label: "your own server (a Bivy server you run)" },
+        { key: "l", label: "this machine only for now (add more any time with 'bivy access')" },
       ],
       selfHostEnv ? "s" : "h",
     );
+    wantTailscale = syncChoice === "t";
     const relayArgs = [];
-    if (syncChoice === "l") {
-      console.log(c.dim("\nSkipping remote access. Enable it any time with 'bivy relay:setup'."));
+    if (syncChoice === "l" || syncChoice === "t") {
+      console.log(c.dim(`\n${syncChoice === "t" ? "Tailscale is turned on once the node is running." : "Skipping remote access."} 'bivy access' shows every option later.`));
     }
     if (syncChoice === "s") {
       const endpoints = await getHostedEndpoints();
@@ -4655,7 +4662,7 @@ async function cmdSetup(args = []) {
       if (relayWs.trim()) relayArgs.push("--relay", relayWs.trim());
     }
 
-    if (syncChoice !== "l") {
+    if (syncChoice !== "l" && syncChoice !== "t") {
       if (!nodeClaimCode) {
         const loginChoice = await askChoice(
           "Remote login",
@@ -4704,7 +4711,7 @@ async function cmdSetup(args = []) {
       setupSession = consumeSetupSession();
     }
   } else {
-    console.log(c.dim("\nRemote access already configured. Re-run 'bivy relay:setup' to change sync or sign-in."));
+    console.log(c.dim("\nRemote access already configured. 'bivy access' shows it and the other options."));
   }
 
   // GitHub App — connect it from the web app (Settings → GitHub App) or with
@@ -4784,6 +4791,7 @@ async function cmdSetup(args = []) {
     ? Boolean(liveReadiness?.credential?.ok ?? hasModelConfig(finalConfig))
     : agentAuthReady;
   const repoReady = Boolean(liveReadiness?.repository?.ok);
+  if (wantTailscale) await cmdTailscale(["on"]).catch((error) => console.log(c.yellow(`Tailscale setup didn't finish: ${error?.message || error}. Run 'bivy access tailscale' to retry.`)));
   console.log(c.bold(c.green("\n  ✓ Node running. Check first-task readiness below.\n")));
   console.log(`  ${c.green("✓")} node reachable at ${url(finalConfig)}`);
   console.log(`  ${agentReady ? c.green("✓") : c.yellow("!")} runtime ${agentReady ? `${setupAgent?.label || "Pi"} available` : "not installed — run 'bivy agents:install'"}`);
@@ -4792,7 +4800,7 @@ async function cmdSetup(args = []) {
   const ghReady = githubConnected(finalConfig);
   console.log(`  ${ghReady ? c.green("✓") : c.dim("○")} GitHub ${ghReady ? "connected — your repos will list in the app" : c.dim("optional — connect later in the app under Settings → GitHub App")}`);
   console.log(`  ${agentReady && modelReady && repoReady ? c.green("✓") : c.yellow("!")} first task ${agentReady && modelReady && repoReady ? "ready to try" : "blocked by the stage above"}`);
-  console.log(`  ${fs.existsSync(relayConfigPath) ? c.green("✓") : c.yellow("!")} remote ${fs.existsSync(relayConfigPath) ? "configured" : "not configured — run 'bivy relay:setup'"}\n`);
+  console.log(`  ${fs.existsSync(relayConfigPath) || fs.existsSync(tailscaleConfigPath) ? c.green("✓") : c.dim("○")} access ${fs.existsSync(relayConfigPath) || fs.existsSync(tailscaleConfigPath) ? "set up — 'bivy access' shows what it gives you" : "this machine only — 'bivy access' shows the options"}\n`);
   // Get the user into the product immediately; terminal commands are the
   // fallback/next-step checklist after the remote app has been opened or linked.
   await finishSetupRemote(finalConfig, setupSession);
@@ -4979,8 +4987,10 @@ async function cmdStatus(args = []) {
   const relay = loadRelayConfig();
   const relaySt = status?.relay;
   const relayConfigured = Boolean(relaySt?.configured || relay);
+  const access = reachable ? await fetchAccess(config).catch(() => null) : null;
+  if (access) console.log(`  access:    ${accessLine(access)}`);
   if (!relayConfigured) {
-    console.log(`  remote:    ${c.dim("local only")}  ${c.dim("('bivy relay:setup' to enable remote access)")}`);
+    if (!access) console.log(`  remote:    ${c.dim("this machine only")}  ${c.dim("('bivy access' to see the options)")}`);
   } else {
     // The live link state is only knowable when the node is running; if it's
     // down we can say it's configured but not whether it's currently connected.
@@ -5175,7 +5185,7 @@ async function cmdDoctor(args = []) {
   const relayApp = status?.relay?.controlPlaneUrl;
   const relayErr = status?.relay?.lastError;
   const relayLine = !relayConfigured
-    ? c.dim("local only — 'bivy relay:setup' to enable")
+    ? c.dim("this machine only — 'bivy access' to see the options")
     : relayConnected
       ? c.green("relay connected") + (relayApp ? c.dim(`  ${relayApp}`) : "")
       : c.yellow("configured, not connected") + (relayErr ? c.dim(`  (${relayErr})`) : "");
@@ -5847,6 +5857,71 @@ async function cmdTailscale(args = []) {
   await printPairLink(config);
 }
 
+async function fetchAccess(config) {
+  return localApi(config, "/api/access/get", { method: "POST", body: "{}" });
+}
+
+// `bivy access` — how this machine can be reached (this machine only,
+// Tailscale, Bivy hosted, your own server), what that gives you, and the next
+// step. The node owns the table (src/access.ts); this only renders and routes.
+async function cmdAccess(args = []) {
+  const [verb, target] = args.filter((a) => !a.startsWith("-"));
+  if (args.includes("-h") || args.includes("--help") || (verb && !["local", "tailscale", "hosted", "server"].includes(verb))) {
+    console.log(`Usage: bivy access [--json]
+       bivy access tailscale              reach this machine from your devices over Tailscale
+       bivy access hosted                 sign in to Bivy hosted: every machine, from anywhere
+       bivy access server <url> [--relay <wss-url>]   the same, through your own server
+       bivy access local                  turn remote access off
+
+Setups stack: Tailscale can stay on alongside hosted or your own server.`);
+    if (verb && !["local", "tailscale", "hosted", "server"].includes(verb)) process.exitCode = EXIT.usage;
+    return;
+  }
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) {
+    console.error(c.red(`Could not start the Bivy node at ${url(config)}.`));
+    process.exitCode = EXIT.unavailable;
+    return;
+  }
+  const report = await fetchAccess(config);
+
+  if (!verb) {
+    if (wantsJson(args)) { console.log(JSON.stringify(report, null, 2)); return; }
+    console.log(`\n${accessScreen(report, c).join("\n")}\n`);
+    return;
+  }
+  if (verb === "tailscale") return cmdTailscale(["on"]);
+  if (verb === "hosted" || verb === "server") {
+    const linked = report.setups.find((s) => s.active && (s.id === "hosted" || s.id === "server"));
+    if (linked && linked.id === verb && verb === "hosted") {
+      console.log(`Already on ${linked.label}${report.controlPlaneUrl ? ` (${report.controlPlaneUrl})` : ""}.`);
+      return;
+    }
+    if (linked) console.log(c.yellow(`This machine is on ${linked.label}${report.controlPlaneUrl ? ` (${report.controlPlaneUrl})` : ""}. Switching keeps everything on this machine; your devices sign in again at the new address.`));
+    if (verb === "hosted") return cmdRelaySetup([]);
+    if (!target) {
+      console.log(`Usage: bivy access server <url> [--relay <wss-url>]\n\nThe address of your Bivy server, e.g. https://bivy.example.com. Set one up with docs/self-host-quickstart.md.`);
+      process.exitCode = EXIT.usage;
+      return;
+    }
+    let appUrl;
+    try { appUrl = new URL(/^https?:\/\//.test(target) ? target : `https://${target}`); } catch { appUrl = null; }
+    if (!appUrl) { console.error(c.red(`Not a URL: ${target}`)); process.exitCode = EXIT.usage; return; }
+    // Bivy's server installs serve the relay at /relay on the app's own domain.
+    const relayUrl = argValue(args, "relay") || `${appUrl.protocol === "http:" ? "ws" : "wss"}://${appUrl.host}/relay`;
+    return cmdRelaySetup(["--control-plane", appUrl.origin, "--relay", relayUrl]);
+  }
+  // local: turn off every remote setup that is on.
+  const on = report.setups.filter((s) => s.active && s.id !== "local");
+  if (!on.length) { console.log("Already this machine only."); return; }
+  const rl = createPrompter();
+  const yes = await rl.askYesNo(`Turn off ${on.map((s) => s.label).join(" and ")}? Sessions and credentials on this machine stay.`, false);
+  rl.close();
+  if (!yes) return;
+  if (on.some((s) => s.id === "tailscale")) await cmdTailscale(["off"]);
+  if (on.some((s) => s.id === "hosted" || s.id === "server")) await cmdAccountLogout([]);
+}
+
 function printUninstallHelp() {
   console.log(`
 ${c.bold("bivy uninstall")} — remove Bivy and all its data from this machine
@@ -6452,6 +6527,9 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       break;
     case "tailscale":
       await cmdTailscale(args);
+      break;
+    case "access":
+      await cmdAccess(args);
       break;
     case "relay:setup":
       await cmdRelaySetup(args);

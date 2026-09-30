@@ -360,7 +360,8 @@ export class DirectTransport implements Transport {
         case "apps.unshare":
         case "apps.revoke":
         case "apps.remove":
-        case "artifacts.list": {
+        case "artifacts.list":
+        case "access.get": {
           const requestId = String(obj.requestId ?? "");
           try {
             const result = await this.directApi(`/api/${obj.kind.replace(".", "/")}`, { method: "POST", body: JSON.stringify(obj) });
