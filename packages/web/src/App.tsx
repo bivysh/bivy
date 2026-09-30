@@ -25,6 +25,7 @@ import { SessionMenu } from "./components/SessionMenu.js";
 import { TuiLockedView } from "./components/TuiLockedView.js";
 import { GithubPill } from "./components/GithubPill.js";
 import { RunPill } from "./components/RunPill.js";
+import { AppsPill } from "./components/AppsPill.js";
 import { classifySource, indexSessionSources, isLiveRunSession, isRunLogSession } from "./sessionSource.js";
 import { runtimeSupportsTerminalTakeover } from "./terminalTakeover.js";
 import { indexRunEvidence, failingCheckNames } from "./runEvidence.js";
@@ -39,6 +40,7 @@ import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
 import { AppsSheet } from "./components/AppsSheet.js";
 import { ForkSheet } from "./components/ForkSheet.js";
 import { useSessionApps } from "./useSessionApps.js";
+import { useNewNotes } from "./notesSeen.js";
 import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
 import { Spinner } from "./components/Spinner.js";
@@ -178,6 +180,7 @@ export function App() {
   // previewed yet, so a dev server any agent starts shows on the run pill.
   const currentSession = state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId);
   const liveApps = useSessionApps(currentSession?.sessionId, currentSession ? statusClass(currentSession) === "working" : false);
+  const newNotes = useNewNotes(currentSession?.sessionId, liveApps.noteTimes);
   const [terminalOpen, setTerminalOpen] = useState(false);
   /** A live `bivy run` PTY selected from the sidebar; null means open the
    * ordinary shell terminal for the active chat/node. */
@@ -1177,9 +1180,6 @@ export function App() {
                   onOpenChanges={() => setChangesSheetOpen(true)}
                   artifactsCount={artifacts.length}
                   onOpenArtifacts={() => setArtifactsSheetOpen(true)}
-                  appsCount={liveApps.published ?? apps.length}
-                  serverPorts={liveApps.offers.map((offer) => offer.port)}
-                  onOpenApps={() => setAppsSheet({ sessionId: activeSession.sessionId })}
                   onOpenRun={(runId) => openRun(runId)}
                   onRecover={(kind) => {
                     // C2: recover a terminal run using existing capabilities. fix/retry
@@ -1202,6 +1202,14 @@ export function App() {
                 />
               ) : (
                 <GithubPill gh={state.activeSession.github} />
+              )}
+              {activeSession && (
+                <AppsPill
+                  apps={liveApps.published ?? apps.length}
+                  serverPorts={liveApps.offers.map((offer) => offer.port)}
+                  newNotes={newNotes}
+                  onOpen={() => setAppsSheet({ sessionId: activeSession.sessionId })}
+                />
               )}
             </div>
 

@@ -130,9 +130,6 @@ export function RunPill({
   onOpenChanges,
   artifactsCount,
   onOpenArtifacts,
-  appsCount,
-  serverPorts,
-  onOpenApps,
   onRecover,
   onOpenRun,
   anchorId,
@@ -172,16 +169,6 @@ export function RunPill({
   artifactsCount?: number;
   /** Open the Artifacts sheet. */
   onOpenArtifacts?: () => void;
-  /** Count of apps this session has published — from
-   *  deriveApps(state.activeSession.transcript), computed in App. Lets the
-   *  header reopen the Apps sheet after the inline launcher card scrolls away. */
-  appsCount?: number;
-  /** Ports of servers running in the session's workspace that aren't previewed
-   *  yet (the node's `apps.offers` scan). Shown on the pill so a dev server the
-   *  agent started is one tap from a preview. */
-  serverPorts?: number[];
-  /** Open the Apps sheet. */
-  onOpenApps?: () => void;
   /** Invoked when the user taps a recovery action on a terminal run (C2). The
    *  parent (App) maps each kind onto a real capability: fix → send a "fix the
    *  failing checks" prompt, retry → re-run the checks, fork → fork the session.
@@ -228,13 +215,6 @@ export function RunPill({
   const filesLabel = filesEdited && filesEdited > 0
     ? `${filesEdited} file${filesEdited === 1 ? "" : "s"} edited`
     : null;
-  const appsLabel = appsCount && appsCount > 0
-    ? `${appsCount} app${appsCount === 1 ? "" : "s"}`
-    : null;
-  const servers = serverPorts ?? [];
-  const serversLabel = servers.length === 1 ? `Server on :${servers[0]}`
-    : servers.length > 1 ? `${servers.length} servers running` : null;
-  const appsRowLabel = [appsLabel, serversLabel].filter(Boolean).join(" · ");
   const artifactsLabel = artifactsCount && artifactsCount > 0
     ? `${artifactsCount} artifact${artifactsCount === 1 ? "" : "s"}`
     : null;
@@ -245,7 +225,7 @@ export function RunPill({
         id={anchorId}
         className={`run-pill src-${source.kind} ${statusClass}`}
         onClick={() => setOpen(true)}
-        title={[source.label, statusLabel, filesLabel, appsLabel, serversLabel].filter(Boolean).join(" · ")}
+        title={[source.label, statusLabel, filesLabel].filter(Boolean).join(" · ")}
       >
         {/* A hand-opened session is the default, so only an automation trigger
             names itself here; the full source always heads the sheet. */}
@@ -253,8 +233,6 @@ export function RunPill({
         <span className="run-pill-stat"><StatusDot status={statusClass} />{statusLabel}</span>
         <PrBadge prs={gh.prs} />
         {filesLabel && <span className="run-pill-files">{filesLabel}</span>}
-        {appsLabel && <span className="run-pill-files">{appsLabel} published</span>}
-        {serversLabel && <span className="run-pill-files">{serversLabel}</span>}
       </button>
       {open && (
         <Sheet
@@ -369,18 +347,6 @@ export function RunPill({
                 <span className="run-sheet-changes-icon" aria-hidden>📎</span>
                 <span>{artifactsLabel}</span>
                 <span className="run-sheet-changes-hint">View artifacts</span>
-              </button>
-            )}
-
-            {appsRowLabel && onOpenApps && (
-              <button
-                type="button"
-                className="sheet-action run-sheet-changes"
-                onClick={() => dismiss(onOpenApps)}
-              >
-                <span className="run-sheet-changes-icon" aria-hidden>◆</span>
-                <span>{appsRowLabel}</span>
-                <span className="run-sheet-changes-hint">{serversLabel ? "Preview" : "Open apps"}</span>
               </button>
             )}
 

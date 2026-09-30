@@ -182,6 +182,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .badge[data-variant="solid"][data-tone="accent"] { background: var(--accent); }
 .badge[data-variant="solid"][data-tone="ok"] { background: var(--ok); }
 .badge[data-variant="solid"][data-tone="danger"] { background: var(--danger); color: var(--danger-contrast); }
+.badge[data-variant="solid"][data-tone="unseen"] { background: var(--unseen); color: var(--unseen-contrast); }
 
 /* ---- Status ---- */
 .status-dot {
@@ -898,6 +899,9 @@ button.sheet-action:last-child { border-bottom: 0; }
    and let them wrap on a narrow phone instead of squashing. */
 .composer-lead { gap: var(--space-2); flex-wrap: wrap; }
 .composer-gh:empty { display: none; }
+/* The Apps pill keeps to the band's right edge, apart from the run pill. */
+.apps-pill { flex: none; margin-left: auto; }
+.apps-pill > svg { flex: none; color: var(--muted); }
 .pill-gh { flex: none; }
 
 /* TUI single-writer lock: full session-window interstitial (see
