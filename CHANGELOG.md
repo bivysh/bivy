@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`bivy tailscale`** puts your machine's Bivy on `https://<machine>.<tailnet>.ts.net`, reachable from any device on your tailnet, with no account, control plane or relay. The node serves the web app itself. Pair a phone by opening the one-time link it prints; `bivy tailscale devices` and `bivy tailscale revoke <id>` manage who has access. See [Tailscale](docs/tailscale.md).
+
 ### Changed
 
 - **Suggested tasks: pick them, and the agent recommends where they run.** A suggestion can run here, through this session's sub-agents, or in new sessions. The agent passes `bivy suggest --run here|subagents|new` to pick the recommended action, which becomes the card's main button, and the other actions stay one tap away. Without it, a single card recommends *here* and several recommend *new sessions*. When an agent suggests several tasks, each card has a checkbox and the last card starts the selected ones together (e.g. **Run 3 as sub-agents**, **Do 3 here**). This replaces the ambiguous "Run all in parallel" button.

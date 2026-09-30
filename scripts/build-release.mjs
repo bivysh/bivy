@@ -5,7 +5,7 @@
  * Build the `bivy` release artifact.
  *
  * Compiles src/ to dist/, then stages a curated package directory containing
- * only what a packaged install needs: dist/, bin/, public/qr.js, package
+ * only what a packaged install needs: dist/, bin/, web/ (the built app), public/qr.js, package
  * metadata, README and LICENSE. It intentionally excludes src/, deploy/, the
  * hosted services, tests, and internal docs.
  *
@@ -22,6 +22,8 @@
  *   node scripts/build-release.mjs --pack <dir>
  *                                  stage and write <dir>/bivy-latest.tar.gz +
  *                                  bivy-latest.json (self-hosted download channel)
+ *   node scripts/build-release.mjs --without-web
+ *                                  leave out the built web app (relay-only nodes)
  *   node scripts/build-release.mjs --npm-pack <dir>
  *                                  write <dir>/bivy-npm.tgz for consumer tests
  */
@@ -84,13 +86,20 @@ for (const [source, target] of [["packages/ui/tokens.css", "tokens.css"], ["pack
 // macOS desktop previews compile their helper from source on the Mac that runs them.
 fs.copyFileSync(path.join(root, "src/apps/macos-display.swift"), path.join(root, "dist/apps/macos-display.swift"));
 
-// The node is a pure data plane and no longer hosts the web UI, so the release
-// artifact ships no PWA bundle. The React/Vite app (@bivy/web) is built and
-// served independently by the control plane (see deploy/Dockerfile.control-plane
-// + services/control-plane). The CLI still needs public/qr.js at runtime for
-// `bivy link`/setup QR rendering, so that single file ships; the PWA-only images
-// under public/ are dropped.
+// The control plane serves the web app to relay-connected nodes, but a node
+// reached directly (`bivy tailscale`) has no control plane, so the release ships
+// the built app under web/ for the node's direct listener (src/web-app.ts), with
+// the root icons the app and its manifest reference. The CLI also needs
+// public/qr.js for `bivy link`/setup QR rendering.
+// Disposable runners are always relay-connected, so their image skips it (--without-web).
 fs.mkdirSync(app, { recursive: true });
+if (!argv.includes("--without-web")) {
+  run("pnpm", ["run", "build:web"]);
+  copy("packages/web/dist", "web");
+  for (const icon of ["apple-touch-icon.png", "icon-192.png", "icon-512.png", "icon.svg", "tent-logo.png"]) {
+    copy(`services/control-plane/public/${icon}`, `web/${icon}`);
+  }
+}
 for (const item of [
   ["bin", "bin"],
   ["dist", "dist"],

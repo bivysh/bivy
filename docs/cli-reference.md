@@ -875,6 +875,22 @@ the relay to be configured.
 bivy link
 ```
 
+### `bivy tailscale [on|pair|status|devices|revoke|off]`
+
+Serves this machine's Bivy on `https://<machine>.<tailnet>.ts.net` through
+`tailscale serve`, reachable only from your tailnet, with no control plane or
+relay in between. The node serves the web app itself on that address. Prints a
+one-time pairing link (and QR); each device opens one once to get its token.
+See [Tailscale](tailscale.md).
+
+```bash
+bivy tailscale            # turn it on and pair the first device
+bivy tailscale pair       # a pairing link for another device
+bivy tailscale devices    # who holds a token
+bivy tailscale revoke <id>
+bivy tailscale off
+```
+
 ### `bivy token`
 
 Mints and prints a device token for **this** node to stdout. Copy it to another
