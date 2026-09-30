@@ -29,6 +29,8 @@ function noStore(res: express.Response): void {
 export function webAppRouter(dirs: string[]): express.Router | null {
   const indexDir = dirs.find((dir) => fs.existsSync(path.join(dir, "index.html")));
   if (!indexDir) return null;
+  // Read once: the shell is served from memory, with no file access per request.
+  const indexHtml = fs.readFileSync(path.join(indexDir, "index.html"));
   const router = express.Router();
   router.get("/runtime-config.js", (_req, res) => {
     noStore(res);
@@ -48,9 +50,7 @@ export function webAppRouter(dirs: string[]): express.Router | null {
   router.get(/.*/, (req, res, next) => {
     if (NODE_ROUTES.some((prefix) => req.path === prefix || req.path.startsWith(`${prefix}/`)) || !req.accepts("html")) return next();
     noStore(res);
-    // Relative to `root`: installs live under ~/.bivy, and send() refuses an
-    // absolute path through a dot-directory.
-    res.sendFile("index.html", { root: indexDir });
+    res.type("html").send(indexHtml);
   });
   return router;
 }
