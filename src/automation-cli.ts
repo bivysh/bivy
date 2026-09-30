@@ -33,7 +33,8 @@ Commands:
   plan [path] [--json]        Show triggers, routing, and effective safety
   test [path] --event <file>  Simulate an event and explain the first match
   test-filter [path] --id <key> --event <json>  Execute a trusted filter locally
-  apply [path] [--prune]      Encrypt instructions and reconcile the control plane
+  apply [path] [--prune] [--dry-run]  Encrypt instructions and reconcile the control plane
+                              (inside an agent session: proposed to the user first)
 
 Run commands (normally invoked as 'bivy runs ...'):
   start <instructions>          Queue definition-free unattended work
@@ -465,6 +466,24 @@ async function main() {
     const pairing = PairingStore.load(appDir, relay.e2eKey);
     const current = await request<{ automations: Array<{ configKey?: string }> }>(relay, "/node/automation-config");
     const wanted = new Set(config.automations.map((a) => a.id));
+    // --dry-run: what apply would change, and nothing more. The node shows this
+    // on the approval card when an agent proposes automations.
+    if (args.includes("--dry-run")) {
+      const changes = [
+        ...config.automations.map((entry) => {
+          const safety = effectiveSafety(entry, file);
+          return {
+            id: entry.id, action: current.automations.some((a) => a.configKey === entry.id) ? "update" : "create", name: entry.name, enabled: entry.enabled, trigger: entry.trigger,
+            schedule: entry.schedule, workspace: entry.repo ?? (entry.repos?.length ? entry.repos.join(", ") : undefined),
+            agent: entry.routing.agent ?? "node default", sandbox: safety.sandbox, approval: safety.approval,
+          };
+        }),
+        ...(args.includes("--prune") ? current.automations.filter((a) => a.configKey && !wanted.has(a.configKey)).map((a) => ({ id: a.configKey!, action: "remove" })) : []),
+      ];
+      if (args.includes("--json")) console.log(JSON.stringify({ version: 1, changes }, null, 2));
+      else for (const change of changes) console.log(`${change.action === "create" ? "+" : change.action === "remove" ? "-" : "~"} ${change.id}`);
+      return;
+    }
     let created = 0, updated = 0, removed = 0;
     for (const [configOrder, entry] of config.automations.entries()) {
       const exists = current.automations.some((a) => a.configKey === entry.id);

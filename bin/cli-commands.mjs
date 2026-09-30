@@ -78,7 +78,11 @@ export const COMMANDS = [
 
   // Runs and automations
   { name: "runs", group: "runs", scope: "account", json: true, usage: 'runs <start|list|status|wait>', summary: "Unattended Runs with checks, evidence and a Receipt", subcommands: ["start", "list", "status", "wait"] },
-  { name: "automation", aliases: ["automations"], group: "runs", scope: "account", json: true, usage: "automation <list|trigger|init|validate|plan|test|apply>", summary: "Automations as code: validate, plan, apply, trigger", subcommands: ["list", "trigger", "init", "validate", "plan", "test", "test-filter", "apply"] },
+  { name: "automation", aliases: ["automations"], group: "runs", scope: "account", json: true, usage: "automation <list|trigger|init|validate|plan|test|apply>", summary: "Automations as code: validate, plan, apply, trigger", subcommands: ["list", "trigger", "init", "validate", "plan", "test", "test-filter", "apply", "proposal"],
+    tools: [
+      { name: "automation_plan", description: "Check an automations file (.bivy/automations.yaml) and show what each automation would do: trigger, routing, effective safety. Run it before automation_apply.", input: { path: { type: "string", description: "The automations file (default .bivy/automations.yaml)." } }, argv: ["automation", "plan", { arg: "path" }] },
+      { name: "automation_apply", description: "Propose applying an automations file to the user's account. They get an approval card listing each change; nothing is applied unless they approve. Returns the proposal: status applied, rejected, expired, failed, or pending (check later with bivy automation proposal <id> --wait).", input: { path: { type: "string", description: "The automations file (default .bivy/automations.yaml)." }, prune: { type: "boolean", description: "Also remove automations this file no longer has." } }, argv: ["automation", "apply", { arg: "path" }, { when: "prune", flag: "--prune" }] },
+    ] },
 
   // This node
   { name: "setup", aliases: ["init"], group: "node", scope: "node", usage: "setup", summary: "First-run wizard: agent, model login, remote sign-in, background service" },

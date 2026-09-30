@@ -2826,6 +2826,60 @@ async function cmdInstructions(args = []) {
   fail({ code: "usage", message: usage, exit: EXIT.usage });
 }
 
+// `bivy automation apply` inside an agent session: the node shows the user what
+// would change as an approval card and applies it only once they approve, with
+// this machine's account credential. `proposal <id> [--wait]` follows one.
+async function cmdAutomationProposal(args = []) {
+  const usage = "Usage (in an agent session): bivy automation apply [path] [--prune] [--timeout 90] [--json]\n       bivy automation proposal <id> [--wait] [--timeout 90] [--json]";
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log(`${usage}\n\nInside an agent session, apply is a proposal: the user gets an approval card listing what would change, and the automations are applied only if they approve. Waits up to --timeout seconds (default 90) for the answer; if it hasn't come, prints the proposal id to check later with 'bivy automation proposal <id> --wait'. The card stays open for 30 minutes. Validate and plan first ('bivy automation validate', 'plan').`);
+    return;
+  }
+  const json = wantsJson(args);
+  const fail = (error) => cliError(error, { json, paint: c.red });
+  const parsed = parseSessionArgs(args, ["--timeout", "--session"]);
+  if (parsed.error) return fail({ code: "usage", message: parsed.error, exit: EXIT.usage });
+  const sessionId = resolveAttachSessionId({ sessionFlag: parsed.one("--session"), env: process.env });
+  if (!sessionId) return fail({ code: "no_session", message: "No session id.", next: "bivy sessions --json", exit: EXIT.usage });
+  const timeout = parsed.one("--timeout") === undefined ? 90 : durationSeconds(parsed.one("--timeout"));
+  if (!Number.isFinite(timeout) || timeout < 0) return fail({ code: "usage", message: "--timeout takes seconds or a duration like 90s or 10m.", exit: EXIT.usage });
+  const base = `/api/session/${encodeURIComponent(sessionId)}/automations/apply`;
+  const [action, target] = parsed.positional;
+  let proposal;
+  if (action === "proposal") {
+    if (!target) return fail({ code: "usage", message: usage, exit: EXIT.usage });
+    const { status, body } = await nodeRequest("GET", `${base}/${encodeURIComponent(target)}`, undefined, { json, sessionId });
+    if (status >= 400) return fail({ code: status === 404 ? "not_found" : "failed", message: body.error || `HTTP ${status}`, exit: status === 404 ? EXIT.notFound : EXIT.failed });
+    proposal = body;
+    if (!parsed.has("--wait")) { if (json) console.log(JSON.stringify(proposal)); else console.log(`Proposal ${proposal.id}: ${proposal.status}`); return; }
+  } else {
+    const file = path.resolve(process.cwd(), target ?? ".bivy/automations.yaml");
+    const { status, body } = await nodeRequest("POST", base, { file, prune: parsed.has("--prune") }, { json, sessionId });
+    if (status === 404 && !body.error?.includes("Session")) return fail({ code: "node_outdated", message: "This node is older than proposing automations from a session.", next: "bivy update", exit: EXIT.unavailable });
+    if (status >= 400) return fail(sessionHttpError("Proposing the automations", status, body));
+    proposal = body;
+    if (!json) {
+      console.error(`Asked the user to approve these changes (${proposal.file}):`);
+      for (const change of proposal.changes) console.error(`  ${change.action === "create" ? "+" : change.action === "remove" ? "-" : "~"} ${change.id}`);
+    }
+  }
+  const deadline = Date.now() + timeout * 1000;
+  while (proposal.status === "pending" && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const { status, body } = await nodeRequest("GET", `${base}/${encodeURIComponent(proposal.id)}`, undefined, { json, sessionId });
+    if (status < 400) proposal = body;
+  }
+  if (json) console.log(JSON.stringify(proposal));
+  if (proposal.status === "applied") { if (!json) console.log(proposal.output || "Applied."); return; }
+  if (proposal.status === "pending") {
+    if (!json) console.log(`The user hasn't answered yet. Check later with: bivy automation proposal ${proposal.id} --wait`);
+    process.exit(EXIT.timeout);
+  }
+  const message = { rejected: "The user declined these automation changes.", expired: "Nobody answered within 30 minutes; nothing was applied.", failed: `Approved, but applying failed: ${proposal.error || "unknown error"}` }[proposal.status] ?? proposal.status;
+  if (!json) console.error(message);
+  process.exit(proposal.status === "expired" ? EXIT.timeout : EXIT.failed);
+}
+
 // Cross-agent / cross-machine delegation (docs/agent-delegation.md): hand a
 // self-contained task from this session to another agent, optionally on another
 // account machine, and get its answer back. Agent-agnostic — any agent with a
@@ -6081,6 +6135,11 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       break;
     }
     case "automation": {
+      // An agent's apply is a proposal the user approves (see cmdAutomationProposal).
+      if ((args[0] === "apply" && !args.includes("--dry-run") && !process.env.BIVY_AUTOMATION_DIRECT && resolveAttachSessionId({ env: process.env })) || args[0] === "proposal") {
+        await cmdAutomationProposal(args);
+        break;
+      }
       if (!(await ensureDeps())) process.exit(1);
       process.exit(await run(nodeBin, [...nodeScriptArgs(automationEntry), ...args], { cwd: process.cwd(), env: process.env }));
       break;

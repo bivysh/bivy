@@ -662,7 +662,7 @@ the secret is stored in the encrypted vault (or, for a reference, only the point
 
 ## Automations as code
 
-### `bivy automation <list|trigger|init|validate|plan|test|apply>`
+### `bivy automation <list|trigger|init|validate|plan|test|apply|proposal>`
 
 Lists and manually triggers account automations, or defines automations in
 `.bivy/automations.yaml` and reconciles them to the enrolled control plane.
@@ -688,8 +688,34 @@ complete run record. `list`, `trigger`, and `apply` require an enrolled node.
 
 `apply` encrypts instructions for the applying node before upload. `--prune`
 removes only source-controlled definitions absent from the file, never
-app-created definitions. See [automations-as-code.md](automations-as-code.md) for
-the schema, fixture fields, and safety behavior.
+app-created definitions. `apply --dry-run` lists what would be created, updated
+or removed, and changes nothing. See [automations-as-code.md](automations-as-code.md)
+for the schema, fixture fields, and safety behavior.
+
+**From an agent session, `apply` is a proposal.** Inside a session
+(`$BIVY_SESSION_ID` set), `apply` hands the file to the node instead of applying
+it:
+
+1. The node checks the file, which must be inside the session workspace, and
+   works out the changes.
+2. The user gets an approval card and a push listing every change. They get it
+   even when the node's approval mode is "never ask".
+3. Only after they approve does the node apply the file, with the machine's own
+   account credential.
+
+The command waits up to `--timeout` seconds (default 90) for the answer:
+
+| Outcome | Exit |
+| --- | --- |
+| Approved and applied (prints apply's output) | 0 |
+| Declined | 1 |
+| Approved but applying failed | 1 |
+| No answer in time: prints the proposal id | 5 |
+
+Follow a proposal with `bivy automation proposal <id> [--wait]`. The card stays
+open for 30 minutes. `BIVY_AUTOMATION_DIRECT=1` applies directly, the way it
+works outside a session. That is for scripts you run yourself; the agent note
+doesn't mention it.
 
 ## Sessions
 
@@ -1309,6 +1335,7 @@ MCP `instructions`, the guides as resources, and these tools:
 | `ask_user` | `bivy ask` |
 | `suggest_task` | `bivy suggest` |
 | `app_publish`, `app_screenshot`, `app_present` | `bivy app publish`, `shot`, `present` |
+| `automation_plan`, `automation_apply` | `bivy automation plan`, `apply` (a proposal the user approves) |
 | `bivy_guide` | `bivy guide` |
 
 Apart from `attach_to_chat`, the tools are declared next to their commands in

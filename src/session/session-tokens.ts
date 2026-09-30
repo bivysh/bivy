@@ -59,6 +59,8 @@ export const SESSION_TOKEN_ROUTES: readonly { method: "GET" | "POST"; path: RegE
   { method: "POST", path: /^\/api\/session\/([^/]+)\/delegated-runs$/, session: "path" },
   { method: "GET", path: /^\/api\/session\/([^/]+)\/delegated-runs\/[^/]+$/, session: "path" },
   { method: "POST", path: /^\/api\/session\/([^/]+)\/delegated-runs\/[^/]+\/wait$/, session: "path" },
+  { method: "POST", path: /^\/api\/session\/([^/]+)\/automations\/apply$/, session: "path" },
+  { method: "GET", path: /^\/api\/session\/([^/]+)\/automations\/apply\/[^/]+$/, session: "path" },
   { method: "POST", path: /^\/api\/apps\/[a-zA-Z]+$/, session: "body" },
   { method: "POST", path: /^\/api\/session\/fork$/, session: "body" },
   { method: "GET", path: /^\/api\/machines$/, session: "none" },

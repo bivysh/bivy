@@ -35,4 +35,13 @@ describe("formatApproval", () => {
     const f = formatApproval({ tool: "bash", input: { command: "ls -la" } });
     expect(f.command).toBe("ls -la");
   });
+
+  it("shows every automation change an agent proposes, in full, and treats removals as permanent", () => {
+    const changes = Array.from({ length: 12 }, (_, i) => `Add automation-${i}: 0 2 * * * (UTC), node default, workspace-write, approvals risky`);
+    const f = formatApproval({ toolName: "apply_automations", input: { file: ".bivy/automations.yaml", changes } });
+    expect(f.title).toBe("Apply automations to your account?");
+    expect(f.severity).toBe("high");
+    expect(f.fields.find(([label]) => label === "Changes")?.[1]).toBe(changes.join("\n"));
+    expect(formatApproval({ toolName: "apply_automations", input: { changes: ["Remove nightly"] } }).severity).toBe("critical");
+  });
 });

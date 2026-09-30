@@ -167,6 +167,7 @@ import { createArtifactCommands } from "./controllers/artifact-commands.js";
 import { PresenceBook, deviceFrom, type DeviceRef, type DriveVia, type SessionPresence } from "./session/presence.js";
 import { buildAgentContext } from "./session/agent-context.js";
 import { AgentQuestions, askQuestionsFrom } from "./session/agent-questions.js";
+import { AutomationProposals, describeChange } from "./session/automation-proposals.js";
 import { createSessionTokenCodec, isSessionToken, sessionTokenAllows } from "./session/session-tokens.js";
 import { setSessionTokenSigner } from "./runtime/session-env.js";
 import { MAX_NOTICE_TEXT, isAgentNotice, noticePush } from "./session/notices.js";
@@ -530,6 +531,29 @@ setSessionTokenSigner(sessionTokens.sign);
 // them, and session.question(.resolved) is broadcast from its listeners.
 const questionManager = new QuestionManager();
 const agentQuestions = new AgentQuestions(questionManager);
+// `bivy automation apply` from an agent: shown to the user as an approval card,
+// applied with this machine's account credential only once they approve.
+const automationProposals = new AutomationProposals({
+  runCli: (args, cwd) => new Promise((resolve) => {
+    const cli = process.env.BIVY_NODE_CLI ?? path.join(repoRoot, "bin", "bivy.mjs");
+    const child = spawn(process.execPath, [cli, ...args], { cwd, env: { ...process.env, BIVY_DATA_DIR: appDir, BIVY_AUTOMATION_DIRECT: "1", NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+    child.on("error", (error) => resolve({ code: 1, stdout, stderr: error.message }));
+    child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
+  }),
+  requestApproval: async ({ id, sessionId, file, changes, prune }) => {
+    const approved = await approvals.request({
+      id, sessionId, toolName: "apply_automations", alwaysAsk: true, timeoutMs: 30 * 60_000,
+      toolInput: { file, prune, changes: changes.map(describeChange) },
+      reason: "Automations run on their own, on your machines, until you turn them off.",
+    });
+    if (approved) return "approved";
+    return approvals.list().find((request) => request.id === id)?.status === "expired" ? "expired" : "rejected";
+  },
+});
 questionManager.onRequest((request) => {
   scheduleAdvertise();
   broadcast({ type: "session.question", sessionId: request.sessionId, requestId: request.id, questions: request.questions, createdAt: request.createdAt });
@@ -9435,7 +9459,7 @@ approvals.onRequest((request: ApprovalRequest) => {
   persistApprovalRequest(request);
   recordApprovalRequestAudit(request);
   scheduleAdvertise();
-  if (approvalMode === "never") {
+  if (approvalMode === "never" && !request.alwaysAsk) {
     resolveApproval(request.id, true);
     broadcast({ type: "approval.resolved", id: request.id, approved: true });
     scheduleAdvertise();
@@ -9444,13 +9468,13 @@ approvals.onRequest((request: ApprovalRequest) => {
   broadcast({ type: "approval.created", approval: request });
   const rec = resolveSession(request.sessionId);
   if (rec) broadcastSessionState(rec);
-  if (!rec?.isWorking && !rec?.remoteActive) {
+  if (request.alwaysAsk || (!rec?.isWorking && !rec?.remoteActive)) {
     void sendNotificationHint({
       kind: "approval_requested",
       sessionId: request.sessionId,
       attentionId: request.id,
       title: "Approval needed",
-      body: `${sessionNotifyLabel(rec)} wants to run something — tap to approve or deny.`,
+      body: request.alwaysAsk ? `${sessionNotifyLabel(rec)} wants to change your automations — tap to review.` : `${sessionNotifyLabel(rec)} wants to run something — tap to approve or deny.`,
     });
   }
 });
@@ -11812,6 +11836,21 @@ app.post("/api/session/:id/ask/:askId/wait", async (req, res) => {
   const result = await agentQuestions.wait(String(req.params.id), String(req.params.askId), seconds * 1000);
   if (!result) return res.status(404).json({ error: "Question not found" });
   res.json(result);
+});
+
+// `bivy automation apply` inside a session: propose, and follow the proposal.
+app.post("/api/session/:id/automations/apply", async (req, res) => {
+  const record = openSessions.get(String(req.params.id));
+  if (!record) return res.status(404).json({ error: "Session not found" });
+  const file = typeof req.body?.file === "string" && req.body.file.trim() ? req.body.file.trim() : ".bivy/automations.yaml";
+  const result = await automationProposals.propose(record.id, harnessDirFor(record), file, req.body?.prune === true);
+  if ("error" in result) return res.status(400).json({ error: result.error });
+  res.status(201).json(result);
+});
+app.get("/api/session/:id/automations/apply/:proposalId", (req, res) => {
+  const proposal = automationProposals.get(String(req.params.id), String(req.params.proposalId));
+  if (!proposal) return res.status(404).json({ error: "Proposal not found" });
+  res.json(proposal);
 });
 
 // `bivy suggest "<task>"`: the agent proposes a task the user can start in one
