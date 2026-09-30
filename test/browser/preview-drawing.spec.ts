@@ -39,6 +39,10 @@ for (const theme of themes) test(`preview marking captures gestures (${theme})`,
   await openMenu();
   await checkTargets();
   await page.screenshot({ path: info.outputPath(`menu-${theme}.png`) });
+  // The control that opened it closes it.
+  await shell.getByRole('button', { name: /Preview options/ }).click();
+  await expect(shell.getByRole('menu')).toBeHidden();
+  await openMenu();
   await markControl.click();
   await expect(shell.getByRole('button', { name: 'Done', exact: true })).toBeDisabled();
   await expect(shell.getByRole('toolbar', { name: 'Marking tools' })).toBeFocused();

@@ -163,7 +163,7 @@ if(framed){
   // A long press already means something where the reader is typing or selecting.
   const theirs=el=>{
     for(let n=el;n&&n.nodeType===1;n=n.parentElement)if(/^(input|textarea|select)$/.test(n.localName)||n.isContentEditable)return true;
-    return !(getSelection?.()?.isCollapsed!==false);
+    return getSelection?.()?.isCollapsed===false;
   };
   const clear=()=>{clearTimeout(hold?.timer);hold=null;};
   /** A clear layer so nothing new reaches the app while a mark is being made.

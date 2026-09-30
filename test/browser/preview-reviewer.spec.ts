@@ -30,6 +30,8 @@ for (const theme of themes) test(`public preview sends annotations as notes with
   await openMenu();
   await expect(markControl).toBeEnabled();
   await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu')).toBeHidden();
+  await expect(page.getByRole('button', { name: /Preview options/ })).toBeFocused();
   // "Made with Bivy" sits under the app, and the floating tools stay clear of it.
   const badge = page.getByRole('link', { name: /Made with Bivy/ });
   await expect(badge).toHaveAttribute('href', 'https://bivy.sh/?ref=preview');

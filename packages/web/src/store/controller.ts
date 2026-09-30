@@ -2465,10 +2465,6 @@ export class AppController {
   stagePin(pin: { sessionId: string; appId: string; viewId: string; context: string }): void {
     this.stagedPin = { ...pin, at: Date.now() };
   }
-  /** They dropped the draft instead of sending it: the marks were never said. */
-  dropStagedPin(): void {
-    this.stagedPin = null;
-  }
   /** They sent it: the marks become a pin, with the words they actually sent. */
   private async commitStagedPin(text: string): Promise<void> {
     const pin = this.stagedPin;

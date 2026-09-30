@@ -597,7 +597,7 @@ more.onclick=()=>openMenu(menu.hidden);
 menu.addEventListener('click',e=>{if(e.target.closest('.menu-item')){openMenu(false);more.focus();}});
 // A tap outside, or Escape, closes it. (The app is in a frame, so a tap there
 // never reaches this document: the menu also closes when the frame takes over.)
-addEventListener('pointerdown',e=>{if(!menu.hidden&&!menu.contains(e.target)&&e.target!==more)openMenu(false);},true);
+addEventListener('pointerdown',e=>{if(!menu.hidden&&!menu.contains(e.target)&&!more.contains(e.target))openMenu(false);},true);
 // Focus moving into the app's frame (or away from the preview) closes it too:
 // a tap inside the frame never reaches this document.
 addEventListener('blur',()=>openMenu(false));
@@ -652,7 +652,7 @@ ask.onclick=()=>toChat('The app preview "'+metadata.name+'" isn’t loading: not
 addEventListener('keydown',e=>{
   // C marks something, for anyone not holding a finger on a phone.
   if((e.key==='c'||e.key==='C')&&!e.metaKey&&!e.ctrlKey&&!e.altKey&&!/^(input|textarea|select)$/i.test(e.target?.localName||'')&&!markBtn.disabled&&!draw){e.preventDefault();startDraw('frame');return;}
-  if(e.key==='Escape'){if(listening)cancelListening();else if(!$('draft').hidden)$('draft-cancel').click();else if(draw&&!draw.done)endDraw();else panels(null);}});
+  if(e.key==='Escape'){if(!menu.hidden){openMenu(false);more.focus();}else if(listening)cancelListening();else if(!$('draft').hidden)$('draft-cancel').click();else if(draw&&!draw.done)endDraw();else panels(null);}});
 back.onclick=()=>{if(metadata?.returnTo){window.close();setTimeout(()=>location.replace(metadata.returnTo),100);}else{window.close();status.hidden=false;status.textContent='You can close this tab to return to Bivy.';}};
 // A reload fetches the newest bytes, so it settles any waiting version too.
 reload.onclick=()=>{if(!metadata)return;shown=latest;waiting(false);open(currentPath,'Reloading app…');};
