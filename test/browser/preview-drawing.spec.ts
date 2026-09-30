@@ -124,6 +124,8 @@ for (const theme of themes) test(`preview marking captures gestures (${theme})`,
   await expect(ink.locator('.pip-text')).toHaveText(['1', '2']);
   await page.screenshot({ path: info.outputPath(`notes-${theme}.png`) });
   await shell.getByRole('button', { name: 'Add 2 notes to chat', exact: true }).click();
+  // The message is handed over asynchronously, like the first one above.
+  await expect.poll(() => page.evaluate(() => (window as any).annotation?.mark.notes?.length)).toBe(2);
   const second = await page.evaluate(() => (window as any).annotation);
   expect(second.mark.notes.map((note: any) => [note.n, note.words]))
     .toEqual([[1, 'The header is too tight'], [2, 'This total is misaligned']]);

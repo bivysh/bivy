@@ -163,7 +163,7 @@ try {
   const bareCode = await new Promise<number | null>((resolve) => bare.on("exit", resolve));
   assert.equal(bareCode, 0, bareOutput);
   assert.match(bareOutput, /bivy — Bivy node CLI/);
-  assert.match(bareOutput, /bivy run claude/);
+  assert.match(bareOutput, /bivy run <agent>/);
   console.log("setup-isolated-smoke: interrupted fresh setup resumes and reaches the remote app without touching the host service");
 } finally {
   daemon.kill("SIGTERM");
