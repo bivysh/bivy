@@ -106,6 +106,35 @@ export function visualChange(before: Buffer, after: Buffer): number {
   return changed / (a.width * a.height);
 }
 
+/** Share of a pin's marked region that must differ between the page before a
+ * run and the page after it before the pin is called "changed". Higher than a
+ * whole-page threshold: a region is small, so a handful of antialiased pixels
+ * is a larger share of it, and calling a pin answered when it isn't is worse
+ * than leaving it open. */
+export const PIN_CHANGE = 0.01;
+
+/** Share of pixels that visibly differ inside one region (0–1). The region is
+ * in page CSS pixels; `scale` maps those to image pixels. Returns undefined
+ * when the region isn't inside both images — a page that grew or shrank says
+ * nothing about the marked spot. */
+export function regionChange(before: Buffer, after: Buffer, region: { x: number; y: number; width: number; height: number }, scale: number): number | undefined {
+  const a = decodePng(before), b = decodePng(after);
+  if (a.width !== b.width || a.height !== b.height) return undefined;
+  const left = Math.max(0, Math.floor(region.x * scale)), top = Math.max(0, Math.floor(region.y * scale));
+  const right = Math.min(a.width, Math.ceil((region.x + region.width) * scale)), bottom = Math.min(a.height, Math.ceil((region.y + region.height) * scale));
+  const pixels = (right - left) * (bottom - top);
+  if (pixels <= 0) return undefined;
+  let changed = 0;
+  for (let y = top; y < bottom; y++) {
+    for (let x = left; x < right; x++) {
+      const i = (y * a.width + x) * a.channels, j = (y * b.width + x) * b.channels;
+      const delta = Math.abs(a.pixels[i]! - b.pixels[j]!) + Math.abs(a.pixels[i + 1]! - b.pixels[j + 1]!) + Math.abs(a.pixels[i + 2]! - b.pixels[j + 2]!);
+      if (delta > 12) changed++;
+    }
+  }
+  return changed / pixels;
+}
+
 /** PNG dimensions, from the header. */
 export function pngSize(png: Buffer): { width: number; height: number } {
   return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };

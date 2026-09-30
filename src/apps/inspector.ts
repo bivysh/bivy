@@ -84,7 +84,10 @@ function startPointing(){
   document.documentElement.append(layer,box);
   addEventListener('keydown',key,true);
 }
-for(const type of ['pointerdown','keydown'])addEventListener(type,e=>{if(!layer&&!(host&&e.composedPath?.().includes(host)))interacted=true;},true);
+// "before" keeps the value this event changed, so a press that turns out to be
+// a mark (not use of the app) can put it back.
+let interactedBefore=false;
+for(const type of ['pointerdown','keydown'])addEventListener(type,e=>{if(!layer&&!(host&&e.composedPath?.().includes(host))){interactedBefore=interacted;interacted=true;}},true);
 // Draw (in the shell, over this page): where the page is, what state it holds
 // that a fresh browser on the machine wouldn't, and what's under each mark.
 const signals=()=>{
@@ -136,13 +139,86 @@ addEventListener('message',e=>{
   }
   else if(d.type==='bivy:draw')post(drawState());
   else if(d.type==='bivy:scroll'){scrollBy({left:n(d.dx),top:n(d.dy),behavior:'instant'});post({type:'scrolled',scroll:{x:Math.round(scrollX),y:Math.round(scrollY)}});}
+  // Where the reader was before they took a new version. The page may still be
+  // laying out (or fetching what makes it long enough), so try again briefly.
+  else if(d.type==='bivy:restore'){
+    const panels=Array.isArray(d.elementScrolls)?d.elementScrolls.slice(0,50):[];
+    const put=()=>{
+      scrollTo({left:n(d.scroll?.x),top:n(d.scroll?.y),behavior:'instant'});
+      for(const p of panels){try{document.querySelector(p.selector)?.scrollTo({left:n(p.x),top:n(p.y),behavior:'instant'});}catch{}}
+    };
+    for(const ms of [0,150,500])setTimeout(put,ms);
+  }
   else if(d.type==='bivy:marks'&&d.rect)post({type:'marked',id:n(d.id),elements:marked({x:n(d.rect.x),y:n(d.rect.y),width:n(d.rect.width),height:n(d.rect.height)})});
 });
-addEventListener('message',e=>{
-  if(!framed||e.origin!==SHELL||e.source!==parent||e.data?.type!=='bivy:point')return;
-  // Held: the layer goes when the finger lifts (see up).
-  if(e.data.on)startPointing();else if(!held)stop();
-});
+// Marking, started from inside the app: a long press on what's wrong. A tap is
+// left alone, so the app stays usable; so are presses on a field or on text the
+// reader is selecting, where a long press already means something to them.
+// Once it fires, the rest of the gesture is swallowed here — the shell's marking
+// layer cannot receive a gesture that began in this document — and its points
+// are streamed to the shell.
+if(framed){
+  let hold=null,armed=true;
+  const page=e=>[Math.round(e.clientX+scrollX),Math.round(e.clientY+scrollY)];
+  // A long press already means something where the reader is typing or selecting.
+  const theirs=el=>{
+    for(let n=el;n&&n.nodeType===1;n=n.parentElement)if(/^(input|textarea|select)$/.test(n.localName)||n.isContentEditable)return true;
+    return getSelection?.()?.isCollapsed===false;
+  };
+  const clear=()=>{clearTimeout(hold?.timer);hold=null;};
+  /** A clear layer so nothing new reaches the app while a mark is being made.
+   * It cannot take this gesture's events (the app's element already has them,
+   * which is what the swallowing below is for), but it stops everything else. */
+  const cover=()=>{
+    stop();
+    layer=document.createElement('div');
+    layer.setAttribute('aria-hidden','true');
+    Object.assign(layer.style,{position:'fixed',inset:0,zIndex:2147483646,cursor:'crosshair',background:'transparent',touchAction:'none',userSelect:'none',webkitUserSelect:'none',webkitTouchCallout:'none'});
+    layer.addEventListener('contextmenu',e=>e.preventDefault());
+    document.documentElement.append(layer);
+  };
+  const begin=()=>{
+    const start=hold;if(!start)return;
+    // The press was marking, not using the app: the picture is still faithful.
+    interacted=start.before;
+    hold={marking:true,id:start.id};
+    cover();
+    const el=under({clientX:start.client[0],clientY:start.client[1]});
+    const r=el&&el.getBoundingClientRect();
+    post(Object.assign(drawState(),{type:'mark-start',point:start.point,
+      element:el?{selector:selector(el),tag:el.localName,text:(el.innerText||el.getAttribute('aria-label')||el.getAttribute('alt')||'').trim().replace(/\\s+/g,' ').slice(0,120),
+        rect:{x:Math.round(r.left+scrollX),y:Math.round(r.top+scrollY),width:Math.round(r.width),height:Math.round(r.height)}}:undefined}));
+  };
+  addEventListener('pointerdown',e=>{
+    if(!armed||hold?.marking||layer||(host&&e.composedPath?.().includes(host))||!e.isPrimary||theirs(e.target))return;
+    clear();
+    hold={id:e.pointerId,client:[e.clientX,e.clientY],point:page(e),before:interactedBefore,timer:setTimeout(begin,450)};
+  },true);
+  addEventListener('pointermove',e=>{
+    if(!hold||e.pointerId!==hold.id)return;
+    if(hold.marking){post({type:'mark-move',point:page(e)});return;}
+    if(Math.hypot(e.clientX-hold.client[0],e.clientY-hold.client[1])>10)clear();
+  },true);
+  for(const type of ['pointerup','pointercancel'])addEventListener(type,e=>{
+    if(!hold||e.pointerId!==hold.id)return;
+    const marking=hold.marking;clear();
+    if(!marking)return;
+    stop();post({type:'mark-end'});
+  },true);
+  // Scrolling is never a mark, however still the finger was.
+  addEventListener('scroll',()=>{if(hold&&!hold.marking)clear();},true);
+  // Hiding Bivy's controls means "let me use the app": an app with its own
+  // long press (a canvas, a map) gets it back, and showing them arms it again.
+  addEventListener('message',e=>{
+    if(e.origin!==SHELL||e.source!==parent||e.data?.type!=='bivy:arm')return;
+    armed=e.data.on!==false;
+    if(!armed&&hold&&!hold.marking)clear();
+  });
+  // The app must not act on the gesture it already owns: no click on release,
+  // no scroll, no selection, no callout.
+  for(const type of ['click','auxclick','dblclick','contextmenu','mousedown','mouseup','touchstart','touchmove','touchend','selectstart'])
+    addEventListener(type,e=>{if(hold?.marking){e.preventDefault();e.stopPropagation();}},{capture:true,passive:false});
+}
 if(REVIEWER&&!framed){
   // A shadow root keeps the app's CSS off these controls (and ours off the app).
   host=document.createElement('bivy-review');

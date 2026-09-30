@@ -5,6 +5,7 @@ import { handoffSeedOf, looksLikeAuthFailure, stripAttachmentPlaceholders, toHtm
 import { Spinner } from "./Spinner.js";
 import { AppMessage } from "./AppMessage.js";
 import { ReviewCard } from "./ReviewCard.js";
+import { PinCard } from "./PinCard.js";
 import { SuggestionCard } from "./SuggestionCard.js";
 import { DelegationCard } from "./DelegationCard.js";
 import { ToolGroup } from "./ToolGroup.js";
@@ -504,13 +505,14 @@ const EntryView = memo(function EntryView({
   const hasAttachments = !!entry.attachments && entry.attachments.length > 0;
   const captionOnly = entry.attachments?.length === 1 && entry.attachments[0]?.description === entry.text;
   return (
-    <div className="assistant-row" id={hasAttachments || entry.app || entry.review || entry.suggestion || entry.delegation ? `msg-${entry.id}` : undefined}>
+    <div className="assistant-row" id={hasAttachments || entry.app || entry.review || entry.pin || entry.suggestion || entry.delegation ? `msg-${entry.id}` : undefined}>
       {entry.app && <AppMessage app={entry.app} />}
       {entry.review && <ReviewCard review={entry.review} />}
+      {entry.pin && <PinCard pin={entry.pin} />}
       {entry.suggestion && <SuggestionCard suggestion={entry.suggestion} />}
       {entry.delegation && <DelegationCard delegation={entry.delegation} />}
       {hasAttachments && <MessageAttachments attachments={entry.attachments!} />}
-      {((entry.text && !captionOnly) || (!hasAttachments && !entry.app && !entry.review && !entry.suggestion && !entry.delegation)) && (
+      {((entry.text && !captionOnly) || (!hasAttachments && !entry.app && !entry.review && !entry.pin && !entry.suggestion && !entry.delegation)) && (
         <div ref={bodyRef} className="msg assistant" dangerouslySetInnerHTML={{ __html: html }} />
       )}
       {entry.text && !captionOnly && (

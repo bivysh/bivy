@@ -7,7 +7,7 @@ import { toHtml } from "./markdown.js";
 import { eventKind, toolCallId, toolDetail, toolInput, toolName, toolParentId } from "./tool-activity.js";
 import { contentThinking, contentToText, toolEntriesFromContent, embeddedAttachments } from "./store-render.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
-import { isAppReference, isAppReview, type AppReference, type AppReview } from "./apps.js";
+import { isAppPin, isAppReference, isAppReview, type AppPin, type AppReference, type AppReview } from "./apps.js";
 import { isTaskSuggestion, type TaskSuggestion } from "./suggestions.js";
 import { isDelegationCard, type DelegationCard } from "./delegations.js";
 
@@ -21,6 +21,7 @@ export interface TranscriptFoldTool {
 export interface TranscriptFoldEntry {
   app?: AppReference;
   review?: AppReview;
+  pin?: AppPin;
   suggestion?: TaskSuggestion;
   delegation?: DelegationCard;
   id: string; role: "user" | "assistant" | "system" | "thinking" | "error"; text: string;
@@ -217,6 +218,15 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
       // so the card stays with the agent's latest message.
       if (index >= 0 && review.expired) value.transcript[index] = entry;
       else { if (index >= 0) value.transcript.splice(index, 1); value.transcript.push(entry); }
+      break;
+    }
+    case "app_pin": {
+      const pin = (event as any).pin;
+      if (!isAppPin(pin)) break;
+      // A pin keeps the place it was made; only its state moves.
+      const index = value.transcript.findIndex((entry) => entry.pin?.id === pin.id);
+      const entry: TranscriptFoldEntry = { id: pin.id, role: "assistant", text: "", pin };
+      if (index >= 0) value.transcript[index] = entry; else value.transcript.push(entry);
       break;
     }
     case "attachment": {

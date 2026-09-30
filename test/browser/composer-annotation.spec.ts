@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test, themes, type WebApp } from "./fixtures.js";
 
-// A marked-up preview (Draw) or a shared screenshot reaches the composer as
+// A marked-up preview or a shared screenshot reaches the composer as
 // the user's own attachment: the same thumbnail chip, expandable and
 // removable, sent with the prompt like any image the user adds.
 let url: string;

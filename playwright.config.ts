@@ -11,6 +11,7 @@ const singleViewport = [
   "**/pwa-lifecycle.spec.ts",
   "**/library.spec.ts",
   "**/share-landing.spec.ts",
+  "**/preview-update.spec.ts",
 ];
 
 // Specs whose layout, touch targets or visual baselines differ on a phone.
@@ -29,6 +30,7 @@ const mobileSpecs = [
   "**/activity-history.spec.ts",
   "**/run-pill-apps.spec.ts",
   "**/review-card.spec.ts",
+  "**/pin-card.spec.ts",
   "**/notify-offer.spec.ts",
   "**/followup-new-session.spec.ts",
   "**/suggestion-card.spec.ts",
@@ -42,6 +44,7 @@ const mobileOnlySpecs = [
   "**/changes-card.spec.tsx",
   "**/run-pill-apps.spec.ts",
   "**/review-card.spec.ts",
+  "**/pin-card.spec.ts",
   "**/notify-offer.spec.ts",
 ];
 

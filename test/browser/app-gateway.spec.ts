@@ -15,11 +15,25 @@ import { WebSocket, WebSocketServer } from "ws";
 import { RemotePreview } from "../../src/apps/remote-preview.js";
 import { PreviewRelay } from "../../services/relay/src/preview.js";
 
-/** Taps an element while pointing. The layer that takes the tap arrives by
- * message; once it covers the page, the tap lands on it as a finger's would. */
-async function pointAt(app: Page | FrameLocator, target: Locator): Promise<void> {
-  await expect(app.locator('html > div[aria-hidden="true"]')).toHaveCount(2);
-  await target.click({ force: true });
+/** The marking gesture: press and hold what's wrong, then let go where it
+ * landed. The app's own layer swallows the rest of the press, and the shell
+ * shows the mark it made. */
+async function markAt(page: Page, shell: Page | FrameLocator, target: Locator): Promise<void> {
+  const box = (await target.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await expect(shell.locator("#ink")).toBeVisible();
+  await page.mouse.up();
+}
+/** Opens the pill's menu and chooses an item. (Items carry the menu roles that
+ * match what they do — menuitem, menuitemcheckbox, menuitemradio — so the
+ * helper locates them by the one class they share.) */
+function menuItem(shell: Page | FrameLocator, name: string): Locator {
+  return shell.locator("#menu .menu-item", { hasText: name });
+}
+async function fromMenu(shell: Page | FrameLocator, name: string): Promise<void> {
+  await shell.getByRole("button", { name: /Preview options/ }).click();
+  await menuItem(shell, name).click();
 }
 
 /** Bivy's real preview drawer (PreviewPeek) on a page of the web app, framing
@@ -114,13 +128,18 @@ for (const mode of ["direct", "automatic"]) test(`preview launch redeems its fra
     expect(await content.locator("body").evaluate(() => document.cookie)).not.toContain("bivy-preview");
     expect(await content.locator("body").evaluate(() => { try { parent.document.querySelector('nav')?.remove(); return true; } catch { return false; } })).toBe(false);
     await expect(page.getByRole("navigation", { name: "Bivy preview controls" })).toBeVisible();
-    await page.getByRole("button", { name: "Reload", exact: true }).click();
+    await fromMenu(page, "Reload");
     await expect(content.locator("output")).toHaveText("0");
-    // An agent turn that rebuilds the output reloads the open preview.
+    // An agent turn that rebuilds the output waits for the reader instead of
+    // reloading under them: the counter they were using is still theirs.
+    await content.getByRole("button", { name: "Increment" }).click();
     await fs.writeFile(path.join(dir, "index.html"), '<!doctype html><html lang="en"><title>Generated app</title><h1>Rebuilt by the agent</h1></html>');
     registry.touch("s");
+    await expect(page.getByText("New version ready")).toBeVisible();
+    await expect(content.locator("output")).toHaveText("1");
+    await page.getByRole("button", { name: "Show new version" }).click();
     await expect(content.getByRole("heading", { name: "Rebuilt by the agent" })).toBeVisible();
-    await expect(page.getByText("Updated after the agent’s turn")).toBeVisible();
+    await expect(page.getByText("New version ready")).toBeHidden();
     await page.screenshot({ path: testInfo.outputPath("open-app-with-header.png"), fullPage: true });
     const light = await page.getByRole("navigation").evaluate((element) => getComputedStyle(element).backgroundColor);
     await page.emulateMedia({ colorScheme: "dark" });
@@ -210,60 +229,64 @@ test("inspector reports console errors and pointed elements to the pill", async 
     await page.goto(gateway.open(id, "https://bivy.example/sessions/s"));
     const content = page.frameLocator('iframe[title="Ledger"]');
     await expect(content.getByRole("heading", { name: "Ledger" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Console, 1 error" })).toBeVisible();
-    await page.getByRole("button", { name: "Console, 1 error" }).click();
+    // The count is on the pill, so it is visible without opening anything.
+    await expect(page.getByRole("button", { name: "Preview options, 1 error" })).toBeVisible();
+    await fromMenu(page, "Console");
     await expect(page.getByRole("region", { name: "Console" })).toContainText("Ledger failed to load totals");
     await page.screenshot({ path: testInfo.outputPath("pill-console.png") });
 
-    await page.getByRole("button", { name: "Point" }).click();
-    await expect(page.getByText("Tap anything in the app to point at it.")).toBeVisible();
-    await pointAt(content, content.getByRole("button", { name: "Add transaction" }));
+    // Press and hold what's wrong: no mode to enter, and the press never
+    // reaches the app.
+    await markAt(page, page, content.getByRole("button", { name: "Add transaction" }));
     const draftBox = page.getByRole("textbox", { name: "What should change?" });
     await expect(draftBox).toBeFocused();
     // Under 16px, iOS zooms the shell on focus and it stays zoomed.
     await expect(draftBox).toHaveCSS("font-size", "16px");
     const context = await page.locator("#draft-context").textContent();
     expect(context).toContain('#save ("Add transaction")');
-    expect(context).toContain("Ledger failed to load totals");
     await page.screenshot({ path: testInfo.outputPath("pill-draft.png") });
-    // Pointing kept the tap from the app, whose own handler never ran; right
-    // after, the app takes taps again.
+    // The app takes taps again right after.
     await page.getByRole("button", { name: "Cancel" }).click();
     await content.getByRole("button", { name: "Add transaction" }).click();
 
-    await page.getByRole("radio", { name: "Phone" }).click();
+    await fromMenu(page, "Phone");
     await expect.poll(() => page.locator("iframe").evaluate((el) => el.getBoundingClientRect().width)).toBeLessThanOrEqual(391);
     await page.emulateMedia({ colorScheme: "dark" });
     await page.screenshot({ path: testInfo.outputPath("pill-lens-dark.png") });
 
     await page.setViewportSize({ width: 390, height: 844 });
-    // Controls collapse out of the app's way and come back.
-    await page.getByRole("button", { name: "Hide Bivy controls" }).click();
-    await expect(page.getByRole("navigation", { name: "Bivy preview controls" })).toBeHidden();
-    await page.getByRole("button", { name: "Show Bivy controls" }).click();
-    await expect(page.getByRole("radiogroup", { name: "Preview width" })).toBeHidden();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    // One row on a phone, and dragging the grip moves it to the top edge, for next time too.
     const nav = page.getByRole("navigation", { name: "Bivy preview controls" });
-    expect((await nav.boundingBox())!.height).toBeLessThan(72);
-    const grip = (await page.getByRole("button", { name: "Hide Bivy controls" }).boundingBox())!;
-    await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+    // Controls collapse out of the app's way and come back — and out of the way
+    // includes the gesture, so an app with its own long press gets it back.
+    await fromMenu(page, "Hide controls");
+    await expect(nav).toBeHidden();
+    const save = (await content.getByRole("button", { name: "Add transaction" }).boundingBox())!;
+    await page.mouse.move(save.x + save.width / 2, save.y + save.height / 2);
     await page.mouse.down();
-    await page.mouse.move(grip.x + grip.width / 2, 100, { steps: 8 });
+    await page.waitForTimeout(700);
     await page.mouse.up();
+    await expect(page.locator("#ink")).toBeHidden();
+    await page.getByRole("button", { name: "Show Bivy controls" }).click();
+    // A phone is already the width it is, so the choice isn't offered there.
+    await page.getByRole("button", { name: /Preview options/ }).click();
+    await expect(menuItem(page, "Phone")).toBeHidden();
+    await page.keyboard.press("Escape");
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    // One row on a phone, and it can move to the top edge, for next time too.
+    expect((await nav.boundingBox())!.height).toBeLessThan(72);
+    await fromMenu(page, "Move to top");
     await expect(nav).toBeVisible();
     await expect.poll(async () => (await nav.boundingBox())!.y).toBeLessThan(40);
     expect(await page.evaluate(() => localStorage.getItem("bivy-preview-edge"))).toBe("top");
     await page.screenshot({ path: testInfo.outputPath("pill-mobile-dark.png") });
-    await page.getByRole("button", { name: "Hide Bivy controls" }).press("ArrowDown");
+    await page.getByRole("button", { name: /Preview options/ }).press("ArrowDown");
     await expect.poll(async () => (await nav.boundingBox())!.y).toBeGreaterThan(700);
-    await page.getByRole("button", { name: "Point" }).click();
-    await pointAt(content, content.getByRole("heading", { name: "Ledger" }));
+    await markAt(page, page, content.getByRole("heading", { name: "Ledger" }));
     await expect(draftBox).toBeFocused();
     await page.keyboard.type("Make the title bigger");
     await page.getByRole("button", { name: "Add to chat" }).click();
     await expect(page).toHaveURL(/^https:\/\/bivy\.example\/share\?session=s&text=/);
-    expect(new URL(page.url()).searchParams.get("text")).toMatch(/^Make the title bigger[\s\S]*page \/saved/);
+    expect(new URL(page.url()).searchParams.get("text")).toMatch(/^In the app preview "Ledger" \(page \/saved[\s\S]*1\. “Make the title bigger”/);
   } finally { app.close(); app.closeAllConnections(); fixture.close(); }
 });
 
@@ -293,12 +316,11 @@ test("the preview works framed inside Bivy and hands drafts to it", async ({ pag
     // Cookies the app sets itself are partitioned too, so Safari keeps them.
     await expect.poll(async () => (await page.context().cookies()).find((c) => c.name === "theme")?.partitionKey).toBe("https://bivy.example");
     await page.screenshot({ path: testInfo.outputPath("peek-embedded.png") });
-    await shell.getByRole("button", { name: "Point" }).click();
-    await pointAt(app, app.getByRole("button", { name: "Add transaction" }));
+    await markAt(page, shell, app.getByRole("button", { name: "Add transaction" }));
     await expect(shell.getByRole("textbox", { name: "What should change?" })).toBeFocused();
     await page.keyboard.type("Use a plus icon");
     await shell.getByRole("button", { name: "Add to chat" }).click();
-    await expect.poll(() => page.evaluate(() => (window as any).drafts)).toEqual([expect.objectContaining({ type: "draft", text: expect.stringMatching(/^Use a plus icon\n\nIn the app preview "Ledger"/) })]);
+    await expect.poll(() => page.evaluate(() => (window as any).drafts)).toEqual([expect.objectContaining({ type: "annotation", text: expect.stringMatching(/^In the app preview "Ledger"[\s\S]*1\. “Use a plus icon”[\s\S]*- #save \("Add transaction"\)/), mark: expect.objectContaining({ selector: "#save", notes: [expect.objectContaining({ n: 1, words: "Use a plus icon", selectors: ["#save"] })] }) })]);
     await expect(page).toHaveURL("https://bivy.example/chat");
 
     // A browser that refuses the framed cookie is detected and reported, so
@@ -342,10 +364,11 @@ test("point and speak: hold the mic or long-press while pointing, and the words 
     const app = shell.frameLocator('iframe[title="Checkout"]');
     await expect(app.getByRole("heading", { name: "Your bag" })).toBeVisible();
 
-    // Point, then hold the mic in the draft box.
-    await shell.getByRole("button", { name: "Point" }).click();
-    await expect(shell.getByText("Hold to point and speak.")).toBeVisible();
-    await pointAt(app, app.getByRole("button", { name: "Pay now" }));
+    // Mark from the menu, then hold the mic in the note box.
+    await fromMenu(shell, "Mark something");
+    const pay = (await app.getByRole("button", { name: "Pay now" }).boundingBox())!;
+    await page.mouse.click(pay.x + pay.width / 2, pay.y + pay.height / 2);
+    await shell.getByRole("button", { name: "Done" }).click();
     const mic = shell.getByRole("button", { name: "Speak" });
     await mic.hover(); await page.mouse.down();
     await expect(page.getByRole("group", { name: "Voice recording" })).toBeVisible();
@@ -358,20 +381,21 @@ test("point and speak: hold the mic or long-press while pointing, and the words 
     await page.screenshot({ path: testInfo.outputPath("point-and-speak-draft.png") });
     expect((await page.evaluate(() => (window as any).transcribed))[0].bytes).toBeGreaterThan(0);
     await shell.getByRole("button", { name: "Add to chat" }).click();
-    await expect.poll(() => page.evaluate(() => (window as any).drafts)).toEqual([expect.stringMatching(/^give it more room above the home bar\n\nIn the app preview "Checkout" \(page \/[^)]*\):\nElement: #pay \("Pay now"\)/)]);
+    await expect.poll(() => page.evaluate(() => (window as any).drafts)).toEqual([expect.stringMatching(/^In the app preview "Checkout"[\s\S]*1\. “give it more room above the home bar”[\s\S]*- #pay \("Pay now"\)/)]);
 
-    // Long-press while pointing: the draft opens listening; letting go stops,
-    // and the press never reaches the app.
-    await shell.getByRole("button", { name: "Point" }).click();
-    await expect(app.locator('html > div[aria-hidden="true"]')).toHaveCount(2);
-    const pay = await app.getByRole("button", { name: "Pay now" }).boundingBox();
-    await page.mouse.move(pay!.x + pay!.width / 2, pay!.y + pay!.height / 2);
+    // A long press that lifts where it landed opens the note already listening
+    // — what holding to point and speak did — and never reaches the app.
+    await page.mouse.move(pay.x + pay.width / 2, pay.y + pay.height / 2);
     await page.mouse.down();
+    await expect(shell.locator("#ink")).toBeVisible();
+    await page.mouse.up();
+    // Listening starts when the finger lifts, not while it is held: on a phone
+    // the note and the keyboard arrive under the thumb that is still pressing.
     await expect(page.getByRole("group", { name: "Voice recording" })).toBeVisible();
     await page.waitForTimeout(400);
-    await page.mouse.up();
+    await shell.getByRole("button", { name: "Stop and add what you said" }).click();
     await expect(box).toHaveValue("give it more room above the home bar");
-    await expect(shell.locator("#draft-context")).toContainText("Element: #pay");
+    await expect(shell.locator("#draft-context")).toContainText('- #pay ("Pay now")');
     await expect(app.locator("#paid")).toHaveText("0");
     await expect(app.locator('html > div[aria-hidden="true"]')).toHaveCount(0);
   } finally { gateway.close(); await fs.rm(dir, { recursive: true, force: true }); }
@@ -413,14 +437,18 @@ test("draw on the preview: marks freeze the app, name what's under them, and rea
     const frame = shell.frameLocator('iframe[title="Checkout"]');
     await expect(frame.getByRole("heading", { name: "Your bag" })).toBeVisible();
 
-    await shell.getByRole("button", { name: "Draw" }).click();
-    await expect(shell.getByRole("toolbar", { name: "Drawing tools" })).toBeVisible();
+    await fromMenu(shell, "Mark something");
+    await expect(shell.getByRole("toolbar", { name: "Marking tools" })).toBeVisible();
     await expect(shell.getByRole("navigation", { name: "Bivy preview controls" })).toBeHidden();
-    // The app is frozen: a tap on Pay now while drawing never reaches it.
+    // The app is frozen: a tap on Pay now while marking marks it instead of
+    // paying. Undo it, so the circle below is judged on its own.
     const pay = (await frame.locator("#pay").boundingBox())!;
     const total = (await frame.locator("#total").boundingBox())!;
     await page.mouse.click(pay.x + pay.width / 2, pay.y + pay.height / 2);
     await expect(frame.locator("#paid")).toHaveText("0");
+    await expect(shell.locator("#ink rect.mark")).toHaveCount(1);
+    await shell.getByRole("button", { name: "Undo" }).click();
+    await expect(shell.locator("#ink rect.mark")).toHaveCount(0);
     // Circle the total and Pay now with the pen.
     const [left, top, right, bottom] = [total.x + 2, total.y - 6, pay.x + pay.width + 30, pay.y + pay.height + 8];
     await page.mouse.move(left, top); await page.mouse.down();
@@ -444,7 +472,7 @@ test("draw on the preview: marks freeze the app, name what's under them, and rea
     await expect.poll(() => page.evaluate(() => (window as any).drafts.length)).toBe(1);
     const [draft] = await page.evaluate(() => (window as any).drafts);
     // Top to bottom: everything inside the circle, and nothing it only crossed.
-    expect(draft.text).toMatch(/^Give this more room\n\nIn the app preview "Checkout" \(page \/, viewport \d+×\d+\), marked:\n- #total \("Total \$102"\)\n- #promo \("Promo code"\)\n- #pay \("Pay now"\)\nMarks \(page px\): pen /);
+    expect(draft.text).toMatch(/^In the app preview "Checkout" \(page \/, viewport \d+×\d+\):\n\n1\. “Give this more room”\n {3}- #total \("Total \$102"\)\n {3}- #promo \("Promo code"\)\n {3}- #pay \("Pay now"\)\n {3}Marks \(page px\): pen /);
     expect(draft.attachments).toEqual([expect.objectContaining({ kind: "image", mimeType: "image/png", name: "Checkout marked.png", bytes: expect.any(Number) })]);
     expect(draft.text).not.toContain("approximate");
     // The attachment delivered to the composer contains the actual pen pixels,
@@ -459,23 +487,24 @@ test("draw on the preview: marks freeze the app, name what's under them, and rea
 
     // A page holding state a fresh browser won't have: the picture is approximate.
     await frame.getByRole("textbox", { name: "Promo code" }).fill("SPRING");
-    await shell.getByRole("button", { name: "Draw" }).click();
-    await shell.getByRole("radio", { name: "Box" }).click();
-    await page.mouse.move(pay.x - 6, pay.y - 6); await page.mouse.down(); await page.mouse.move(pay.x + pay.width + 6, pay.y + pay.height + 6, { steps: 4 }); await page.mouse.up();
+    await fromMenu(shell, "Mark something");
+    // A tap in marking means the element under it, boxed.
+    await page.mouse.click(pay.x + pay.width / 2, pay.y + pay.height / 2);
+    await expect(shell.locator("#ink rect.mark")).toHaveCount(1);
     await shell.getByRole("button", { name: "Done" }).click();
     await shell.getByRole("button", { name: "Add to chat" }).click();
     await expect.poll(() => page.evaluate(() => (window as any).drafts.length)).toBe(2);
     const second = (await page.evaluate(() => (window as any).drafts))[1];
     expect(second.attachments[0].name).toBe("Checkout marked (approximate).png");
-    expect(second.text).toMatch(/^In the app preview[\s\S]*- #pay \("Pay now"\)\nMarks \(page px\): box [\s\S]*\nPicture: retaken on the machine/);
+    expect(second.text).toMatch(/^In the app preview[\s\S]*- #pay \("Pay now"\)\n {3}Marks \(page px\): box [\s\S]*\nPicture: retaken on the machine/);
     expect(requests.at(-1)?.scroll).toEqual({ x: 0, y: 0 });
 
     // Compare: mark the "after" screenshot itself — the exact frame, no retake.
     const grey = (v: number) => ({ revision: v, at: v, png: encodePng(780, 1688, Buffer.alloc(780 * 1688 * 3, 100 + v * 50)) });
     registry.getView(id)!.shots = [grey(0), grey(1)];
     const shots = requests.length;
-    await shell.getByRole("button", { name: "Reload" }).click();
-    await shell.getByRole("button", { name: "Compare" }).click();
+    await fromMenu(shell, "Reload");
+    await fromMenu(shell, "Compare with before");
     await shell.getByRole("button", { name: "Draw on “now”" }).click();
     const after = (await shell.getByRole("img", { name: "After the agent’s last change" }).boundingBox())!;
     await page.mouse.move(after.x + 10, after.y + 10); await page.mouse.down(); await page.mouse.move(after.x + 60, after.y + 40, { steps: 4 }); await page.mouse.up();
@@ -539,7 +568,7 @@ test("Compare shows before and after the agent's last change", async ({ page }, 
       await (response ? route.fulfill({ response }) : route.abort()).catch(() => {});
     });
     await page.goto(gateway.open(id));
-    await page.getByRole("button", { name: "Compare" }).click();
+    await fromMenu(page, "Compare with before");
     const panel = page.getByRole("region", { name: "Before and after the agent’s last change" });
     await expect.poll(() => panel.getByRole("img", { name: "Before the agent’s last change" }).evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(390);
     await panel.getByRole("slider").fill("20");
@@ -566,9 +595,7 @@ test("a reviewer on a shared link can pin a note to an element", async ({ page }
     await page.goto(gateway.share(id).url);
     const app = page.frameLocator('#app');
     await expect(app.getByRole("button", { name: "Add transaction" })).toBeVisible();
-    await page.getByRole("button", { name: "Point", exact: true }).click();
-    await expect(page.locator('#pointing')).toBeVisible();
-    await pointAt(app, app.getByRole("button", { name: "Add transaction" }));
+    await markAt(page, page, app.getByRole("button", { name: "Add transaction" }));
     // Under 16px, iOS zooms the page in when the note box takes focus.
     const note = page.getByRole("textbox", { name: "What should change?" });
     await expect(note).toHaveCSS("font-size", "16px");

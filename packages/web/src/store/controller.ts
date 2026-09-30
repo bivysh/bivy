@@ -1622,7 +1622,7 @@ export class AppController {
 
   /** Apps use the same authenticated command path over direct HTTP or relay.
    *  `nodeId` targets another machine without switching to it. */
-  async appCommand(command: "apps.list" | "apps.offers" | "apps.adopt" | "apps.open" | "apps.logs" | "apps.clearNotes" | "apps.agentNotes" | "apps.share" | "apps.unshare" | "apps.revoke" | "apps.remove" | "apps.showMe" | "apps.mute" | "apps.reviewMode" | "apps.annotate", sessionId: string, fields: { appId?: string; viewId?: string; returnTo?: string; port?: number; direct?: boolean; path?: string; mode?: ReviewCardMode; [key: string]: unknown } = {}, nodeId?: string | null): Promise<ServerEvent> {
+  async appCommand(command: "apps.list" | "apps.offers" | "apps.adopt" | "apps.open" | "apps.logs" | "apps.clearNotes" | "apps.agentNotes" | "apps.share" | "apps.unshare" | "apps.revoke" | "apps.remove" | "apps.showMe" | "apps.mute" | "apps.reviewMode" | "apps.annotate" | "apps.pin" | "apps.pinState", sessionId: string, fields: { appId?: string; viewId?: string; returnTo?: string; port?: number; direct?: boolean; path?: string; mode?: ReviewCardMode; [key: string]: unknown } = {}, nodeId?: string | null): Promise<ServerEvent> {
     const { connection } = this.store.getState();
     // A desktop app's display starts at this device's pixel density (1× or 2×).
     if (command === "apps.open") Object.assign(fields, { scale: typeof devicePixelRatio === "number" && devicePixelRatio >= 1.5 ? 2 : 1 });
@@ -2454,6 +2454,27 @@ export class AppController {
    */
   sendPrompt(text: string, attachments?: PromptAttachment[]): void {
     this.sessionCoordinator.sendPrompt(text, attachments);
+    void this.commitStagedPin(text);
+  }
+
+  /** Marks the person made in a preview, waiting to see whether they send them.
+   *  A pin is a record in the chat, so it must not appear until they do.
+   *  `context`: the text the marks put in the composer. The message must still
+   *  carry it, or these marks were dropped and something else was sent. */
+  private stagedPin: { sessionId: string; appId: string; viewId: string; context: string; at: number } | null = null;
+  stagePin(pin: { sessionId: string; appId: string; viewId: string; context: string }): void {
+    this.stagedPin = { ...pin, at: Date.now() };
+  }
+  /** They sent it: the marks become a pin, with the words they actually sent. */
+  private async commitStagedPin(text: string): Promise<void> {
+    const pin = this.stagedPin;
+    this.stagedPin = null;
+    // The node stops holding the picture after ten minutes; don't claim a pin
+    // for a message that no longer carries these marks.
+    if (!pin || Date.now() - pin.at > 10 * 60_000 || !pin.context || !text.includes(pin.context)) return;
+    // A pin is a record of what was already sent; failing to make one must
+    // never look like the message failed.
+    try { await this.appCommand("apps.pin", pin.sessionId, { appId: pin.appId, viewId: pin.viewId, words: text }); } catch { /* the message stands on its own */ }
   }
 
   /** Provision the selected runner while its local sidebar row remains usable. */

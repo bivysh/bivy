@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import type { AppManifest, ReviewCardMode, SessionApp, ShareDuration } from "../apps/types.js";
+import type { AppManifest, AppPinState, ReviewCardMode, SessionApp, ShareDuration } from "../apps/types.js";
 import type { CommandEntries } from "../protocol/command-registry.js";
 import type { AppService } from "../apps/service.js";
 
@@ -35,6 +35,10 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
     "apps.mute": (msg) => service.mute(String(msg.sessionId)),
     "apps.reviewMode": (msg) => service.setReviewMode(String(msg.sessionId), String(msg.appId), msg.mode as ReviewCardMode),
     "apps.annotate": (msg) => service.annotate(String(msg.sessionId), msg as never),
+    // A pin is made only once the person has actually sent the message the
+    // marks went into, so nothing appears in the chat that they didn't send.
+    "apps.pin": (msg) => service.pin(String(msg.sessionId), { appId: String(msg.appId), viewId: String(msg.viewId), words: typeof msg.words === "string" ? msg.words : "" }),
+    "apps.pinState": (msg) => service.setPinState(String(msg.sessionId), String(msg.pinId), msg.state as AppPinState),
     "apps.clearNotes": (msg) => service.clearNotes(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
     "apps.agentNotes": (msg) => service.setAgentNotes(String(msg.sessionId), String(msg.appId), msg.enabled === true),
     "apps.notes": (msg) => service.notes(String(msg.sessionId), { app: typeof msg.appId === "string" ? msg.appId : undefined, view: typeof msg.view === "string" ? msg.view : undefined, since: typeof msg.since === "number" ? msg.since : undefined }),

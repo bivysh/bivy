@@ -23,6 +23,30 @@ export interface PageSignals { storage?: boolean; cookies?: boolean; interacted?
   /** The page couldn't say (no inspector): assume it may differ. */
   unknown?: boolean }
 
+/** One mark and the words about it: the unit a pin is made from. */
+export interface MarkNote { n: number; words: string; selectors: string[]; strokes: Stroke[] }
+const MAX_NOTES = 20;
+
+/** Notes from the client (untrusted shape): numbered, bounded, with strokes. */
+export function readNotes(input: unknown): MarkNote[] {
+  if (input === undefined) return [];
+  if (!Array.isArray(input) || !input.length || input.length > MAX_NOTES) throw new Error(`A message carries 1 to ${MAX_NOTES} notes.`);
+  return input.map((raw, index) => {
+    const note = raw as { n?: unknown; words?: unknown; selectors?: unknown };
+    if (!Number.isInteger(note?.n) || (note.n as number) < 1 || (note.n as number) > MAX_NOTES) throw new Error("Invalid note number.");
+    if (note.words !== undefined && typeof note.words !== "string") throw new Error("Invalid note text.");
+    const selectors = Array.isArray(note.selectors) ? note.selectors.filter((s): s is string => typeof s === "string" && !!s && s.length <= 300).slice(0, 8) : [];
+    return { n: index + 1, words: typeof note.words === "string" ? note.words.trim().slice(0, 2000) : "", selectors, strokes: readStrokes((raw as { strokes?: unknown }).strokes) };
+  });
+}
+
+/** Where a note's number sits: the top-left of everything it covers. */
+export function noteAnchor(note: MarkNote): { x: number; y: number } {
+  const xs = note.strokes.flatMap((stroke) => stroke.points.map(([x]) => x));
+  const ys = note.strokes.flatMap((stroke) => stroke.points.map(([, y]) => y));
+  return { x: Math.min(...xs), y: Math.min(...ys) };
+}
+
 const MAX_STROKES = 50;
 const MAX_POINTS = 10_000;
 
@@ -64,11 +88,59 @@ const HALO = tokenColor("annotate-halo", "#ffffff");
 /** Mark width in CSS pixels, and its halo on each side. */
 const WIDTH = 4;
 const HALO_WIDTH = 1.5;
+/** A note's number, in CSS pixels: the pill's half-height, and the digits. */
+const PIP = { radius: 11, height: 12, width: 6, gap: 3, stroke: 1.6 };
+
+/** Seven-segment digits, drawn rather than typeset: the picture has to carry
+ * the numbers, and a PNG writer has no font. Adding a glyph is adding a row.
+ *
+ *      aaa
+ *     f   b
+ *      ggg
+ *     e   c
+ *      ddd
+ */
+const SEGMENTS: Record<string, string> = {
+  "0": "abcdef", "1": "bc", "2": "abged", "3": "abgcd", "4": "fgbc",
+  "5": "afgcd", "6": "afgecd", "7": "abc", "8": "abcdefg", "9": "abcdfg",
+};
+function digit(glyph: string, x: number, y: number, w: number, h: number): [number, number][][] {
+  const middle = y + h / 2;
+  const lines: Record<string, [number, number][]> = {
+    a: [[x, y], [x + w, y]], b: [[x + w, y], [x + w, middle]], c: [[x + w, middle], [x + w, y + h]],
+    d: [[x, y + h], [x + w, y + h]], e: [[x, middle], [x, y + h]], f: [[x, y], [x, middle]], g: [[x, middle], [x + w, middle]],
+  };
+  return [...(SEGMENTS[glyph] ?? "")].map((name) => lines[name]!);
+}
+
+/** Cuts out the part of a picture a pin is about, with room around it so the
+ * mark is read in its surroundings rather than in isolation. `scale` maps CSS
+ * pixels to image pixels. Returns the whole picture when the cut would be
+ * empty or nearly all of it. */
+export function crop(png: Buffer, region: { x: number; y: number; width: number; height: number }, scale: number, padding = 24): Buffer {
+  const image = decodePng(png);
+  const { width, height, channels } = image;
+  const pad = padding * scale;
+  const left = Math.max(0, Math.floor((region.x - padding) * scale));
+  const top = Math.max(0, Math.floor((region.y - padding) * scale));
+  const right = Math.min(width, Math.ceil((region.x + region.width) * scale + pad));
+  const bottom = Math.min(height, Math.ceil((region.y + region.height) * scale + pad));
+  const w = right - left, h = bottom - top;
+  if (w < 8 || h < 8 || (w >= width * 0.9 && h >= height * 0.9)) return png;
+  const rgb = Buffer.alloc(w * h * 3);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const from = ((y + top) * width + (x + left)) * channels;
+      image.pixels.copy(rgb, (y * w + x) * 3, from, from + 3);
+    }
+  }
+  return encodePng(w, h, rgb);
+}
 
 /** Draws marks onto a PNG. `scale` maps CSS pixels to image pixels;
  * `offset` (CSS px) is subtracted first — the scroll position the picture
  * was taken at. Halos go under every mark first, so crossings stay clean. */
-export function composite(png: Buffer, strokes: Stroke[], map: { scale: number; offset?: { x: number; y: number } }): Buffer {
+export function composite(png: Buffer, strokes: Stroke[], map: { scale: number; offset?: { x: number; y: number } }, badges: { n: number; x: number; y: number }[] = []): Buffer {
   const image = decodePng(png);
   const { width, height, channels } = image;
   const rgb = Buffer.alloc(width * height * 3);
@@ -100,5 +172,18 @@ export function composite(png: Buffer, strokes: Stroke[], map: { scale: number; 
   const r = (WIDTH / 2) * map.scale;
   for (const path of paths) trace(path, r + HALO_WIDTH * map.scale, HALO);
   for (const path of paths) trace(path, r, INK);
+  // The numbers last, over the marks, so a note and the thing it is about stay
+  // paired in the picture as well as in the words.
+  for (const badge of badges) {
+    const glyphs = [...String(badge.n)];
+    const [pw, ph, gap, pr] = [PIP.width, PIP.height, PIP.gap, PIP.radius].map((v) => v * map.scale);
+    const span = glyphs.length * pw + (glyphs.length - 1) * gap;
+    const [cx, cy] = toImage([badge.x, badge.y]);
+    // A traced line of radius `pr` is a pill: a disc at each end, filled between.
+    trace([[cx - span / 2, cy], [cx + span / 2, cy]], pr, INK);
+    glyphs.forEach((glyph, index) => {
+      for (const segment of digit(glyph, cx - span / 2 + index * (pw + gap), cy - ph / 2, pw, ph)) trace(segment, PIP.stroke * map.scale, HALO);
+    });
+  }
   return encodePng(width, height, rgb);
 }

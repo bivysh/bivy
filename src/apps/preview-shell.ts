@@ -22,24 +22,19 @@ iframe { width:100%; height:100%; border:0; background:var(--bg); }
 #dock { position:fixed; left:var(--space-2); right:var(--space-2); bottom:calc(var(--space-2) + env(safe-area-inset-bottom)); z-index:var(--z-sticky); display:flex; flex-direction:column; align-items:center; gap:var(--space-2); pointer-events:none; }
 #dock > * { pointer-events:auto; }
 /* The hint sits over the app; a tap on it is meant for the app underneath. */
-#dock > #pointing { pointer-events:none; }
+#dock > #drawing, #dock > #hint { pointer-events:none; }
 nav, #draw-bar { display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:var(--space-1); max-width:100%; padding:var(--space-1); background:var(--surface); border:thin solid var(--line); border-radius:var(--radius-xl); box-shadow:var(--shadow-lg); }
 nav .btn, #draw-bar .btn { flex-shrink:0; border-radius:var(--radius-full); }
-nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); }
 /* One row, however narrow: a bar that wraps doubles what it covers. Past the
    edge it scrolls sideways instead. */
 nav { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
 nav::-webkit-scrollbar { display:none; }
-/* The grip hides the bar on a tap and moves it to the other edge on a drag. */
-#hide { color:var(--muted); cursor:grab; touch-action:none; }
-#dock.dragging, #dock.dragging #hide { cursor:grabbing; }
 #dock[data-edge="top"] { top:calc(var(--space-2) + env(safe-area-inset-top)); bottom:auto; flex-direction:column-reverse; }
 #show[data-edge="top"] { top:calc(var(--space-3) + env(safe-area-inset-top)); bottom:auto; }
 #name { display:flex; flex-direction:column; min-width:0; padding:0 var(--space-2); }
 #title { font-size:var(--text-sm); font-weight:var(--weight-semibold); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:14em; }
-#stamp { font-size:var(--text-xs); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#stamp { font-size:var(--text-xs); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:14em; }
 #stamp:empty { display:none; }
-#lens { flex-shrink:0; }
 .panel { width:min(560px, 100%); max-height:50vh; overflow:auto; background:var(--surface); border:thin solid var(--line); border-radius:var(--radius-lg); box-shadow:var(--shadow-lg); padding:var(--space-3); box-sizing:border-box; }
 .panel h2 { font-size:var(--text-sm); margin:0 0 var(--space-2); display:flex; align-items:center; justify-content:space-between; gap:var(--space-2); }
 .panel-actions { display:flex; justify-content:flex-end; gap:var(--space-2); margin-top:var(--space-2); flex-wrap:wrap; }
@@ -63,7 +58,7 @@ nav::-webkit-scrollbar { display:none; }
 /* The note owns the dock while editing. Only its body scrolls; actions never
    cover the text field, even when the keyboard leaves little vertical room. */
 #dock { max-height:calc(100% - var(--space-4)); }
-#dock:has(#draft:not([hidden])) nav, #dock:has(#draft:not([hidden])) #pointing { display:none; }
+#dock:has(#draft:not([hidden])) nav, #dock:has(#draft:not([hidden])) #drawing, #dock:has(#draft:not([hidden])) #menu { display:none; }
 #draft { display:flex; flex-direction:column; max-height:70dvh; overflow:hidden; padding:0; }
 #draft-body { min-height:0; overflow:auto; padding:var(--space-3); }
 #draft .panel-actions { flex-shrink:0; margin:0; padding:var(--space-2) var(--space-3); border-top:thin solid var(--line); }
@@ -80,17 +75,29 @@ nav::-webkit-scrollbar { display:none; }
 #ink.frozen { pointer-events:none; cursor:default; }
 #ink .halo { fill:none; stroke:var(--annotate-halo); stroke-width:7; stroke-linecap:round; stroke-linejoin:round; }
 #ink .mark { fill:none; stroke:var(--annotate); stroke-width:4; stroke-linecap:round; stroke-linejoin:round; }
-#dock > #drawing { pointer-events:none; }
+/* A saved mark keeps its place while the next one is made, and wears its
+   number, so a note and the thing it is about stay paired. */
+#ink .saved { opacity:0.75; }
+#ink .pip { fill:var(--annotate); stroke:var(--annotate-halo); stroke-width:2; }
+#ink .pip-text { fill:var(--annotate-halo); font:var(--weight-semibold) 13px/1 var(--font-sans); text-anchor:middle; dominant-baseline:central; }
+#mark-count { flex-shrink:0; }
 /* Hints float over the app, whose page may be any colour: back them solidly. */
 #dock > .banner.inline[data-tone="accent"] { background:color-mix(in srgb, var(--accent) 14%, var(--surface)); box-shadow:var(--shadow-sm); }
-#dock .btn, #dock .seg-btn, #show, #down .btn { min-block-size:var(--space-7); min-inline-size:var(--space-7); font-size:var(--text-sm); }
-#draw-bar .segmented { flex-shrink:0; }
+#dock .btn, #show, #down .btn, #dock .menu-item { min-block-size:var(--space-7); font-size:var(--text-sm); }
+#dock .btn, #show { min-inline-size:var(--space-7); }
+/* The menu belongs to the pill, so it sits over it. */
+#menu { align-self:center; max-width:min(320px, 100%); }
+#menu kbd { flex:none; padding:0 var(--space-1); border:thin solid var(--line); border-radius:var(--radius-sm); color:var(--muted); font-family:var(--font-mono); font-size:var(--text-xs); }
+/* The name is a label, not a target: one pill, three buttons at most. */
+#name { pointer-events:none; }
+#more { position:relative; gap:var(--space-1); }
+#dock:not([data-edge="top"]) #more svg { transform:rotate(180deg); }
 #compare-draw { margin-top:var(--space-2); }
 /* Marking a Compare shot: make it big enough to draw on with a thumb. */
 #compare[data-drawing] #compare-stage img { max-height:min(60vh, 560px); }
 #compare[data-drawing] #compare-slider, #compare[data-drawing] #compare-hint, #compare[data-drawing] #compare-draw { display:none; }
 .label-narrow { display:none; }
-@media (max-width: 699px) { #lens { display:none; } #name { display:none; } .label-wide { display:none; } .label-narrow { display:inline; } nav { gap:0; } nav .btn { padding-inline:var(--space-2); } }
+@media (max-width: 699px) { .wide-only { display:none; } .label-wide { display:none; } .label-narrow { display:inline; } #title { max-width:9em; } }
 /* "Made with Bivy": a quiet strip under a shared app, never over it. */
 #made-with { flex-shrink:0; display:flex; align-items:center; justify-content:center; gap:var(--space-1); min-height:var(--space-6); padding:0 var(--space-3) env(safe-area-inset-bottom); box-sizing:border-box; background:var(--surface); border-top:thin solid var(--line); color:var(--muted); font-size:var(--text-xs); text-decoration:none; }
 #made-with:hover, #made-with:focus-visible { color:var(--ink); }
@@ -125,27 +132,34 @@ body.badged #dock:not([data-edge="top"]) { bottom:calc(var(--space-2) + var(--sp
     <p class="muted" id="note-status" role="status"></p>
     <details id="draft-details"><summary>Preview context</summary><pre id="draft-context"></pre></details>
     </div>
-    <div class="panel-actions"><button class="btn sm ghost" id="draft-cancel">Cancel</button><button class="btn sm primary" id="draft-add">Add to chat</button></div>
+    <div class="panel-actions"><button class="btn sm ghost" id="draft-cancel">Cancel</button><button class="btn sm" id="draft-more" type="button">Mark another</button><button class="btn sm primary" id="draft-add">Add to chat</button></div>
   </section>
-  <p class="banner inline" data-tone="accent" id="pointing" role="status" hidden>Tap anything in the app to point at it. <span id="pointing-voice" hidden>Hold to point and speak. </span>Press Escape or Point again to stop.</p>
-  <p class="banner inline" data-tone="accent" id="drawing" role="status" hidden>Circle or box what’s wrong, then Done. Two fingers scroll the page.</p>
-  <div id="draw-bar" role="toolbar" aria-label="Drawing tools" hidden>
-    <div class="segmented" role="radiogroup" aria-label="Mark with"><button class="seg-btn" type="button" role="radio" aria-checked="true" data-tool="pen">Pen</button><button class="seg-btn" type="button" role="radio" aria-checked="false" data-tool="box">Box</button></div>
+  <p class="banner inline" data-tone="accent" id="hint" role="status" hidden>Press and hold anything in the app to mark what’s wrong.</p>
+  <p class="banner inline" data-tone="accent" id="drawing" role="status" hidden>Tap what’s wrong, or circle it. Then Done. Two fingers scroll the page.</p>
+  <div id="draw-bar" role="toolbar" aria-label="Marking tools" tabindex="-1" hidden>
+    <span id="mark-count" class="badge" data-tone="accent" hidden></span>
     <button class="btn sm ghost" id="draw-undo" type="button" disabled>Undo</button>
     <button class="btn sm ghost" id="draw-clear" type="button" disabled>Clear</button>
-    <button class="btn sm ghost" id="draw-cancel" type="button" aria-label="Stop drawing">✕</button>
+    <button class="btn sm ghost" id="draw-cancel" type="button" aria-label="Stop marking">✕</button>
     <button class="btn sm primary" id="draw-done" type="button" disabled>Done</button>
   </div>
+  <div class="menu" id="menu" role="menu" aria-label="Preview options" hidden>
+    <button class="menu-item" role="menuitem" id="mark" type="button" aria-keyshortcuts="c" disabled><span class="menu-item-label">Mark something</span><kbd>C</kbd></button>
+    <button class="menu-item" role="menuitemcheckbox" id="errors" type="button" aria-checked="false" disabled><span class="menu-item-label">Console</span></button>
+    <button class="menu-item" role="menuitemcheckbox" id="compare-btn" type="button" aria-checked="false" hidden><span class="menu-item-label">Compare with before</span></button>
+    <div class="menu-heading wide-only">Width</div>
+    <button class="menu-item wide-only" role="menuitemradio" data-lens="full" type="button" aria-checked="true"><span class="menu-item-label">Full</span></button>
+    <button class="menu-item wide-only" role="menuitemradio" data-lens="tablet" type="button" aria-checked="false"><span class="menu-item-label">Tablet</span></button>
+    <button class="menu-item wide-only" role="menuitemradio" data-lens="phone" type="button" aria-checked="false"><span class="menu-item-label">Phone</span></button>
+    <button class="menu-item separated" role="menuitem" id="reload" type="button" disabled><span class="menu-item-label">Reload</span></button>
+    <button class="menu-item" role="menuitem" id="edge" type="button"><span class="menu-item-label">Move to top</span></button>
+    <button class="menu-item" role="menuitem" id="hide" type="button"><span class="menu-item-label">Hide controls</span></button>
+  </div>
   <nav aria-label="Bivy preview controls">
-    <button class="btn sm ghost" id="hide" aria-label="Hide Bivy controls" title="Tap to hide · Drag to move" aria-keyshortcuts="ArrowUp ArrowDown"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></button>
-    <button class="btn sm ghost" id="back" aria-label="Back to chat">‹ <span class="label-wide">Back to chat</span><span class="label-narrow">Chat</span></button>
+    <button class="btn sm ghost" id="back" aria-label="Back to chat">‹ <span class="label-wide">Chat</span></button>
     <span id="name"><span id="title">App preview</span><span id="stamp" class="muted" role="status"></span></span>
-    <button class="btn sm ghost" id="point" aria-pressed="false" disabled>Point</button>
-    <button class="btn sm ghost" id="draw" type="button" hidden>Draw</button>
-    <button class="btn sm ghost" id="compare-btn" aria-pressed="false" hidden>Compare</button>
-    <button class="btn sm ghost" id="errors" aria-pressed="false" aria-label="Console" disabled>Console <span class="badge" data-variant="solid" data-tone="danger" id="error-count" hidden></span></button>
-    <div class="segmented" id="lens" role="radiogroup" aria-label="Preview width"><button class="seg-btn" role="radio" aria-selected="true" data-lens="full">Full</button><button class="seg-btn" role="radio" aria-selected="false" data-lens="tablet">Tablet</button><button class="seg-btn" role="radio" aria-selected="false" data-lens="phone">Phone</button></div>
-    <button class="btn sm ghost" id="reload" aria-label="Reload" disabled><span class="label-wide">Reload</span><span class="label-narrow" aria-hidden="true">↻</span></button>
+    <button class="btn sm primary" id="update" type="button" hidden><span class="label-wide">Show new version</span><span class="label-narrow">New</span></button>
+    <button class="btn sm ghost" id="more" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Preview options"><span class="badge" data-variant="solid" data-tone="danger" id="error-count" hidden></span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
   </nav>
 </div>
 <button class="btn sm" id="show" hidden aria-label="Show Bivy controls">Bivy</button>
@@ -162,12 +176,12 @@ const embedded=parent!==window;
 const toBivy=m=>parent.postMessage(Object.assign({source:'bivy-preview'},m),location.ancestorOrigins?.[0]||new URL(metadata.returnTo).origin);
 const storageKey='bivy-preview';
 const safePath=p=>typeof p==='string'&&p.startsWith('/')&&!p.startsWith('//')&&p.length<=2048?p:'/';
-const reviewerTools=ready=>{if(metadata?.reviewer)for(const id of ['point','draw','errors'])$(id).disabled=!ready;};
+const reviewerTools=ready=>{if(metadata?.reviewer)for(const id of ['mark','errors'])$(id).disabled=!ready;};
 const open=(path,message)=>{status.hidden=false;status.textContent=message;resetConsole();reviewerTools(false);frame.src=metadata.origin+safePath(path);};
 function show(data,launch){
   metadata=data;
   if(data.reviewer){
-    drawOk=data.inspect!==false;$('draw').hidden=!drawOk;back.hidden=true;
+    drawOk=data.inspect!==false;back.hidden=true;
     $('draft-title').textContent='Note for the app’s owner';
     $('draft-text').maxLength=1000;
     $('send-errors').textContent='Leave a note…';
@@ -182,40 +196,86 @@ function show(data,launch){
   back.title=data.returnTo?'Return to '+new URL(data.returnTo).host:'Close preview';
   frame.title=data.name;
   frame.hidden=false;
-  // Desktop apps have no page to inspect: no Point or Console. Their viewer
+  // Desktop apps have no page to inspect, so no Console. Their viewer
   // (Bivy's own code) may use the clipboard; generated web apps may not.
   // (Set before navigating: the policy is fixed when the frame loads.)
-  for(const b of [$('point'),$('errors')])b.hidden=data.inspect===false;
+  $('errors').hidden=data.inspect===false;
   if(data.inspect===false)frame.allow='clipboard-read; clipboard-write';
   frame.src=data.origin+(launch?'/__bivy/open#'+(embedded?'e:':'')+launch+(startPage?'~'+startPage:''):'/');
   back.hidden=Boolean(data.reviewer)||(embedded&&Boolean(data.returnTo));
-  for(const b of [reload,$('point'),$('errors')])b.disabled=false;
+  for(const b of [reload,$('errors'),markBtn])b.disabled=false;
   reviewerTools(false);
   status.textContent='Loading app…';
-  frame.onload=()=>{status.hidden=true;void loadCompare();if(revision===null){revision=-1;watch();}else if(wake)wake();};
+  frame.onload=()=>{
+    status.hidden=true;void loadCompare();
+    // Put them back where they were before an update they asked for.
+    if(restore){const at=restore;restore=null;frame.contentWindow?.postMessage(Object.assign({type:'bivy:restore'},at),metadata.origin);}
+    if(!watching){watching=true;latest=-1;shown=null;watch();firstHint();}else if(wake)wake();
+  };
   // A Bivy client framing the shell says whether it can take dictation.
   if(embedded&&data.returnTo)toBivy({type:'hello'});
   // Store navigation metadata only, never tickets or cookies.
   try{sessionStorage.setItem(storageKey,JSON.stringify(data));}catch{}
 }
-// Reload when an agent turn changes files, returning to the page in view.
+// The marking gesture is the whole point of a preview, and a gesture nobody is
+// told about is a gesture nobody uses. Say it once per device, then never again.
+const hintKey='bivy-preview-hint';
+function firstHint(){
+  // A desktop app has no page to press on: its marking is the menu's, so the
+  // hint would promise a gesture that isn't there.
+  if(metadata.controls===false||metadata.inspect===false)return;
+  try{if(localStorage.getItem(hintKey))return;localStorage.setItem(hintKey,'1');}catch{return;}
+  $('hint').hidden=false;
+  setTimeout(()=>{$('hint').hidden=true;},8000);
+}
+// An agent turn changes files: never reload the app under the person looking
+// at it — a scroll position, a filled-in form or an open menu would go with it.
+// "shown" is the revision the frame is displaying, "latest" the newest the node
+// reports; while they differ the controls offer the new version, and taking it
+// is the user's tap.
 // Until the frame has redeemed its access cookie, polls fail; back off, and
 // let the next frame load retry at once.
-let revision=null,retry=0,wake=null;
+let shown=null,latest=null,watching=false,retry=0,wake=null,restore=null,newPath='/';
 async function watch(){
   wake=null;
   try{
-    const r=await fetch(metadata.origin+'/__bivy/revision?after='+revision,{credentials:'include',cache:'no-store'});
+    const r=await fetch(metadata.origin+'/__bivy/revision?after='+latest,{credentials:'include',cache:'no-store'});
     if(!r.ok)throw Error();
     const d=await r.json();
-    if(revision>=0&&d.revision!==revision){
-      open(currentPath!=='/'?currentPath:d.path,'Updating…');
-      $('stamp').textContent='Updated after the agent’s turn';
-      // Screenshots for Compare land a few seconds after the change.
-      for(const ms of [5000,15000])setTimeout(()=>void loadCompare(),ms);
-    }
-    revision=d.revision;retry=0;setTimeout(watch,0);
+    latest=d.revision;newPath=safePath(d.path);
+    // The first poll after a load describes what the frame already has.
+    if(shown===null)shown=latest;
+    waiting(latest!==shown);
+    retry=0;setTimeout(watch,0);
   }catch{retry=Math.min(30000,(retry||1000)*2);const t=setTimeout(watch,retry);wake=()=>{clearTimeout(t);watch();};}
+}
+/** Offers the newer version, or takes the offer away once it is on screen.
+ *  Only a change writes the stamp, which other statuses also use. */
+function waiting(on){
+  if($('update').hidden===!on)return;
+  $('update').hidden=!on;
+  $('stamp').textContent=on?'New version ready':'';
+}
+/** Asks the page where it is, so the update can put it back. Without an
+ *  inspector (a desktop app) there is nothing to ask. */
+function pageState(){
+  if(metadata.inspect===false)return Promise.resolve(null);
+  return new Promise(resolve=>{
+    const done=d=>{clearTimeout(timer);if(stateWaiter===done)stateWaiter=null;resolve(d||null);};
+    const timer=setTimeout(()=>done(null),500);
+    stateWaiter=done;
+    frame.contentWindow?.postMessage({type:'bivy:draw'},metadata.origin);
+  });
+}
+let stateWaiter=null;
+/** Take the version the agent just built, on the page in view. */
+async function takeUpdate(){
+  const at=await pageState();
+  restore=at&&{scroll:at.scroll,elementScrolls:at.elementScrolls};
+  shown=latest;waiting(false);
+  open(currentPath!=='/'?currentPath:newPath,'Updating…');
+  // Screenshots for Compare land a few seconds after the change.
+  for(const ms of [5000,15000])setTimeout(()=>void loadCompare(),ms);
 }
 // Owner drafts go to the session's composer. Reviewer drafts use only the
 // bounded notes endpoint, never the owner's command channel.
@@ -224,14 +284,19 @@ function toChat(text){
   const to=new URL(metadata.returnTo),session=to.pathname.split('/').pop();
   location.assign(to.origin+'/share?session='+encodeURIComponent(session)+'&text='+encodeURIComponent(text));
 }
-let noteMark=null,pendingNote=null,noteSequence=0;
+let pendingNote=null,noteSequence=0,pending=null;
 function draft(context,listen){
-  panels(null);noteMark=null;
+  panels(null);
   $('draft-add').disabled=false;
   $('note-status').textContent='';
   $('draft-hint').textContent=metadata.reviewer?'Feedback only — no agent runs. Pictures are approximate; if screenshots are off, we save text and mark details.':'Review in chat before sending.';
   $('draft').hidden=false;
-  $('draft-add').textContent=metadata.reviewer?'Send note':metadata.returnTo?'Add to chat':'Copy';
+  // Several marks, several notes: each keeps its own words and its own number.
+  // A reviewer sends one note at a time, as the notes endpoint takes them.
+  $('draft-more').hidden=!pending||Boolean(metadata.reviewer);
+  $('draft-title').textContent=metadata.reviewer?'Note for the app’s owner':pending?'Note '+pending.n:'Note for the agent';
+  const waiting=notes.length+(pending?1:0);
+  $('draft-add').textContent=metadata.reviewer?'Send note':metadata.returnTo?(waiting>1?'Add '+waiting+' notes to chat':'Add to chat'):'Copy';
   $('draft-context').textContent=context;
   $('draft-details').open=false;
   const box=$('draft-text');box.value='';
@@ -265,29 +330,71 @@ mic.onpointerdown=e=>{
 mic.onpointerup=mic.onpointercancel=()=>{if(heldAt&&Date.now()-heldAt>400)stopListening();heldAt=0;};
 mic.onclick=e=>{if(e.detail===0){if(listening)stopListening();else startListening();}};
 function fromBivy(d){
-  if(d.type==='draw'){drawOk=d.available===true;$('draw').hidden=!drawOk;$('compare-draw').hidden=!drawOk;}
-  else if(d.type==='voice'){voice=d.available===true;mic.hidden=!voice;$('pointing-voice').hidden=!voice;if(!voice)cancelListening();}
+  if(d.type==='draw'){drawOk=d.available===true;$('compare-draw').hidden=!drawOk;}
+  else if(d.type==='voice'){voice=d.available===true;mic.hidden=!voice;if(!voice)cancelListening();}
   else if(d.type==='transcript'){setListening(false);if(typeof d.error==='string')sayVoice(d.error.slice(0,200));else addSpoken(d.text);}
   else if(d.type==='listening'&&d.on===false&&listening){setListening(false);if(voiceStatus.textContent.startsWith('Listening'))sayVoice('');}
 }
-$('draft-cancel').onclick=()=>{const target=marks?$('draw'):point;cancelListening();$('draft').hidden=true;endDraw();target.focus();};
+/** Saves the words for the mark in hand, and hands back the mark layer. */
+function keepNote(){
+  if(!pending)return false;
+  notes.push({...pending,words:$('draft-text').value.trim().slice(0,2000)});
+  pending=null;
+  return true;
+}
+/** Back to marking with the notes so far still on the page. */
+function resumeMarking(){
+  const target=draw?.target??'frame',seed=draw?.state&&{scroll:draw.scroll,viewport:draw.state.viewport,dpr:draw.state.dpr,theme:draw.state.theme,path:draw.state.path,elementScrolls:draw.state.elementScrolls,signals:draw.state.signals};
+  const keep=notes;
+  cancelListening();
+  $('draft').hidden=true;
+  draw=null;notes=[];
+  startDraw(target,seed);
+  notes=keep;
+  updateDrawBar();renderInk();
+}
+$('draft-more').onclick=()=>{if(keepNote())resumeMarking();};
+// Cancelling drops the mark in hand; the notes before it are still yours.
+$('draft-cancel').onclick=()=>{
+  cancelListening();pending=null;
+  $('draft').hidden=true;
+  if(notes.length)resumeMarking();else{endDraw();$('more').focus();}
+};
+/** What goes to the machine: the page's state, every stroke, and which note
+ *  each stroke belongs to, so the picture can be numbered and each note can
+ *  become a pin of its own. */
+function markPayload(d,list){
+  const st=d.state,first=list[0]?.els?.[0];
+  return Object.assign({path:st.path,viewport:st.viewport,dpr:st.dpr,signals:st.signals,
+    strokes:list.flatMap(note=>note.strokes),
+    notes:list.map(note=>({n:note.n,words:note.words||'',selectors:note.selectors,strokes:note.strokes})),
+    selector:first?.selector||'',text:first?.text||''},
+    d.target==='frame'?{scroll:d.scroll,elementScrolls:st.elementScrolls,theme:st.theme}:{compare:compareAfter});
+}
+/** The notes as words: where they are, once, then one numbered entry each. */
+function composeText(d,list){
+  return placeContext(d)+':\\n\\n'+list.map(note=>note.n+'. '+(note.words?'“'+note.words+'”\\n   ':'')+note.context.replace(/\\n/g,'\\n   ')).join('\\n\\n');
+}
 $('draft-add').onclick=async()=>{
   cancelListening();
-  const note=$('draft-text').value.trim();
+  const words=$('draft-text').value.trim();
+  const d=draw;
   if(metadata.reviewer){
-    if(!note){$('note-status').textContent='Write a note before sending.';$('draft-text').focus();return;}
-    const mark=marks||noteMark,id=++noteSequence;
+    if(!words){$('note-status').textContent='Write a note before sending.';$('draft-text').focus();return;}
+    const mark=pending&&d?markPayload(d,[{...pending,words}]):null,id=++noteSequence;
     $('draft-add').disabled=true;$('draft-cancel').disabled=true;$('draft-text').disabled=true;
     $('note-status').textContent='Sending note…';$('draft-add').textContent='Sending…';
     const timer=setTimeout(()=>finishNote({id,error:'No reply yet. Your note may have arrived; check the connection before retrying.'}),60000);
     pendingNote={id,timer};
-    frame.contentWindow?.postMessage({type:'bivy:note',id,note:{note,context:$('draft-context').textContent,selector:mark?.selector||'',text:mark?.text||'',path:mark?.path||currentPath,viewport:mark?.viewport||{width:frame.clientWidth,height:frame.clientHeight},...(mark?{mark}:{})}},metadata.origin);
+    frame.contentWindow?.postMessage({type:'bivy:note',id,note:{note:words,context:$('draft-context').textContent,selector:mark?.selector||'',text:mark?.text||'',path:mark?.path||currentPath,viewport:mark?.viewport||{width:frame.clientWidth,height:frame.clientHeight},...(mark?{mark}:{})}},metadata.origin);
     return;
   }
-  const text=(note?note+'\\n\\n':'')+$('draft-context').textContent;
-  // Marks go to the Bivy client, which adds a picture made on the machine.
-  if(marks){const mark=marks;$('draft').hidden=true;endDraw();return toBivy({type:'annotation',text,mark});}
-  if(metadata.returnTo){$('draft').hidden=true;return toChat(text);}
+  keepNote();
+  const list=notes;
+  const text=list.length&&d?composeText(d,list):(words?words+'\\n\\n':'')+$('draft-context').textContent;
+  // Marks go to the Bivy client, which adds a numbered picture from the machine.
+  if(list.length&&d&&embedded){const mark=markPayload(d,list);$('draft').hidden=true;endDraw();return toBivy({type:'annotation',text,mark});}
+  if(metadata.returnTo){$('draft').hidden=true;endDraw();return toChat(text);}
   try{await navigator.clipboard.writeText(text);$('draft-add').textContent='Copied';}catch{$('draft-text').select();}
 };
 $('draft-text').addEventListener('input',()=>{if(!pendingNote)$('note-status').textContent='';});
@@ -296,10 +403,10 @@ function finishNote(d){
   clearTimeout(pendingNote.timer);pendingNote=null;
   $('draft-cancel').disabled=false;$('draft-add').disabled=false;$('draft-text').disabled=false;$('draft-add').textContent='Send note';
   if(d.error){$('note-status').textContent=String(d.error).slice(0,200);return;}
-  $('draft').hidden=true;endDraw();noteMark=null;
+  $('draft').hidden=true;endDraw();
   $('stamp').textContent=d.screenshot?'Note and approximate picture sent':'Note sent without a picture';
   status.hidden=false;status.textContent=$('stamp').textContent+'. The app’s owner will see it.';
-  point.focus();
+  $('more').focus();
 }
 // Console
 let entries=[];
@@ -307,48 +414,55 @@ function resetConsole(){entries=[];renderConsole();}
 function renderConsole(){
   const errors=entries.filter(e=>e.level==='error').length,count=$('error-count');
   count.hidden=!errors;count.textContent=String(errors);
-  $('errors').setAttribute('aria-label',errors?'Console, '+errors+' error'+(errors===1?'':'s'):'Console');
+  // The number is shown once, on the pill, so it is visible without opening it.
+  $('more').setAttribute('aria-label',errors?'Preview options, '+errors+' error'+(errors===1?'':'s'):'Preview options');
   $('console-empty').hidden=entries.length>0;$('send-errors').disabled=!entries.length;
   $('entries').replaceChildren(...entries.map(e=>{const li=document.createElement('li');const tag=document.createElement('span');tag.className='badge';tag.dataset.tone=e.level==='error'?'danger':'warn';tag.textContent=e.level;const text=document.createElement('span');text.textContent=e.text;li.append(tag,text);return li;}));
 }
 $('errors').onclick=()=>panels($('console').hidden?'console':null);
 $('clear').onclick=resetConsole;
 $('send-errors').onclick=()=>draft('Console output in the app preview "'+metadata.name+'" (page '+currentPath+'):\\n'+entries.slice(-20).map(e=>'- '+e.level+': '+e.text).join('\\n'));
-// Point and tell
-const point=$('point');
-// Pointing again starts a new draft: panels over the app step aside.
-function pointing(on){if(on)panels(null);point.setAttribute('aria-pressed',String(on));$('pointing').hidden=!on;frame.contentWindow?.postMessage({type:'bivy:point',on},metadata.origin);}
-point.onclick=()=>pointing(point.getAttribute('aria-pressed')!=='true');
-function picked(d){
-  pointing(false);
-  if(d.cancelled)return;
-  // A long press: the draft opens listening, and letting go stops.
-  if(d.hold&&voice)heldAt=Date.now();
-  const r=d.rect||{},v=d.viewport||{};
-  const errors=entries.filter(e=>e.level==='error').slice(-5);
-  draft('In the app preview "'+metadata.name+'" (page '+safePath(d.path)+', viewport '+v.width+'×'+v.height+'):\\n'
-    +'Element: '+String(d.selector).slice(0,300)+(d.text?' ("'+String(d.text).slice(0,200)+'")':'')+', '+r.width+'×'+r.height+' at '+r.x+','+r.y
-    +(errors.length?'\\nRecent errors:\\n'+errors.map(e=>'- '+e.text).join('\\n'):''),d.hold===true&&voice);
-  if(metadata.reviewer){const s=pos(d.scroll);noteMark={path:safePath(d.path),viewport:v,scroll:s,theme:d.theme,selector:String(d.selector).slice(0,300),text:String(d.text||'').slice(0,200),strokes:[{tool:'box',points:[[r.x+s.x,r.y+s.y],[r.x+r.width+s.x,r.y+r.height+s.y]]}]};}
-}
-// Draw: freeze the app and mark what's wrong. Marks are kept in page
-// coordinates (so they stay on the content while two fingers scroll), and
-// the app reports what's under each one. On Done they go into the draft box
-// with that context; Add to chat hands them to the Bivy client, which gets a
-// picture from the machine. Reviewers instead submit marks with their note;
-// pictures stay on the machine for the owner. Compare's "after" shot can be
-// marked the same way by the owner.
+// Marking: one gesture, two results. Pointing at an element and circling an
+// area were two modes with a button each; they are one mode now, because they
+// are one intention — "this, here".
+//
+//   Tap the app                     reaches the app, unchanged
+//   Long press, lift without moving marks that element and opens the note
+//                                   (listening, when voice is available)
+//   Long press, then drag           draws a lasso and stays in marking
+//   Mark (or the C key)             enters marking with nothing marked yet
+//
+// Marks are kept in page coordinates (so they stay on the content while two
+// fingers scroll), and the app reports what is under each one. On Done they go
+// into the draft box with that context; Add to chat hands them to the Bivy
+// client, which gets a picture from the machine. Reviewers instead submit marks
+// with their note; pictures stay on the machine for the owner. Compare's "after"
+// shot can be marked the same way by the owner.
+const markBtn=$('mark');
+markBtn.onclick=()=>{if(draw&&!draw.done)endDraw();else startDraw('frame');};
 const ink=$('ink'),inkMarks=$('ink-marks'),SVG='http://www.w3.org/2000/svg';
-let draw=null,marks=null,drawOk=false,nextStroke=0;
+// One mark, one note, one number. Several marks used to collapse into a single
+// note, so "the button is too small" and "the total is misaligned" arrived as
+// one lump that could only be answered as a lump. Each mark now carries its own
+// words and becomes its own pin, and the picture wears the numbers so a note and
+// the thing it is about stay paired.
+let draw=null,notes=[],drawOk=false,nextStroke=0,speakNext=false;
 const pos=v=>({x:Number(v?.x)||0,y:Number(v?.y)||0});
-function startDraw(target){
-  endDraw();if(point.getAttribute('aria-pressed')==='true')pointing(false);
+/** Applies a page's report of where it is and what state it holds. */
+function applyState(current,d){
+  current.scroll=pos(d.scroll);
+  current.state={viewport:{width:Math.round(Number(d.viewport?.width))||current.state.viewport.width,height:Math.round(Number(d.viewport?.height))||current.state.viewport.height},dpr:Number(d.dpr)||devicePixelRatio,theme:d.theme==='dark'?'dark':'light',path:safePath(d.path),elementScrolls:d.elementScrolls,signals:Object.fromEntries(Object.entries(d.signals||{}).map(([k,v])=>[k,v===true]))};
+}
+/** "seed": the page's state, when a long press in the app brought it along. */
+function startDraw(target,seed){
+  endDraw();
   if(target==='frame')panels(null);
+  $('hint').hidden=true;
   if(target==='compare'){$('compare-slider').value='0';split();$('compare').dataset.drawing='';}
   // Tools first: they change the layout the marks are measured against.
   $('drawing').hidden=false;$('draw-bar').hidden=false;document.querySelector('nav').hidden=true;
   const r=placeInk(target);
-  draw={target,rect:r,scroll:{x:0,y:0},strokes:[],elements:{},tool:'pen',current:null,pointers:new Map(),pan:null,done:false,
+  draw={target,rect:r,scroll:{x:0,y:0},strokes:[],elements:{},current:null,pointers:new Map(),pan:null,done:false,
     state:{viewport:{width:Math.round(r.width),height:Math.round(r.height)},dpr:devicePixelRatio,path:currentPath,signals:{}}};
   ink.style.zIndex=target==='compare'?'calc(var(--z-sticky) + 1)':'';
   ink.classList.remove('frozen');ink.toggleAttribute('hidden',false);
@@ -357,17 +471,67 @@ function startDraw(target){
   if(target==='frame'&&metadata.inspect!==false){
     const current=draw;
     current.state.signals={unknown:true};
-    current.waiting=d=>{current.waiting=null;current.scroll=pos(d.scroll);current.state={viewport:{width:Math.round(Number(d.viewport?.width))||current.state.viewport.width,height:Math.round(Number(d.viewport?.height))||current.state.viewport.height},dpr:Number(d.dpr)||devicePixelRatio,theme:d.theme==='dark'?'dark':'light',path:safePath(d.path),elementScrolls:d.elementScrolls,signals:Object.fromEntries(Object.entries(d.signals||{}).map(([k,v])=>[k,v===true]))};renderInk();};
-    frame.contentWindow?.postMessage({type:'bivy:draw'},metadata.origin);
+    if(seed)applyState(current,seed);
+    else{
+      current.waiting=d=>{current.waiting=null;applyState(current,d);renderInk();};
+      frame.contentWindow?.postMessage({type:'bivy:draw'},metadata.origin);
+    }
   }
-  for(const b of $('draw-bar').querySelectorAll('[data-tool]'))b.setAttribute('aria-checked',String(b.dataset.tool===draw.tool));
-  $('draw-bar').querySelector('[aria-checked="true"]').focus();
+  space=draw;
+  $('draw-bar').focus();
   updateDrawBar();renderInk();
 }
-/** Lays the marking layer over what's marked; returns where that is. */
+/** A long press inside the app opens marking with that element already marked;
+ *  dragging on from it draws instead, and the app streams the points here
+ *  because the gesture belongs to its document, not this one. */
+function markFromPress(d){
+  startDraw('frame',d);
+  const el=d.element||{},r=el.rect||{};
+  const s={id:nextStroke++,tool:'pen',points:[[Math.round(Number(d.point?.[0])||0),Math.round(Number(d.point?.[1])||0)]],live:true};
+  draw.strokes.push(s);draw.live=s;
+  if(el.selector)draw.elements[s.id]=[{selector:String(el.selector).slice(0,300),tag:el.tag,text:String(el.text||'').slice(0,120),rect:r}];
+  renderInk();updateDrawBar();
+}
+/** The pressing finger moved: the mark becomes the path it draws. */
+function markMoved(d){
+  const s=draw?.live;if(!s)return;
+  const p=[Math.round(Number(d.point?.[0])||0),Math.round(Number(d.point?.[1])||0)];
+  const last=s.points[s.points.length-1];
+  if(Math.hypot(p[0]-last[0],p[1]-last[1])<2||s.points.length>=2000)return;
+  s.points.push(p);renderInk();
+}
+/** The finger lifted. Lifted where it landed: the element is what they meant,
+ *  so the mark becomes its box and the note opens, listening when it can. */
+function markEnded(){
+  const s=draw?.live;if(!s)return;
+  draw.live=null;delete s.live;
+  const xs=s.points.map(p=>p[0]),ys=s.points.map(p=>p[1]);
+  const moved=Math.max(...xs)-Math.min(...xs)>=4||Math.max(...ys)-Math.min(...ys)>=4;
+  if(moved){askMarked(s);renderInk();updateDrawBar();return;}
+  const r=draw.elements[s.id]?.[0]?.rect;
+  if(r&&r.width&&r.height){s.tool='box';s.points=[[r.x,r.y],[r.x+r.width,r.y+r.height]];}
+  else{s.tool='box';s.points=[[xs[0]-12,ys[0]-12],[xs[0]+12,ys[0]+12]];}
+  renderInk();updateDrawBar();
+  speakNext=voice;
+  $('draw-done').click();
+}
+/** Asks the page what a mark covers, while it is still on screen. */
+function askMarked(s){
+  if(draw.target!=='frame'||metadata.inspect===false)return;
+  const xs=s.points.map(p=>p[0]),ys=s.points.map(p=>p[1]);
+  const [x,y]=onScreen([Math.min(...xs),Math.min(...ys)]);
+  frame.contentWindow?.postMessage({type:'bivy:marks',id:s.id,rect:{x,y,width:Math.max(...xs)-Math.min(...xs),height:Math.max(...ys)-Math.min(...ys)}},metadata.origin);
+}
+/** Lays the marking layer over what's marked; returns where that is. A Compare
+ *  shot scrolls inside its panel, and its box keeps the size it would have
+ *  unclipped: left as is, the layer would reach past the panel and swallow the
+ *  taps meant for the tools under it. Clipping the bottom keeps the top-left
+ *  origin the marks are measured from. */
 function placeInk(target){
   const r=(target==='compare'?$('compare-after'):frame).getBoundingClientRect();
-  Object.assign(ink.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px'});
+  const limit=target==='compare'?$('compare').getBoundingClientRect().bottom:Infinity;
+  const height=Math.max(0,Math.min(r.height,limit-r.top));
+  Object.assign(ink.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px',height:height+'px'});
   inkMarks.setAttribute('viewBox','0 0 '+r.width+' '+r.height);
   return {left:r.left,top:r.top,width:r.width,height:r.height};
 }
@@ -375,22 +539,50 @@ function placeInk(target){
 // the frame are in page pixels, so they follow; the size in use is kept.)
 addEventListener('resize',()=>{if(draw&&!draw.done)draw.rect=Object.assign(placeInk(draw.target),{});});
 function endDraw(){
-  if(!draw)return;
+  if(!draw&&!notes.length)return;
   delete $('compare').dataset.drawing;
-  draw=null;marks=null;ink.toggleAttribute('hidden',true);inkMarks.replaceChildren();
-  $('drawing').hidden=true;$('draw-bar').hidden=true;document.querySelector('nav').hidden=false;
+  draw=null;space=null;notes=[];pending=null;ink.toggleAttribute('hidden',true);inkMarks.replaceChildren();
+  $('drawing').hidden=true;$('draw-bar').hidden=true;$('mark-count').hidden=true;document.querySelector('nav').hidden=false;
 }
-function updateDrawBar(){const has=Boolean(draw?.strokes.length);for(const id of ['draw-undo','draw-clear','draw-done'])$(id).disabled=!has;}
-const onScreen=([x,y])=>draw.target==='frame'?[x-draw.scroll.x,y-draw.scroll.y]:[x,y];
+function updateDrawBar(){
+  const has=Boolean(draw?.strokes.length);
+  $('draw-done').disabled=!has;
+  $('draw-clear').disabled=!has;
+  // Undo walks back through this mark's strokes, then through the marks before it.
+  $('draw-undo').disabled=!has&&!notes.length;
+  $('draw-undo').setAttribute('aria-label',has||!notes.length?'Undo':'Remove note '+notes.length);
+  $('mark-count').hidden=!notes.length;
+  $('mark-count').textContent=notes.length===1?'1 note':notes.length+' notes';
+}
+// Page pixels to screen pixels. Saved marks are drawn between marks, when
+// there is no mark in hand, so the page's position is kept beside them.
+let space=null;
+const onScreen=([x,y])=>{const d=draw||space;return d&&d.target==='frame'?[x-d.scroll.x,y-d.scroll.y]:[x,y];};
 function shape(stroke){
   const pts=stroke.points.map(onScreen);
   if(stroke.tool==='box'){const [a,b]=[pts[0],pts[pts.length-1]];const el=document.createElementNS(SVG,'rect');el.setAttribute('x',Math.min(a[0],b[0]));el.setAttribute('y',Math.min(a[1],b[1]));el.setAttribute('width',Math.abs(b[0]-a[0]));el.setAttribute('height',Math.abs(b[1]-a[1]));el.setAttribute('rx','3');return el;}
   const el=document.createElementNS(SVG,'polyline');el.setAttribute('points',pts.map(p=>p.join(',')).join(' '));return el;
 }
+/** The number a saved mark wears, at the top-left of what it covers. */
+function pip(note){
+  const xs=note.strokes.flatMap(s=>s.points.map(p=>p[0])),ys=note.strokes.flatMap(s=>s.points.map(p=>p[1]));
+  const [x,y]=onScreen([Math.min(...xs),Math.min(...ys)]);
+  const g=document.createElementNS(SVG,'g');
+  const disc=document.createElementNS(SVG,'circle');
+  disc.setAttribute('cx',x);disc.setAttribute('cy',y);disc.setAttribute('r','11');disc.setAttribute('class','pip');
+  const text=document.createElementNS(SVG,'text');
+  text.setAttribute('x',x);text.setAttribute('y',y);text.setAttribute('class','pip-text');text.textContent=String(note.n);
+  g.append(disc,text);
+  return g;
+}
 function renderInk(){
-  if(!draw)return;
-  const all=[...draw.strokes,...(draw.current?[draw.current]:[])];
-  inkMarks.replaceChildren(...all.flatMap(s=>['halo','mark'].map(c=>{const el=shape(s);el.setAttribute('class',c);return el;})));
+  if(!draw&&!notes.length)return;
+  const paint=(s,saved)=>['halo','mark'].map(c=>{const el=shape(s);el.setAttribute('class',saved?c+' saved':c);return el;});
+  const done=notes.flatMap(note=>[...note.strokes.flatMap(s=>paint(s,true)),pip(note)]);
+  const live=draw?[...draw.strokes,...(draw.current?[draw.current]:[])].flatMap(s=>paint(s,false)):[];
+  // The mark being written about wears its number too, so the note on screen
+  // and the thing it is about are paired while the words are still being typed.
+  inkMarks.replaceChildren(...done,...live,...(pending&&notes.length?[pip(pending)]:[]));
 }
 function local(e){const x=e.clientX-draw.rect.left,y=e.clientY-draw.rect.top;return draw.target==='frame'?[Math.round(x+draw.scroll.x),Math.round(y+draw.scroll.y)]:[Math.round(x),Math.round(y)];}
 let scrollAsk=null;
@@ -405,15 +597,16 @@ ink.onpointerdown=e=>{
   draw.pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
   // A second finger scrolls instead: the stroke it interrupted is dropped.
   if(draw.pointers.size>=2){draw.current=null;draw.pan=middle();renderInk();return;}
-  draw.current={id:nextStroke++,tool:draw.tool,points:[local(e)]};renderInk();
+  draw.current={id:nextStroke++,tool:'pen',points:[local(e)]};renderInk();
 };
 ink.onpointermove=e=>{
   if(!draw||!draw.pointers.has(e.pointerId))return;
   draw.pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
   if(draw.pan&&draw.pointers.size>=2){const m=middle();scrollPage(draw.pan.x-m.x,draw.pan.y-m.y);draw.pan=m;return;}
   const s=draw.current;if(!s)return;const p=local(e);
-  if(s.tool==='box')s.points=[s.points[0],p];
-  else{const last=s.points[s.points.length-1];if(Math.hypot(p[0]-last[0],p[1]-last[1])<2||s.points.length>=2000)return;s.points.push(p);}
+  const last=s.points[s.points.length-1];
+  if(Math.hypot(p[0]-last[0],p[1]-last[1])<2||s.points.length>=2000)return;
+  s.points.push(p);
   renderInk();
 };
 ink.onpointerup=ink.onpointercancel=e=>{
@@ -421,38 +614,51 @@ ink.onpointerup=ink.onpointercancel=e=>{
   const s=draw.current;draw.current=null;
   if(s&&e.type==='pointerup'){
     const xs=s.points.map(p=>p[0]),ys=s.points.map(p=>p[1]),w=Math.max(...xs)-Math.min(...xs),h=Math.max(...ys)-Math.min(...ys);
-    if(w>=4||h>=4){
-      draw.strokes.push(s);
-      // Ask what's under it while it's on screen (viewport coordinates).
-      if(draw.target==='frame'&&metadata.inspect!==false){const [x,y]=onScreen([Math.min(...xs),Math.min(...ys)]);frame.contentWindow?.postMessage({type:'bivy:marks',id:s.id,rect:{x,y,width:w,height:h}},metadata.origin);}
-    }
+    draw.strokes.push(s);
+    // A drag is the path it drew; a tap means the element under it, whose box
+    // the page reports back (see "marked").
+    if(w>=4||h>=4)askMarked(s);
+    else if(draw.target==='frame'&&metadata.inspect!==false){s.fit=true;frame.contentWindow?.postMessage({type:'bivy:marks',id:s.id,rect:{x:onScreen(s.points[0])[0]-2,y:onScreen(s.points[0])[1]-2,width:4,height:4}},metadata.origin);}
+    else draw.strokes.pop();
   }
   updateDrawBar();renderInk();
 };
 ink.onwheel=e=>{if(!draw||draw.done)return;e.preventDefault();scrollPage(e.deltaX,e.deltaY);};
-for(const b of $('draw-bar').querySelectorAll('[data-tool]'))b.onclick=()=>{if(!draw)return;draw.tool=b.dataset.tool;for(const o of $('draw-bar').querySelectorAll('[data-tool]'))o.setAttribute('aria-checked',String(o===b));};
-$('draw-undo').onclick=()=>{if(!draw)return;const s=draw.strokes.pop();if(s)delete draw.elements[s.id];updateDrawBar();renderInk();};
+$('draw-undo').onclick=()=>{
+  if(!draw)return;
+  // Back through this mark's strokes first, then through the notes before it.
+  const s=draw.strokes.pop();
+  if(s)delete draw.elements[s.id];else notes.pop();
+  updateDrawBar();renderInk();
+};
 $('draw-clear').onclick=()=>{if(!draw)return;draw.strokes=[];draw.elements={};updateDrawBar();renderInk();};
 $('draw-cancel').onclick=()=>endDraw();
-$('draw').onclick=()=>startDraw('frame');
 $('compare-draw').onclick=()=>startDraw('compare');
-$('draw-done').onclick=()=>{
-  if(!draw||!draw.strokes.length)return;
-  const d=draw,st=d.state,seen=new Set(),els=[];
-  for(const s of d.strokes)for(const el of d.elements[s.id]||[]){const key=String(el.selector);if(!seen.has(key)){seen.add(key);els.push(el);}}
+/** What one mark names, and where it is, in words. */
+function markContext(d,els){
   const bounds=s=>{const xs=s.points.map(p=>p[0]),ys=s.points.map(p=>p[1]);return s.tool+' '+Math.min(...xs)+','+Math.min(...ys)+'–'+Math.max(...xs)+','+Math.max(...ys);};
+  return (els.length?els.map(el=>'- '+String(el.selector).slice(0,300)+(el.text?' ("'+String(el.text).slice(0,120)+'")':'')).join('\\n')+'\\n':'')
+    +'Marks ('+(d.target==='compare'?'screenshot':'page')+' px): '+d.strokes.map(bounds).join('; ');
+}
+/** Where all the notes are, said once, above them. */
+function placeContext(d){
+  const st=d.state;
   const where=d.target==='compare'?'On the Compare screenshot after the agent’s last change in "'+metadata.name+'"':metadata.inspect===false?'On the desktop app "'+metadata.name+'"':'In the app preview "'+metadata.name+'"';
   const scrolled=d.target==='frame'&&(d.scroll.x||d.scroll.y)?', scrolled to '+d.scroll.x+','+d.scroll.y:'';
-  const context=where+' (page '+st.path+', viewport '+st.viewport.width+'×'+st.viewport.height+scrolled+'), marked:\\n'
-    +(els.length?els.map(el=>'- '+String(el.selector).slice(0,300)+(el.text?' ("'+String(el.text).slice(0,120)+'")':'')).join('\\n')+'\\n':'')
-    +'Marks ('+(d.target==='compare'?'screenshot':'page')+' px): '+d.strokes.map(bounds).join('; ');
-  const mark=Object.assign({path:st.path,viewport:st.viewport,dpr:st.dpr,strokes:d.strokes.map(s=>({tool:s.tool,points:s.points})),signals:st.signals},
-    d.target==='frame'?{scroll:d.scroll,elementScrolls:st.elementScrolls,theme:st.theme}:{compare:compareAfter});
-  // The marks stay on screen, frozen, while you add your words.
+  return where+' (page '+st.path+', viewport '+st.viewport.width+'×'+st.viewport.height+scrolled+')';
+}
+$('draw-done').onclick=()=>{
+  if(!draw||!draw.strokes.length)return;
+  const d=draw,seen=new Set(),els=[];
+  for(const s of d.strokes)for(const el of d.elements[s.id]||[]){const key=String(el.selector);if(!seen.has(key)){seen.add(key);els.push(el);}}
+  pending={n:notes.length+1,strokes:d.strokes.map(s=>({tool:s.tool,points:s.points})),els,context:markContext(d,els),
+    selectors:els.map(el=>String(el.selector).slice(0,300)).slice(0,8)};
+  // The marks stay on screen, frozen, while the words for this one are added.
   d.done=true;draw=null;
-  draft(context,false);
-  draw=d;marks=mark;ink.classList.add('frozen');
-  // Compare closed for the draft box: its marks go with it (they're in the context).
+  const speak=speakNext;speakNext=false;
+  draft(placeContext(d)+', note '+pending.n+':\\n'+pending.context,speak);
+  draw=d;ink.classList.add('frozen');renderInk();
+  // Compare closed for the note box: its marks go with it (they're in the context).
   if(d.target==='compare')ink.toggleAttribute('hidden',true);$('drawing').hidden=true;$('draw-bar').hidden=true;document.querySelector('nav').hidden=false;
 };
 // Compare: screenshots around the agent's last change (agent screenshots on).
@@ -461,7 +667,7 @@ async function loadCompare(){
   if(metadata.reviewer)return;
   try{const r=await fetch(metadata.origin+'/__bivy/compare',{credentials:'include',cache:'no-store'});if(!r.ok)return;shots=(await r.json()).shots||[];compareBtn.hidden=shots.length<2;}catch{}
 }
-function panels(open){if(listening)cancelListening();if(draw&&!(open==='compare'&&draw.target==='compare'))endDraw();for(const [id,btn] of [['console','errors'],['compare','compare-btn']]){$(id).hidden=id!==open;$(btn).setAttribute('aria-pressed',String(id===open));}$('draft').hidden=true;}
+function panels(open){if(listening)cancelListening();if(draw&&!(open==='compare'&&draw.target==='compare'))endDraw();for(const [id,btn] of [['console','errors'],['compare','compare-btn']]){$(id).hidden=id!==open;$(btn).setAttribute('aria-checked',String(id===open));}$('draft').hidden=true;}
 compareBtn.onclick=async()=>{
   if(!$('compare').hidden)return panels(null);
   panels('compare');
@@ -478,33 +684,42 @@ compareBtn.onclick=async()=>{
 };
 const split=()=>{$('compare-before').style.clipPath='inset(0 '+(100-Number($('compare-slider').value))+'% 0 0)';};
 $('compare-slider').oninput=split;
-// The pill can cover an app's own bars: drag its grip to the other edge (kept
-// for next time), or tap it to collapse the pill to a corner button.
-const dock=$('dock'),grip=$('hide'),edgeKey='bivy-preview-edge';
+// One pill, and one menu behind it: everything that used to be a button in a
+// row of seven. The row scrolled sideways on a phone and covered the app; the
+// pill holds what must always be visible — where you are, whether a newer
+// version is waiting, whether the app is logging errors — and the menu holds
+// the rest.
+const dock=$('dock'),menu=$('menu'),more=$('more'),edgeKey='bivy-preview-edge';
 function edge(to,keep){
   dock.dataset.edge=to;$('show').dataset.edge=to;
+  $('edge').querySelector('.menu-item-label').textContent=to==='top'?'Move to bottom':'Move to top';
   if(keep)try{localStorage.setItem(edgeKey,to);}catch{}
 }
 try{edge(localStorage.getItem(edgeKey)==='top'?'top':'bottom');}catch{edge('bottom');}
-let drag=null,dragged=false;
-grip.onpointerdown=e=>{drag={y:e.clientY,moved:false};try{grip.setPointerCapture(e.pointerId);}catch{}};
-grip.onpointermove=e=>{
-  if(!drag)return;const dy=e.clientY-drag.y;
-  if(!drag.moved&&Math.abs(dy)<8)return;
-  drag.moved=true;dock.classList.add('dragging');dock.style.transform='translateY('+dy+'px)';
-};
-grip.onpointerup=grip.onpointercancel=e=>{
-  if(!drag)return;const {moved}=drag;drag=null;
-  if(moved){const r=grip.getBoundingClientRect();edge(r.top+r.height/2<innerHeight/2?'top':'bottom',true);dragged=true;setTimeout(()=>{dragged=false;});}
-  dock.classList.remove('dragging');dock.style.transform='';
-};
-grip.onkeydown=e=>{if(e.key==='ArrowUp'||e.key==='ArrowDown'){e.preventDefault();edge(e.key==='ArrowUp'?'top':'bottom',true);}};
-grip.onclick=()=>{if(dragged){dragged=false;return;}if(point.getAttribute('aria-pressed')==='true')pointing(false);dock.hidden=true;$('show').hidden=false;$('show').focus();};
-$('show').onclick=()=>{$('dock').hidden=false;$('show').hidden=true;$('hide').focus();};
-// Device lens (desktop widths)
-for(const b of $('lens').querySelectorAll('button'))b.onclick=()=>{
+function openMenu(on){
+  menu.hidden=!on;more.setAttribute('aria-expanded',String(on));
+  if(on)menu.querySelector('.menu-item:not([hidden]):not(:disabled)')?.focus();
+}
+more.onclick=()=>openMenu(menu.hidden);
+// Choosing anything closes the menu; the pill takes focus back.
+menu.addEventListener('click',e=>{if(e.target.closest('.menu-item')){openMenu(false);more.focus();}});
+// A tap outside, or Escape, closes it. (The app is in a frame, so a tap there
+// never reaches this document: the menu also closes when the frame takes over.)
+addEventListener('pointerdown',e=>{if(!menu.hidden&&!menu.contains(e.target)&&!more.contains(e.target))openMenu(false);},true);
+// Focus moving into the app's frame (or away from the preview) closes it too:
+// a tap inside the frame never reaches this document.
+addEventListener('blur',()=>openMenu(false));
+$('edge').onclick=()=>edge(dock.dataset.edge==='top'?'bottom':'top',true);
+more.onkeydown=e=>{if(e.key==='ArrowUp'||e.key==='ArrowDown'){e.preventDefault();edge(e.key==='ArrowUp'?'top':'bottom',true);}};
+/** Out of the way means out of the way: with the controls hidden, a long press
+ *  belongs to the app again (a canvas, a map, anything with its own). */
+const arm=on=>frame.contentWindow?.postMessage({type:'bivy:arm',on},metadata.origin);
+$('hide').onclick=()=>{dock.hidden=true;$('show').hidden=false;$('show').focus();arm(false);};
+$('show').onclick=()=>{dock.hidden=false;$('show').hidden=true;more.focus();arm(true);};
+// Width (desktop only: a phone is already the width it is)
+for(const b of menu.querySelectorAll('[data-lens]'))b.onclick=()=>{
   stage.dataset.lens=b.dataset.lens;
-  for(const o of $('lens').querySelectorAll('button'))o.setAttribute('aria-selected',String(o===b));
+  for(const o of menu.querySelectorAll('[data-lens]'))o.setAttribute('aria-checked',String(o===b));
 };
 // Messages from the app origin: server state and inspector reports.
 const down=$('down'),downText=$('down-text'),ask=$('ask');
@@ -524,17 +739,35 @@ addEventListener('message',e=>{
     if(d.type==='note-sent'&&metadata.reviewer)finishNote(d);
     else if(d.type==='route'){currentPath=safePath(d.path);reviewerTools(true);}
     else if(d.type==='console'&&(d.level==='error'||d.level==='warn')){entries.push({level:d.level,text:String(d.text).slice(0,500)});if(entries.length>50)entries.shift();renderConsole();}
-    else if(d.type==='picked')picked(d);
     else if(d.type==='release'&&heldAt){heldAt=0;stopListening();}
-    else if(d.type==='draw-state'&&draw&&draw.waiting){draw.waiting(d);}
+    else if(d.type==='draw-state'){if(draw&&draw.waiting)draw.waiting(d);else if(stateWaiter)stateWaiter(d);}
     else if(d.type==='scrolled'&&draw&&draw.target==='frame'){draw.scroll=pos(d.scroll);renderInk();}
-    else if(d.type==='marked'&&draw){draw.elements[Number(d.id)]=Array.isArray(d.elements)?d.elements.slice(0,8):[];}
+    else if(d.type==='marked'&&draw){
+      const els=Array.isArray(d.elements)?d.elements.slice(0,8):[];
+      draw.elements[Number(d.id)]=els;
+      // A tap: make the mark the box of what it landed on.
+      const s=draw.strokes.find(item=>item.id===Number(d.id));
+      if(s&&s.fit){
+        delete s.fit;const r=els[0]?.rect;
+        if(r&&r.width&&r.height)s.points=[[r.x,r.y],[r.x+r.width,r.y+r.height]];
+        else s.points=[[s.points[0][0]-12,s.points[0][1]-12],[s.points[0][0]+12,s.points[0][1]+12]];
+        s.tool='box';renderInk();updateDrawBar();
+      }
+    }
+    else if(d.type==='mark-start')markFromPress(d);
+    else if(d.type==='mark-move')markMoved(d);
+    else if(d.type==='mark-end')markEnded();
   }
 });
 ask.onclick=()=>toChat('The app preview "'+metadata.name+'" isn’t loading: nothing is answering on port '+downPort+'. Please find out why the server stopped, restart it, and tell me when it’s back.');
-addEventListener('keydown',e=>{if(e.key==='Escape'){if(listening)cancelListening();else if(!$('draft').hidden)$('draft-cancel').click();else if(draw&&!draw.done)endDraw();else if(point.getAttribute('aria-pressed')==='true')pointing(false);else panels(null);}});
+addEventListener('keydown',e=>{
+  // C marks something, for anyone not holding a finger on a phone.
+  if((e.key==='c'||e.key==='C')&&!e.metaKey&&!e.ctrlKey&&!e.altKey&&!/^(input|textarea|select)$/i.test(e.target?.localName||'')&&!markBtn.disabled&&!draw){e.preventDefault();startDraw('frame');return;}
+  if(e.key==='Escape'){if(!menu.hidden){openMenu(false);more.focus();}else if(listening)cancelListening();else if(!$('draft').hidden)$('draft-cancel').click();else if(draw&&!draw.done)endDraw();else panels(null);}});
 back.onclick=()=>{if(metadata?.returnTo){window.close();setTimeout(()=>location.replace(metadata.returnTo),100);}else{window.close();status.hidden=false;status.textContent='You can close this tab to return to Bivy.';}};
-reload.onclick=()=>{if(metadata)open(currentPath,'Reloading app…');};
+// A reload fetches the newest bytes, so it settles any waiting version too.
+reload.onclick=()=>{if(!metadata)return;shown=latest;waiting(false);open(currentPath,'Reloading app…');};
+$('update').onclick=()=>{void takeUpdate();};
 (async()=>{
   if(ticket){
     const response=await fetch('/__bivy/launch',{method:'POST',headers:{'Content-Type':'text/plain'},body:ticket});

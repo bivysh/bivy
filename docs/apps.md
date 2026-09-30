@@ -165,6 +165,39 @@ chat attachment the device fetches over the session channel. It waits up to
 encrypted in transit, in the node's attachment store). Each view keeps only
 its latest card's pictures: an older card shows "Screenshot no longer stored".
 
+### Pins
+
+Marks sent from a preview become a **pin**: a card in the chat holding the crop
+of what was marked, the words that were sent with it, and a state. A message
+carrying several numbered notes makes one pin per note, each with its own crop,
+its own number and its own answer. The message
+they travelled in is unchanged — the agent still reads the words, the context
+and the full picture — but a message says nothing about itself afterwards, and a
+pin does.
+
+A pin is made only when the message is actually sent, so nothing appears in the
+chat that nobody sent. It keeps the place it was made and only its state moves:
+
+| State | What it means |
+| --- | --- |
+| **Open** | Nothing has changed where it points. |
+| **Changed** | A later run changed the pixels it marked. |
+| **Element gone** | Everything it named has left the page. |
+| **Done** | The person said so (and can reopen it). |
+
+Only evidence moves a pin off **Open**: a run that changes nothing there leaves
+it open, because it has not been answered. The evidence is the run's own
+before/after screenshots, compared inside the marked region alone, plus a check
+of whether the marked elements still match anything on the page. Turning preview
+cards off stops the cards, not the answers — pins on that app are still resolved.
+
+Two things a pin does not claim: a pin marked at a viewport width far from the
+390 px the run screenshots use sat on a different layout, so its region is not
+compared and it stays open; and with agent screenshots off there are no pictures
+to compare, so pins stay open until marked done. Pins live in the node's memory
+and their pictures in the attachment store; the card survives a reload through
+the session's event log.
+
 ### Share links (`bivy app share`)
 
 ```sh
@@ -191,7 +224,7 @@ and view it picked:
 The link works for `--for` (`1h`, `1d` or `7d`; default `1d`), until the user
 stops sharing in the Apps sheet, until the app is removed, or until the machine
 restarts. People who open it can leave reviewer notes, which come back under the
-view in **Apps**; with `--view-only` they see just the app, without Point, Draw
+view in **Apps**; with `--view-only` they see just the app, without marking
 or notes. The JSON also carries `controls` (whether the link has the feedback
 tools).
 
@@ -269,8 +302,9 @@ output, it restarts if it exits, and removing the app stops both. With
 `restartOnChange`, an agent turn that changed files restarts it too, so it runs
 the new code, and Compare gets a before/after pair. The preview streams the
 display into the usual shell, so Peek, **Open in tab**, the stable address and
-**Copy link** work as for web views. **Point**, **Console** and reviewer notes
-need a page to inspect, so they're not offered.
+**Copy link** work as for web views. **Console** and reviewer notes need a page
+to inspect, so they're not offered; marking works on the streamed frame, which
+is exactly what you saw.
 
 The display follows the viewer: it takes the preview's size (a phone gets a
 phone-sized screen), each app window fills it, and dialogs stay their own size,
@@ -555,8 +589,8 @@ It opens the isolated preview shell in reviewer mode, with the app in its own
 frame. Every visit exchanges it for a host-only app cookie, capped so a browser
 session never outlives the link.
 The Share sheet picks how long it works (1 hour, 1 day or 7 days; the choice is
-remembered per device) and whether it carries the **Feedback tools** (Point,
-Draw and notes; on by default). Off, people see only the app: the shell shows no
+remembered per device) and whether it carries the **Feedback tools** (marking
+and notes; on by default). Off, people see only the app: the shell shows no
 Bivy controls, the reviewer inspector isn't served, and notes are refused.
 It stays valid for that long, until **Stop sharing**, until the app is removed,
 or until the machine restarts (links live in the node's memory). While links
@@ -568,8 +602,8 @@ bearer capability: anyone holding it can use the app, including a live server's
 backend, until it lapses or is revoked. Agents mint the same link with
 [`bivy app share`](#share-links-bivy-app-share).
 
-**Reviewer notes.** A copied link offers **Point** and **Draw → Pen / Box**,
-using the same controls as the owner's preview. The visitor marks the page,
+**Reviewer notes.** A copied link offers the same **Mark** gesture as the
+owner's preview. The visitor marks the page,
 writes a note, and chooses **Send note**. No microphone or voice transcription
 is available, and submitting feedback never starts an agent run.
 
@@ -619,32 +653,59 @@ expires. Reload reloads the page the app is on.
 ### Preview controls
 
 The preview shell floats one pill over the app, so the app keeps the whole
-screen. **⌄** collapses it to a small **Bivy** button when it covers the app's
-own bottom bar.
+screen. The pill holds only what must always be visible — which preview you are
+in, whether a newer version is waiting, and how many errors the page is logging
+— and **⌄** opens a menu with everything else: **Mark something**, **Console**,
+**Compare**, the width choices on wide screens, **Reload**, **Move to
+top/bottom**, and **Hide controls**, which collapses the pill to a small
+**Bivy** button when it covers the app's own bottom bar.
 
-- **Point**: tap any element in the app. A draft for the agent opens with the
-  element's selector, text, size and position, the page, the viewport and
-  recent errors. You add what should change, then **Add to chat** puts it in the
-  session's composer. The tap you point with is not passed to the app.
-- **Point and speak** (in the preview drawer inside Bivy): the draft box has a
-  mic. Hold it and speak, then let go; or tap to start and tap again to stop.
-  **Long-press** an element while pointing to open its draft already
-  listening; letting go stops. What you said goes first in the draft, and stays
-  editable, followed by the element's context. Bivy does the listening, not
-  the preview: the shell asks the Bivy page that frames it to listen, and only
-  the transcript comes back. Audio goes to the node for transcription over the
-  encrypted session channel (Settings → Voice input), or to the browser's own
-  dictation when no key is set. It never passes through the preview origin. A
-  preview opened in a tab has no mic; use the composer's.
-- **Draw** (in the preview drawer inside Bivy): the app freezes under a
-  marking layer — nothing you draw reaches it — and you circle, scribble
-  (**Pen**) or **Box** what's wrong; **Undo**, **Clear**, **Done**. Two fingers
-  (or a mouse wheel) scroll the page, and marks stay on the content. Done opens
-  the draft box (type, or use the mic): its context names the elements inside
-  your marks (by their content, so circling "Total $102" names that line, not
-  the whole row), the page and viewport, and each mark's bounds. **Add to
-  chat** puts your words and that context in the composer with a picture of
-  what you marked, as an ordinary image attachment you can open or remove.
+- **Show new version**: appears when an agent turn has built something newer
+  than what is on screen. A turn never reloads the preview under you — a scroll
+  position, a filled-in form or an open menu would go with it — so the new
+  version waits for this tap, and taking it puts you back on the same page at
+  the same place.
+- **Mark**: pointing at an element and circling an area are one gesture, because
+  they are one intention.
+
+  | What you do | What happens |
+  | --- | --- |
+  | Tap the app | reaches the app, unchanged |
+  | Long press, lift without moving | marks that element and opens the note |
+  | Long press, then drag | draws a lasso, and marking stays open for more |
+  | **Mark**, or the `C` key | opens marking with nothing marked yet |
+
+  In marking, the app freezes under a layer — nothing you draw reaches it — a
+  drag draws the path it takes, and a tap marks the element under it. **Undo**,
+  **Clear**, **✕**, **Done**. Two fingers (or a mouse wheel) scroll the page,
+  and marks stay on the content. Done opens the note box: its context names the
+  elements your marks cover (by their content, so circling "Total $102" names
+  that line, not the whole row), the page and viewport, and each mark's bounds.
+- **One mark, one note, one number.** **Mark another** keeps what you have
+  written and hands the layer back, so "the button is too small" and "the total
+  is misaligned" stay separate thoughts instead of one lump. Each saved mark
+  stays on the page wearing its number, **Undo** walks back through the current
+  mark's strokes and then through the notes before it, and the picture carries
+  the same numbers, so a note and the thing it is about stay paired. **Add N
+  notes to chat** sends them together, as one message and one picture — and each
+  note becomes a [pin](#pins) of its own, so they are answered one at a time. A
+  reviewer on a shared link sends one note at a time.
+- **Add to chat** puts your words and that context in the composer with a
+  picture of what you marked, as an ordinary image attachment you can open or
+  remove. A long press inside a field, or over text you are selecting, is left
+  to the app — a long press already means something there. **Hide controls**
+  gives it back entirely, for an app with its own long press (a canvas, a map);
+  showing them arms it again.
+- **Speaking a note** (in the preview drawer inside Bivy): the note box has a
+  mic. Hold it and speak, then let go; or tap to start and tap again to stop. A
+  long press that lifts where it landed opens the note already listening. What
+  you said goes first in the note, and stays editable, followed by the marks'
+  context. Bivy does the listening, not the preview: the shell asks the Bivy page
+  that frames it to listen, and only the transcript comes back. Audio goes to the
+  node for transcription over the encrypted session channel (Settings → Voice
+  input), or to the browser's own dictation when no key is set. It never passes
+  through the preview origin. A preview opened in a tab has no mic; use the
+  composer's.
   - The picture is made on the machine and fetched by the Bivy page over the
     encrypted session channel: for a web page, the local Chrome retakes it at
     your viewport, pixel ratio and scroll, and the marks are drawn on top. It
@@ -659,10 +720,12 @@ own bottom bar.
   - Strokes, elements and pictures never go through the preview origin: the
     shell hands them to the Bivy page by `postMessage`. The marks use the
     `--annotate` design token, the same colour in both themes.
-- **Console**: errors and warnings from the page, with a count on the pill.
+- **Console** (in the menu): errors and warnings from the page, with the count on the pill.
+  Because it is on the pill, the number is visible without opening the menu.
   **Send to agent…** drafts them the same way.
-- **Full / Tablet / Phone** (wide screens): constrains the app to 768 or 390 px.
-- **Compare** (with agent screenshots on): before/after screenshots at phone
+- **Full / Tablet / Phone** (in the menu, wide screens only): constrains the app to 768 or 390 px.
+  A phone is already the width it is, so the choice isn't offered there.
+- **Compare** (in the menu, with agent screenshots on): before/after screenshots at phone
   width around the agent's last change (review cards reuse these shots), with a handle to reveal either. Bivy
   takes a baseline the first time a view is opened, and one after each turn that
   changes files, of the page last viewed. The last four are kept in memory.

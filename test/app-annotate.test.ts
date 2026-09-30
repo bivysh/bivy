@@ -5,7 +5,7 @@ import { test } from "node:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { approximate, composite, readStrokes, readElementScrolls } from "../src/apps/annotate.js";
+import { approximate, composite, noteAnchor, readNotes, readStrokes, readElementScrolls } from "../src/apps/annotate.js";
 import { decodePng } from "../src/apps/review.js";
 import { encodePng } from "../src/apps/rfb.js";
 import { findChrome } from "../src/apps/screenshot.js";
@@ -30,6 +30,29 @@ test("marks are composited in page coordinates, scaled to the picture, over a ha
   assert.deepEqual(pixel(png, 190, 190), [0, 0, 0]);
   assert.throws(() => readStrokes([{ tool: "laser", points: [[0, 0]] }]), /Invalid mark/);
   assert.throws(() => readStrokes([]), /at least one/);
+});
+
+test("several notes wear their numbers in the picture, where each one starts", () => {
+  const notes = readNotes([
+    { n: 1, words: "  Too small  ", selectors: ["#buy", 42, "x".repeat(400)], strokes: [{ tool: "box", points: [[40, 40], [90, 70]] }] },
+    { n: 2, words: "Misaligned", strokes: [{ tool: "pen", points: [[40, 140], [160, 140]] }] },
+  ]);
+  assert.deepEqual(notes.map((note) => [note.n, note.words, note.selectors]), [[1, "Too small", ["#buy"]], [2, "Misaligned", []]]);
+  assert.deepEqual(notes.map(noteAnchor), [{ x: 40, y: 40 }, { x: 40, y: 140 }]);
+  const badges = notes.map((note) => ({ n: note.n, ...noteAnchor(note) }));
+  const png = composite(black(200, 200), notes.flatMap((note) => note.strokes), { scale: 1 }, badges);
+  // A pill of ink centred on each anchor, with the digit cut out of it in halo.
+  assert.deepEqual(pixel(png, 40, 30), INK);
+  assert.deepEqual(pixel(png, 40, 130), INK);
+  const halo = (x: number, y: number) => { const d = decodePng(png); let n = 0; for (let j = y - 8; j <= y + 8; j++) for (let i = x - 8; i <= x + 8; i++) { const k = (j * d.width + i) * d.channels; if (d.pixels[k] === 255 && d.pixels[k + 1] === 255 && d.pixels[k + 2] === 255) n++; } return n; };
+  assert.ok(halo(40, 40) > 0 && halo(40, 140) > 0, "each number is drawn inside its pill");
+  // "1" is two segments and "2" is five, so they cannot be the same picture.
+  assert.notEqual(halo(40, 40), halo(40, 140));
+  // Without numbers, nothing is drawn at the anchors but the marks themselves.
+  const plain = composite(black(200, 200), notes.flatMap((note) => note.strokes), { scale: 1 });
+  assert.deepEqual(pixel(plain, 40, 30), [0, 0, 0]);
+  assert.throws(() => readNotes([{ n: 0, strokes: [{ tool: "box", points: [[0, 0]] }] }]), /note number/);
+  assert.throws(() => readNotes([]), /1 to 20 notes/);
 });
 
 test("a retaken picture is approximate when the page held state or couldn't scroll there; exact frames never are", () => {

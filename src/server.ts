@@ -34,9 +34,9 @@ import { CLIENT_COMMAND_ROUTES } from "./protocol/client-command-routes.js";
 import { AppRegistry } from "./apps/registry.js";
 import { AppGateway } from "./apps/gateway.js";
 import { RemotePreview } from "./apps/remote-preview.js";
-import { AppService, type ReviewSink } from "./apps/service.js";
+import { AppService, type PinSink, type ReviewSink } from "./apps/service.js";
 import { pngSize, reviewHint } from "./apps/review.js";
-import type { AppReview, ReviewShot } from "./apps/types.js";
+import type { AppPin, AppReview, ReviewShot } from "./apps/types.js";
 import { createDisplayHost } from "./apps/display.js";
 import { createAppCommands } from "./controllers/app-commands.js";
 import { bindClientCommandRoutes } from "./http/client-command-routes.js";
@@ -2050,9 +2050,10 @@ function referencedAttachmentHashes(): Set<string> | null {
   // `scan`, not `entries`: this visits every session ever created, and must not pin
   // each one's full log in the event-log cache.
   for (const id of ids) {
-    for (const entry of eventLog.scan(id, ["attachment", "outbound-attachment", "inline-image", "app-review"])) {
+    for (const entry of eventLog.scan(id, ["attachment", "outbound-attachment", "inline-image", "app-review", "app-pin"])) {
       if (entry.bivyKind === "attachment") for (const ref of entry.refs) hashes.add(ref.hash);
       else if (entry.bivyKind === "app-review") { for (const shot of [entry.review.shot, entry.review.before]) if (shot) hashes.add(shot.hash); }
+      else if (entry.bivyKind === "app-pin") { if (entry.pin.shot) hashes.add(entry.pin.shot.hash); }
       else if (entry.bivyKind === "outbound-attachment" || entry.bivyKind === "inline-image") hashes.add(entry.ref.hash);
     }
   }
@@ -2316,6 +2317,30 @@ function createReviewSink(): ReviewSink {
     },
   };
 }
+/** Pins: the picture becomes an encrypted attachment like a review card's, and
+ * the pin is logged where it was made, so it keeps its place in the chat while
+ * only its state moves. */
+function createPinSink(): PinSink {
+  const anchors = new Map<string, { afterMessageCount: number; createdAt: number }>();
+  return {
+    publish(pin, image) {
+      const record = resolveSession(pin.sessionId);
+      if (!record) return pin;
+      const card: AppPin = { ...pin };
+      if (image && !card.shot) {
+        try {
+          const ref = attachmentStore.put(image, { name: `${pin.name} ${pin.path} pinned.png`, mimeType: "image/png", kind: "image" });
+          card.shot = { hash: ref.hash, size: ref.size, ...pngSize(image) };
+        } catch { /* a pin without a picture still carries the words and the marks */ }
+      }
+      const at = anchors.get(card.id) ?? { afterMessageCount: record.session.getMessages().length, createdAt: Date.now() };
+      anchors.set(card.id, at);
+      eventLog.appendAppPin(record.id, { ...at, pin: card });
+      broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "app_pin", id: card.id, pin: card } }));
+      return card;
+    },
+  };
+}
 const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   start: async (spec) => {
     let failure = "Could not start the app terminal.";
@@ -2328,7 +2353,7 @@ const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   },
   has: (id) => terminals.has(id),
   close: (id) => { terminals.close(id); },
-}, { screenshots: { enabled: appScreenshotsEnabled }, displays: appDisplays, reviews: createReviewSink() });
+}, { screenshots: { enabled: appScreenshotsEnabled }, displays: appDisplays, reviews: createReviewSink(), pins: createPinSink() });
 // A reviewer's note shows up in an open Apps sheet without reopening it, and
 // the owner gets one push per burst of notes on a view ("2 notes on
 // Storefront"), which opens the Apps sheet at that app. Counts, names and IDs
