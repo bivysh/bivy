@@ -2675,10 +2675,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     if (!sid || !newName) return;
     const rec = resolveSession(sid);
     if (!rec) return;
-    rec.session.setName(newName);
-    persistSessionMetadata(rec);
-    ctx.broadcast({ type: "session.renamed", sessionId: rec.id, sessionFile: rec.sessionFile, name: newName });
-    scheduleAdvertise();
+    sessionNamer.setSessionName(rec, newName);
   },
   abort(msg, ctx) {
     const sessionId = String(msg.sessionId ?? "");
@@ -10060,10 +10057,7 @@ app.post("/api/sessions/rename", (req, res, next) => {
     if (!sid || !newName) return res.status(400).json({ error: "sessionId and name required" });
     const rec = resolveSession(sid);
     if (!rec) return res.status(404).json({ error: "Session not found" });
-    rec.session.setName(newName);
-    persistSessionMetadata(rec);
-    broadcast({ type: "session.renamed", sessionId: rec.id, sessionFile: rec.sessionFile, name: newName });
-    scheduleAdvertise();
+    sessionNamer.setSessionName(rec, newName);
     res.json({ ok: true, name: newName });
   } catch (error) {
     next(error);
@@ -11907,6 +11901,18 @@ app.get("/api/session/:id/automations/apply/:proposalId", (req, res) => {
   const proposal = automationProposals.get(String(req.params.id), String(req.params.proposalId));
   if (!proposal) return res.status(404).json({ error: "Proposal not found" });
   res.json(proposal);
+});
+
+// `bivy title "<title>"`: the agent names its own session, e.g. when the first
+// message made a poor title or the work changed direction.
+const MAX_SESSION_TITLE = 100;
+app.post("/api/session/:id/title", (req, res) => {
+  const record = openSessions.get(String(req.params.id));
+  if (!record) return res.status(404).json({ error: "Session not found" });
+  const title = typeof req.body?.title === "string" ? req.body.title.replace(/\s+/g, " ").trim() : "";
+  if (!title || title.length > MAX_SESSION_TITLE) return res.status(400).json({ error: `A title needs 1 to ${MAX_SESSION_TITLE} characters.` });
+  sessionNamer.setSessionName(record, title);
+  res.json({ ok: true, title });
 });
 
 // `bivy suggest "<task>"`: the agent proposes a task the user can start in one

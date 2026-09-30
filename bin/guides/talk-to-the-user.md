@@ -41,6 +41,13 @@ instead of a bulleted list.
 | `subagents` | Independent tasks you can split across your own sub-agents and report back on. Only if you have sub-agents. |
 | `new` | Bigger independent work the user will want to follow, review or merge on its own. Default for several cards. |
 
+## Name the session: title
+
+    bivy title "Fix login redirect loop"
+
+The session list shows a title taken from the first message. When that doesn't
+say what the work is, or the work changes direction, rename it. Keep it short.
+
 ## Is anyone there?
 
 `bivy context --json` reports `userConnected` (some device has the app open) and
