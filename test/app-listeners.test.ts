@@ -56,6 +56,26 @@ test("only workspace processes listening on loopback or wildcard are offered, an
   }
 });
 
+test("before a session exists, servers anywhere under the owner's home are offered with the project they run in", { skip: !["linux", "darwin"].includes(process.platform) }, async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-home-"));
+  const project = path.join(home, "code", "shop");
+  fs.mkdirSync(path.join(project, ".git"), { recursive: true });
+  fs.mkdirSync(path.join(project, "web"));
+  const inProject = await server(path.join(project, "web"));
+  const inHome = await server(home);
+  try {
+    const service = new AppService(new AppRegistry(), undefined, { start: async () => "t", has: () => true, close: () => {} });
+    const commands = new CommandRegistry(createAppCommands(service, () => undefined, undefined, () => home), CLIENT_COMMAND_SCHEMAS);
+    const replies: any[] = [];
+    await commands.dispatch("apps.offers", { kind: "apps.offers" }, { reply: (event: unknown) => replies.push(event), broadcast: () => {} });
+    // A server started in the home folder itself has no project to open.
+    assert.deepEqual(replies.at(-1).offers.map((offer: { port: number; project: string }) => [offer.port, offer.project]), [[inProject.port, fs.realpathSync(project)]]);
+  } finally {
+    inProject.child.kill(); inHome.child.kill();
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("socket tables admit loopback and wildcard listeners only", () => {
   const row = (address: string, state = "0A") => `  0: ${address}:1F90 00000000:0000 ${state} 00000000:00000000 00:00000000 00000000  1000        0 4242 1 0000000000000000`;
   assert.deepEqual(listenPort(row("0100007F")), { inode: "4242", port: 8080 });

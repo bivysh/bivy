@@ -9,7 +9,7 @@ test.beforeAll(async ({ webApp }) => {
 });
 
 for (const theme of themes) {
-  test(`first machine advances to an agent-led first session (${theme})`, async ({ page }, testInfo) => {
+  test(`first machine advances to a first task that runs the loop (${theme})`, async ({ page }, testInfo) => {
     page.on("pageerror", error => console.error(error.message));
     await page.addInitScript((theme) => {
       localStorage.setItem("bivy_session", "sess_private_never_in_command");
@@ -50,6 +50,12 @@ for (const theme of themes) {
     await page.evaluate(async () => {
       const module = "/src/store/useStore.ts";
       const { controller } = await import(module);
+      // The machine's running servers, before any session exists; none at first.
+      const w = window as unknown as { offers: unknown[]; sent: unknown[][] };
+      w.offers = []; w.sent = [];
+      controller.appCommand = async (kind: string) => kind === "apps.offers" ? { offers: w.offers } : {};
+      controller.pushStatus = async () => ({ supported: false, subscribed: false, permission: "default" });
+      controller.sendPrompt = (...args: unknown[]) => { w.sent.push(args); };
       controller.switchNode = (id: string) => {
         controller.store.setCurrentNode(id);
         controller.store.setStatus("online");
@@ -76,7 +82,7 @@ for (const theme of themes) {
       const { controller } = await import(module);
       controller.store.apply({ type: "activation.readiness", credential: { configured: true, probed: true, ok: true }, repository: { chosen: false, probed: true, ok: true, authed: false } });
     });
-    await expect(page.getByRole("heading", { name: "Let your agent show you around" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Give your agent a first task" })).toBeVisible();
     await expect(page.getByRole("status", { name: "Setup readiness" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Use starter task" })).toHaveCount(0);
     await expect(page.locator(".composer-input")).toHaveValue("");
@@ -105,18 +111,34 @@ for (const theme of themes) {
       const { controller } = await import(module);
       controller.store.setDraftEphemeralConfig(null);
     });
-    await expect(page.getByRole("heading", { name: "Let your agent show you around" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Give your agent a first task" })).toBeVisible();
     await page.locator(".composer-input").focus();
     await expect(page.locator(".composer-input")).toBeFocused();
     await page.locator(".composer-input").fill("Explain the API authentication flow instead.");
     await expect(page.locator(".composer-input")).toHaveValue("Explain the API authentication flow instead.");
-    // One tap sends the visible "show me around" request as the first message.
+    // Nothing running: one tap asks for a small change, reported back by push.
+    await page.getByRole("button", { name: "Make one small improvement" }).click();
+    expect(await page.evaluate(() => (window as unknown as { sent: string[][] }).sent[0][0])).toMatch(/^I'm new to Bivy\. Make one small, useful change/);
+    // A dev server running on the machine becomes the first task: the session
+    // starts in the app's own folder, not the draft repository.
     await page.evaluate(async () => {
       const module = "/src/store/useStore.ts";
       const { controller } = await import(module);
-      controller.sendPrompt = (text: string) => { (window as unknown as { sent: string[] }).sent = [text]; };
+      (window as unknown as { offers: unknown[] }).offers = [{ port: 5173, pid: 42, command: "node vite --port 5173", project: "/home/me/code/shop" }];
+      controller.store.setDraftEphemeralConfig({ id: "cloud", name: "Cloud", provider: "fly", computeSource: "managed", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
     });
-    await page.getByRole("button", { name: "Show me around" }).click();
-    expect(await page.evaluate(() => (window as unknown as { sent?: string[] }).sent?.[0])).toMatch(/^I'm new to Bivy\. Show me around:/);
+    await expect(page.getByRole("heading", { name: "Give your agent a first task" })).toHaveCount(0);
+    await page.evaluate(async () => {
+      const module = "/src/store/useStore.ts";
+      const { controller } = await import(module);
+      controller.store.setDraftEphemeralConfig(null);
+    });
+    await expect(page.getByRole("heading", { name: "Mark what's wrong in shop" })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`first-task-app-${theme}.png`), fullPage: true });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.getByRole("button", { name: "Open shop and mark what's wrong" }).click();
+    const [text, , start] = await page.evaluate(() => (window as unknown as { sent: unknown[][] }).sent[1]) as [string, unknown, Record<string, unknown>];
+    expect(text).toContain("port 5173");
+    expect(start).toMatchObject({ workspace: "/home/me/code/shop" });
   });
 }

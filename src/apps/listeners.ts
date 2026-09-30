@@ -17,9 +17,35 @@ export async function scanListeners(workspace: string, platform: NodeJS.Platform
   try { root = await fs.realpath(workspace); } catch { return []; }
   const found = platform === "linux" ? await scanProc(root) : platform === "darwin" ? await scanLsof(root) : [];
   const byPort = new Map<number, AppOffer>();
-  for (const offer of found) if (offer.pid !== process.pid && offer.port >= 1024 && !byPort.has(offer.port)) byPort.set(offer.port, offer);
+  for (const { cwd: _cwd, ...offer } of found) if (offer.pid !== process.pid && offer.port >= 1024 && !byPort.has(offer.port)) byPort.set(offer.port, offer);
   return [...byPort.values()].sort((a, b) => a.port - b.port);
 }
+
+/** Servers running anywhere under `root` (the owner's home), each with the
+ * project it runs in: what a first session can open before it has a folder.
+ * Processes running in `root` itself or in Bivy's own data folders aren't apps. */
+export async function scanMachineListeners(root: string, bivyDirs: readonly string[] = [path.join(root, ".bivy")], platform: NodeJS.Platform = process.platform): Promise<AppOffer[]> {
+  let top: string;
+  try { top = await fs.realpath(root); } catch { return []; }
+  const found = platform === "linux" ? await scanProc(top) : platform === "darwin" ? await scanLsof(top) : [];
+  const byPort = new Map<number, AppOffer>();
+  for (const { cwd, ...offer } of found) {
+    if (offer.pid === process.pid || offer.port < 1024 || byPort.has(offer.port) || cwd === top || bivyDirs.includes(cwd)) continue;
+    byPort.set(offer.port, { ...offer, project: await projectOf(cwd, top) });
+  }
+  return [...byPort.values()].sort((a, b) => a.port - b.port);
+}
+
+/** The nearest folder at or above `dir` (below `top`) with a .git, else `dir`. */
+async function projectOf(dir: string, top: string): Promise<string> {
+  for (let at = dir; inside(top, at) && at !== top; at = path.dirname(at)) {
+    if (await fs.stat(path.join(at, ".git")).then(() => true, () => false)) return at;
+  }
+  return dir;
+}
+
+/** A listener and the folder its process runs in. */
+type Found = AppOffer & { cwd: string };
 
 const inside = (root: string, dir: string) => dir === root || dir.startsWith(root + path.sep);
 
@@ -37,7 +63,7 @@ export function listenPort(line: string): { inode: string; port: number } | unde
   return { inode: cols[9], port: parseInt(portHex, 16) };
 }
 
-async function scanProc(root: string): Promise<AppOffer[]> {
+async function scanProc(root: string): Promise<Found[]> {
   const sockets = new Map<string, number>();
   for (const file of ["/proc/net/tcp", "/proc/net/tcp6"]) {
     const text = await fs.readFile(file, "utf8").catch(() => "");
@@ -47,7 +73,7 @@ async function scanProc(root: string): Promise<AppOffer[]> {
     }
   }
   if (!sockets.size) return [];
-  const offers: AppOffer[] = [];
+  const offers: Found[] = [];
   const pids = (await fs.readdir("/proc").catch(() => [] as string[])).filter((name) => /^\d+$/.test(name));
   // cwd first: other users' processes fail here, and only workspace processes
   // pay for an fd walk.
@@ -64,7 +90,7 @@ async function scanProc(root: string): Promise<AppOffer[]> {
     }
     if (!ports.size) return;
     const argv = (await fs.readFile(`/proc/${pid}/cmdline`, "utf8").catch(() => "")).split("\0").filter(Boolean);
-    for (const port of ports) offers.push({ port, pid: Number(pid), command: commandLabel(argv) });
+    for (const port of ports) offers.push({ port, pid: Number(pid), command: commandLabel(argv), cwd });
   }));
   return offers;
 }
@@ -79,19 +105,19 @@ export function parseLsof(stdout: string): { pid: number; values: string[] }[] {
   return records;
 }
 
-async function scanLsof(root: string): Promise<AppOffer[]> {
+async function scanLsof(root: string): Promise<Found[]> {
   const run = (args: string[]) => execFileP("lsof", args, { timeout: 4000, maxBuffer: 4 * 1024 * 1024 }).then((r) => r.stdout, (e: { stdout?: string }) => e.stdout ?? "");
   const listening = parseLsof(await run(["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpn"]));
   if (!listening.length) return [];
   const cwds = new Map(parseLsof(await run(["-a", "-d", "cwd", "-Fpn", "-p", listening.map((r) => r.pid).join(",")])).map((r) => [r.pid, r.values[0] ?? ""]));
-  const offers: AppOffer[] = [];
+  const offers: Found[] = [];
   for (const { pid, values } of listening) {
     const cwd = await fs.realpath(cwds.get(pid) ?? "").catch(() => "");
     if (!cwd || !inside(root, cwd)) continue;
     const args = (await execFileP("ps", ["-p", String(pid), "-o", "args="], { timeout: 4000 }).then((r) => r.stdout, () => "")).trim();
     for (const name of values) {
       const match = /^(\*|127\.[\d.]+|\[::1\]|\[::\]|localhost):(\d+)$/.exec(name);
-      if (match) offers.push({ port: Number(match[2]), pid, command: commandLabel(args.split(/\s+/)) });
+      if (match) offers.push({ port: Number(match[2]), pid, command: commandLabel(args.split(/\s+/)), cwd });
     }
   }
   return offers;

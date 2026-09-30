@@ -17,7 +17,7 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
   "tailnet.machines": Type.Object(request),
   "session.fork.local": Type.Object({ ...request, ...session, model: Type.Optional(Type.Object({ provider: Type.Optional(Type.String({ maxLength: 200 })), id: Type.String({ maxLength: 200 }) })) }),
   "apps.publish": Type.Object({ ...request, ...session, manifest: Type.Unknown() }),
-  "apps.offers": Type.Object({ ...request, ...session }),
+  "apps.offers": Type.Object({ ...request, ...optionalSession }),
   "apps.adopt": Type.Object({ ...request, ...session, port: Type.Integer({ minimum: 1024, maximum: 65535 }) }),
   "apps.open": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String(), returnTo: Type.Optional(Type.String({ maxLength: 2048 })), direct: Type.Optional(Type.Boolean()), scale: Type.Optional(Type.Integer({ minimum: 1, maximum: 2 })), path: Type.Optional(Type.String({ maxLength: 2048 })) }),
   "apps.shot": Type.Object({ ...request, ...session, appId: Type.Optional(Type.String()), widths: Type.Optional(Type.Array(Type.Integer(), { maxItems: 4 })), themes: Type.Optional(Type.Array(Type.Union([Type.Literal("light"), Type.Literal("dark")]), { maxItems: 2 })), path: Type.Optional(Type.String({ maxLength: 2048 })) }),

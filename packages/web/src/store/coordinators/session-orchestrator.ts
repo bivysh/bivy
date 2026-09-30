@@ -149,7 +149,9 @@ export class SessionOrchestrator {
     if (repo) port.listBranches(repo);
   }
 
-  sendPrompt(text: string, attachments?: PromptAttachment[]): void {
+  /** `start`: fields for a new session that override the draft (e.g. the
+   *  folder a detected app runs in). Ignored when the prompt joins a session. */
+  sendPrompt(text: string, attachments?: PromptAttachment[], start?: Record<string, unknown>): void {
     const port = this.workflowPort();
     const trimmed = text.trim();
     const files = attachments?.length ? attachments : undefined;
@@ -191,7 +193,7 @@ export class SessionOrchestrator {
       return;
     }
 
-    const frame: Command = { kind: "session.new", requestId, title: trimmed || undefined, ...port.draftSessionFields() };
+    const frame: Command = { kind: "session.new", requestId, title: trimmed || undefined, ...port.draftSessionFields(), ...start };
     const prompt: PendingSessionPrompt = { text: trimmed, requestId, clientMessageId, attachments: files, frame };
     const runner = port.draftEphemeralRunner();
     if (runner) {

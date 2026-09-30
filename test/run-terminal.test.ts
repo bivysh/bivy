@@ -39,7 +39,7 @@ function harness(over: any = {}) {
     terminals,
     broadcast: (p) => { broadcasts.push(p); },
     sendRelayEvent: () => {},
-    sendNotificationHint: () => {},
+    sendNotificationHint: over.sendNotificationHint ?? (() => {}),
     createSession: over.createSession ?? (async (_ws, sf) => { created.push(sf ?? "<fresh>"); return { id: "new-session" }; }),
     resolveSession: over.resolveSession ?? (() => undefined),
     findOpenSession: over.findOpenSession ?? (() => undefined),
@@ -156,6 +156,19 @@ test("an in-flight terminal list cannot resurrect a run closed by takeover", asy
   assert.equal(result.ok, true);
   releaseList();
   assert.deepEqual(await pending, [], "the stale list drops the terminal removed during takeover");
+});
+
+test("a quiet run pinned to a session notifies as that session, so a tap opens it", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const hints: any[] = [];
+  const terminals = fakeTerminals({ meta: () => ({ kind: "run", agent: "claude", sessionId: "sess-1" }) });
+  const { rt, emit } = harness({ terminals, sendNotificationHint: (hint: unknown) => hints.push(hint) });
+  await rt.openRunTerminal({ command: "claude", args: [], agent: "claude", sessionId: "sess-1" }, emit);
+  terminals.calls.open[0].onData("Done. Anything else?");
+  t.mock.timers.tick(30_000);
+  assert.equal(hints.length, 1);
+  assert.equal(hints[0].kind, "agent_waiting");
+  assert.equal(hints[0].targetSessionId, "sess-1");
 });
 
 test("takeover retries a lazily persisted Pi session", async () => {
