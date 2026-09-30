@@ -11,6 +11,11 @@ Pi, OpenCode and other agents on your own machine. Reach them from a browser or
 your phone, with the live session, its terminal, its approvals, and the app
 they're building right in the chat. Try it, mark what's wrong, and send it back.
 
+<p align="center">
+  <img src="docs/images/preview-feedback-loop.gif" width="360"
+       alt="On a phone: open the app an agent built, circle the packed items, send a note, and compare the result before and after the agent's fix.">
+</p>
+
 Bivy is not another coding agent and not a cloud development machine. The agent
 stays local and does the coding with your model provider. Your repos, tools,
 databases, and services stay where they are. Bivy gives you remote access to all
