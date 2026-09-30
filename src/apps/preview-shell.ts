@@ -214,7 +214,9 @@ function show(data,launch){
 // told about is a gesture nobody uses. Say it once per device, then never again.
 const hintKey='bivy-preview-hint';
 function firstHint(){
-  if(metadata.controls===false)return;
+  // A desktop app has no page to press on: its marking is the menu's, so the
+  // hint would promise a gesture that isn't there.
+  if(metadata.controls===false||metadata.inspect===false)return;
   try{if(localStorage.getItem(hintKey))return;localStorage.setItem(hintKey,'1');}catch{return;}
   $('hint').hidden=false;
   setTimeout(()=>{$('hint').hidden=true;},8000);
