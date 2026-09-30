@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.2] - 2026-09-30
+
 ### Changed
 
 - Refresh the release-tested agent pins: Pi `0.99.1` (previously `0.87.1`), Claude Agent SDK `0.3.285` and Codex `0.159.1` (previously `0.3.284` / `0.159.0`). Pi 0.99 adds codemode, MCP servers and GPT-6.1 Sol, and "OpenAI Codex" sign-ins keep working under the same provider id.
