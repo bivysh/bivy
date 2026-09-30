@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`bivy tui`**: every session on this machine and on the nodes you added with `bivy nodes add`, in one keyboard-driven terminal view. Sessions waiting on you come first. The right pane follows the selected transcript live; press `a` or `r` to answer what the agent is asking, `i` to message it and `x` to stop it. It uses your terminal's colors, so it matches your theme.
 - **Arch Linux and Omarchy package.** `packaging/aur/PKGBUILD` packages Bivy for the AUR as `bivy` (`yay -S bivy`). A pacman-owned install tells you to update through your AUR helper, from `bivy update` and from the app's Update button, instead of overwriting files pacman owns.
 - **Self-host with Kamal.** `deploy/kamal/` deploys the control plane, web app, relay and Postgres to your own server with `kamal setup`, using the published images at the release you pin, one domain, Let's Encrypt TLS and no registry account. `kamal owner-login` prints your sign-in link. See [Self-host with Kamal](docs/self-host-kamal.md).
 - **`bivy tailscale`** puts your machine's Bivy on `https://<machine>.<tailnet>.ts.net`, reachable from any device on your tailnet, with no account, control plane or relay. The node serves the web app itself. Pair a phone by opening the one-time link it prints; `bivy tailscale devices` and `bivy tailscale revoke <id>` manage who has access. See [Tailscale](docs/tailscale.md).

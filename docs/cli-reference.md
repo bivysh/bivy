@@ -743,6 +743,32 @@ doesn't mention it.
 
 ## Sessions
 
+### `bivy tui`
+
+A keyboard-driven terminal view, in the spirit of lazygit, of every session on
+this machine and on the nodes you added with `bivy nodes add`. Sessions waiting
+on you come first, then working ones, then the rest. The right pane follows the
+selected session's transcript live, shows what it's asking approval for, and
+lets you message the agent.
+
+| Key | |
+|---|---|
+| `j`/`k`, `↑`/`↓` | Move, or scroll the transcript |
+| `tab`, `h`/`l` | Switch pane |
+| `enter` | Open the session (a closed one starts on its machine) |
+| `i` | Message the agent |
+| `a` / `r` | Approve / reject what it's waiting on |
+| `x` | Stop the current turn |
+| `/` | Filter by name, agent, machine or branch |
+| `?` | All keys |
+| `q` | Quit |
+
+It uses your terminal's colors, so it matches your terminal theme.
+
+```bash
+bivy tui
+```
+
 ### `bivy sessions [selector] [flags]`
 
 Alias: `bivy ls`.
