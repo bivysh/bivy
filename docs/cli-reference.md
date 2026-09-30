@@ -26,6 +26,7 @@ get shell completion. Agents in a session should start with `bivy context`.
 | List every command as JSON | `bivy help --json` |
 | Read the playbooks for agents | `bivy guide` |
 | Propose a task the user can start in one tap | `bivy suggest "<task>"` |
+| Rename the session an agent runs in | `bivy title "<title>"` |
 | Tell the user something when they're away | `bivy notify "<message>"` |
 | Ask the user a question and wait for the answer | `bivy ask "<question>" --option A --option B` |
 | Stop a session | `bivy kill <id>` |
@@ -412,22 +413,30 @@ bivy attach coverage/index.html --artifact --caption "Coverage report"
 
 `--json` prints `{"ok","name","kind","size","mimeType","hash"}`.
 
-### `bivy suggest "<task>" [--title "…"] [--session <id>] [--json]`
+### `bivy suggest "<task>" [--title "…"] [--run here|subagents|new] [--session <id>] [--json]`
 
 Posts a **suggested task** card into the chat: a task the agent proposes (a next
-step, an idea, one of several options). The user starts it with one tap —
-**Start in new session** runs it beside the current session (same project,
-agent, model and safety; a git checkout gets its own worktree), **Do it here**
-sends it to this session, and a run of several cards offers **Run all in
-parallel**. Like `bivy attach`, it is meant to be run by the agent itself and
-finds the session through `$BIVY_SESSION_ID`.
+step, an idea, one of several options). The user starts it with one tap:
+
+- **Do it here** sends it to this session's agent.
+- **Use sub-agents** sends it here too, asking the agent to run it through its
+  own sub-agents. It only appears when the agent recommends it.
+- **Start in new session** runs it beside the current session (same project,
+  agent, model and safety; a git checkout gets its own worktree).
+
+`--run` names the one the agent recommends, which becomes the card's main
+button. Without it, a single card recommends `here` and a run of several
+recommends `new`. In a run, each card has a checkbox and the last card starts
+the selected ones together (`Do 3 here` sends them as one message). Like `bivy
+attach`, it is meant to be run by the agent itself and finds the session
+through `$BIVY_SESSION_ID`.
 
 Write the task as a complete instruction with paths relative to the project
 root: it becomes the first message of a session that works in its own copy.
 `--title` is the short label on the card.
 
 ```bash
-bivy suggest "Add a GET /version endpoint that returns the package version and git commit." --title "Add /version"
+bivy suggest "Add a GET /version endpoint that returns the package version and git commit." --title "Add /version" --run new
 ```
 
 `--json` prints `{"ok","id"}`.
@@ -466,6 +475,19 @@ bivy takeover 3f1c9a02-6b41-4a0f-9c2e-5d7f1b0a8e33
 These commands act on the session the agent runs in: they read
 `$BIVY_SESSION_ID` (or `$PI_SESSION_ID` under Pi), or take `--session <id>`.
 `bivy attach` and `bivy suggest` above belong here too.
+
+### `bivy title "<title>" [--session <id>] [--json]`
+
+Renames the session in the session list, for every device. Sessions are titled
+from their first message; an agent uses this when that made a poor title or the
+work changed direction. A title set this way is kept: the automatic namer won't
+replace it. Titles are 1 to 100 characters. The MCP tool is `set_session_title`.
+
+```bash
+bivy title "Fix login redirect loop"
+```
+
+`--json` prints `{"ok","title"}`.
 
 ### `bivy context [--json] [--session <id>]`
 
@@ -721,6 +743,32 @@ doesn't mention it.
 
 ## Sessions
 
+### `bivy tui`
+
+A keyboard-driven terminal view, in the spirit of lazygit, of every session on
+this machine and on the nodes you added with `bivy nodes add`. Sessions waiting
+on you come first, then working ones, then the rest. The right pane follows the
+selected session's transcript live, shows what it's asking approval for, and
+lets you message the agent.
+
+| Key | |
+|---|---|
+| `j`/`k`, `↑`/`↓` | Move, or scroll the transcript |
+| `tab`, `h`/`l` | Switch pane |
+| `enter` | Open the session (a closed one starts on its machine) |
+| `i` | Message the agent |
+| `a` / `r` | Approve / reject what it's waiting on |
+| `x` | Stop the current turn |
+| `/` | Filter by name, agent, machine or branch |
+| `?` | All keys |
+| `q` | Quit |
+
+It uses your terminal's colors, so it matches your terminal theme.
+
+```bash
+bivy tui
+```
+
 ### `bivy sessions [selector] [flags]`
 
 Alias: `bivy ls`.
@@ -865,6 +913,22 @@ the relay to be configured.
 
 ```bash
 bivy link
+```
+
+### `bivy tailscale [on|pair|status|devices|revoke|off]`
+
+Serves this machine's Bivy on `https://<machine>.<tailnet>.ts.net` through
+`tailscale serve`, reachable only from your tailnet, with no control plane or
+relay in between. The node serves the web app itself on that address. Prints a
+one-time pairing link (and QR); each device opens one once to get its token.
+See [Tailscale](tailscale.md).
+
+```bash
+bivy tailscale            # turn it on and pair the first device
+bivy tailscale pair       # a pairing link for another device
+bivy tailscale devices    # who holds a token
+bivy tailscale revoke <id>
+bivy tailscale off
 ```
 
 ### `bivy token`
@@ -1336,6 +1400,7 @@ MCP `instructions`, the guides as resources, and these tools:
 | `notify_user` | `bivy notify` |
 | `ask_user` | `bivy ask` |
 | `suggest_task` | `bivy suggest` |
+| `set_session_title` | `bivy title` |
 | `app_publish`, `app_screenshot`, `app_present` | `bivy app publish`, `shot`, `present` |
 | `automation_plan`, `automation_apply` | `bivy automation plan`, `apply` (a proposal the user approves) |
 | `bivy_guide` | `bivy guide` |

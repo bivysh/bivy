@@ -173,6 +173,7 @@ import { nativeSessionLink } from "../native-session-link.js";
 import { accountOrigin, clearNativeNotifications, clearNativeSubscriptions, clientStorage, flushClientStorage, hasNativeSubscriptions, isPackagedClient, nativeNotifications, onNativeOpenURL, onNativeForeground, synchronizeNativeSubscriptions } from "../packaged-client.js";
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
 import { setMachineTheme } from "../theme.js";
+import { runtimeBoolean } from "../runtime-config.js";
 import { cloudMachinesEnabled } from "../cloudMachines.js";
 import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
 import { SessionOrchestrator } from "./coordinators/session-orchestrator.js";
@@ -256,6 +257,8 @@ const RUNNER_BOOT_TIMEOUT_MS = 4 * 60 * 1000;
  */
 export function isDirectMode(store = createLocalStore(clientStorage())): boolean {
   if (requiresAccountConnection) return false;
+  // Served by the node itself (`bivy tailscale`): talk to it directly.
+  if (runtimeBoolean("directNode", false)) return true;
   const params = new URLSearchParams(location.search);
   if (params.has("local")) return true;
   return LOOPBACK.test(location.hostname) && !store.s && !location.hash.includes("payload=");
@@ -269,6 +272,8 @@ export class AppController {
    *  token from the QR, with NO control plane. Not signed in (no `local.s`), so
    *  every CP-coupled path stays off, yet the app shell renders and dials. */
   readonly solo: boolean;
+  /** One-time pairing code from a `bivy tailscale` link, redeemed on connect. */
+  private directPairCode = "";
   private transport: Transport;
   /** A first prompt queued while a brand-new session is being created. `frame` is
    *  the exact `session.new` command we sent; it's re-fired verbatim after a
@@ -641,6 +646,13 @@ export class AppController {
     // created (ours or another client's), instead of only on this session's
     // own eventual agent_end.
     this.store.onSessionCreatedElsewhere = () => this.refreshSessions();
+    // A `bivy tailscale` pairing link (`#pair=<code>`): keep the code for the
+    // direct transport to redeem, and drop it from the address bar.
+    const pairLink = /^#pair=([A-Za-z0-9_-]+)$/.exec(location.hash);
+    if (pairLink) {
+      this.directPairCode = pairLink[1] ?? "";
+      history.replaceState(null, "", location.pathname + location.search);
+    }
     // Capture the session token / node from a sign-in redirect or QR link
     // (`…#<payload>`), then clean the URL. Must run before the direct/relay
     // decision, since a fresh sign-in sets store.s.
@@ -875,8 +887,14 @@ export class AppController {
 
   private buildTransport(): Transport {
     const handlers = this.buildTransportHandlers();
+    const servedByNode = runtimeBoolean("directNode", false);
     return this.direct
-      ? new DirectTransport({ bootstrap: new URLSearchParams(location.search).get("bootstrap") || "", handlers })
+      ? new DirectTransport({
+        bootstrap: new URLSearchParams(location.search).get("bootstrap") || "",
+        // A paired device keeps its token across launches; loopback re-bootstraps.
+        ...(servedByNode ? { tokenStore: clientStorage(), pairCode: this.directPairCode, deviceName: thisDevice().label, requireToken: true } : {}),
+        handlers,
+      })
       : new RelayTransport({ store: this.local, handlers });
   }
 

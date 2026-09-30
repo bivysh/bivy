@@ -12,7 +12,14 @@ export interface TaskSuggestion {
   text: string;
   /** A short label; the card falls back to the text. */
   title?: string;
+  /** Where the agent recommends running it: the card's primary action. */
+  run?: SuggestionRun;
 }
+
+/** here: this session's agent. subagents: this agent, through its own sub-agents. new: a session per task. */
+export const SUGGESTION_RUNS = ["here", "subagents", "new"] as const;
+export type SuggestionRun = typeof SUGGESTION_RUNS[number];
+const isRun = (value: unknown) => value === undefined || (SUGGESTION_RUNS as readonly unknown[]).includes(value);
 
 export const SUGGESTION_BLOCK = "bivy_suggestion";
 export const MAX_SUGGESTION_TEXT = 4000;
@@ -23,5 +30,6 @@ export function isTaskSuggestion(value: unknown): value is TaskSuggestion {
   const s = value as Partial<TaskSuggestion>;
   return typeof s.id === "string" && s.id.length > 0
     && typeof s.text === "string" && s.text.length > 0 && s.text.length <= MAX_SUGGESTION_TEXT
-    && (s.title === undefined || (typeof s.title === "string" && s.title.length <= MAX_SUGGESTION_TITLE));
+    && (s.title === undefined || (typeof s.title === "string" && s.title.length <= MAX_SUGGESTION_TITLE))
+    && isRun(s.run);
 }

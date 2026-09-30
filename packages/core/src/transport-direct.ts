@@ -23,11 +23,18 @@ export interface DirectTransportOptions {
   webSocketImpl?: typeof WebSocket;
   /** Optional bootstrap token from the launch URL (?bootstrap=...). */
   bootstrap?: string;
+  /** One-time pairing code from a `bivy tailscale` link (`#pair=...`), traded for a device token. */
+  pairCode?: string;
+  /** Name the node records for this device when it pairs. */
+  deviceName?: string;
+  /** The node never trusts this caller without a token (it isn't on loopback). */
+  requireToken?: boolean;
   handlers: TransportHandlers;
 }
 
 const TOKEN_KEY = "bivy_local_token";
 const MAX_BACKOFF = 15000;
+const NOT_PAIRED = "This device isn't paired with this machine. Run 'bivy tailscale pair' there and open the link on this device.";
 
 export class DirectTransport implements Transport {
   private readonly origin: string;
@@ -35,7 +42,12 @@ export class DirectTransport implements Transport {
   private readonly fetchImpl: typeof fetch;
   private readonly WS: typeof WebSocket;
   private readonly bootstrap: string;
+  private pairCode: string;
+  private readonly deviceName: string;
+  private readonly requireToken: boolean;
   private readonly handlers: TransportHandlers;
+  /** Pairing/bootstrap in flight; API calls wait so they carry the new token. */
+  private authPending: Promise<void> = Promise.resolve();
 
   private ws: WebSocket | null = null;
   private connected = false;
@@ -50,6 +62,9 @@ export class DirectTransport implements Transport {
     this.fetchImpl = opts.fetchImpl ?? (globalThis.fetch?.bind(globalThis) as typeof fetch);
     this.WS = opts.webSocketImpl ?? (globalThis as any).WebSocket;
     this.bootstrap = opts.bootstrap ?? "";
+    this.pairCode = opts.pairCode ?? "";
+    this.deviceName = opts.deviceName ?? "Paired device";
+    this.requireToken = opts.requireToken ?? false;
     this.handlers = opts.handlers;
   }
 
@@ -67,6 +82,10 @@ export class DirectTransport implements Transport {
   }
 
   private async directApi<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
+    if (!path.startsWith("/api/auth/")) {
+      await this.authPending;
+      if (this.requireToken && !this.token()) throw new Error(NOT_PAIRED);
+    }
     const res = await this.fetchImpl(`${this.origin}${path}`, {
       ...opts,
       headers: { ...this.directHeaders(), ...((opts.headers as Record<string, string>) || {}) },
@@ -85,7 +104,24 @@ export class DirectTransport implements Transport {
   }
 
   private async bootstrapAuth(): Promise<void> {
-    if (this.token()) return;
+    if (this.pairCode) {
+      const code = this.pairCode;
+      this.pairCode = "";
+      try {
+        const data = await this.directApi<{ token?: string }>("/api/auth/pair", {
+          method: "POST",
+          body: JSON.stringify({ code, name: this.deviceName }),
+        });
+        if (data?.token) {
+          this.tokenStore?.setItem(TOKEN_KEY, data.token);
+          return;
+        }
+      } catch (e) {
+        this.handlers.onError?.(e instanceof Error ? e.message : String(e));
+      }
+    }
+    // Bootstrap is loopback-only, so a remote (paired) device never tries it.
+    if (this.token() || this.requireToken) return;
     try {
       const data = await this.directApi<{ token?: string }>("/api/auth/bootstrap", {
         method: "POST",
@@ -98,6 +134,12 @@ export class DirectTransport implements Transport {
       // eslint-disable-next-line no-console
       console.warn("local bootstrap failed", e);
     }
+  }
+
+  private notPaired(): void {
+    this.connected = false;
+    this.setStatus("offline");
+    this.handlers.onError?.(NOT_PAIRED);
   }
 
   private setStatus(s: ConnectionStatus): void {
@@ -120,7 +162,12 @@ export class DirectTransport implements Transport {
   async connect(): Promise<void> {
     this.closedByUs = false;
     this.setStatus("connecting");
-    await this.bootstrapAuth();
+    this.authPending = this.bootstrapAuth();
+    await this.authPending;
+    if (this.requireToken && !this.token()) {
+      this.notPaired();
+      return;
+    }
     const proto = typeof location !== "undefined" && location.protocol === "https:" ? "wss:" : "ws:";
     const host = typeof location !== "undefined" ? location.host : this.origin.replace(/^https?:\/\//, "");
     const token = this.token();
@@ -148,8 +195,14 @@ export class DirectTransport implements Transport {
         /* ignore malformed */
       }
     };
-    ws.onclose = () => {
+    ws.onclose = (event: CloseEvent) => {
       if (!isCurrent() || this.closedByUs) return;
+      if (this.requireToken && event?.code === 1008 && event.reason === "Unauthorized") {
+        // The token was revoked: retrying can't help until the device pairs again.
+        this.tokenStore?.setItem(TOKEN_KEY, "");
+        this.notPaired();
+        return;
+      }
       this.connected = false;
       this.setStatus("reconnecting");
       if (this.reconnectTimer) clearTimeout(this.reconnectTimer);

@@ -87,6 +87,18 @@ test("re-entrancy: a naming already in flight is a no-op", async () => {
   assert.deepEqual(renamed, []);
 });
 
+test("a title set while the model is still naming wins over the refinement", async () => {
+  const { namer, renamed } = harness();
+  let answer!: (name: string) => void;
+  const record: NamerSession = { id: "abcd1234ef", session: fakeSession({ suggestName: () => new Promise((resolve) => { answer = resolve; }) }) } as any;
+  const naming = namer.maybeNameSession(record, "hey can you look at the login thing");
+  namer.setSessionName(record, "Fix login redirect loop");
+  answer("Login investigation");
+  await naming;
+  assert.equal(record.session.getName(), "Fix login redirect loop");
+  assert.deepEqual(renamed, ["hey can you look at the"], "only the fallback's branch rename");
+});
+
 test("setSessionName sets, locks, persists, and survives a later interactive message", async () => {
   const { namer, persisted, broadcasts } = harness();
   const record: NamerSession = { id: "s9", session: fakeSession() } as any;

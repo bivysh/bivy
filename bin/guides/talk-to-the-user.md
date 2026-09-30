@@ -28,9 +28,25 @@ Ask only when you can't reasonably decide yourself.
 
     bivy suggest "Add a GET /version endpoint that returns the package version." --title "Add /version"
 
-Each suggestion is a card the user can start in one tap, here or in a parallel
-session with its own copy of the project. Write it as a complete instruction with
-paths relative to the project root. Post one per idea instead of a bulleted list.
+Each suggestion is a card the user can start in one tap: here, through your
+sub-agents, or in a parallel session with its own copy of the project. Write it as
+a complete instruction with paths relative to the project root. Post one per idea
+instead of a bulleted list.
+
+`--run` picks the card's main button; the others stay one tap away:
+
+| `--run` | When |
+|---|---|
+| `here` | It builds on this conversation, or it's small. Default for a single card. |
+| `subagents` | Independent tasks you can split across your own sub-agents and report back on. Only if you have sub-agents. |
+| `new` | Bigger independent work the user will want to follow, review or merge on its own. Default for several cards. |
+
+## Name the session: title
+
+    bivy title "Fix login redirect loop"
+
+The session list shows a title taken from the first message. When that doesn't
+say what the work is, or the work changes direction, rename it. Keep it short.
 
 ## Is anyone there?
 
