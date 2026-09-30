@@ -95,6 +95,8 @@ import { SessionEventCoalescer } from "./session-event-coalescer.js";
 import { readMachineTheme, watchMachineTheme } from "./machine-theme.js";
 import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed, markRemoteListener } from "./auth.js";
 import { PairCodes } from "./pair-codes.js";
+import { accessReport, type AccessReport } from "./access.js";
+import { hostedEndpoints } from "./hosted-endpoints.mjs";
 import http from "node:http";
 import { webAppDirs, webAppRouter } from "./web-app.js";
 import { RelayConnector, loadRelayConfig, loadDirectListenerConfig, soloCredentials, type ClientMessage } from "./remote/index.js";
@@ -2454,6 +2456,15 @@ appRegistry.on("notes", (viewId: string) => {
   }, NOTES_NOTIFY_MS).unref?.();
 });
 
+function currentAccess(): AccessReport {
+  const relay = loadRelayConfig(appDir);
+  return accessReport({
+    tailscaleHostname: loadDirectListenerConfig(appDir)?.hostname,
+    relay: relay ? { controlPlaneUrl: relay.controlPlaneUrl, room: relay.room, roomToken: relay.roomToken } : null,
+    hostedControlPlane: hostedEndpoints(process.env).controlPlane,
+  });
+}
+
 const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   ...createAppCommands(appService, (id) => { const record = resolveSession(id); return record ? harnessDirFor(record) : undefined; }, (app) => {
     const record = resolveSession(app.sessionId);
@@ -2470,6 +2481,10 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   // (see runBivyUpdate). The node restarts itself when the update lands, so the
   // client just sees the socket reconnect on the new build; a failure to even
   // start reports back so the banner can show the manual command.
+  // How this machine can be reached and what the next setup would add (src/access.ts).
+  "access.get"(msg, ctx) {
+    ctx.reply({ type: "access.get.ok", requestId: msg.requestId, ...currentAccess() });
+  },
   "node.update"(_msg, ctx) {
     const result = runBivyUpdate();
     ctx.reply({ type: "node.update.result", ok: result.ok, error: result.error });

@@ -12,6 +12,7 @@ import { ImportSessionContent } from "./ImportSessionSheet.js";
 import { MachineCapabilitiesSection } from "./MachineCapabilities.js";
 import { Segmented } from "./Segmented.js";
 import { Badge } from "./Badge.js";
+import { AccessCard, AccessNudge } from "./AccessCard.js";
 import { currentThemeSetting, machineTheme, onMachineThemeChange, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalBack, useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
@@ -665,6 +666,15 @@ function NotificationsPanel() {
     });
   };
 
+  // Push is delivered by a control plane; a machine reached directly has none.
+  if (controller.direct) {
+    return (
+      <div className="settings-form">
+        <AccessNudge feature="push" inSettings />
+      </div>
+    );
+  }
+
   if (status && !status.supported) {
     return (
       <div className="settings-form">
@@ -1213,6 +1223,7 @@ function NodesPanel({ state, cloudMachinesEnabled }: { state: AppState; cloudMac
   return (
     <div className="settings-form">
       {saveErr && <div className="banner inline" data-tone="danger" role="alert">{saveErr}</div>}
+      {nodeOnline && <AccessCard key={currentNodeId || "direct"} />}
       {hosted && (
         <section className="settings-section">
           <h4 className="settings-subhead">Connect a machine</h4>

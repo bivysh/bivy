@@ -174,6 +174,7 @@ import { accountOrigin, clearNativeNotifications, clearNativeSubscriptions, clie
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
 import { setMachineTheme } from "../theme.js";
 import { runtimeBoolean } from "../runtime-config.js";
+import type { AccessReport } from "../access.js";
 import { cloudMachinesEnabled } from "../cloudMachines.js";
 import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
 import { SessionOrchestrator } from "./coordinators/session-orchestrator.js";
@@ -3651,6 +3652,10 @@ export class AppController {
   disablePush(): Promise<string> {
     if (isPackagedClient) return nativeNotifications()?.disable({ token: this.local.s, controlPlane: accountOrigin() }) ?? Promise.reject(new Error("Native notifications are unavailable."));
     return this.accountCoordinator.disablePush();
+  }
+  /** How the connected machine can be reached, and what the next setup adds (node: src/access.ts). */
+  async getAccess(): Promise<AccessReport> {
+    return await this.awaitAck({ kind: "access.get" }, 15_000) as unknown as AccessReport;
   }
   pushStatus(): ReturnType<typeof getPushSubscriptionStatus> {
     if (isPackagedClient) return nativeNotifications()?.status({ token: this.local.s, controlPlane: accountOrigin() }) ?? Promise.resolve({ supported: false, subscribed: false, permission: "default" });

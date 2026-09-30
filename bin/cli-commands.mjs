@@ -106,6 +106,7 @@ export const COMMANDS = [
   { name: "token", group: "node", scope: "node", usage: "token", summary: "Print a device token for this node" },
   { name: "open", group: "node", scope: "node", usage: "open", summary: "Open the remote web app" },
   { name: "link", group: "node", scope: "node", usage: "link", summary: "Show a web app link as a QR code in the terminal" },
+  { name: "access", group: "node", scope: "node", json: true, usage: "access [local|tailscale|hosted|server <url>]", summary: "How this machine can be reached, what that gives you, and the next step", subcommands: ["local", "tailscale", "hosted", "server"] },
   { name: "tailscale", group: "node", scope: "node", usage: "tailscale [on|pair|status|devices|revoke|off]", summary: "Reach this machine over Tailscale, with no server in between", subcommands: ["on", "pair", "status", "devices", "revoke", "off"] },
   { name: "relay:setup", group: "node", scope: "node", usage: "relay:setup", summary: "Enable secure remote web app access" },
   { name: "uninstall", group: "node", scope: "node", usage: "uninstall [--keep-sessions] [--dry-run]", summary: "Remove Bivy and all its data" },
