@@ -22,7 +22,14 @@ for (const theme of themes) test(`public preview sends annotations as notes with
   });
   await context.addInitScript(() => sessionStorage.setItem('bivy-preview', JSON.stringify({ name: 'Public website preview', origin: 'http://preview.test', reviewer: true, badge: true })));
   await page.goto(`${origin}/shell`);
-  await expect(page.getByRole('button', { name: 'Mark', exact: true })).toBeEnabled();
+  const openMenu = async () => {
+    await page.getByRole('button', { name: /Preview options/ }).click();
+    await expect(page.getByRole('menu')).toBeVisible();
+  };
+  const markControl = page.getByRole('menuitem', { name: /Mark something/ });
+  await openMenu();
+  await expect(markControl).toBeEnabled();
+  await page.keyboard.press('Escape');
   // "Made with Bivy" sits under the app, and the floating tools stay clear of it.
   const badge = page.getByRole('link', { name: /Made with Bivy/ });
   await expect(badge).toHaveAttribute('href', 'https://bivy.sh/?ref=preview');
@@ -34,7 +41,8 @@ for (const theme of themes) test(`public preview sends annotations as notes with
   await expect(page.locator('#compare-btn')).toBeHidden();
   await expect(page.locator('#update')).toBeHidden();
   await page.screenshot({ path: info.outputPath(`public-controls-${theme}.png`) });
-  await page.getByRole('button', { name: 'Mark', exact: true }).click();
+  await openMenu();
+  await markControl.click();
   for (let i = 0; i < 2; i++) {
     await page.mouse.move(30, 30 + i * 30); await page.mouse.down();
     await page.mouse.move(210, 150 + i * 30, { steps: 8 }); await page.mouse.up();
@@ -62,7 +70,7 @@ for (const theme of themes) test(`public preview sends annotations as notes with
   await expect(page.locator('#draft')).toBeHidden();
   await expect(page.locator('#status')).toContainText('picture sent');
   await expect(page.locator('#ink')).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Mark', exact: true })).toBeFocused();
+  await expect(page.getByRole('button', { name: /Preview options/ })).toBeFocused();
   // A long press on the button is the whole gesture: it marks it and opens the note.
   const buy = (await page.frameLocator('#app').getByRole('button', { name: 'Buy a ticket' }).boundingBox())!;
   await page.mouse.move(buy.x + buy.width / 2, buy.y + buy.height / 2);

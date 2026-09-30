@@ -14,10 +14,16 @@ for (const theme of themes) test(`preview marking captures gestures (${theme})`,
   await context.addInitScript(({ origin }) => sessionStorage.setItem('bivy-preview', JSON.stringify({ name: 'Website preview', origin: 'http://preview.test', returnTo: origin + '/chat' })), { origin });
   await page.goto(`${origin}/host`);
   const shell = page.frameLocator('iframe');
-  await expect(shell.getByRole('button', { name: 'Mark', exact: true })).toBeVisible();
-  // Point and Draw were one intention behind two buttons; there is one now.
+  // One pill over the app, where seven buttons used to be: the name and one
+  // menu. (Framed inside Bivy, the client owns closing, so there is no Back.)
+  await expect(shell.locator('#dock nav button:visible')).toHaveCount(1);
   await expect(shell.getByRole('button', { name: 'Point', exact: true })).toHaveCount(0);
   await expect(shell.getByRole('button', { name: 'Draw', exact: true })).toHaveCount(0);
+  const openMenu = async () => {
+    await shell.getByRole('button', { name: /Preview options/ }).click();
+    await expect(shell.getByRole('menu')).toBeVisible();
+  };
+  const markControl = shell.getByRole('menuitem', { name: /Mark something/ });
   const checkTargets = async () => {
     for (const button of await shell.locator('#dock button:visible').all()) {
       const box = (await button.boundingBox())!;
@@ -30,7 +36,10 @@ for (const theme of themes) test(`preview marking captures gestures (${theme})`,
   await checkTargets();
   await page.screenshot({ path: info.outputPath(`controls-${theme}.png`) });
   await shell.frameLocator('#app').locator('#panel').evaluate(el => { el.scrollTop = 220; });
-  await shell.getByRole('button', { name: 'Mark', exact: true }).click();
+  await openMenu();
+  await checkTargets();
+  await page.screenshot({ path: info.outputPath(`menu-${theme}.png`) });
+  await markControl.click();
   await expect(shell.getByRole('button', { name: 'Done', exact: true })).toBeDisabled();
   await expect(shell.getByRole('toolbar', { name: 'Marking tools' })).toBeFocused();
   await checkTargets();

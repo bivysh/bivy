@@ -22,24 +22,19 @@ iframe { width:100%; height:100%; border:0; background:var(--bg); }
 #dock { position:fixed; left:var(--space-2); right:var(--space-2); bottom:calc(var(--space-2) + env(safe-area-inset-bottom)); z-index:var(--z-sticky); display:flex; flex-direction:column; align-items:center; gap:var(--space-2); pointer-events:none; }
 #dock > * { pointer-events:auto; }
 /* The hint sits over the app; a tap on it is meant for the app underneath. */
-#dock > #drawing { pointer-events:none; }
+#dock > #drawing, #dock > #hint { pointer-events:none; }
 nav, #draw-bar { display:flex; flex-wrap:wrap; justify-content:center; align-items:center; gap:var(--space-1); max-width:100%; padding:var(--space-1); background:var(--surface); border:thin solid var(--line); border-radius:var(--radius-xl); box-shadow:var(--shadow-lg); }
 nav .btn, #draw-bar .btn { flex-shrink:0; border-radius:var(--radius-full); }
-nav .btn[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); }
 /* One row, however narrow: a bar that wraps doubles what it covers. Past the
    edge it scrolls sideways instead. */
 nav { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
 nav::-webkit-scrollbar { display:none; }
-/* The grip hides the bar on a tap and moves it to the other edge on a drag. */
-#hide { color:var(--muted); cursor:grab; touch-action:none; }
-#dock.dragging, #dock.dragging #hide { cursor:grabbing; }
 #dock[data-edge="top"] { top:calc(var(--space-2) + env(safe-area-inset-top)); bottom:auto; flex-direction:column-reverse; }
 #show[data-edge="top"] { top:calc(var(--space-3) + env(safe-area-inset-top)); bottom:auto; }
 #name { display:flex; flex-direction:column; min-width:0; padding:0 var(--space-2); }
 #title { font-size:var(--text-sm); font-weight:var(--weight-semibold); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:14em; }
-#stamp { font-size:var(--text-xs); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+#stamp { font-size:var(--text-xs); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:14em; }
 #stamp:empty { display:none; }
-#lens { flex-shrink:0; }
 .panel { width:min(560px, 100%); max-height:50vh; overflow:auto; background:var(--surface); border:thin solid var(--line); border-radius:var(--radius-lg); box-shadow:var(--shadow-lg); padding:var(--space-3); box-sizing:border-box; }
 .panel h2 { font-size:var(--text-sm); margin:0 0 var(--space-2); display:flex; align-items:center; justify-content:space-between; gap:var(--space-2); }
 .panel-actions { display:flex; justify-content:flex-end; gap:var(--space-2); margin-top:var(--space-2); flex-wrap:wrap; }
@@ -63,7 +58,7 @@ nav::-webkit-scrollbar { display:none; }
 /* The note owns the dock while editing. Only its body scrolls; actions never
    cover the text field, even when the keyboard leaves little vertical room. */
 #dock { max-height:calc(100% - var(--space-4)); }
-#dock:has(#draft:not([hidden])) nav, #dock:has(#draft:not([hidden])) #drawing { display:none; }
+#dock:has(#draft:not([hidden])) nav, #dock:has(#draft:not([hidden])) #drawing, #dock:has(#draft:not([hidden])) #menu { display:none; }
 #draft { display:flex; flex-direction:column; max-height:70dvh; overflow:hidden; padding:0; }
 #draft-body { min-height:0; overflow:auto; padding:var(--space-3); }
 #draft .panel-actions { flex-shrink:0; margin:0; padding:var(--space-2) var(--space-3); border-top:thin solid var(--line); }
@@ -82,13 +77,21 @@ nav::-webkit-scrollbar { display:none; }
 #ink .mark { fill:none; stroke:var(--annotate); stroke-width:4; stroke-linecap:round; stroke-linejoin:round; }
 /* Hints float over the app, whose page may be any colour: back them solidly. */
 #dock > .banner.inline[data-tone="accent"] { background:color-mix(in srgb, var(--accent) 14%, var(--surface)); box-shadow:var(--shadow-sm); }
-#dock .btn, #dock .seg-btn, #show, #down .btn { min-block-size:var(--space-7); min-inline-size:var(--space-7); font-size:var(--text-sm); }
+#dock .btn, #show, #down .btn, #dock .menu-item { min-block-size:var(--space-7); font-size:var(--text-sm); }
+#dock .btn, #show { min-inline-size:var(--space-7); }
+/* The menu belongs to the pill, so it sits over it. */
+#menu { align-self:center; max-width:min(320px, 100%); }
+#menu kbd { flex:none; padding:0 var(--space-1); border:thin solid var(--line); border-radius:var(--radius-sm); color:var(--muted); font-family:var(--font-mono); font-size:var(--text-xs); }
+/* The name is a label, not a target: one pill, three buttons at most. */
+#name { pointer-events:none; }
+#more { position:relative; gap:var(--space-1); }
+#dock:not([data-edge="top"]) #more svg { transform:rotate(180deg); }
 #compare-draw { margin-top:var(--space-2); }
 /* Marking a Compare shot: make it big enough to draw on with a thumb. */
 #compare[data-drawing] #compare-stage img { max-height:min(60vh, 560px); }
 #compare[data-drawing] #compare-slider, #compare[data-drawing] #compare-hint, #compare[data-drawing] #compare-draw { display:none; }
 .label-narrow { display:none; }
-@media (max-width: 699px) { #lens { display:none; } #name { display:none; } .label-wide { display:none; } .label-narrow { display:inline; } nav { gap:0; } nav .btn { padding-inline:var(--space-2); } }
+@media (max-width: 699px) { .wide-only { display:none; } .label-wide { display:none; } .label-narrow { display:inline; } #title { max-width:9em; } }
 /* "Made with Bivy": a quiet strip under a shared app, never over it. */
 #made-with { flex-shrink:0; display:flex; align-items:center; justify-content:center; gap:var(--space-1); min-height:var(--space-6); padding:0 var(--space-3) env(safe-area-inset-bottom); box-sizing:border-box; background:var(--surface); border-top:thin solid var(--line); color:var(--muted); font-size:var(--text-xs); text-decoration:none; }
 #made-with:hover, #made-with:focus-visible { color:var(--ink); }
@@ -125,6 +128,7 @@ body.badged #dock:not([data-edge="top"]) { bottom:calc(var(--space-2) + var(--sp
     </div>
     <div class="panel-actions"><button class="btn sm ghost" id="draft-cancel">Cancel</button><button class="btn sm primary" id="draft-add">Add to chat</button></div>
   </section>
+  <p class="banner inline" data-tone="accent" id="hint" role="status" hidden>Press and hold anything in the app to mark what’s wrong.</p>
   <p class="banner inline" data-tone="accent" id="drawing" role="status" hidden>Tap what’s wrong, or circle it. Then Done. Two fingers scroll the page.</p>
   <div id="draw-bar" role="toolbar" aria-label="Marking tools" tabindex="-1" hidden>
     <button class="btn sm ghost" id="draw-undo" type="button" disabled>Undo</button>
@@ -132,16 +136,23 @@ body.badged #dock:not([data-edge="top"]) { bottom:calc(var(--space-2) + var(--sp
     <button class="btn sm ghost" id="draw-cancel" type="button" aria-label="Stop marking">✕</button>
     <button class="btn sm primary" id="draw-done" type="button" disabled>Done</button>
   </div>
+  <div class="menu" id="menu" role="menu" aria-label="Preview options" hidden>
+    <button class="menu-item" role="menuitem" id="mark" type="button" aria-keyshortcuts="c" disabled><span class="menu-item-label">Mark something</span><kbd>C</kbd></button>
+    <button class="menu-item" role="menuitemcheckbox" id="errors" type="button" aria-checked="false" disabled><span class="menu-item-label">Console</span></button>
+    <button class="menu-item" role="menuitemcheckbox" id="compare-btn" type="button" aria-checked="false" hidden><span class="menu-item-label">Compare with before</span></button>
+    <div class="menu-heading wide-only">Width</div>
+    <button class="menu-item wide-only" role="menuitemradio" data-lens="full" type="button" aria-checked="true"><span class="menu-item-label">Full</span></button>
+    <button class="menu-item wide-only" role="menuitemradio" data-lens="tablet" type="button" aria-checked="false"><span class="menu-item-label">Tablet</span></button>
+    <button class="menu-item wide-only" role="menuitemradio" data-lens="phone" type="button" aria-checked="false"><span class="menu-item-label">Phone</span></button>
+    <button class="menu-item separated" role="menuitem" id="reload" type="button" disabled><span class="menu-item-label">Reload</span></button>
+    <button class="menu-item" role="menuitem" id="edge" type="button"><span class="menu-item-label">Move to top</span></button>
+    <button class="menu-item" role="menuitem" id="hide" type="button"><span class="menu-item-label">Hide controls</span></button>
+  </div>
   <nav aria-label="Bivy preview controls">
-    <button class="btn sm ghost" id="hide" aria-label="Hide Bivy controls" title="Tap to hide · Drag to move" aria-keyshortcuts="ArrowUp ArrowDown"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></button>
-    <button class="btn sm ghost" id="back" aria-label="Back to chat">‹ <span class="label-wide">Back to chat</span><span class="label-narrow">Chat</span></button>
+    <button class="btn sm ghost" id="back" aria-label="Back to chat">‹ <span class="label-wide">Chat</span></button>
     <span id="name"><span id="title">App preview</span><span id="stamp" class="muted" role="status"></span></span>
     <button class="btn sm primary" id="update" type="button" hidden><span class="label-wide">Show new version</span><span class="label-narrow">New</span></button>
-    <button class="btn sm ghost" id="mark" type="button" aria-keyshortcuts="c" disabled>Mark</button>
-    <button class="btn sm ghost" id="compare-btn" aria-pressed="false" hidden>Compare</button>
-    <button class="btn sm ghost" id="errors" aria-pressed="false" aria-label="Console" disabled>Console <span class="badge" data-variant="solid" data-tone="danger" id="error-count" hidden></span></button>
-    <div class="segmented" id="lens" role="radiogroup" aria-label="Preview width"><button class="seg-btn" role="radio" aria-selected="true" data-lens="full">Full</button><button class="seg-btn" role="radio" aria-selected="false" data-lens="tablet">Tablet</button><button class="seg-btn" role="radio" aria-selected="false" data-lens="phone">Phone</button></div>
-    <button class="btn sm ghost" id="reload" aria-label="Reload" disabled><span class="label-wide">Reload</span><span class="label-narrow" aria-hidden="true">↻</span></button>
+    <button class="btn sm ghost" id="more" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Preview options"><span class="badge" data-variant="solid" data-tone="danger" id="error-count" hidden></span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
   </nav>
 </div>
 <button class="btn sm" id="show" hidden aria-label="Show Bivy controls">Bivy</button>
@@ -192,12 +203,21 @@ function show(data,launch){
     status.hidden=true;void loadCompare();
     // Put them back where they were before an update they asked for.
     if(restore){const at=restore;restore=null;frame.contentWindow?.postMessage(Object.assign({type:'bivy:restore'},at),metadata.origin);}
-    if(!watching){watching=true;latest=-1;shown=null;watch();}else if(wake)wake();
+    if(!watching){watching=true;latest=-1;shown=null;watch();firstHint();}else if(wake)wake();
   };
   // A Bivy client framing the shell says whether it can take dictation.
   if(embedded&&data.returnTo)toBivy({type:'hello'});
   // Store navigation metadata only, never tickets or cookies.
   try{sessionStorage.setItem(storageKey,JSON.stringify(data));}catch{}
+}
+// The marking gesture is the whole point of a preview, and a gesture nobody is
+// told about is a gesture nobody uses. Say it once per device, then never again.
+const hintKey='bivy-preview-hint';
+function firstHint(){
+  if(metadata.controls===false)return;
+  try{if(localStorage.getItem(hintKey))return;localStorage.setItem(hintKey,'1');}catch{return;}
+  $('hint').hidden=false;
+  setTimeout(()=>{$('hint').hidden=true;},8000);
 }
 // An agent turn changes files: never reload the app under the person looking
 // at it — a scroll position, a filled-in form or an open menu would go with it.
@@ -301,7 +321,7 @@ function fromBivy(d){
   else if(d.type==='transcript'){setListening(false);if(typeof d.error==='string')sayVoice(d.error.slice(0,200));else addSpoken(d.text);}
   else if(d.type==='listening'&&d.on===false&&listening){setListening(false);if(voiceStatus.textContent.startsWith('Listening'))sayVoice('');}
 }
-$('draft-cancel').onclick=()=>{cancelListening();$('draft').hidden=true;endDraw();markBtn.focus();};
+$('draft-cancel').onclick=()=>{cancelListening();$('draft').hidden=true;endDraw();$('more').focus();};
 $('draft-add').onclick=async()=>{
   cancelListening();
   const note=$('draft-text').value.trim();
@@ -330,7 +350,7 @@ function finishNote(d){
   $('draft').hidden=true;endDraw();
   $('stamp').textContent=d.screenshot?'Note and approximate picture sent':'Note sent without a picture';
   status.hidden=false;status.textContent=$('stamp').textContent+'. The app’s owner will see it.';
-  markBtn.focus();
+  $('more').focus();
 }
 // Console
 let entries=[];
@@ -338,7 +358,8 @@ function resetConsole(){entries=[];renderConsole();}
 function renderConsole(){
   const errors=entries.filter(e=>e.level==='error').length,count=$('error-count');
   count.hidden=!errors;count.textContent=String(errors);
-  $('errors').setAttribute('aria-label',errors?'Console, '+errors+' error'+(errors===1?'':'s'):'Console');
+  // The number is shown once, on the pill, so it is visible without opening it.
+  $('more').setAttribute('aria-label',errors?'Preview options, '+errors+' error'+(errors===1?'':'s'):'Preview options');
   $('console-empty').hidden=entries.length>0;$('send-errors').disabled=!entries.length;
   $('entries').replaceChildren(...entries.map(e=>{const li=document.createElement('li');const tag=document.createElement('span');tag.className='badge';tag.dataset.tone=e.level==='error'?'danger':'warn';tag.textContent=e.level;const text=document.createElement('span');text.textContent=e.text;li.append(tag,text);return li;}));
 }
@@ -375,6 +396,7 @@ function applyState(current,d){
 function startDraw(target,seed){
   endDraw();
   if(target==='frame')panels(null);
+  $('hint').hidden=true;
   if(target==='compare'){$('compare-slider').value='0';split();$('compare').dataset.drawing='';}
   // Tools first: they change the layout the marks are measured against.
   $('drawing').hidden=false;$('draw-bar').hidden=false;document.querySelector('nav').hidden=true;
@@ -537,7 +559,7 @@ async function loadCompare(){
   if(metadata.reviewer)return;
   try{const r=await fetch(metadata.origin+'/__bivy/compare',{credentials:'include',cache:'no-store'});if(!r.ok)return;shots=(await r.json()).shots||[];compareBtn.hidden=shots.length<2;}catch{}
 }
-function panels(open){if(listening)cancelListening();if(draw&&!(open==='compare'&&draw.target==='compare'))endDraw();for(const [id,btn] of [['console','errors'],['compare','compare-btn']]){$(id).hidden=id!==open;$(btn).setAttribute('aria-pressed',String(id===open));}$('draft').hidden=true;}
+function panels(open){if(listening)cancelListening();if(draw&&!(open==='compare'&&draw.target==='compare'))endDraw();for(const [id,btn] of [['console','errors'],['compare','compare-btn']]){$(id).hidden=id!==open;$(btn).setAttribute('aria-checked',String(id===open));}$('draft').hidden=true;}
 compareBtn.onclick=async()=>{
   if(!$('compare').hidden)return panels(null);
   panels('compare');
@@ -554,33 +576,39 @@ compareBtn.onclick=async()=>{
 };
 const split=()=>{$('compare-before').style.clipPath='inset(0 '+(100-Number($('compare-slider').value))+'% 0 0)';};
 $('compare-slider').oninput=split;
-// The pill can cover an app's own bars: drag its grip to the other edge (kept
-// for next time), or tap it to collapse the pill to a corner button.
-const dock=$('dock'),grip=$('hide'),edgeKey='bivy-preview-edge';
+// One pill, and one menu behind it: everything that used to be a button in a
+// row of seven. The row scrolled sideways on a phone and covered the app; the
+// pill holds what must always be visible — where you are, whether a newer
+// version is waiting, whether the app is logging errors — and the menu holds
+// the rest.
+const dock=$('dock'),menu=$('menu'),more=$('more'),edgeKey='bivy-preview-edge';
 function edge(to,keep){
   dock.dataset.edge=to;$('show').dataset.edge=to;
+  $('edge').querySelector('.menu-item-label').textContent=to==='top'?'Move to bottom':'Move to top';
   if(keep)try{localStorage.setItem(edgeKey,to);}catch{}
 }
 try{edge(localStorage.getItem(edgeKey)==='top'?'top':'bottom');}catch{edge('bottom');}
-let drag=null,dragged=false;
-grip.onpointerdown=e=>{drag={y:e.clientY,moved:false};try{grip.setPointerCapture(e.pointerId);}catch{}};
-grip.onpointermove=e=>{
-  if(!drag)return;const dy=e.clientY-drag.y;
-  if(!drag.moved&&Math.abs(dy)<8)return;
-  drag.moved=true;dock.classList.add('dragging');dock.style.transform='translateY('+dy+'px)';
-};
-grip.onpointerup=grip.onpointercancel=e=>{
-  if(!drag)return;const {moved}=drag;drag=null;
-  if(moved){const r=grip.getBoundingClientRect();edge(r.top+r.height/2<innerHeight/2?'top':'bottom',true);dragged=true;setTimeout(()=>{dragged=false;});}
-  dock.classList.remove('dragging');dock.style.transform='';
-};
-grip.onkeydown=e=>{if(e.key==='ArrowUp'||e.key==='ArrowDown'){e.preventDefault();edge(e.key==='ArrowUp'?'top':'bottom',true);}};
-grip.onclick=()=>{if(dragged){dragged=false;return;}dock.hidden=true;$('show').hidden=false;$('show').focus();};
-$('show').onclick=()=>{$('dock').hidden=false;$('show').hidden=true;$('hide').focus();};
-// Device lens (desktop widths)
-for(const b of $('lens').querySelectorAll('button'))b.onclick=()=>{
+function openMenu(on){
+  menu.hidden=!on;more.setAttribute('aria-expanded',String(on));
+  if(on)menu.querySelector('.menu-item:not([hidden]):not(:disabled)')?.focus();
+}
+more.onclick=()=>openMenu(menu.hidden);
+// Choosing anything closes the menu; the pill takes focus back.
+menu.addEventListener('click',e=>{if(e.target.closest('.menu-item')){openMenu(false);more.focus();}});
+// A tap outside, or Escape, closes it. (The app is in a frame, so a tap there
+// never reaches this document: the menu also closes when the frame takes over.)
+addEventListener('pointerdown',e=>{if(!menu.hidden&&!menu.contains(e.target)&&e.target!==more)openMenu(false);},true);
+// Focus moving into the app's frame (or away from the preview) closes it too:
+// a tap inside the frame never reaches this document.
+addEventListener('blur',()=>openMenu(false));
+$('edge').onclick=()=>edge(dock.dataset.edge==='top'?'bottom':'top',true);
+more.onkeydown=e=>{if(e.key==='ArrowUp'||e.key==='ArrowDown'){e.preventDefault();edge(e.key==='ArrowUp'?'top':'bottom',true);}};
+$('hide').onclick=()=>{dock.hidden=true;$('show').hidden=false;$('show').focus();};
+$('show').onclick=()=>{dock.hidden=false;$('show').hidden=true;more.focus();};
+// Width (desktop only: a phone is already the width it is)
+for(const b of menu.querySelectorAll('[data-lens]'))b.onclick=()=>{
   stage.dataset.lens=b.dataset.lens;
-  for(const o of $('lens').querySelectorAll('button'))o.setAttribute('aria-selected',String(o===b));
+  for(const o of menu.querySelectorAll('[data-lens]'))o.setAttribute('aria-checked',String(o===b));
 };
 // Messages from the app origin: server state and inspector reports.
 const down=$('down'),downText=$('down-text'),ask=$('ask');

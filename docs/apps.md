@@ -620,8 +620,12 @@ expires. Reload reloads the page the app is on.
 ### Preview controls
 
 The preview shell floats one pill over the app, so the app keeps the whole
-screen. **⌄** collapses it to a small **Bivy** button when it covers the app's
-own bottom bar.
+screen. The pill holds only what must always be visible — which preview you are
+in, whether a newer version is waiting, and how many errors the page is logging
+— and **⌄** opens a menu with everything else: **Mark something**, **Console**,
+**Compare**, the width choices on wide screens, **Reload**, **Move to
+top/bottom**, and **Hide controls**, which collapses the pill to a small
+**Bivy** button when it covers the app's own bottom bar.
 
 - **Show new version**: appears when an agent turn has built something newer
   than what is on screen. A turn never reloads the preview under you — a scroll
@@ -672,10 +676,12 @@ own bottom bar.
   - Strokes, elements and pictures never go through the preview origin: the
     shell hands them to the Bivy page by `postMessage`. The marks use the
     `--annotate` design token, the same colour in both themes.
-- **Console**: errors and warnings from the page, with a count on the pill.
+- **Console** (in the menu): errors and warnings from the page, with the count on the pill.
+  Because it is on the pill, the number is visible without opening the menu.
   **Send to agent…** drafts them the same way.
-- **Full / Tablet / Phone** (wide screens): constrains the app to 768 or 390 px.
-- **Compare** (with agent screenshots on): before/after screenshots at phone
+- **Full / Tablet / Phone** (in the menu, wide screens only): constrains the app to 768 or 390 px.
+  A phone is already the width it is, so the choice isn't offered there.
+- **Compare** (in the menu, with agent screenshots on): before/after screenshots at phone
   width around the agent's last change (review cards reuse these shots), with a handle to reveal either. Bivy
   takes a baseline the first time a view is opened, and one after each turn that
   changes files, of the page last viewed. The last four are kept in memory.
