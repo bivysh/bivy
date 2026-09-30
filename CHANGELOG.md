@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A new version waits for you.** An agent turn no longer reloads the preview under you, taking your scroll position, half-filled form or open menu with it. **Show new version** appears on the pill instead, and taking it puts you back on the same page in the same place.
 - **One gesture marks the app.** Point and Draw were two modes with a button each; press and hold anything in the preview to mark it, or drag on from there to circle it. Lifting without moving opens the note already listening. **Mark something** and the `C` key do the same without a gesture, and a long press inside a field or over selected text is left to the app.
+- The README now opens with what Bivy is (remote access to the coding agents on your own machine, not an agent or a cloud dev machine) and its four parts, and covers one-gesture marking, pins, share-link durations, usage-limit handoffs, `bivy delegate`, and the commands agents use to reach you.
 - **One pill over the app.** The preview's seven controls become the name, any waiting version and one menu holding Mark, Console, Compare, width, Reload and the rest — so the app keeps the screen it is being judged on.
 
 ## [0.19.3] - 2026-09-30

@@ -4,22 +4,27 @@
 [![license: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-2b6cb0)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-2b6cb0)](https://nodejs.org)
 
-**Build, try, and review apps from your phone. Your coding agent and dev
-environment stay on your own machines.**
+**Local coding agents that show their work. Anywhere.**
 
-Bivy is an open-source remote development environment built around coding
-agents. Ask for a change, try the running app, and point to or draw on what
-needs fixing. Send that feedback to the agent and try again—all in the same
-session, without going back to your computer.
+Bivy is the open-source workspace for coding agents. It runs Claude Code, Codex,
+Pi, OpenCode and other agents on your own machine. Reach them from a browser or
+your phone, with the live session, its terminal, its approvals, and the app
+they're building right in the chat. Try it, mark what's wrong, and send it back.
 
-Live previews bring your app to your phone or browser without deploying it to
-Render, building a Docker image, or setting up a separate preview server.
-Share a preview link so someone else can try it and leave notes, too.
+Bivy is not another coding agent and not a cloud development machine. The agent
+stays local and does the coding with your model provider. Your repos, tools,
+databases, and services stay where they are. Bivy gives you remote access to all
+of it, plus live previews, automations, and review.
 
-Keep Claude Code, Codex, Pi, OpenCode, or another supported agent. Keep your
-repos, tools, databases, and development environment. Bivy connects them to
-chat, a terminal, app previews, and code review wherever you are. Start work
-yourself, or let an issue, CI failure, message, schedule, or webhook start it.
+- **Live previews.** The running app beside the chat. Mark it, send it back,
+  share it with someone who has no Bivy account.
+- **Automations.** GitHub issues, failed CI, Linear, Slack, schedules, and
+  webhooks start the work. It comes back as a preview link or a pull request.
+- **Any agent.** Hit a usage limit? Fork the session to another agent, or let
+  Bivy retry when the limit resets.
+- **Your machine, anywhere.** Start at your desk, pick the session up on your
+  phone. The machine dials out, so there are no ports to open, and session
+  traffic is end-to-end encrypted.
 
 **[Start free on Bivy Cloud](https://app.bivy.sh)** ·
 **[Quickstart](docs/quickstart.md)** ·
@@ -47,30 +52,34 @@ agents. Connect a Mac, Linux computer, or existing server and bring your own
 agent subscription, model API key, or local model. You can also self-host the
 entire remote-access stack.
 
-> **Bivy is 0.x software.** Claude Code, Codex, Pi, and OpenCode are the
+> **Bivy is 0.x software.** Claude Code, Codex, Pi, OpenCode, and Grok are the
 > release-tested paths. Credential sync, resume, handoffs, approvals, and
 > sandboxing depend on the runtime. See the
 > [runtime support matrix](docs/runtime-support-matrix.md).
 
-## Build → preview → mark up → iterate
+## Don't just read the diff. Try the app.
 
-Remote chat lets you ask an agent for a change. Bivy also lets you **use what
-it built and show it what to fix**, without a separate deployment step.
+Bivy lets you **use what the agent built and show it what to fix**, without a
+separate deployment step.
 
 1. **Ask for a change.** The agent works in your repo with your existing tools
    and local services.
-2. **Try the app.** Open a live preview from the session. Use the running app,
-   not just a screenshot of what the agent says it finished. Bivy can discover
-   dev servers running in the session workspace; tap **Preview** to open one.
-3. **Mark up what needs work.** Point at an element or circle and draw on the
-   preview. Add a note, then send the draft to the agent with the element and
-   page context. Marked-up screenshots and before/after comparison are available
-   when agent screenshots are enabled.
-4. **Iterate and review.** Try the next version, inspect the diff, review checks,
-   and decide when the work is ready—not just when the agent stops.
-5. **Bring someone else into the review.** Copy a public preview link so they
-   can use the app without a Bivy account and leave notes on specific elements.
-   Bring their notes into the session when you're ready to act on them.
+2. **Try the app.** Bivy finds the dev server the agent starts and opens it
+   beside the chat: web apps, terminals, and desktop apps. Use the running app,
+   not a screenshot of what the agent says it finished.
+3. **Mark what needs work.** Press and hold anything in the preview to mark it,
+   or drag to circle it, then say what you want. **Mark another** keeps
+   separate notes separate. The marks go to the agent with the element and page
+   context. No screenshots to paste.
+4. **Follow each note.** Every mark stays in the chat as a pin that resolves
+   itself: **Changed** when a later run changes what you marked, **Element
+   gone** when it leaves the page, **Done** when you say so.
+5. **Review the next version.** A new version waits on the preview pill instead
+   of reloading under you. Take it when you're ready, compare before and after,
+   inspect the diff and checks, and decide when the work is done.
+6. **Get a second opinion.** Share a preview link for 1 hour, 1 day, or 7 days.
+   Teammates and clients try the running app and leave notes without a Bivy
+   account. Make it view-only, or **Stop sharing** to end every link at once.
 
 On Bivy Cloud, preview delivery is built in: no per-app domains, certificates,
 public ports, or tunnels to configure. Self-hosters configure preview delivery
@@ -79,26 +88,12 @@ build or dev-server setup, and **the machine serving it must stay awake and
 online**. These are development previews, not production hosting.
 
 **Share deliberately:** anyone with a preview link can use that app, including
-its live backend. Links expire after 24 hours and can be revoked sooner.
+its live backend, until the link expires or you stop sharing.
 Reviewer notes aren't sent to the agent automatically; you send them or explicitly
 allow agent access. Preview traffic uses HTTPS through the preview relay, not
 session end-to-end encryption; the relay operator can see it.
 
 [App previews, visual feedback, and sharing →](docs/apps.md)
-
-## Your agents and machines, one workspace
-
-| Capability | What it means for you |
-|---|---|
-| **One workspace, multiple agents** | Use different agents and models for different tasks without maintaining a separate workflow for each. |
-| **Your machines and environment** | Work beside your existing repos, dev servers, databases, private networks, toolchains, and GPUs. |
-| **Automations and triggers** | Let issues, failed CI, messages, schedules, and webhooks start work instead of copying requests into a chat. |
-| **Encrypted key and OAuth sync** | Reuse Bivy-managed provider credentials across enrolled machines and compatible runtimes, with less repeated setup. |
-| **Live sessions from anywhere** | Build and review from your phone, browser, or terminal; answer questions and approve supported actions in the same session. |
-| **Live app previews** | Try the running app without deploying it to a separate hosting service. |
-| **Visual feedback and sharing** | Point, draw, and send specific feedback to the agent; share a preview link for outside review. |
-| **Reviewable results** | Inspect the app, changes, declared checks, artifacts, and pull requests—not just an agent's claim that it finished. |
-| **Hosted convenience or self-hosting** | Use Bivy Cloud for managed remote access, or run the same open-source core yourself. |
 
 ## One workflow, from trigger to review
 
@@ -131,34 +126,70 @@ creates runs when an event matches.
 Manual and automated work use the same kind of live session. You can join a run
 when it needs help rather than wait for a black-box job to finish.
 
-### Work in the environment you already have
+### Let events start the work
 
-A clean cloud sandbox isn't always enough. Your agent may need the database
-running on localhost, an uncommitted change, an internal API behind your VPN,
-or a model running on your GPU. Bivy runs the agent where those things already
-exist, subject to that machine's permissions and the runtime's protection.
+Automations turn recurring or incoming work into sessions you can join,
+supervise, and review. An agent picks the task up on your machine and posts
+back a preview link or a pull request, so you try the result where the task
+lives and reply in the same session. Choose the repository, machine, agent,
+model, approval mode, sandbox setting, and maximum attempts.
 
-Connect several machines to the same account: a laptop for interactive work,
-a Linux server for background jobs, or a GPU box for local inference. Choose
-the machine for each session or pin it in an automation. Repository runs can
-use isolated Git worktrees without rebuilding the whole development environment.
+| Trigger | Example workflow |
+|---|---|
+| **GitHub issues and mentions** | Label an issue `bivy` or `bivy/<machine>`, or mention your Bivy GitHub App, to work toward a pull request. |
+| **Failed CI** | Match a failed workflow, ask the agent to reproduce it, make a fix, and run the affected checks. |
+| **Linear** | Label an issue to start work without copying its description into an agent. |
+| **Slack** | Send a request from the conversation where the work came up. |
+| **Schedules** | Run a weekly dependency review, recurring maintenance, or a one-time task. |
+| **Signed webhooks** | Connect alerts, internal tools, or your own event sources. |
 
-**The execution machine must stay awake and online.** To close your laptop and
-leave work running, run the agent on a different, always-on machine.
+Configure automations in the app or version them with your repository in
+`.bivy/automations.yaml`:
 
-[Environment and multi-machine recipes →](docs/capability-recipes.md)
+```bash
+bivy automation init
+# Edit the generated definition for your repository and workflow.
+bivy automation validate
+bivy automation test --event .bivy/events/failed-ci.yaml  # supply a local event fixture
+bivy automation apply
+```
 
-### Use multiple agents, not multiple disconnected workflows
+Or delegate a one-off job without creating an automation:
+
+```bash
+bivy runs start "Review outdated dependencies and propose a small, tested update."
+bivy runs wait <id>
+```
+
+Runs keep routing and lifecycle evidence, check results, and output references
+in a reviewable Receipt. For unattended issue work, Bivy runs declared repository
+checks after the agent's turn; failed required checks fail the run even if the
+agent reports success. A completed process alone is not proof that the task
+succeeded.
+
+[Automation recipes →](docs/capability-recipes.md#let-events-start-runs) ·
+[Automations as code →](docs/automations-as-code.md) ·
+[Run outcomes and reliability limits →](docs/automation-runs.md)
+
+### Use every agent you pay for. Switch mid-task.
 
 Run Claude Code for one task, Codex for another, and Pi or OpenCode where they
-fit. Bivy supplies the shared session, remote-access, automation, and review
-surfaces; your chosen agent still does the coding and uses your model provider.
+fit, side by side in one session list. Bivy supplies the shared session,
+remote-access, automation, and review surfaces; your chosen agent still does
+the coding and uses your model provider.
 
+- **Hit a usage limit? Keep going.** When a turn fails on a limit, fork the
+  session, with its code and conversation, to another agent and model, or let
+  Bivy retry when the limit resets (the provider has to report a reset time).
+- **Get a second opinion.** `bivy delegate` hands a task to another agent, on
+  the same machine or a different one, and brings back its answer, branch, and
+  PR. `--to codex,claude@linux` sends one task to several agents to compare.
 - Choose an agent and, where supported, a model for each session or run.
 - Import existing Claude Code and Codex sessions.
 - Fork or move work to another agent or machine when a different setup fits
   better. Continuation fidelity varies: some paths preserve native history,
-  while others replay portable turns or seed the destination with context.
+  while others replay portable turns or hand over a summary with the earlier
+  transcript as a local file.
 - Use agent-native logins, Bivy-managed credentials, or local inference.
   Bivy's custom OpenAI-compatible endpoint registry currently feeds Pi;
   other agents may need their own provider configuration.
@@ -199,48 +230,22 @@ hosted-provisioning custody grants are separate from ordinary encrypted sync.
 [Credentials guide →](docs/credentials-guide.md) ·
 [Key storage →](docs/key-management.md)
 
-### Let events start the work
+### Work in the environment you already have
 
-Automations turn recurring or incoming work into sessions you can join,
-supervise, and review. Choose the repository, machine, agent, model, approval
-mode, sandbox setting, and maximum attempts.
+A clean cloud sandbox isn't always enough. Your agent may need the database
+running on localhost, an uncommitted change, an internal API behind your VPN,
+or a model running on your GPU. Bivy runs the agent where those things already
+exist, subject to that machine's permissions and the runtime's protection.
 
-| Trigger | Example workflow |
-|---|---|
-| **GitHub issues and mentions** | Label an issue `bivy` or `bivy/<machine>`, or mention your Bivy GitHub App, to work toward a pull request. |
-| **Failed CI** | Match a failed workflow, ask the agent to reproduce it, make a fix, and run the affected checks. |
-| **Linear** | Label an issue to start work without copying its description into an agent. |
-| **Slack** | Send a request from the conversation where the work came up. |
-| **Schedules** | Run a weekly dependency review, recurring maintenance, or a one-time task. |
-| **Signed webhooks** | Connect alerts, internal tools, or your own event sources. |
+Connect several machines to the same account: a laptop for interactive work,
+a Linux server for background jobs, or a GPU box for local inference. Choose
+the machine for each session or pin it in an automation. Repository runs can
+use isolated Git worktrees without rebuilding the whole development environment.
 
-Configure automations in the app or version them with your repository in
-`.bivy/automations.yaml`:
+**The execution machine must stay awake and online.** To close your laptop and
+leave work running, run the agent on a different, always-on machine.
 
-```bash
-bivy automation init
-# Edit the generated definition for your repository and workflow.
-bivy automation validate
-bivy automation test --event .bivy/events/failed-ci.yaml  # supply a local event fixture
-bivy automation apply
-```
-
-Or delegate a one-off job without creating an automation:
-
-```bash
-bivy runs start "Review outdated dependencies and propose a small, tested update."
-bivy runs wait <id>
-```
-
-Runs keep routing and lifecycle evidence, check results, and output references
-in a reviewable Receipt. For unattended issue work, Bivy runs declared repository
-checks after the agent's turn; failed required checks fail the run even if the
-agent reports success. A completed process alone is not proof that the task
-succeeded.
-
-[Automation recipes →](docs/capability-recipes.md#let-events-start-runs) ·
-[Automations as code →](docs/automations-as-code.md) ·
-[Run outcomes and reliability limits →](docs/automation-runs.md)
+[Environment and multi-machine recipes →](docs/capability-recipes.md)
 
 ### Start at your desk. Continue anywhere.
 
@@ -268,6 +273,29 @@ in your browser; adding it to your home screen is optional.
 
 [Remote access →](docs/remote-access.md) ·
 [Voice, files, and terminal recipes →](docs/capability-recipes.md)
+
+### Agents can reach you, too
+
+Every session gets the `bivy` CLI, so any agent with a shell can talk back
+through the app, not only agents with their own built-in tools:
+
+```bash
+bivy notify "Tests are green, PR is up"     # chat card + phone push when you're away
+bivy ask "Ship to staging?" --option Yes --option No  # waits for your answer
+bivy attach report.png --caption "Before/after"       # show a file in the chat
+bivy suggest "Add a dark theme to settings"           # a next task you start in one tap
+bivy context --json                                   # session, workspace, machine, apps
+```
+
+`bivy help --json` lists every command, and with `BIVY_OUTPUT=json` failures
+come back as structured errors with distinct exit codes, so an agent can tell
+what went wrong and what to run next. `bivy guide` prints short playbooks for
+agents, and the same commands are served as MCP tools for agents that prefer
+them. Add your own standing instructions for
+every session in **Settings → Agent instructions**.
+
+[Commands for agents inside a session →](docs/cli-reference.md#inside-an-agent-session) ·
+[Agent instructions →](docs/agent-instructions.md)
 
 ## Get started
 
@@ -404,9 +432,9 @@ for the task, especially before enabling unattended work.
 
 ## Agents and everyday commands
 
-**Claude Code, Codex, Pi, and OpenCode are release-tested.** Additional adapters
-include Gemini CLI, Qwen Code, Goose, Aider, Cline, Crush, Cursor, GitHub Copilot,
-Grok, Amp, Auggie, Droid, Continue, Kilo Code, and Rovo Dev. Installation,
+**Claude Code, Codex, Pi, OpenCode, and Grok are release-tested.** Additional
+adapters include Gemini CLI, Qwen Code, Goose, Aider, Cline, Crush, Cursor, GitHub
+Copilot, Amp, Auggie, Droid, Continue, Kilo Code, and Rovo Dev. Installation,
 resume, model selection, and tool protection vary—see the
 [support matrix](docs/runtime-support-matrix.md) and [agent guides](docs/agents/README.md).
 
