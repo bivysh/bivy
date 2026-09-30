@@ -10,7 +10,9 @@ import { MoreIcon } from "./UiIcons.js";
 import type { PromptAttachment } from "@bivy/core";
 
 /** Marks drawn in the preview, as the shell hands them over (see apps.annotate). */
-type Mark = { path?: string; viewport: { width: number; height: number }; scroll?: { x: number; y: number }; elementScrolls?: { selector: string; x: number; y: number }[]; dpr?: number; theme?: string; strokes: unknown[]; compare?: number; signals?: Record<string, boolean> };
+type Mark = { path?: string; viewport: { width: number; height: number }; scroll?: { x: number; y: number }; elementScrolls?: { selector: string; x: number; y: number }[]; dpr?: number; theme?: string; strokes: unknown[]; compare?: number; signals?: Record<string, boolean>;
+  /** What the marks named, so a pin can look for them again later. */
+  selectors?: string[] };
 type Annotated = { image?: { data: string; mimeType: string; name: string }; approximate: boolean; screenshotsOff?: boolean };
 const APPROXIMATE = "Picture: retaken on the machine, so it may not show this page’s state (a cart, a sign-in, an open menu). The marks and elements are exact.";
 
@@ -62,11 +64,17 @@ export function PreviewPeek({ url, name, sessionId, appId, viewId, onClose, onOp
   // Tell the shell whether it may show its mic and Draw (again when that changes).
   useEffect(() => { capabilities(); }, [capabilities]);
 
-  const deliver = useCallback((text: string, attachments: PromptAttachment[] = []) => {
+  /** `marked`: these words came from marks, so they become a pin if they are
+   *  sent. Staging rather than creating keeps the rule that nothing reaches the
+   *  chat, or the agent, until the person sends it. */
+  const deliver = useCallback((text: string, attachments: PromptAttachment[] = [], marked = false) => {
     if (!controller.prefillComposer(text, attachments)) seedSessionDraft(localStorage, sessionId, text);
+    // The marks' own context, which the message must still carry to be the one
+    // these marks went into.
+    if (marked && appId && viewId) controller.stagePin({ sessionId, appId, viewId, context: text.trim().slice(-80) });
     setMarking(null);
     onClose();
-  }, [sessionId, onClose]);
+  }, [sessionId, appId, viewId, onClose]);
   /** The user's words and marks, plus a picture of what they marked: made on
    *  the machine and fetched over the session channel, never the preview's. */
   const addMarked = useCallback(async (text: string, mark: Mark) => {
@@ -78,7 +86,7 @@ export function PreviewPeek({ url, name, sessionId, appId, viewId, onClose, onOp
       const image = result.image;
       const attachment: PromptAttachment = { kind: "image", mimeType: image.mimeType, data: image.data, size: Math.round((image.data.length * 3) / 4),
         name: result.approximate ? image.name.replace(/\.png$/, " (approximate).png") : image.name };
-      deliver(result.approximate ? `${text}\n${APPROXIMATE}` : text, [attachment]);
+      deliver(result.approximate ? `${text}\n${APPROXIMATE}` : text, [attachment], true);
     } catch (e) { setMarking({ state: "failed", text, mark, message: e instanceof Error ? e.message : "Couldn’t take the picture." }); }
   }, [appId, viewId, sessionId, deliver]);
   // Turning screenshots on is the user's explicit choice here, never automatic.
@@ -146,7 +154,7 @@ export function PreviewPeek({ url, name, sessionId, appId, viewId, onClose, onOp
                     {marking.state === "off"
                       ? <button className="btn primary" onClick={() => void enableShots(marking.text, marking.mark)}>Turn on and add picture</button>
                       : <button className="btn" onClick={() => void addMarked(marking.text, marking.mark)}>Try again</button>}
-                    <button className="btn ghost" onClick={() => deliver(marking.text)}>Add without picture</button>
+                    <button className="btn ghost" onClick={() => deliver(marking.text, [], true)}>Add without picture</button>
                   </span>
                 </div>}
           </div>}

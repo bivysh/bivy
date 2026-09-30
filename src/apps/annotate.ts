@@ -65,6 +65,30 @@ const HALO = tokenColor("annotate-halo", "#ffffff");
 const WIDTH = 4;
 const HALO_WIDTH = 1.5;
 
+/** Cuts out the part of a picture a pin is about, with room around it so the
+ * mark is read in its surroundings rather than in isolation. `scale` maps CSS
+ * pixels to image pixels. Returns the whole picture when the cut would be
+ * empty or nearly all of it. */
+export function crop(png: Buffer, region: { x: number; y: number; width: number; height: number }, scale: number, padding = 24): Buffer {
+  const image = decodePng(png);
+  const { width, height, channels } = image;
+  const pad = padding * scale;
+  const left = Math.max(0, Math.floor((region.x - padding) * scale));
+  const top = Math.max(0, Math.floor((region.y - padding) * scale));
+  const right = Math.min(width, Math.ceil((region.x + region.width) * scale + pad));
+  const bottom = Math.min(height, Math.ceil((region.y + region.height) * scale + pad));
+  const w = right - left, h = bottom - top;
+  if (w < 8 || h < 8 || (w >= width * 0.9 && h >= height * 0.9)) return png;
+  const rgb = Buffer.alloc(w * h * 3);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const from = ((y + top) * width + (x + left)) * channels;
+      image.pixels.copy(rgb, (y * w + x) * 3, from, from + 3);
+    }
+  }
+  return encodePng(w, h, rgb);
+}
+
 /** Draws marks onto a PNG. `scale` maps CSS pixels to image pixels;
  * `offset` (CSS px) is subtracted first — the scroll position the picture
  * was taken at. Halos go under every mark first, so crossings stay clean. */

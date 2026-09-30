@@ -543,7 +543,7 @@ $('draw-done').onclick=()=>{
     +(els.length?els.map(el=>'- '+String(el.selector).slice(0,300)+(el.text?' ("'+String(el.text).slice(0,120)+'")':'')).join('\\n')+'\\n':'')
     +'Marks ('+(d.target==='compare'?'screenshot':'page')+' px): '+d.strokes.map(bounds).join('; ');
   // The first element a mark names is what the note is "on", as pointing at one used to be.
-  const mark=Object.assign({path:st.path,viewport:st.viewport,dpr:st.dpr,strokes:d.strokes.map(s=>({tool:s.tool,points:s.points})),signals:st.signals,selector:els[0]?.selector||'',text:els[0]?.text||''},
+  const mark=Object.assign({path:st.path,viewport:st.viewport,dpr:st.dpr,strokes:d.strokes.map(s=>({tool:s.tool,points:s.points})),signals:st.signals,selector:els[0]?.selector||'',text:els[0]?.text||'',selectors:els.map(el=>String(el.selector).slice(0,300)).slice(0,8)},
     d.target==='frame'?{scroll:d.scroll,elementScrolls:st.elementScrolls,theme:st.theme}:{compare:compareAfter});
   // The marks stay on screen, frozen, while you add your words.
   d.done=true;draw=null;

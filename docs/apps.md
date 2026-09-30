@@ -165,6 +165,37 @@ chat attachment the device fetches over the session channel. It waits up to
 encrypted in transit, in the node's attachment store). Each view keeps only
 its latest card's pictures: an older card shows "Screenshot no longer stored".
 
+### Pins
+
+Marks sent from a preview become a **pin**: a card in the chat holding the crop
+of what was marked, the words that were sent with it, and a state. The message
+they travelled in is unchanged — the agent still reads the words, the context
+and the full picture — but a message says nothing about itself afterwards, and a
+pin does.
+
+A pin is made only when the message is actually sent, so nothing appears in the
+chat that nobody sent. It keeps the place it was made and only its state moves:
+
+| State | What it means |
+| --- | --- |
+| **Open** | Nothing has changed where it points. |
+| **Changed** | A later run changed the pixels it marked. |
+| **Element gone** | Everything it named has left the page. |
+| **Done** | The person said so (and can reopen it). |
+
+Only evidence moves a pin off **Open**: a run that changes nothing there leaves
+it open, because it has not been answered. The evidence is the run's own
+before/after screenshots, compared inside the marked region alone, plus a check
+of whether the marked elements still match anything on the page. Turning preview
+cards off stops the cards, not the answers — pins on that app are still resolved.
+
+Two things a pin does not claim: a pin marked at a viewport width far from the
+390 px the run screenshots use sat on a different layout, so its region is not
+compared and it stays open; and with agent screenshots off there are no pictures
+to compare, so pins stay open until marked done. Pins live in the node's memory
+and their pictures in the attachment store; the card survives a reload through
+the session's event log.
+
 ### Share links (`bivy app share`)
 
 ```sh

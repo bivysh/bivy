@@ -18,10 +18,15 @@ export interface ShotRequest {
    * desktop at 800×1): its viewport height, pixel ratio and scroll position. */
   elementScrolls?: ElementScroll[];
   height?: number; scale?: number; scroll?: { x: number; y: number };
+  /** Ask whether these CSS selectors still match anything on the page. Used to
+   * tell a pin whose element is gone from one whose element merely moved. */
+  selectors?: string[];
 }
 /** Desktop apps are shot as they are on screen: `theme` is "native" for them.
  * `scroll`: where the page actually scrolled to, when asked to scroll. */
-export interface Shot { viewId: string; view: string; width: number; theme: "light" | "dark" | "native"; file: string; elementScrollsRestored?: boolean; scroll?: { x: number; y: number } }
+export interface Shot { viewId: string; view: string; width: number; theme: "light" | "dark" | "native"; file: string; elementScrollsRestored?: boolean; scroll?: { x: number; y: number };
+  /** Of `request.selectors`, those that matched nothing. */
+  missing?: string[] }
 
 /** Browsers tried in order; BIVY_CHROME overrides. Any Chromium works. */
 const CANDIDATES = [
@@ -167,10 +172,18 @@ export async function takeShots(views: RegisteredView[], request: ShotRequest, o
           const { result } = await cdp.send("Runtime.evaluate", { expression: "[scrollX, scrollY]", returnByValue: true }, sessionId);
           scroll = { x: Number(result?.value?.[0]) || 0, y: Number(result?.value?.[1]) || 0 };
         }
+        let missing: string[] | undefined;
+        if (request.selectors?.length) {
+          // The page's own selectors, evaluated as data: a list of strings in,
+          // a list of strings out, never anything the page chooses to run.
+          const wanted = JSON.stringify(request.selectors.slice(0, 50));
+          const { result } = await cdp.send("Runtime.evaluate", { expression: `(${wanted}).filter(s => { try { return !document.querySelector(s); } catch { return false; } })`, returnByValue: true }, sessionId);
+          missing = Array.isArray(result?.value) ? result.value.filter((s: unknown) => typeof s === "string") : undefined;
+        }
         const { data } = await cdp.send("Page.captureScreenshot", { format: "png" }, sessionId);
         const file = path.join(outDir, `${entry.view.id.slice(0, 8)}-${width}-${theme}.png`);
         fs.writeFileSync(file, Buffer.from(data, "base64"));
-        shots.push({ viewId: entry.view.id, view: entry.view.name, width, theme, file, ...(scroll ? { scroll } : {}), ...(elementScrollsRestored !== undefined ? { elementScrollsRestored } : {}) });
+        shots.push({ viewId: entry.view.id, view: entry.view.name, width, theme, file, ...(scroll ? { scroll } : {}), ...(elementScrollsRestored !== undefined ? { elementScrollsRestored } : {}), ...(missing ? { missing } : {}) });
       }
     }
     return shots;

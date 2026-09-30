@@ -275,6 +275,7 @@ export interface TranscriptEntry {
   app?: import("./apps.js").AppReference;
   /** A review card: the app at a moment worth judging, updated in place. */
   review?: import("./apps.js").AppReview;
+  pin?: import("./apps.js").AppPin;
   /** A task the agent proposed (`bivy suggest`), startable in one tap. */
   suggestion?: import("./suggestions.js").TaskSuggestion;
   /** A delegated child Run (another agent/machine), updated in place. */
@@ -2899,7 +2900,7 @@ export class SessionStore {
         // must be working" update over that would clobber the needs_action
         // status right back to working the instant it was set.
         // Publishing an app is display output, not evidence of an agent turn.
-        if (sid && innerKind !== "user_question" && innerKind !== "user_question_resolved" && innerKind !== "app_published" && innerKind !== "app_review" && innerKind !== "suggestion") {
+        if (sid && innerKind !== "user_question" && innerKind !== "user_question_resolved" && innerKind !== "app_published" && innerKind !== "app_review" && innerKind !== "app_pin" && innerKind !== "suggestion") {
           // Keep the dot live for every event — tool calls and streaming
           // deltas are real signs the session is "working", worth showing.
           // But *ordering* the sidebar on every one of them (#479) meant a

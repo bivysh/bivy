@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Pins.** Marks you send from a preview now stay in the chat as a card with a state, instead of vanishing into a paragraph of selectors and coordinates. A pin holds a crop of what you marked and the words you sent, and answers itself: **Changed** when a later run changed the pixels you marked, **Element gone** when what you marked left the page, **Done** when you say so. Only evidence moves a pin — a run that changes nothing there leaves it open.
+
+### Changed
+
+- **A new version waits for you.** An agent turn no longer reloads the preview under you, taking your scroll position, half-filled form or open menu with it. **Show new version** appears on the pill instead, and taking it puts you back on the same page in the same place.
+- **One gesture marks the app.** Point and Draw were two modes with a button each; press and hold anything in the preview to mark it, or drag on from there to circle it. Lifting without moving opens the note already listening. **Mark something** and the `C` key do the same without a gesture, and a long press inside a field or over selected text is left to the app.
+- **One pill over the app.** The preview's seven controls become the name, any waiting version and one menu holding Mark, Console, Compare, width, Reload and the rest — so the app keeps the screen it is being judged on.
+
 ## [0.19.3] - 2026-09-30
 
 ### Changed

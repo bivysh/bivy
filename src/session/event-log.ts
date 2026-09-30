@@ -34,7 +34,7 @@ import { normalizedIntermediateText, thinkingTextFromContent, mergeTranscript, t
 import type { RuntimeMessage } from "../runtime/types.js";
 import type { AttachmentRef } from "./attachment-store.js";
 import { DELEGATION_BLOCK, isDelegationCard, type DelegationCard } from "./delegations.js";
-import { APP_PUBLICATION_BLOCK, APP_REVIEW_BLOCK, isAppReference, isAppReview, type AppReference, type AppReview } from "../apps/types.js";
+import { APP_PIN_BLOCK, APP_PUBLICATION_BLOCK, APP_REVIEW_BLOCK, isAppPin, isAppReference, isAppReview, type AppPin, type AppReference, type AppReview } from "../apps/types.js";
 import { SUGGESTION_BLOCK, isTaskSuggestion, type TaskSuggestion } from "./suggestions.js";
 
 /** The serialization-independent atoms mergeBases folds a reopen on (see below). */
@@ -296,6 +296,14 @@ export interface AppReviewLogEntry {
   id: string;
   review: AppReview;
 }
+/** A pin on a preview; re-appended under the same id when its state changes. */
+export interface AppPinLogEntry {
+  bivyKind: "app-pin";
+  createdAt: number;
+  afterMessageCount: number;
+  id: string;
+  pin: AppPin;
+}
 /** A task the agent proposed with `bivy suggest`, placed where it was posted. */
 export interface SuggestionLogEntry {
   bivyKind: "suggestion";
@@ -313,7 +321,7 @@ export interface DelegationLogEntry {
   delegation: DelegationCard;
 }
 
-export type LogRecord = DelegationLogEntry | EventLogEntry | BaseLogEntry | ForkDisplayLogEntry | AttachmentLogEntry | OutboundAttachmentLogEntry | InlineImageLogEntry | AppPublicationLogEntry | AppReviewLogEntry | SuggestionLogEntry;
+export type LogRecord = DelegationLogEntry | EventLogEntry | BaseLogEntry | ForkDisplayLogEntry | AttachmentLogEntry | OutboundAttachmentLogEntry | InlineImageLogEntry | AppPublicationLogEntry | AppReviewLogEntry | AppPinLogEntry | SuggestionLogEntry;
 
 /** Content-block type carried by a folded outbound attachment. MUST match
  *  `AGENT_ATTACHMENT_BLOCK` in packages/core/src/store-render.ts — the client's
@@ -393,8 +401,14 @@ function isAppReviewEntry(value: unknown): value is AppReviewLogEntry {
   return entry.bivyKind === "app-review" && typeof entry.id === "string" && typeof entry.createdAt === "number" && typeof entry.afterMessageCount === "number" && isAppReview(entry.review);
 }
 
+function isAppPinEntry(value: unknown): value is AppPinLogEntry {
+  if (!value || typeof value !== "object") return false;
+  const entry = value as Partial<AppPinLogEntry>;
+  return entry.bivyKind === "app-pin" && typeof entry.id === "string" && typeof entry.createdAt === "number" && typeof entry.afterMessageCount === "number" && isAppPin(entry.pin);
+}
+
 function isRecord(value: unknown): value is LogRecord {
-  return isDelegationEntry(value) || isOverlay(value) || isBase(value) || isForkDisplay(value) || isAttachment(value) || isOutboundAttachment(value) || isInlineImage(value) || isAppPublication(value) || isAppReviewEntry(value) || isSuggestionEntry(value);
+  return isDelegationEntry(value) || isOverlay(value) || isBase(value) || isForkDisplay(value) || isAttachment(value) || isOutboundAttachment(value) || isInlineImage(value) || isAppPublication(value) || isAppReviewEntry(value) || isAppPinEntry(value) || isSuggestionEntry(value);
 }
 
 /**
@@ -504,6 +518,13 @@ export function replayExtras(entries: readonly LogRecord[]): SidecarMessage[] {
     role: "assistant", content: [{ type: APP_REVIEW_BLOCK, review: entry.review }],
     id: entry.id, afterMessageCount: entry.afterMessageCount, createdAt: entry.createdAt,
   }));
+  // A pin keeps where it was made and shows its latest state.
+  const pins = new Map<string, AppPinLogEntry>();
+  for (const entry of entries) if (entry.bivyKind === "app-pin") pins.set(entry.id, entry);
+  const pinCards: SidecarMessage[] = [...pins.values()].map((entry) => ({
+    role: "assistant", content: [{ type: APP_PIN_BLOCK, pin: entry.pin }],
+    id: entry.id, afterMessageCount: entry.afterMessageCount, createdAt: entry.createdAt,
+  }));
   // A delegation card keeps the place it was created and shows its latest state.
   const delegations = new Map<string, DelegationLogEntry>();
   for (const entry of entries) {
@@ -519,7 +540,7 @@ export function replayExtras(entries: readonly LogRecord[]): SidecarMessage[] {
     role: "assistant", content: [{ type: SUGGESTION_BLOCK, suggestion: entry.suggestion }],
     id: entry.id, afterMessageCount: entry.afterMessageCount, createdAt: entry.createdAt,
   }));
-  return [...foldIntermediate(intermediate), ...foldTool(tool), ...replayOutboundAttachments(entries), ...publications, ...cards, ...delegationCards, ...suggestions];
+  return [...foldIntermediate(intermediate), ...foldTool(tool), ...replayOutboundAttachments(entries), ...publications, ...cards, ...pinCards, ...delegationCards, ...suggestions];
 }
 
 /**
@@ -826,6 +847,11 @@ export class EventLog {
   appendAppReview(id: string, entry: { afterMessageCount: number; createdAt?: number; review: AppReview }): void {
     this.load(id);
     this.enqueue(id, `review:${entry.review.id}`, { bivyKind: "app-review", createdAt: entry.createdAt ?? Date.now(), afterMessageCount: entry.afterMessageCount, id: entry.review.id, review: structuredClone(entry.review) });
+  }
+
+  appendAppPin(id: string, entry: { afterMessageCount: number; createdAt?: number; pin: AppPin }): void {
+    this.load(id);
+    this.enqueue(id, `pin:${entry.pin.id}`, { bivyKind: "app-pin", createdAt: entry.createdAt ?? Date.now(), afterMessageCount: entry.afterMessageCount, id: entry.pin.id, pin: structuredClone(entry.pin) });
   }
 
   appendSuggestion(id: string, entry: { afterMessageCount: number; suggestion: TaskSuggestion }): void {

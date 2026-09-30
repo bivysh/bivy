@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { SHARE_DURATIONS, type AppManifest, type AppOffer, type AppReview, type OpenAppViewResult, type ReviewCardMode, type ReviewerNote, type SessionApp, type SessionAppOffersResult, type SessionAppsResult, type ShareAppViewResult, type ShareOptions } from "./types.js";
+import { SHARE_DURATIONS, type AppManifest, type AppOffer, type AppPin, type AppPinState, type AppReview, type OpenAppViewResult, type ReviewCardMode, type ReviewerNote, type SessionApp, type SessionAppOffersResult, type SessionAppsResult, type ShareAppViewResult, type ShareOptions } from "./types.js";
 import { randomBytes } from "node:crypto";
-import { REVIEW_MODES, shouldReview, visualChange } from "./review.js";
+import { PIN_CHANGE, REVIEW_MODES, regionChange, shouldReview, visualChange } from "./review.js";
 import { AppRegistry, type RegisteredView } from "./registry.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { scanListeners } from "./listeners.js";
 import { takeShots, type Shot, type ShotRequest } from "./screenshot.js";
-import { approximate, composite, readStrokes, readElementScrolls, type ElementScroll, type PageSignals } from "./annotate.js";
+import { approximate, composite, crop, readStrokes, readElementScrolls, type ElementScroll, type PageSignals } from "./annotate.js";
 import { captureFrame, encodePng, sendInput } from "./rfb.js";
 import { inputEvents, readAction } from "./input.js";
 import { pressMenu, readMenuPath, readMenus, type AppMenu } from "./menu.js";
@@ -49,6 +49,21 @@ export interface ReviewSink {
   expire(review: AppReview, keep: ReadonlySet<string>): void;
 }
 const NO_REVIEWS: ReviewSink = { publish: (review) => review, expire: () => {} };
+/** Where pins go: the same treatment as a review card — the picture becomes an
+ * encrypted attachment, the pin is logged and broadcast, and a state change is
+ * re-published under the same id. */
+export interface PinSink {
+  publish(pin: AppPin, image?: Buffer): AppPin;
+}
+const NO_PINS: PinSink = { publish: (pin) => pin };
+/** A pin's region is in the page CSS pixels of the viewport it was marked in.
+ * Run screenshots are taken at this width, so a pin marked at a very different
+ * one sat on a different layout: its region says nothing about these pixels,
+ * and it stays open rather than being answered wrongly. */
+const PIN_SHOT_WIDTH = 390;
+const PIN_WIDTH_TOLERANCE = 0.1;
+/** How long a drawn picture is kept for the pin that may follow it. */
+const MARK_TTL_MS = 10 * 60_000;
 /** One agent run (a prompt until the agent stops) in a session. */
 interface Run {
   /** Each view's revision when the run started. */
@@ -85,6 +100,12 @@ export class AppService {
   private readonly displays: AppDisplayProvider;
   private shooting: Promise<unknown> = Promise.resolve();
   private readonly reviews: ReviewSink;
+  private readonly pinSink: PinSink;
+  /** Pins made in this node's lifetime, newest last, by view. */
+  private pins: AppPin[] = [];
+  /** The last picture drawn on a view, kept briefly for the pin that may
+   *  follow it: the person is still typing their words when it is made. */
+  private lastMark = new Map<string, { at: number; png: Buffer; path: string; selectors: string[]; region: AppPin["region"]; viewport: AppPin["viewport"] }>();
   private readonly settleMs: number;
   private runs = new Map<string, Run>();
   /** The latest card per view: a newer one expires its images. */
@@ -99,6 +120,7 @@ export class AppService {
     screenshots?: { enabled: () => boolean; take?: typeof takeShots };
     displays?: AppDisplayProvider;
     reviews?: ReviewSink;
+    pins?: PinSink;
     /** How long servers get to rebuild after a change before a screenshot. */
     settleMs?: number;
   } = {}) {
@@ -107,6 +129,7 @@ export class AppService {
     this.screenshots = { enabled: options.screenshots?.enabled ?? (() => false), take: options.screenshots?.take ?? takeShots };
     this.displays = options.displays ?? NO_DISPLAYS;
     this.reviews = options.reviews ?? NO_REVIEWS;
+    this.pinSink = options.pins ?? NO_PINS;
     this.settleMs = options.settleMs ?? COMPARE_SETTLE_MS;
   }
 
@@ -184,10 +207,15 @@ export class AppService {
     return pending;
   }
 
-  /** Web views of a session whose app wants review cards on their own. */
+  private hasOpenPins(viewId: string): boolean {
+    return this.pins.some((pin) => pin.viewId === viewId && pin.state === "open");
+  }
+  /** Web views a run watches: those whose app wants review cards, and those
+   * carrying a pin still waiting for an answer. */
   private reviewable(sessionId: string): RegisteredView[] {
-    return this.registry.list(sessionId).filter((app) => REVIEW_MODES[this.registry.reviewMode(app.id)].minChange !== undefined)
-      .flatMap((app) => app.views.filter((view) => view.kind === "web").map((view) => this.registry.getView(view.id)!)).filter(Boolean);
+    return this.registry.list(sessionId)
+      .flatMap((app) => app.views.filter((view) => view.kind === "web").map((view) => this.registry.getView(view.id)!)).filter(Boolean)
+      .filter((entry) => REVIEW_MODES[this.registry.reviewMode(entry.app.id)].minChange !== undefined || this.hasOpenPins(entry.view.id));
   }
   /** An agent run started. Remembers each view's revision, and the page as
    * it is now, so the end of the run can tell whether anything visibly
@@ -214,9 +242,14 @@ export class AppService {
     for (const { entry } of changed) {
       if (!entry || !this.screenshots.enabled()) continue;
       const mode = this.registry.reviewMode(entry.app.id);
-      if (run.muted || REVIEW_MODES[mode].minChange === undefined) continue;
+      const cards = !run.muted && REVIEW_MODES[mode].minChange !== undefined;
       const before = run.baseline.get(entry.view.id);
-      const after = await this.shotOf(entry);
+      // Pins are answered from evidence even where cards are off or muted:
+      // turning cards off means "stop showing me the app", not "forget what I
+      // asked for".
+      const after = cards || this.hasOpenPins(entry.view.id) ? await this.shotOf(entry) : undefined;
+      await this.resolvePins(entry, before, after);
+      if (!cards) continue;
       const change = before && after ? visualChange(before, after) : undefined;
       // A card the agent presented earlier in the run is refreshed if the page changed since.
       const current = this.latest.get(entry.view.id);
@@ -428,6 +461,8 @@ export class AppService {
   async annotate(sessionId: string, input: {
     appId: string; viewId: string; path?: string; viewport: { width: number; height: number };
     scroll?: { x: number; y: number }; elementScrolls?: ElementScroll[]; dpr?: number; theme?: "light" | "dark"; strokes: unknown; compare?: number; signals?: PageSignals;
+    /** What the marks named, for a pin to find again later. Untrusted strings. */
+    selectors?: unknown;
   }): Promise<{ image?: { data: string; mimeType: "image/png"; name: string; width: number; height: number }; approximate: boolean; screenshotsOff?: true }> {
     const entry = this.registry.requireView(sessionId, input.appId, input.viewId);
     if (entry.view.kind !== "web") throw new Error("Only previews can be drawn on.");
@@ -440,8 +475,16 @@ export class AppService {
     const page = typeof input.path === "string" && input.path.startsWith("/") && !input.path.startsWith("//") && input.path.length <= 2048 ? input.path : entry.lastPath ?? "/";
     const scroll = { x: whole(input.scroll?.x, 0, 1e6) ? input.scroll!.x : 0, y: whole(input.scroll?.y, 0, 1e6) ? input.scroll!.y : 0 };
     const name = `${entry.app.name} ${page === "/" ? "" : page} marked.png`.replace(/[^\w .()-]+/g, "-").replace(/\s+/g, " ").trim();
+    // What the marks cover, in the page pixels they were drawn in, so a later
+    // screenshot can be compared exactly there (see resolvePins).
+    const xs = strokes.flatMap((stroke) => stroke.points.map(([x]) => x));
+    const ys = strokes.flatMap((stroke) => stroke.points.map(([, y]) => y));
+    const region = { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys) };
+    const selectors = (Array.isArray(input.selectors) ? input.selectors : []).filter((value): value is string => typeof value === "string" && value.length > 0 && value.length <= 300).slice(0, 8);
     const finish = (base: Buffer, offset: { x: number; y: number }, approx: boolean) => {
       const png = composite(base, strokes, { scale: pngSize(base).width / viewport.width, offset });
+      // Keep it for the pin that may follow: the person is still writing.
+      this.lastMark.set(entry.view.id, { at: Date.now(), png, path: page, selectors, region, viewport });
       return { image: { data: png.toString("base64"), mimeType: "image/png" as const, name, ...pngSize(png) }, approximate: approx };
     };
     // Compare: the exact frame they drew on, in its own coordinates.
@@ -470,6 +513,66 @@ export class AppService {
     const scrolledTo = Math.abs(landed.x - scroll.x) <= 2 && Math.abs(landed.y - scroll.y) <= 2;
     // Marks stay on the content they were drawn on, wherever the retake scrolled.
     return finish(base, landed, approximate("retake", input.signals, scrolledTo && shot.elementScrollsRestored !== false));
+  }
+  /** A pin: the marks the person just sent, kept as a thing with a state
+   * rather than a paragraph in a message. Made only when the message is
+   * actually sent, so nothing appears in the chat that the person didn't send.
+   * The picture is the one `annotate` already made for the message. */
+  pin(sessionId: string, input: { appId: string; viewId: string; words: string }): { pin: AppPin } {
+    const entry = this.registry.requireView(sessionId, input.appId, input.viewId);
+    const mark = this.lastMark.get(input.viewId);
+    if (!mark || Date.now() - mark.at > MARK_TTL_MS) throw new Error("That mark is no longer held. Mark the preview again.");
+    this.lastMark.delete(input.viewId);
+    // The card shows what they marked, not the whole page it sat on. The
+    // message keeps the full picture; this is the pin's own thumbnail.
+    let picture = mark.png;
+    try { picture = crop(mark.png, mark.region, pngSize(mark.png).width / mark.viewport.width); } catch { /* the whole picture still tells the story */ }
+    const pin = this.pinSink.publish({
+      id: `pin-${randomBytes(8).toString("hex")}`, sessionId, appId: entry.app.id, viewId: entry.view.id,
+      name: entry.app.name, view: entry.view.name, path: mark.path,
+      words: String(input.words ?? "").trim().slice(0, 2000), at: Date.now(),
+      selectors: mark.selectors, region: mark.region, viewport: mark.viewport, state: "open",
+    }, picture);
+    this.pins = [...this.pins, pin].slice(-200);
+    return { pin };
+  }
+  /** The person's own verdict on a pin. Only they can say "done". */
+  setPinState(sessionId: string, pinId: string, state: AppPinState): { pin: AppPin } {
+    const current = this.pins.find((pin) => pin.id === pinId && pin.sessionId === sessionId);
+    if (!current) throw new Error("That pin is no longer held on this machine.");
+    return { pin: this.updatePin(current, state) };
+  }
+  private updatePin(pin: AppPin, state: AppPinState): AppPin {
+    const next = this.pinSink.publish({ ...pin, state, stateAt: Date.now() });
+    this.pins = this.pins.map((item) => (item.id === pin.id ? next : item));
+    return next;
+  }
+  /** After a run, say what became of the pins on a view — from evidence only.
+   * "gone" when what a pin named is no longer on the page; "changed" when the
+   * pixels it marked differ from before the run. A run that changed nothing
+   * there leaves the pin open: it has not been answered. */
+  private async resolvePins(entry: RegisteredView, before: Buffer | undefined, after: Buffer | undefined): Promise<void> {
+    const open = this.pins.filter((pin) => pin.viewId === entry.view.id && pin.state === "open");
+    if (!open.length) return;
+    const selectors = [...new Set(open.flatMap((pin) => pin.selectors))];
+    let missing: string[] | undefined;
+    if (selectors.length && this.screenshots.enabled()) {
+      const outDir = path.join(os.tmpdir(), "bivy-shots", "pins", entry.view.id);
+      try {
+        const run = this.shooting.catch(() => {}).then(() => this.screenshots.take([entry], { widths: [PIN_SHOT_WIDTH], themes: ["light"], path: entry.lastPath ?? "/", selectors }, outDir));
+        this.shooting = run;
+        missing = (await run)[0]?.missing;
+      } catch { /* no answer is not an answer: the pins stay open */ }
+      finally { fs.rmSync(outDir, { recursive: true, force: true }); }
+    }
+    for (const pin of open) {
+      if (missing && pin.selectors.length && pin.selectors.every((selector) => missing!.includes(selector))) { this.updatePin(pin, "gone"); continue; }
+      if (!before || !after || pin.path !== (entry.lastPath ?? "/")) continue;
+      // A pin marked at a very different width sat on a different layout.
+      if (Math.abs(pin.viewport.width - PIN_SHOT_WIDTH) > PIN_SHOT_WIDTH * PIN_WIDTH_TOLERANCE) continue;
+      const change = regionChange(before, after, pin.region, pngSize(after).width / pin.viewport.width);
+      if (change !== undefined && change > PIN_CHANGE) this.updatePin(pin, "changed");
+    }
   }
   /** The managed server's output, as an attachable terminal (starts it if needed). */
   async logs(sessionId: string, appId: string, viewId: string): Promise<OpenAppViewResult> {

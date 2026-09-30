@@ -3161,6 +3161,11 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
 .review-actions { display: flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-3); }
 .review-actions .btn { min-block-size: var(--space-7); }
 
+/* Pin card (PinCard.tsx): the review card's layout, carrying what someone
+   marked instead of what a run produced. The state is one .badge, and the
+   words are the same quoted block a review note uses. */
+.pin-card .review-note { margin-block-start: 0; }
+
 /* Apps sheet (AppsSheet.tsx): one card per app, its views nested, one primary
    action per view; secondary tools as quiet icon buttons; rare or destructive
    actions behind ⋯ (MoreMenu, the canonical .menu). Status uses .banner. */

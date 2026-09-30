@@ -80,6 +80,47 @@ export function isAppReview(value: unknown): value is AppReview {
     && (review.note === undefined || typeof review.note === "string")
     && (review.notes === undefined || (Number.isInteger(review.notes) && review.notes >= 0));
 }
+/** A mark the user sent to the agent: their words, a picture of what they
+ * marked, and where it was. Unlike the message that carried it, a pin has a
+ * state — a later run can change what it points at, and saying so is the
+ * difference between a comment and a piece of work. */
+export interface AppPin {
+  id: string; sessionId: string; appId: string; viewId: string;
+  name: string; view: string; path: string;
+  /** What the person wrote or said. Their words, shown as text. */
+  words: string;
+  at: number;
+  /** The marked-up picture, as an end-to-end encrypted attachment. */
+  shot?: ReviewShot;
+  /** What the marks named, for finding them again in a later version. */
+  selectors: string[];
+  /** The marks' bounding box and the viewport they were made in, both in page
+   * CSS pixels, so a later screenshot can be compared where it matters. */
+  region: { x: number; y: number; width: number; height: number };
+  viewport: { width: number; height: number };
+  state: AppPinState;
+  /** When the state last changed. */
+  stateAt?: number;
+}
+/** "open": nothing has happened where it points. "changed": a later run changed
+ * those pixels. "gone": what it named is no longer on the page. "done": the
+ * person said so. Only evidence moves a pin off "open" — a run that changes
+ * nothing there leaves it open, because it hasn't been answered. */
+export type AppPinState = "open" | "changed" | "gone" | "done";
+export const APP_PIN_STATES: readonly AppPinState[] = ["open", "changed", "gone", "done"];
+export const APP_PIN_BLOCK = "bivy_app_pin";
+export function isAppPin(value: unknown): value is AppPin {
+  if (!value || typeof value !== "object") return false;
+  const pin = value as Partial<AppPin>;
+  const box = (v: unknown, keys: readonly string[]) => !!v && typeof v === "object" && keys.every((k) => typeof (v as Record<string, unknown>)[k] === "number");
+  return typeof pin.id === "string" && typeof pin.sessionId === "string" && typeof pin.appId === "string" && /^[a-f0-9]{32}$/.test(pin.appId)
+    && typeof pin.viewId === "string" && typeof pin.name === "string" && typeof pin.view === "string" && typeof pin.path === "string"
+    && typeof pin.words === "string" && typeof pin.at === "number"
+    && Array.isArray(pin.selectors) && pin.selectors.every((s) => typeof s === "string")
+    && box(pin.region, ["x", "y", "width", "height"]) && box(pin.viewport, ["width", "height"])
+    && APP_PIN_STATES.includes(pin.state as AppPinState)
+    && (pin.shot === undefined || isShot(pin.shot));
+}
 /** Input→frame latency and bandwidth measured by a display view's viewer. */
 export interface DisplayStats { at: number; latencyMs: { p50: number; p95: number }; kBps: number; viewport: { width: number; height: number; scale: number } }
 /** Untrusted feedback on an element or marked area from a shared link. */
