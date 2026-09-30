@@ -86,5 +86,6 @@ merging a redundant test over adding another.
 
 
 ## PRs
+Always write a goof, short Changelog entry.
 When you open a PR make sure the title and description gives a good overview of what these changes do.
 Follow CI and fix any errors that come up until CI is green.
