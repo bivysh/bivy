@@ -160,9 +160,12 @@ export async function takeShots(views: RegisteredView[], request: ShotRequest, o
         }
         let scroll: { x: number; y: number } | undefined;
         if (request.scroll) {
-          const { result } = await cdp.send("Runtime.evaluate", { expression: `scrollTo(${Number(request.scroll.x) || 0}, ${Number(request.scroll.y) || 0}); [scrollX, scrollY]`, returnByValue: true }, sessionId);
-          scroll = { x: Number(result?.value?.[0]) || 0, y: Number(result?.value?.[1]) || 0 };
+          // Instant: a page's `scroll-behavior: smooth` would otherwise animate,
+          // so the position read (and the picture) would be mid-scroll.
+          await cdp.send("Runtime.evaluate", { expression: `scrollTo({left:${Number(request.scroll.x) || 0},top:${Number(request.scroll.y) || 0},behavior:'instant'})` }, sessionId);
           await new Promise((r) => setTimeout(r, 150));
+          const { result } = await cdp.send("Runtime.evaluate", { expression: "[scrollX, scrollY]", returnByValue: true }, sessionId);
+          scroll = { x: Number(result?.value?.[0]) || 0, y: Number(result?.value?.[1]) || 0 };
         }
         const { data } = await cdp.send("Page.captureScreenshot", { format: "png" }, sessionId);
         const file = path.join(outDir, `${entry.view.id.slice(0, 8)}-${width}-${theme}.png`);
