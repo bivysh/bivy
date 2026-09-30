@@ -17,7 +17,8 @@ a chat and can't see its terminal or files on disk, and which commands reach you
 `bivy attach` (or the `attach_to_chat` tool) to send a file or image,
 `bivy app publish` / `run` / `shot` / `present` to preview, check and hand over
 something with a UI ([apps.md](apps.md)), `bivy suggest` to propose a task
-you can start in one tap, and `bivy delegate` to hand a task to another agent or
+you can start in one tap, `bivy notify` and `bivy ask` to message you or wait
+for your answer, and `bivy delegate` to hand a task to another agent or
 machine when you ask for one ([agent-delegation.md](agent-delegation.md)). It
 ends by pointing at `bivy context` and `bivy help` for everything else. The
 commands find the session through

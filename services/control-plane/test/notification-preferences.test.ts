@@ -18,7 +18,7 @@ import net from "node:net";
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const cpDir = path.resolve(testDir, "..");
 
-const KINDS = ["question_asked", "approval_requested", "agent_waiting", "session_done", "session_error", "terminal_bell", "automation_blocked", "app_notes"];
+const KINDS = ["question_asked", "agent_notice", "approval_requested", "agent_waiting", "session_done", "session_error", "terminal_bell", "automation_blocked", "app_notes"];
 
 async function freePort(): Promise<number> {
   return new Promise((resolve, reject) => {

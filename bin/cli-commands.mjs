@@ -34,6 +34,8 @@ export const COMMANDS = [
   // Inside an agent session
   { name: "context", group: "session", scope: "session", json: true, usage: "context [--json]", summary: "Where this agent is running: session, workspace, machine, apps, and what to run next" },
   { name: "attach", group: "session", scope: "session", json: true, usage: 'attach <file> [--caption "…"] [--artifact]', summary: "Show a local file or image to the user in the chat" },
+  { name: "notify", group: "session", scope: "session", json: true, usage: 'notify "<message>" [--urgent]', summary: "Message the user: a card in the chat, and a push when they're away" },
+  { name: "ask", group: "session", scope: "session", json: true, usage: 'ask "<question>" [--option A --option B] [--async]', summary: "Ask the user a question and wait for the answer", subcommands: ["status", "wait"] },
   { name: "suggest", group: "session", scope: "session", json: true, usage: 'suggest "<task>" [--title "label"]', summary: "Propose a task the user can start in one tap" },
   { name: "app", group: "session", scope: "session", json: true, usage: "app <publish|shot|present|share|run|…>", summary: "Live previews: publish a web/terminal/desktop app, screenshot it, present it", subcommands: ["publish", "list", "remove", "shot", "present", "share", "notes", "run", "click", "type", "key", "scroll", "drag", "move", "menu"] },
   { name: "delegate", group: "session", scope: "session", json: true, usage: 'delegate "<task>" [--agent <id>] [--machine <name>] [--wait]', summary: "Hand a task to another agent or machine and get its answer back", subcommands: ["machines", "status", "wait"] },

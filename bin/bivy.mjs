@@ -2541,6 +2541,149 @@ async function cmdSuggest(args = []) {
   console.log(c.green("Suggested in the chat. The user can start it in one tap."));
 }
 
+// Flags shared by the session commands: `--name value` pairs and bare switches,
+// with every other word collected as positional text.
+function parseSessionArgs(args, valueFlags) {
+  const values = {};
+  const positional = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (valueFlags.includes(a)) {
+      const v = args[i + 1];
+      if (v === undefined) return { error: `${a} requires a value.` };
+      (values[a] ??= []).push(v);
+      i++;
+    } else if (!a.startsWith("--")) positional.push(a);
+  }
+  return { values, positional, has: (flag) => args.includes(flag), one: (flag) => values[flag]?.[0] };
+}
+
+// "90", "90s", "10m", "2h" → seconds.
+function durationSeconds(text) {
+  const m = /^(\d+)(s|m|h)?$/.exec(String(text ?? "").trim());
+  return m ? Number(m[1]) * (m[2] === "h" ? 3600 : m[2] === "m" ? 60 : 1) : NaN;
+}
+
+// `bivy notify "<message>" [--urgent]` — reach the user: a card in the chat,
+// and a push naming the session (never the text) when nobody has the app open.
+async function cmdNotify(args = []) {
+  const usage = 'Usage: bivy notify "<message>" [--urgent] [--session <id>] [--json]';
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log(`${usage}
+
+Send the user a message: it appears as a card in the chat, and their devices get
+a push notification (naming this session, not the text) when nobody has the app
+open. --urgent pushes even while they do. At most one push a minute per session;
+later messages still reach the chat. Use it when you finish long work, get
+blocked, or need the user to look at something. --json prints
+{"ok","id","push":"sent"|"user_watching"|"rate_limited","userWatching"}.`);
+    return;
+  }
+  const json = wantsJson(args);
+  const fail = (error) => cliError(error, { json, paint: c.red });
+  const parsed = parseSessionArgs(args, ["--session"]);
+  if (parsed.error) return fail({ code: "usage", message: parsed.error, exit: EXIT.usage });
+  const text = parsed.positional.join(" ").trim();
+  if (!text) return fail({ code: "usage", message: usage, exit: EXIT.usage });
+  const sessionId = resolveAttachSessionId({ sessionFlag: parsed.one("--session"), env: process.env });
+  if (!sessionId) return fail({ code: "no_session", message: "No session id.", hint: "Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.", next: "bivy sessions --json", exit: EXIT.usage });
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable });
+  const res = await sessionPost(config, sessionId, "notify", { text, urgent: parsed.has("--urgent") }).catch((error) => error);
+  if (res instanceof Error) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node: ${res.message}`, next: "bivy status", exit: EXIT.unavailable });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) return fail(sessionHttpError("Notify", res.status, body));
+  if (json) { console.log(JSON.stringify(body)); return; }
+  const pushed = { sent: "and pushed to the user's devices", user_watching: "(no push: the user has the app open; add --urgent to push anyway)", rate_limited: "(no push: this session pushed less than a minute ago)", unavailable: "(no push: this machine isn't signed in to a Bivy account)" }[body.push] ?? "";
+  console.log(c.green(`Posted in the chat ${pushed}.`.replace(" .", ".")));
+}
+
+// `bivy ask "<question>" [--option …]` — the question card, for any agent.
+// Blocks until the user answers (printing the answer), or with --async returns
+// an id to read later with `bivy ask status|wait <id>`.
+const ASK_USAGE = `Usage: bivy ask "<question>" [--option <label>]… [--multi] [--header <label>] [--timeout 10m] [--async] [--json]
+       bivy ask status <id> [--json]
+       bivy ask wait <id> [--timeout 10m] [--json]`;
+
+async function cmdAsk(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log(`${ASK_USAGE}
+
+Ask the user a question in the chat and wait for the answer. Their devices get a
+"needs your input" push. With --option (2 to 8 of them) they pick one (or
+several with --multi) or write their own; without options they type an answer.
+--header is the short label on the card.
+
+Prints the answer and exits 0. Exits 1 if the user dismissed the question and 5
+if --timeout (default 10m, up to 24h) passes first; the card closes then.
+--async returns the question's id at once; 'bivy ask wait <id>' blocks for the
+answer later and 'bivy ask status <id>' checks without waiting.
+--json prints {"id","status":"pending"|"answered"|"dismissed"|"expired","answer"}.`);
+    return;
+  }
+  const json = wantsJson(args);
+  const fail = (error) => cliError(error, { json, paint: c.red });
+  const parsed = parseSessionArgs(args, ["--session", "--option", "--header", "--timeout"]);
+  if (parsed.error) return fail({ code: "usage", message: parsed.error, exit: EXIT.usage });
+  const sessionId = resolveAttachSessionId({ sessionFlag: parsed.one("--session"), env: process.env });
+  if (!sessionId) return fail({ code: "no_session", message: "No session id.", hint: "Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.", next: "bivy sessions --json", exit: EXIT.usage });
+  const timeout = parsed.one("--timeout") === undefined ? 600 : durationSeconds(parsed.one("--timeout"));
+  if (!Number.isFinite(timeout) || timeout < 1) return fail({ code: "usage", message: "--timeout takes seconds or a duration like 90s, 10m or 2h.", exit: EXIT.usage });
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable });
+  let token;
+  try { token = await localDeviceToken(config); } catch { token = undefined; }
+  const base = `${url(config)}/api/session/${encodeURIComponent(sessionId)}/ask`;
+  const call = async (suffix, body) => {
+    const res = await fetch(`${base}${suffix}`, {
+      method: body ? "POST" : "GET",
+      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    }).catch((error) => error);
+    if (res instanceof Error) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node: ${res.message}`, next: "bivy status", exit: EXIT.unavailable });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return fail(sessionHttpError("Ask", res.status, data));
+    return data;
+  };
+  const answerText = (result) => Object.values(result.answers ?? {}).join("\n");
+  const finish = (result) => {
+    const out = { id: result.id, status: result.status, ...(result.status === "answered" ? { answer: answerText(result) } : {}) };
+    if (result.status === "answered") { console.log(json ? JSON.stringify(out) : out.answer); return; }
+    if (result.status === "pending") { console.log(json ? JSON.stringify(out) : `Still waiting for an answer. Check again with: bivy ask wait ${result.id}`); process.exit(EXIT.timeout); }
+    if (json) console.log(JSON.stringify(out));
+    else console.error(result.status === "expired" ? "The question timed out without an answer." : "The user dismissed the question without answering.");
+    process.exit(result.status === "expired" ? EXIT.timeout : EXIT.failed);
+  };
+  const waitFor = async (id, seconds) => {
+    const deadline = Date.now() + seconds * 1000;
+    let result = await call(`/${encodeURIComponent(id)}`);
+    while (result.status === "pending" && Date.now() < deadline) {
+      result = await call(`/${encodeURIComponent(id)}/wait`, { timeoutSeconds: Math.max(1, Math.min(240, Math.ceil((deadline - Date.now()) / 1000))) });
+    }
+    return result;
+  };
+
+  const [action, id] = parsed.positional;
+  if ((action === "status" || action === "wait") && id && parsed.positional.length === 2) {
+    const result = action === "status" ? await call(`/${encodeURIComponent(id)}`) : await waitFor(id, timeout);
+    if (action === "status" && result.status === "pending") { console.log(json ? JSON.stringify({ id: result.id, status: "pending" }) : "Still waiting for an answer."); return; }
+    return finish(result);
+  }
+  const question = parsed.positional.join(" ").trim();
+  if (!question) return fail({ code: "usage", message: ASK_USAGE, exit: EXIT.usage });
+  const options = parsed.values["--option"] ?? [];
+  if (options.length === 1) return fail({ code: "usage", message: "Offer at least two --option values, or none for a free-text answer.", exit: EXIT.usage });
+  const started = await call("", {
+    questions: [{ question, header: parsed.one("--header"), options, multiSelect: parsed.has("--multi") }],
+    timeoutSeconds: timeout,
+  });
+  if (parsed.has("--async")) {
+    console.log(json ? JSON.stringify({ id: started.id, status: started.status }) : `Asked. Get the answer with: bivy ask wait ${started.id}`);
+    return;
+  }
+  finish(await waitFor(started.id, timeout + 5));
+}
+
 // Cross-agent / cross-machine delegation (docs/agent-delegation.md): hand a
 // self-contained task from this session to another agent, optionally on another
 // account machine, and get its answer back. Agent-agnostic — any agent with a
@@ -5663,6 +5806,12 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       break;
     case "suggest":
       await cmdSuggest(args);
+      break;
+    case "notify":
+      await cmdNotify(args);
+      break;
+    case "ask":
+      await cmdAsk(args);
       break;
     case "delegate":
       await cmdDelegate(args);

@@ -72,13 +72,15 @@ export class QuestionManager {
    * returned answer is formatted back to the agent as the tool result.
    */
   request(input: {
+    /** Caller-chosen id, so it can be looked up before the answer arrives. */
+    id?: string;
     sessionId: string;
     questions: UserQuestionItem[];
     signal?: AbortSignal;
     timeoutMs?: number;
   }): Promise<UserQuestionAnswer> {
     const request: QuestionRequest = {
-      id: randomUUID(),
+      id: input.id ?? randomUUID(),
       sessionId: input.sessionId,
       questions: input.questions,
       createdAt: Date.now(),
