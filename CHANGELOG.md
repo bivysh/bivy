@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Agent plans show as a checklist.** When an agent keeps a todo list or plan (Grok, OpenCode, Codex `update_plan`, or any ACP agent), the turn shows one **Plan · 2 of 4 done** line where the plan was last updated, and it opens into the steps with their status. `bivy tui` shows the same progress as one line per turn. Before, Grok and other ACP plans were pasted into the agent's thinking after every update, and Codex plans didn't show at all.
+
+### Changed
+
+- **Forks carry the plan and the latest request.** A fork to another agent tells it where the previous agent's plan stands, and repeats the user's latest request in full when the summary had to shorten it.
+- **Agents refreshed:** Claude Agent SDK 0.3.286, Codex 0.159.2, Pi 0.99.2.
+
+### Fixed
+
+- An agent CLI's own server is no longer offered as an app preview. OpenCode sessions showed a **Preview :4096** pill for OpenCode's internal server.
+
 ## [0.20.1] - 2026-09-30
 
 ### Added
