@@ -255,6 +255,33 @@ most useful signal: they show which name agents expected. Keep a local counter
 of those misses (unknown commands and flags, by name, with no content) that
 feeds `bivy doctor --agents` and the next rename or alias.
 
+## Status (2026-09-30)
+
+Built, in this order:
+
+| Phase | What landed |
+| --- | --- |
+| 0 + 1 | `bin/cli-commands.mjs` (one row per command) drives dispatch, help, `help --json`, completions and "did you mean". `check:cli` keeps the dispatcher and reference in step. `bivy context`. A shared JSON error shape and exit codes. |
+| 3 (first) | `bivy notify` (chat card, plus a push naming only the session) and `bivy ask` (the question card for any agent; free-text questions). |
+| 2 | `bivy guide` (five playbooks in `bin/guides`). MCP tools declared on command rows and run through `bivy tool`, with guides as MCP resources. |
+| 3 (rest) | `bivy fork`, `bivy approvals`, `bivy issues`, `bivy instructions`. |
+| 4 | Session tokens (`BIVY_SESSION_TOKEN`), with an allow-list and `agent.call` audit events. |
+| 5 | `pnpm run eval:agent-ux`, the unknown-command record, and the `BIVY_NODE_CLI` handoff (found by the eval's first run). |
+
+These changed on the way:
+
+- `bivy terminal` was dropped: a terminal the user can watch is an app `terminal` view.
+- Automation enable/disable stays in the file (`enabled: false`, then `apply`).
+- `bivy work` became `bivy issues`, since GitHub is the only queue with a node API.
+- `bivy context` has no `allowed` field. A session token's reach is the fixed `SESSION_TOKEN_ROUTES` table rather than per-project scopes.
+
+Not built yet:
+
+- Generated skills and `llms.txt`.
+- Integration tools (Notion, Gmail, …) for MCP agents.
+- Per-project token scopes.
+- `BIVY_OUTPUT=json` on by default in agent sessions.
+
 ## Sequencing
 
 | Phase | Scope | Size |
