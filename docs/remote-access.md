@@ -10,7 +10,7 @@ and `bivy access` shows which you have, what it gives you, and the next step:
 | | Your phone and other devices | All your machines in one app | Push notifications | Shareable app previews |
 |---|---|---|---|---|
 | **This machine only** | — | — | — | — |
-| **Tailscale** (`bivy access tailscale`) | on your tailnet | — | — | — |
+| **Tailscale** (`bivy access tailscale`) | on your tailnet | on your tailnet | — | — |
 | **Bivy hosted** (`bivy access hosted`) | from anywhere | ✓ | ✓ | ✓ |
 | **Your own server** (`bivy access server <url>`) | from anywhere | ✓ | ✓ | ✓ |
 

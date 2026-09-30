@@ -27,7 +27,9 @@ export interface DirectTransportOptions {
   pairCode?: string;
   /** Name the node records for this device when it pairs. */
   deviceName?: string;
-  /** The node never trusts this caller without a token (it isn't on loopback). */
+  /** The node isn't on loopback for this caller: never bootstrap, and treat a
+   *  rejected socket as "not paired" (a device token, or the machine owner's
+   *  tailnet identity, gets in). */
   requireToken?: boolean;
   handlers: TransportHandlers;
 }
@@ -45,6 +47,8 @@ export class DirectTransport implements Transport {
   private pairCode: string;
   private readonly deviceName: string;
   private readonly requireToken: boolean;
+  /** Set once the machine turned this device away; API calls stop until it pairs. */
+  private unpaired = false;
   private readonly handlers: TransportHandlers;
   /** Pairing/bootstrap in flight; API calls wait so they carry the new token. */
   private authPending: Promise<void> = Promise.resolve();
@@ -84,7 +88,7 @@ export class DirectTransport implements Transport {
   private async directApi<T = any>(path: string, opts: RequestInit = {}): Promise<T> {
     if (!path.startsWith("/api/auth/")) {
       await this.authPending;
-      if (this.requireToken && !this.token()) throw new Error(NOT_PAIRED);
+      if (this.unpaired) throw new Error(NOT_PAIRED);
     }
     const res = await this.fetchImpl(`${this.origin}${path}`, {
       ...opts,
@@ -137,6 +141,7 @@ export class DirectTransport implements Transport {
   }
 
   private notPaired(): void {
+    this.unpaired = true;
     this.connected = false;
     this.setStatus("offline");
     this.handlers.onError?.(NOT_PAIRED);
@@ -164,10 +169,6 @@ export class DirectTransport implements Transport {
     this.setStatus("connecting");
     this.authPending = this.bootstrapAuth();
     await this.authPending;
-    if (this.requireToken && !this.token()) {
-      this.notPaired();
-      return;
-    }
     const proto = typeof location !== "undefined" && location.protocol === "https:" ? "wss:" : "ws:";
     const host = typeof location !== "undefined" ? location.host : this.origin.replace(/^https?:\/\//, "");
     const token = this.token();
@@ -361,7 +362,8 @@ export class DirectTransport implements Transport {
         case "apps.revoke":
         case "apps.remove":
         case "artifacts.list":
-        case "access.get": {
+        case "access.get":
+        case "tailnet.machines": {
           const requestId = String(obj.requestId ?? "");
           try {
             const result = await this.directApi(`/api/${obj.kind.replace(".", "/")}`, { method: "POST", body: JSON.stringify(obj) });

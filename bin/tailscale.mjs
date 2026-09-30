@@ -7,12 +7,19 @@
 /** The one HTTPS port Bivy claims on the machine's tailnet name. */
 export const SERVE_HTTPS_PORT = 443;
 
-/** `{ running, hostname }` from `tailscale status --json` output. */
+/**
+ * `{ running, hostname, owner }` from `tailscale status --json` output. `owner`
+ * is the login of the user this machine belongs to, or null for a tagged
+ * machine (owned by tags, not a person).
+ */
 export function parseTailscaleStatus(text) {
   let status;
-  try { status = JSON.parse(text); } catch { return { running: false, hostname: null }; }
+  try { status = JSON.parse(text); } catch { return { running: false, hostname: null, owner: null }; }
   const hostname = String(status?.Self?.DNSName ?? "").replace(/\.$/, "") || null;
-  return { running: status?.BackendState === "Running", hostname };
+  const tagged = Array.isArray(status?.Self?.Tags) && status.Self.Tags.length > 0;
+  const login = status?.User?.[String(status?.Self?.UserID)]?.LoginName;
+  const owner = !tagged && typeof login === "string" && login.includes("@") ? login : null;
+  return { running: status?.BackendState === "Running", hostname, owner };
 }
 
 /** Where `tailscale serve` should send the machine's HTTPS traffic. */

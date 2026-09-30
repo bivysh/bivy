@@ -16,6 +16,8 @@ export interface DirectListenerConfig {
   port: number;
   /** The machine's tailnet name, e.g. `box.tail1234.ts.net`, for links. */
   hostname?: string;
+  /** Tailnet login of the machine's owner; their own devices need no pairing. */
+  owner?: string;
 }
 
 export function loadDirectListenerConfig(appDir: string): DirectListenerConfig | null {
@@ -23,7 +25,8 @@ export function loadDirectListenerConfig(appDir: string): DirectListenerConfig |
     const raw = JSON.parse(fs.readFileSync(path.join(appDir, DIRECT_CONFIG_FILE), "utf8")) as Partial<DirectListenerConfig>;
     const port = Number(raw.port);
     if (!Number.isInteger(port) || port <= 0 || port > 65535) return null;
-    return { port, hostname: typeof raw.hostname === "string" && raw.hostname ? raw.hostname : undefined };
+    const text = (value: unknown) => (typeof value === "string" && value ? value : undefined);
+    return { port, hostname: text(raw.hostname), owner: text(raw.owner) };
   } catch {
     return null;
   }

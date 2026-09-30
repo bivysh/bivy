@@ -30,7 +30,7 @@ interface SetupRow {
 
 export const ACCESS_SETUPS: readonly SetupRow[] = [
   { id: "local", label: "This machine only", summary: "The terminal and a browser on this machine.", gives: { devices: 0, machines: 0, push: 0, sharing: 0 } },
-  { id: "tailscale", label: "Tailscale", summary: "Your devices reach this machine over your tailnet. No account, nothing in between.", command: "bivy access tailscale", gives: { devices: 1, machines: 0, push: 0, sharing: 0 } },
+  { id: "tailscale", label: "Tailscale", summary: "Your devices reach your machines over your tailnet. No account, nothing in between.", command: "bivy access tailscale", gives: { devices: 1, machines: 1, push: 0, sharing: 0 } },
   { id: "hosted", label: "Bivy hosted", summary: "Sign in once. Sessions stay end-to-end encrypted.", command: "bivy access hosted", gives: { devices: 2, machines: 2, push: 2, sharing: 2 } },
   { id: "server", label: "Your own server", summary: "Like hosted, on a server you control.", command: "bivy access server <url>", gives: { devices: 2, machines: 2, push: 2, sharing: 2 } },
 ];
@@ -54,6 +54,11 @@ export interface AccessReport {
   next: { id: AccessSetupId; adds: AccessFeatureId[]; addsText: string }[];
   tailscaleUrl?: string;
   controlPlaneUrl?: string;
+}
+
+/** "a, b and c" (or "a and b"). */
+function and(items: string[]): string {
+  return items.length < 2 ? items[0] ?? "" : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 }
 
 const origin = (url: string | undefined) => {
@@ -82,9 +87,11 @@ export function accessReport(inputs: AccessInputs): AccessReport {
     .filter((s) => !active.includes(s.id) && !(linked && (s.id === "hosted" || s.id === "server")))
     .map((s) => {
       const adds = ACCESS_FEATURES.filter((f) => s.gives[f.id] > reach[f.id]);
-      // Already on your tailnet, a step up only widens the reach.
-      const phrases = adds.map((f) => (reach[f.id] === 1 ? `${f.label.toLowerCase()} from anywhere` : f.label.toLowerCase()));
-      return { id: s.id, adds: adds.map((f) => f.id), addsText: phrases.length > 1 ? `${phrases.slice(0, -1).join(", ")} and ${phrases.at(-1)}` : phrases[0] ?? "" };
+      // What you already have on your tailnet only widens: say "from anywhere" once for those.
+      const widened = adds.filter((f) => reach[f.id] === 1).map((f) => f.label.toLowerCase());
+      const fresh = adds.filter((f) => reach[f.id] === 0).map((f) => f.label.toLowerCase());
+      const phrases = [...(widened.length ? [`${and(widened)} from anywhere`] : []), ...fresh];
+      return { id: s.id, adds: adds.map((f) => f.id), addsText: and(phrases) };
     })
     .filter((s) => s.adds.length > 0);
   return {

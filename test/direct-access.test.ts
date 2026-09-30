@@ -9,21 +9,22 @@ import type { AddressInfo } from "node:net";
 import { isAuthorized, markRemoteListener, resolveAuth } from "../src/auth.js";
 import type { NodeIdentity } from "../src/identity.js";
 import { PairCodes } from "../src/pair-codes.js";
-import { serveConflict, serveState } from "../bin/tailscale.mjs";
+import { parseTailscaleStatus, serveConflict, serveState } from "../bin/tailscale.mjs";
+import { discoverTailnetMachines } from "../src/remote/tailnet.js";
 
 const noToken = { verifyToken: () => null } as unknown as NodeIdentity;
 
 /** Auth as seen by a server on 127.0.0.1 for a request from 127.0.0.1. */
-async function authFor(remote: boolean) {
+async function authFor(remote: boolean, headers: Record<string, string> = {}) {
   let seen: ReturnType<typeof resolveAuth> | undefined;
   const server = http.createServer((req, res) => {
     seen = resolveAuth(noToken, req);
     res.end();
   });
-  if (remote) markRemoteListener(server);
+  if (remote) markRemoteListener(server, { trustedLogin: () => "Owner@example.com" });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const { port } = server.address() as AddressInfo;
-  await fetch(`http://127.0.0.1:${port}/api/status`);
+  await fetch(`http://127.0.0.1:${port}/api/status`, { headers });
   await new Promise<void>((resolve) => server.close(() => resolve()));
   return seen!;
 }
@@ -36,6 +37,34 @@ async function run() {
   const proxied = await authFor(true);
   assert.equal(proxied.loopback, false, "a tailscale-serve connection is not loopback");
   assert.equal(isAuthorized(proxied), false, "...so it needs a device token");
+
+  // tailscale serve names the requester; the owner's own devices need no token.
+  assert.equal(isAuthorized(await authFor(true, { "tailscale-user-login": "owner@example.com" })), true, "the owner's device is let in");
+  assert.equal(isAuthorized(await authFor(true, { "tailscale-user-login": "guest@example.com" })), false, "someone else on the tailnet pairs first");
+  process.env.BIVY_REQUIRE_LOCAL_AUTH = "1";
+  assert.equal(isAuthorized(await authFor(true, { "tailscale-user-login": "owner@example.com" })), false, "not where other local accounts could forge the header");
+  process.env.BIVY_REQUIRE_LOCAL_AUTH = "0";
+
+  const status = (tags?: string[]) => JSON.stringify({ BackendState: "Running", Self: { DNSName: "box.tail1.ts.net.", UserID: 7, ...(tags ? { Tags: tags } : {}) }, User: { 7: { LoginName: "owner@example.com" } } });
+  assert.equal(parseTailscaleStatus(status()).owner, "owner@example.com");
+  assert.equal(parseTailscaleStatus(status(["tag:server"])).owner, null, "a tagged machine has no owner to trust");
+
+  // Discovery asks online peers only, and lists those that answer as Bivy.
+  const asked: string[] = [];
+  const machines = await discoverTailnetMachines({
+    status: async () => JSON.stringify({ Peer: {
+      a: { DNSName: "desktop.tail1.ts.net.", HostName: "desktop", Online: true },
+      b: { DNSName: "nas.tail1.ts.net.", HostName: "nas", Online: true },
+      c: { DNSName: "laptop.tail1.ts.net.", HostName: "laptop", Online: false },
+    } }),
+    fetchImpl: (async (url: string) => {
+      asked.push(url);
+      const bivy = url.startsWith("https://desktop.");
+      return new Response(JSON.stringify(bivy ? { bivy: true, name: "Desktop" } : { nope: true }), { status: bivy ? 200 : 404 });
+    }) as unknown as typeof fetch,
+  });
+  assert.deepEqual(machines.map((m) => [m.name, m.url]), [["Desktop", "https://desktop.tail1.ts.net"]]);
+  assert.equal(asked.some((u) => u.includes("laptop")), false, "offline peers aren't asked");
 
   let now = 1_000;
   const codes = new PairCodes(() => now);

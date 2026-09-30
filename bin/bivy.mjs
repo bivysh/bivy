@@ -5825,7 +5825,7 @@ async function cmdTailscale(args = []) {
     process.exitCode = EXIT.unavailable;
     return;
   }
-  const { running, hostname } = parseTailscaleStatus(status.stdout);
+  const { running, hostname, owner } = parseTailscaleStatus(status.stdout);
   if (!running || !hostname) {
     console.log(`${c.yellow("Tailscale isn't connected.")} Sign in with ${c.cyan("sudo tailscale up")}, then run ${c.cyan("bivy tailscale")} again.`);
     process.exitCode = EXIT.unavailable;
@@ -5838,7 +5838,7 @@ async function cmdTailscale(args = []) {
     process.exitCode = EXIT.conflict;
     return;
   }
-  fs.writeFileSync(tailscaleConfigPath, `${JSON.stringify({ port, hostname }, null, 2)}\n`, { mode: 0o600 });
+  fs.writeFileSync(tailscaleConfigPath, `${JSON.stringify({ port, hostname, ...(owner ? { owner } : {}) }, null, 2)}\n`, { mode: 0o600 });
   const reload = await localApi(config, "/api/direct/reload", { method: "POST", body: "{}" });
   const served = runTailscale(serveOnArgs(port));
   if (!served?.ok) {
@@ -5851,9 +5851,15 @@ async function cmdTailscale(args = []) {
     return;
   }
   console.log(c.bold(c.green(`\n  Bivy is on https://${hostname}\n`)));
-  console.log(c.dim("  Only devices on your tailnet can reach it. Pair each one once with a link from 'bivy tailscale pair'."));
+  console.log(c.dim(owner
+    ? `  Only devices on your tailnet can reach it. Yours (signed in as ${owner}) are let in without pairing;\n  anyone else's pairs once with a link from 'bivy tailscale pair'.`
+    : "  Only devices on your tailnet can reach it. This machine is tagged, so each device pairs once with a link from 'bivy tailscale pair'."));
   if (!reload?.webApp) console.log(c.yellow("  This install has no built web app, so the address serves the API only. Run 'pnpm run build:web' in a source checkout."));
   console.log("");
+  if (owner) {
+    console.log(`Open ${c.cyan(`https://${hostname}`)} on any of your devices.\n`);
+    return;
+  }
   await printPairLink(config);
 }
 
