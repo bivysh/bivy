@@ -56,6 +56,7 @@ export const COMMANDS = [
       { name: "app_screenshot", description: "Screenshot this session's web views (or one app) and return the PNG paths, to check your work before saying a UI change is done.", input: { app: { type: "string", description: "App ID or name (default: all web views)." }, widths: { type: "array", items: { type: "number" }, description: "Viewport widths, e.g. [390, 1280]." }, path: { type: "string", description: "Page path, e.g. /settings." } }, argv: ["app", "shot", { arg: "app" }, { flag: "--widths", from: "widths", join: "," }, { flag: "--path", from: "path" }] },
       { name: "app_present", description: "Tell the user a visible change is ready: a card in the chat with the app at phone width (before and after), and the preview opens.", input: { view: { type: "string", description: "App or view name or ID (default: the one opened last)." }, note: { type: "string", description: "What changed." }, path: { type: "string", description: "Page path to show." } }, argv: ["app", "present", { arg: "view" }, { flag: "--note", from: "note" }, { flag: "--path", from: "path" }] },
     ] },
+  { name: "fork", group: "session", scope: "session", json: true, usage: "fork [session-id] [--model <model>]", summary: "Copy this session (conversation and uncommitted work) into a new one on its own branch" },
   { name: "delegate", group: "session", scope: "session", json: true, usage: 'delegate "<task>" [--agent <id>] [--machine <name>] [--wait]', summary: "Hand a task to another agent or machine and get its answer back", subcommands: ["machines", "status", "wait"] },
 
   // Agents and sessions
@@ -68,6 +69,8 @@ export const COMMANDS = [
   { name: "takeover", group: "sessions", scope: "node", usage: "takeover <id>", summary: "Stop a run-terminal's native TUI and continue it as a governed chat" },
   { name: "promote", group: "sessions", scope: "node", usage: "promote <session-id>", summary: "Continue a warm-replicated session on this node" },
   { name: "prune", aliases: ["clean"], group: "sessions", scope: "node", json: true, usage: "prune [--keep N] [--older-than 7d] [--dry-run]", summary: "Delete old sessions, workspaces and worktrees" },
+  { name: "approvals", group: "sessions", scope: "node", json: true, usage: "approvals [list|approve <id>|reject <id>]", summary: "List pending tool approvals on this node, or answer one", subcommands: ["list", "approve", "reject"] },
+  { name: "issues", group: "sessions", scope: "node", json: true, usage: "issues [list|pickup <number>]", summary: "GitHub issues waiting for an agent; pick one up to start a session on it", subcommands: ["list", "pickup"] },
   { name: "agents", group: "sessions", scope: "node", json: true, usage: "agents [--json]", summary: "List supported agents and which are installed" },
   { name: "agent", group: "sessions", scope: "node", json: true, usage: "agent <add|list|remove>", summary: "Connect, list or remove a user-owned agent", subcommands: ["add", "list", "remove"] },
   { name: "agents:install", aliases: ["runtimes:install"], group: "sessions", scope: "node", usage: "agents:install [--bridges]", summary: "Install known upstream agents" },
@@ -111,6 +114,7 @@ export const COMMANDS = [
   { name: "github:app-sync", group: "accounts", scope: "account", usage: "github:app-sync [on|off]", summary: "Sync GitHub App keys to this account's other nodes" },
 
   // Configuration and extensions
+  { name: "instructions", group: "config", scope: "account", json: true, usage: "instructions [show|set <file|->|path]", summary: "The account-wide instructions every agent session receives", subcommands: ["show", "set", "path"] },
   { name: "config", group: "config", scope: "node", json: true, usage: "config <show|get|set|unset|explain|validate|init|path>", summary: "Typed node configuration", subcommands: ["init", "validate", "show", "get", "set", "unset", "explain", "path"] },
   { name: "plugin", aliases: ["plugins"], group: "config", scope: "node", json: true, usage: "plugin <init|validate|doctor|test|install|list|remove>", summary: "Build and install plugins", subcommands: ["init", "validate", "doctor", "test", "install", "list", "remove"] },
   { name: "voice", aliases: ["stt"], group: "config", scope: "node", usage: "voice <provider|key|remove|status>", summary: "Configure speech-to-text", subcommands: ["provider", "key", "remove", "status"] },
