@@ -145,7 +145,9 @@ export function mergeTranscript(base: readonly RuntimeMessage[], extras: readonl
       const text = normalizedIntermediateText(thinkingTextFromContent(entry.content));
       // Skip a sidecar reasoning copy when the adjacent persisted message already
       // carries the same reasoning, and dedupe repeated stream-final copies.
-      const alreadyInTranscript = text && [base[index - 1], base[index]].some((message) => normalizedIntermediateText(thinkingTextFromContent(message?.content)) === text);
+      // A protocol turn persists each reasoning item as its own block inside one
+      // message, so match containment, not only the message's whole reasoning.
+      const alreadyInTranscript = text && [base[index - 1], base[index]].some((message) => normalizedIntermediateText(thinkingTextFromContent(message?.content)).includes(text));
       const dedupeKey = `${index}:${text}`;
       if (alreadyInTranscript || seenIntermediate.has(dedupeKey)) continue;
       if (text) seenIntermediate.add(dedupeKey);

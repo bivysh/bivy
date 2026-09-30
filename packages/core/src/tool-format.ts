@@ -285,9 +285,12 @@ export function formatTool(name: string, input: unknown, detail?: ToolCallDetail
 
   let diffs: DiffHunk[] = [];
   let edits: number | undefined;
-  if (n.includes("write")) {
-    const content = pick(inp, ["content", "text", "contents", "data"]) ?? "";
-    if (content) diffs = [{ oldText: "", newText: content, added: diffStats ? splitLines(content).length : 0, removed: 0, label: "New file" }];
+  // The node's classification decides first: an `edit` tool writing a whole
+  // file is a write, and a tool merely named "…write…" may be an edit.
+  const writes = detail ? detail.kind === "write" : n.includes("write");
+  if (writes) {
+    const content = pick(inp, ["content", "text", "contents", "data", "file_text"]) ?? "";
+    if (content) diffs = [{ oldText: "", newText: content, added: diffStats ? splitLines(content.replace(/\r?\n$/, "")).length : 0, removed: 0, label: "New file" }];
   } else if (n.includes("edit")) {
     const hunks = editHunks(inp, diffStats);
     diffs = hunks;
@@ -377,9 +380,11 @@ export function toolRowLabel(f: ToolFormat): string {
 
 /** Plain-language summary of a batch of tools, e.g. "Read 2 files, ran a command". */
 export function toolGroupSummary(tools: Array<{ name: string; input: unknown; detail?: ToolCallDetail }>): string {
-  let edited = 0;
+  // Files count once however often they were touched: a create followed by an
+  // edit of the same file is "edited a file", not two.
+  const editedFiles = new Set<string>();
+  const readFiles = new Set<string>();
   let ran = 0;
-  let read = 0;
   let output = 0;
   let delegated = 0;
   let failed = 0;
@@ -391,9 +396,11 @@ export function toolGroupSummary(tools: Array<{ name: string; input: unknown; de
     if (f.verb === "Agent output") output++;
     else if (f.verb === "Delegated") delegated++;
     else if (f.command) ran++;
-    else if (f.verb === "Edited" || f.verb === "Created" || f.diffs.length) edited++;
-    else read++;
+    else if (f.verb === "Edited" || f.verb === "Created" || f.diffs.length) editedFiles.add(f.path || `#${editedFiles.size}`);
+    else readFiles.add(f.path || f.query || `#${readFiles.size}`);
   }
+  const edited = editedFiles.size;
+  const read = readFiles.size;
   const parts: string[] = [];
   const plural = (n: number, one: string, many: string) => `${n === 1 ? "a" : n} ${n === 1 ? one : many}`;
   if (read) parts.push(`Read ${plural(read, "file", "files")}`);

@@ -201,6 +201,12 @@ export interface SeedPromptOptions {
   charBudget?: number;
   /** URL of the source session's full transcript, if the client knows it. */
   transcriptUrl?: string;
+  /**
+   * Local path of the full earlier conversation as a readable file. An agent's
+   * tools can read it, unlike the app URL (a web page behind sign-in), so when
+   * present the seed points the agent here instead.
+   */
+  transcriptFile?: string;
   /** Target agent's display name, for the framing line. */
   targetAgent?: string;
   /** Repo / branch / PR context lines to carry, when known. */
@@ -254,23 +260,29 @@ export function buildSeedPrompt(transcript: NormalizedTranscript, opts: SeedProm
   const omitted = formatted.length - picked.length;
   const recent = picked.length ? picked.join("\n") : "- (no prior turns were available)";
 
+  const file = opts.transcriptFile;
+  const where = file ? "the conversation file above" : opts.transcriptUrl ? "the full transcript linked above" : "the full transcript";
   const lines = [
     `I am continuing an existing Bivy session (forked from ${transcript.header.sourceRuntimeId} to ${targetAgent}).`,
     `Session: ${title}`,
-    opts.transcriptUrl ? `Full original transcript: ${opts.transcriptUrl}` : null,
+    file
+      ? `Full earlier conversation, as a local file (read it with your file tools): ${file}`
+      : opts.transcriptUrl ? `Full original transcript: ${opts.transcriptUrl}` : null,
     transcript.header.model ? `Model before fork: ${transcript.header.model}` : null,
     opts.context?.repoSlug ? `Repository: ${opts.context.repoSlug}` : null,
     opts.context?.branch ? `Branch: ${opts.context.branch}` : null,
     opts.context?.prUrl ? `PR: ${opts.context.prUrl}` : null,
     "",
     omitted > 0
-      ? `Recent conversation (most recent last; ${omitted} earlier turn${omitted === 1 ? "" : "s"} omitted — see the full transcript${opts.transcriptUrl ? " linked above" : ""}):`
+      ? `Recent conversation (most recent last; ${omitted} earlier turn${omitted === 1 ? "" : "s"} omitted — see ${where}):`
       : "Recent conversation (most recent last):",
     recent,
     "",
-    opts.transcriptUrl
-      ? "Open the full transcript link above if this summary is missing anything, then continue from here."
-      : "Continue from here.",
+    file
+      ? "Read the conversation file above only if this summary is missing something you need; otherwise continue from here."
+      : opts.transcriptUrl
+        ? "Open the full transcript link above if this summary is missing anything, then continue from here."
+        : "Continue from here.",
   ];
   return lines.filter((line): line is string => line != null).join("\n");
 }
@@ -313,4 +325,20 @@ export function buildForkHistory(transcript: NormalizedTranscript): ForkHistoryM
     else history.push({ role, text });
   }
   return history;
+}
+
+/**
+ * The whole conversation as a readable Markdown document — what a seeded fork's
+ * agent reads when the inlined tail isn't enough (`SeedPromptOptions.transcriptFile`).
+ * Built from the same portable turns a replayed fork writes, so tool activity is
+ * inlined as text.
+ */
+export function renderForkTranscript(transcript: NormalizedTranscript): string {
+  const header = [
+    `# ${transcript.header.title || "Untitled session"}`,
+    "",
+    `Earlier conversation from a Bivy session on ${transcript.header.sourceRuntimeId}${transcript.header.model ? ` (${transcript.header.model})` : ""}.`,
+  ];
+  const turns = buildForkHistory(transcript).map((turn) => `## ${turn.role === "user" ? "User" : "Assistant"}\n\n${turn.text}`);
+  return [...header, "", ...turns].join("\n\n").replace(/\n{3,}/g, "\n\n") + "\n";
 }

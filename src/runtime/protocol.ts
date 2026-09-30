@@ -33,6 +33,7 @@ import type {
 import { withExactCapabilitySurface } from "./types.js";
 import { extractTokenUsage } from "./cli-parsers.js";
 import { mapToolCall, mapToolResult } from "./tool-call-map.js";
+import { stripAnsi } from "./ansi.js";
 
 /** A tool message's sub-agent parent (`parentToolCallId`), spread into the
  *  runtime event and persisted block so delegated work nests under its call. */
@@ -321,6 +322,8 @@ class ProtocolSession implements RuntimeSession {
    * instead of welding `"first." + "Second"` into `"first.Second"`. */
   private assistantItemBoundary = false;
   private reasoningText = "";
+  /** The turnContent thinking block the current reasoning item grows. */
+  private reasoningBlock?: Record<string, unknown>;
   private stderrOutput = "";
   private lastUsage?: UsageSnapshot;
   // Accumulate the current turn's content blocks (text + tool calls, in the order
@@ -530,7 +533,7 @@ class ProtocolSession implements RuntimeSession {
     child.stdout.on("data", (chunk: Buffer) => this.onData(chunk.toString("utf8")));
     child.stderr.on("data", (chunk: Buffer) => {
       this.stderrOutput += chunk.toString("utf8");
-      this.emit({ type: "tool_execution_update", toolName: "agent_output", toolCallId: "agent-output", input: { stream: "stderr", output: this.stderrOutput.slice(-4000) } });
+      this.emit({ type: "tool_execution_update", toolName: "agent_output", toolCallId: "agent-output", input: { stream: "stderr", output: stripAnsi(this.stderrOutput.slice(-4000)) } });
     });
     // The agent's stdin pipe can break (EPIPE) when the shim exits mid-turn — for
     // example a dispose()/abort() racing an in-flight write (a tool.decision reply,
@@ -684,6 +687,22 @@ class ProtocolSession implements RuntimeSession {
     if (pending) this.turnContent.push({ type: "text", text: pending });
   }
 
+  /** Keep reasoning in the turn's ordered blocks where it streamed. Without it a
+   * reopened transcript only had the time-placed sidecar copy, which lands ahead
+   * of the whole (single-message) turn, so every thought stacked at the top.
+   * Consecutive chunks grow one block; prose or a tool in between starts a new one. */
+  private recordReasoning(chunk: string): void {
+    const last = this.turnContent[this.turnContent.length - 1];
+    const textSince = this.assistantText.length > this.turnTextFlushed.length;
+    if (last && last === this.reasoningBlock && !textSince) {
+      last.thinking = `${String(last.thinking ?? "")}${chunk}`;
+      return;
+    }
+    this.flushPendingTurnText();
+    this.reasoningBlock = { type: "thinking", thinking: chunk };
+    this.turnContent.push(this.reasoningBlock);
+  }
+
   /** Publish a stable transcript entry at item boundaries, while keeping the
    * live text cumulative. Replace this entry as the turn grows so reconnects
    * retain commentary without duplicating it at completion. */
@@ -827,6 +846,7 @@ class ProtocolSession implements RuntimeSession {
       const text = String(msg.text ?? msg.delta ?? "");
       if (text) {
         this.reasoningText += text;
+        if (this.streaming) this.recordReasoning(text);
         this.emit({ type: "message_update", message: { role: "assistant", content: [{ type: "thinking", thinking: this.reasoningText }] } });
       }
       return;
@@ -847,7 +867,7 @@ class ProtocolSession implements RuntimeSession {
       // text, so a tool-free turn (turnContent still empty at this point) keeps
       // the plain-text message shape it always had instead of gaining a
       // pointless single-text-block wrapper.
-      const hadTools = this.turnContent.length > 0 || this.turnToolResults.length > 0;
+      const hadTools = this.turnContent.some((b) => b.type !== "thinking") || this.turnToolResults.length > 0;
       const message = { role: "assistant", content: this.assistantText };
       // Persist the assistant turn. When the turn used tools, store the ordered
       // content blocks (text/tool_use interleaved exactly as they streamed — see
@@ -881,7 +901,7 @@ class ProtocolSession implements RuntimeSession {
       // reply and its tool calls/results — persisted exactly as session.done
       // persists a clean turn. The old handler wiped turnContent here, so a mid-
       // turn failure dropped all of that work from the reopened transcript.
-      const hadTools = this.turnContent.length > 0 || this.turnToolResults.length > 0;
+      const hadTools = this.turnContent.some((b) => b.type !== "thinking") || this.turnToolResults.length > 0;
       if (hadTools) {
         this.flushPendingTurnText();
         if (this.turnContent.length) this.snapshotAssistantTurn([...this.turnContent]);
@@ -908,7 +928,10 @@ class ProtocolSession implements RuntimeSession {
       // not), so the preserved content + error marker are durably persisted.
       this.emit({ type: "message_end", message: errored });
       this.emit({ type: "session.error", error: errorText });
-      this.emit({ type: "agent_end" });
+      // Carry the failure on agent_end too (Claude Code's shape), so the daemon's
+      // turn-end recovery sees it: usage-limit offers (fork / retry at reset),
+      // reroute, the failed state, and the error notification.
+      this.emit({ type: "agent_end", error: errorText });
       return;
     }
     if (type === "tool.call" || type === "tool.observe") {
@@ -1078,7 +1101,7 @@ class ProtocolSession implements RuntimeSession {
       this.emit({ type: "session.error", error: preflightError });
       this.emit({ type: "message_end", message });
       this.emit({ type: "turn_end" });
-      this.emit({ type: "agent_end", code: 1, signal: null });
+      this.emit({ type: "agent_end", code: 1, signal: null, error: preflightError });
       return;
     }
     if (!wasStarted) this.emit({ type: "agent_start" });

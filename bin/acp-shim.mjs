@@ -149,11 +149,11 @@ const permissionRequests = new Map();
 // carded — a second time for the same file.
 const approvedCalls = new Set();
 
-/** The approved, still-running call whose inputs name `file`, if any. */
-function approvedCallWriting(file) {
-  for (const id of approvedCalls) {
+/** The still-running call among `ids` whose inputs name `file`, if any. */
+function callWriting(file, ids) {
+  for (const id of ids) {
     const state = toolCallState.get(id);
-    if (!state) { approvedCalls.delete(id); continue; }
+    if (!state) { if (ids === approvedCalls) approvedCalls.delete(id); continue; }
     const input = toolCallInput(state);
     const paths = [input.path, input.file_path, input.filePath, ...(state.locations || []).map((l) => l?.path)].filter(Boolean);
     const root = fs.realpathSync(cwd);
@@ -510,15 +510,20 @@ async function onAgentRequest(id, method, params) {
       try {
         if (sandboxTier === "read-only") throw new Error("writes are disabled by the read-only sandbox");
         const file = workspacePath(params?.path, { write: true });
-        if (approvedCallWriting(file)) {
+        if (callWriting(file, approvedCalls)) {
           fs.writeFileSync(file, String(params?.content ?? ""));
           agentReply(id, {});
           return;
         }
-        const toolCallId = `acp-fs-write-${id}`;
-        permissionRequests.set(toolCallId, { kind: "fs-write", requestId: id, file, content: String(params?.content ?? "") });
+        // An auto-run edit (no permission asked) performs its change through this
+        // write. Gate the write under that call's own id, so the transcript keeps
+        // one card for the edit instead of a second "Created" card for its effect.
+        const owner = callWriting(file, toolCallState.keys());
+        const ownerState = owner ? toolCallState.get(owner) : undefined;
+        const toolCallId = owner ?? `acp-fs-write-${id}`;
+        permissionRequests.set(toolCallId, { kind: "fs-write", requestId: id, file, content: String(params?.content ?? ""), ownCard: !owner });
         const parentCall = childRoute(params?.sessionId);
-        bivy({ type: "tool.call", toolCallId, name: "write", input: { path: file }, ...(parentCall ? { parentToolCallId: parentCall } : {}) });
+        bivy({ type: "tool.call", toolCallId, name: ownerState ? toolCallName(ownerState) : "write", input: ownerState ? toolCallInput(ownerState) : { path: file }, ...(parentCall ? { parentToolCallId: parentCall } : {}) });
       } catch (e) {
         agentReplyError(id, -32000, `write failed: ${e.message}`);
       }
@@ -674,7 +679,10 @@ async function onBivyCommand(msg) {
             }
             if (error) agentReplyError(entry.requestId, allow ? -32000 : -32001, error);
             else agentReply(entry.requestId, {});
-            bivy({ type: "tool.result", toolCallId: msg.toolCallId, name: "write", result: error || `Wrote ${entry.file}`, isError: Boolean(error) });
+            // A write gated under the agent's own call leaves that card to the
+            // agent's completion update.
+            if (!entry.ownCard && allow) approvedCalls.add(msg.toolCallId);
+            if (entry.ownCard) bivy({ type: "tool.result", toolCallId: msg.toolCallId, name: "write", result: error || `Wrote ${entry.file}`, isError: Boolean(error) });
             return;
           }
           // Pick an ACP option matching the human's choice by its `kind`

@@ -96,6 +96,8 @@ export interface ForkStandUpDeps<R extends ForkStandUpSession> {
   applyDirtyPatch(cwd: string, patch: ForkBundle["dirtyPatch"]): { applied?: boolean; warning?: string };
   gitRepoRoot(cwd: string): Promise<string | undefined>;
   materializeFork(args: MaterializeForkOptions): Promise<ForkPlan>;
+  /** Where a seeded fork's full conversation is written for the agent to read. */
+  saveForkTranscript?(markdown: string): string | undefined;
   getRuntime(id: string, sandbox?: SandboxTier): AgentRuntime;
   listRuntimes(): Array<{ id: string; status?: string; displayName?: string }>;
   reposRoot: string;
@@ -298,7 +300,7 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
     // cross-agent fork must let the destination choose its own default unless the
     // caller explicitly supplied a model valid for that target.
     const targetModel = opts.model ?? (targetRuntimeId === bundle.record.runtimeId ? bundle.record.modelRef : undefined);
-    const plan = await deps.materializeFork({ bundle, targetRuntime, ctx: { workspace, cwd, model: targetModel }, seed: { transcriptUrl: opts.transcriptUrl } });
+    const plan = await deps.materializeFork({ bundle, targetRuntime, ctx: { workspace, cwd, model: targetModel }, seed: { transcriptUrl: opts.transcriptUrl }, saveTranscript: deps.saveForkTranscript });
     const record = plan.kind === "resume"
       ? await deps.createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false, newSession: true })
       : await deps.createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false, newSession: true });

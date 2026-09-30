@@ -20,6 +20,12 @@ check("a usage limit with a stated reset offers fork + retry-at-reset", () => {
   assert.deepEqual(sessionLimitNotice("Claude Code", limit!).actions, ["fork", "retry-at-reset:2026-09-26T12:00:00.000Z"]);
 });
 
+check("a calendar reset date (Codex's ChatGPT limit) resolves to that instant", () => {
+  const limit = detectSessionLimit("You’ve hit your usage limit. Visit https://chatgpt.com/codex/settings/usage to purchase more credits or try again at Oct 4th, 2026 5:18 AM.", { now: NOW });
+  assert.equal(limit?.condition, "credits_exhausted");
+  assert.equal(limit?.resetsAt, new Date(2026, 9, 4, 5, 18).toISOString());
+});
+
 check("the structured reset hint wins over the text (weekly window)", () => {
   const limit = detectSessionLimit("you've hit your weekly limit · resets 12am (UTC)", { now: NOW, resetsAtHint: "2026-09-29T00:00:00Z" });
   assert.equal(limit?.resetsAt, "2026-09-29T00:00:00Z");

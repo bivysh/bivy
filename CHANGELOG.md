@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Forking to a different agent now offers that agent's models, so you can continue on a specific model instead of the agent's default. The fork sheet only lists agents that can run on this machine.
+- When a fork hands the conversation to an agent as a text summary, the chat shows one **Handed over** line where the new agent takes over, instead of the whole summary as a message from you. Tap it to see exactly what was sent.
+- That summary now points the agent at the full earlier conversation as a local file it can read. Previously it linked to the app, which agents can't open, so they spent their first turn trying to fetch it.
+
+### Fixed
+
+- Codex, OpenCode, Grok and other ACP agents: a turn that fails on a usage limit now offers **Fork to another agent** and **Retry when the limit resets**, marks the session as failed, and sends the error notification, as Claude Code and Pi already did. Codex's "try again at Oct 4th, 2026 5:18 AM" reset time is understood.
+- ACP agents' reasoning stays where it happened in a reopened transcript, instead of all moving to the top of the turn.
+- A Grok edit made without an approval prompt no longer shows a second "Created" card for the same file.
+- An edit tool that writes a whole file (OpenCode, Grok) shows as **Created** with its line count. Work summaries count each file once ("edited a file" for a file created and then edited), and a new file's line count no longer includes the trailing newline.
+- ACP agents' stderr output no longer shows raw terminal color codes.
+
 ## [0.19.1] - 2026-09-29
 
 ### Fixed

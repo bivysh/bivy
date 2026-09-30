@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { normalizeMessages, buildSeedPrompt, buildForkHistory } from "../src/session/transcript-normal.js";
+import { normalizeMessages, buildSeedPrompt, buildForkHistory, renderForkTranscript } from "../src/session/transcript-normal.js";
 import type { NormalizedTranscriptHeader } from "../src/session/transcript-normal.js";
 
 // Unit tests for the runtime-neutral transcript used by session fork.
@@ -237,3 +237,15 @@ test("buildForkHistory: a system/error notice folds into the assistant voice", (
 });
 
 console.log(`transcript-normal: all ${passed} tests passed`);
+
+test("buildSeedPrompt: a readable conversation file replaces the app link for the agent", () => {
+  const seed = buildSeedPrompt({ header, turns: [{ role: "user", text: "hi" }] }, { transcriptUrl: "https://app.example/s/1", transcriptFile: "/data/fork-transcripts/a.md" });
+  assert.ok(seed.includes("/data/fork-transcripts/a.md"), "points the agent at the file");
+  assert.doesNotMatch(seed, /Full original transcript:/, "no unreadable app link for the agent to chase");
+});
+
+test("renderForkTranscript: every turn, in order, as Markdown", () => {
+  const md = renderForkTranscript({ header, turns: [{ role: "user", text: "first ask" }, { role: "assistant", text: "first answer" }, { role: "user", text: "second ask" }] });
+  assert.ok(md.indexOf("first ask") < md.indexOf("first answer") && md.indexOf("first answer") < md.indexOf("second ask"));
+  assert.match(md, /## User\n\nfirst ask/);
+});

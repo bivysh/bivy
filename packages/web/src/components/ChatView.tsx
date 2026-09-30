@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { looksLikeAuthFailure, stripAttachmentPlaceholders, toHtml, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
+import { handoffSeedOf, looksLikeAuthFailure, stripAttachmentPlaceholders, toHtml, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
 import { AppMessage } from "./AppMessage.js";
 import { ReviewCard } from "./ReviewCard.js";
 import { SuggestionCard } from "./SuggestionCard.js";
 import { DelegationCard } from "./DelegationCard.js";
 import { ToolGroup } from "./ToolGroup.js";
+import { HandoffSeedLine } from "./HandoffSeedLine.js";
 import { ImageGallery } from "./ImageGallery.js";
 import { focusEntries } from "../focusTranscript.js";
 import { clearMessageJump, pendingJumpIndex } from "../messageJump.js";
@@ -470,6 +471,8 @@ const EntryView = memo(function EntryView({
     );
   }
   if (entry.role === "user") {
+    const seed = handoffSeedOf(entry.text);
+    if (seed) return <HandoffSeedLine seed={seed} text={entry.text} />;
     const hasAttachments = !!entry.attachments && entry.attachments.length > 0;
     // With the attachments shown as thumbnails/chips, the node's appended
     // "[Image attachment: …]" placeholder lines are redundant — strip them so the

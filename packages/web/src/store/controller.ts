@@ -812,6 +812,7 @@ export class AppController {
         const before = this.store.getState();
         const appliedEvent = this.eventWithNodeScope(event);
         this.store.apply(appliedEvent);
+        if (appliedEvent.type === "models.list" && typeof appliedEvent.runtimeId === "string") this.settleRuntimeModels(appliedEvent.runtimeId);
         if (appliedEvent.type === "session.error" && appliedEvent.sessionId) {
           const session = this.store.getState().sessionIndex.sessions.find((entry) => entry.sessionId === appliedEvent.sessionId);
           if (session?.launchProgress && !session.launchProgress.firstResponseAt) {
@@ -3229,6 +3230,32 @@ export class AppController {
       ? undefined
       : (s.activeSession.activeRuntimeId ?? s.catalogs.selectedAgentId ?? undefined);
     this.send({ kind: "models.list", sessionId, runtimeId });
+  }
+
+  private runtimeModelWaiters = new Map<string, Array<(models: ModelInfo[]) => void>>();
+
+  /** One agent's model list, without changing what the composer shows — for
+   *  choices about another agent, like a cross-agent fork's target model. The
+   *  node's reply for another runtime only fills the store's per-runtime cache. */
+  modelsForRuntime(runtimeId: string, timeoutMs = 20_000): Promise<ModelInfo[]> {
+    return new Promise((resolve) => {
+      const done = (models: ModelInfo[]) => { clearTimeout(timer); resolve(models); };
+      const timer = setTimeout(() => {
+        const waiters = this.runtimeModelWaiters.get(runtimeId);
+        waiters?.splice(waiters.indexOf(done) >>> 0, 1);
+        resolve(this.store.cachedModelsFor(runtimeId) ?? []);
+      }, timeoutMs);
+      this.runtimeModelWaiters.set(runtimeId, [...(this.runtimeModelWaiters.get(runtimeId) ?? []), done]);
+      this.send({ kind: "models.list", runtimeId });
+    });
+  }
+
+  private settleRuntimeModels(runtimeId: string): void {
+    const waiters = this.runtimeModelWaiters.get(runtimeId);
+    if (!waiters?.length) return;
+    this.runtimeModelWaiters.delete(runtimeId);
+    const models = this.store.cachedModelsFor(runtimeId) ?? [];
+    for (const resolve of waiters) resolve(models);
   }
 
   /** Warm the node's per-runtime model scratch for every installed agent when the

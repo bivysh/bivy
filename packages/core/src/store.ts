@@ -1089,6 +1089,11 @@ export class SessionStore {
    *  the models.list reducer; read by setSelectedAgentLocal. A pure client-side
    *  cache — the node's fresh list still overwrites it (stale-while-revalidate). */
   private modelsByRuntime = new Map<string, { models: ModelInfo[]; currentModel: ModelInfo | null }>();
+
+  /** The last model list seen for `runtimeId` (see modelsByRuntime). */
+  cachedModelsFor(runtimeId: string): ModelInfo[] | undefined {
+    return this.modelsByRuntime.get(runtimeId)?.models;
+  }
   /**
    * The single source of truth for optimistic user sends, keyed by
    * clientMessageId (cmid). One entry per prompt the user sent from this client,
@@ -2594,10 +2599,16 @@ export class SessionStore {
       }
       case "models.list": {
         const e = event as any;
-        // Broadcast to all paired clients: ignore another session's list.
-        if (e.sessionId && this.state.activeSession.activeSessionId && e.sessionId !== this.state.activeSession.activeSessionId) return;
+        const listRuntimeId = e.runtimeId != null ? String(e.runtimeId) : null;
         const models = normalizeModels(e.models);
         const explicit = e.current ? normalizeModels([e.current])[0]! : null;
+        // Broadcast to all paired clients: ignore another session's list. One
+        // tagged for a different agent (the node answers a per-agent query from
+        // a scratch session) still fills that agent's cache — see cachedModelsFor.
+        if (e.sessionId && this.state.activeSession.activeSessionId && e.sessionId !== this.state.activeSession.activeSessionId) {
+          if (listRuntimeId && listRuntimeId !== this.state.activeSession.activeRuntimeId) this.modelsByRuntime.set(listRuntimeId, { models, currentModel: explicit });
+          return;
+        }
         // `models` may include an unconnected tail the node can't select yet
         // (#390's "other models" section — each flagged `configured: false`;
         // absent/true means connected, same as every model before #390). Only
@@ -2633,7 +2644,6 @@ export class SessionStore {
           const stillValid = configuredModels.find((m) => sameModel(m, this.state.catalogs.currentModel));
           current = flagged ?? stillValid ?? configuredModels[0]!;
         }
-        const listRuntimeId = e.runtimeId != null ? String(e.runtimeId) : null;
         // Remember this runtime's list so a later switch back to it repaints
         // instantly (see setSelectedAgentLocal). Keyed by the runtime the node
         // resolved the list for, never the app's currently-selected agent.

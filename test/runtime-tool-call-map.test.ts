@@ -19,6 +19,8 @@ function shape(detail: ReturnType<typeof mapToolCall>): Record<string, unknown> 
 assert.deepEqual(shape(mapToolCall("Bash", { command: "ls -la" })), { kind: "shell", command: "ls -la" });
 assert.deepEqual(shape(mapToolCall("read_file", { file_path: "a.ts" })), { kind: "read", path: "a.ts" });
 assert.deepEqual(shape(mapToolCall("Edit", { file_path: "a.ts", old_string: "x", new_string: "y" })), { kind: "edit", path: "a.ts", oldText: "x", newText: "y" });
+// An edit tool handed the whole file (OpenCode/Grok creating one) is a write.
+assert.deepEqual(shape(mapToolCall("edit", { filePath: "a.py", content: "print(1)\n" })), { kind: "write", path: "a.py" });
 // Codex `apply_patch`/`file_change` carries `changes` as either a path-keyed map
 // (app-server) or an array of `{path, kind}` (exec --json). Both derive the path.
 assert.deepEqual(shape(mapToolCall("apply_patch", { changes: { "src/a.ts": { kind: "update" } } })), { kind: "edit", path: "src/a.ts" });
