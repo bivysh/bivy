@@ -13,9 +13,11 @@ export interface SessionAppsSnapshot {
   published: number | null;
   /** Servers running in the workspace that aren't previewed yet. */
   offers: AppOffer[];
+  /** When each reviewer note on the session's web views was left. */
+  noteTimes: number[];
 }
 
-const EMPTY: SessionAppsSnapshot = { published: null, offers: [] };
+const EMPTY: SessionAppsSnapshot = { published: null, offers: [], noteTimes: [] };
 
 /** The node's live view of a session's apps, so a dev server any agent starts
  * surfaces on its own. Re-checked when the session or connection changes, a
@@ -37,9 +39,10 @@ export function useSessionApps(sessionId: string | undefined, working: boolean):
       const current = ++generation;
       // Older nodes don't know apps.offers; that is "none", not an error.
       const offers = controller.appCommand("apps.offers", sessionId).then((event) => (event as unknown as SessionAppOffersResult).offers ?? [], () => []);
-      const published = controller.appCommand("apps.list", sessionId).then((event) => (event as unknown as SessionAppsResult).apps?.length ?? null, () => null);
-      void Promise.all([published, offers]).then(([count, found]) => {
-        if (live && current === generation) setSnapshot({ key, published: count, offers: found });
+      const list = controller.appCommand("apps.list", sessionId).then((event) => (event as unknown as SessionAppsResult).apps ?? null, () => null);
+      void Promise.all([list, offers]).then(([apps, found]) => {
+        const noteTimes = (apps ?? []).flatMap((app) => app.views.flatMap((view) => view.kind === "web" ? (view.notes ?? []).map((note) => note.at) : []));
+        if (live && current === generation) setSnapshot({ key, published: apps?.length ?? null, offers: found, noteTimes });
       });
     };
     load();

@@ -9,6 +9,7 @@ import { accountOrigin } from "../packaged-client.js";
 import { AppAccess } from "./AppAccess.js";
 import { PreviewPeek, peekBlocked } from "./PreviewPeek.js";
 import { seedSessionDraft } from "../shareTarget.js";
+import { markNotesSeen } from "../notesSeen.js";
 import { MoreMenu } from "./MoreMenu.js";
 import { ImageGallery } from "./ImageGallery.js";
 import { noteAttachments, notePictures } from "./reviewerNotes.js";
@@ -90,6 +91,12 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
       if (generation.current === current) setResult(event as unknown as SessionAppsResult);
     }, () => {});
   }), [sessionId, nodeId]);
+
+  // The sheet lists every note, so opening it clears the Apps pill's "new".
+  useEffect(() => {
+    const times = result?.apps.flatMap((app) => app.views.flatMap((view) => view.kind === "web" ? (view.notes ?? []).map((note) => note.at) : [])) ?? [];
+    if (times.length) markNotesSeen(sessionId, Math.max(...times));
+  }, [result, sessionId]);
 
   // One-use links expire after a minute; remove stale links rather than invite
   // a failed launch. Opening in a top-level tab works with mobile cookie policy.
