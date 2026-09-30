@@ -92,6 +92,7 @@ which subsystem or command you need.
 | --- | --- |
 | [deploy-images.md](deploy-images.md) | Deploy the same public images on any server/container platform: environment contract, browser owner setup, recovery and health checks. No provider templates required. |
 | [self-host-quickstart.md](self-host-quickstart.md) | Optional Compose installer for a VPS: automated Postgres, proxy/TLS, secrets and health checks. |
+| [self-host-kamal.md](self-host-kamal.md) | Deploying the same images with Kamal from your computer: `kamal setup`, zero-downtime upgrades, no registry account. |
 | [self-host.md](self-host.md) | Operators running their own relay and control plane instead of Bivy Cloud — the deeper ops reference (backups, restore drills, secret rotation, security boundary). |
 
 ## Integrations

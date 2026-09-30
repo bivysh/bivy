@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Self-host with Kamal.** `deploy/kamal/` deploys the control plane, web app, relay and Postgres to your own server with `kamal setup`, using the published images at the release you pin, one domain, Let's Encrypt TLS and no registry account. `kamal owner-login` prints your sign-in link. See [Self-host with Kamal](docs/self-host-kamal.md).
+
 ### Changed
 
 - **Apps pill above the composer.** A session's published apps and running servers now have their own pill at the right end of the band above the composer, instead of hiding in the run pill. When people leave reviewer notes on a shared preview, the pill shows **N new notes** until you open the Apps sheet.
