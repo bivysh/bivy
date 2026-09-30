@@ -5,11 +5,10 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 
 /**
- * Automations an agent proposes (`bivy automation apply` inside a session).
- * Automations outlive the session and run unattended on the user's account, so
- * an agent never applies them itself: the node works out what would change
- * (`automation apply --dry-run`), asks the user with an approval card, and only
- * then runs the apply, with the machine's own account credential.
+ * Automations an agent applies (`bivy automation apply` inside a session). The
+ * node works out what would change (`automation apply --dry-run`), puts that
+ * through the node's approval flow (whose mode decides whether the user is
+ * asked), and then runs the apply with the machine's own account credential.
  */
 export interface AutomationChange {
   id: string;
@@ -45,6 +44,8 @@ export interface AutomationProposalDeps {
   runCli(args: string[], cwd: string): Promise<CliRun>;
   /** Shows the approval card; resolves with the user's decision. */
   requestApproval(input: { id: string; sessionId: string; file: string; changes: AutomationChange[]; prune: boolean }): Promise<"approved" | "rejected" | "expired">;
+  /** After a successful apply, so the chat records what changed. */
+  applied?(proposal: AutomationProposal): void;
 }
 
 /** One line per change, for the card and the CLI. */
@@ -95,6 +96,7 @@ export class AutomationProposals {
         proposal.status = run.code === 0 ? "applied" : "failed";
         proposal.output = run.stdout.trim();
         if (run.code !== 0) proposal.error = run.stderr.trim().replace(/^Automation error: /, "");
+        else this.deps.applied?.(this.view(proposal));
       } else proposal.status = decision;
       proposal.settledAt = this.now();
     });

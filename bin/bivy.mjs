@@ -2832,7 +2832,7 @@ async function cmdInstructions(args = []) {
 async function cmdAutomationProposal(args = []) {
   const usage = "Usage (in an agent session): bivy automation apply [path] [--prune] [--timeout 90] [--json]\n       bivy automation proposal <id> [--wait] [--timeout 90] [--json]";
   if (args.includes("-h") || args.includes("--help")) {
-    console.log(`${usage}\n\nInside an agent session, apply is a proposal: the user gets an approval card listing what would change, and the automations are applied only if they approve. Waits up to --timeout seconds (default 90) for the answer; if it hasn't come, prints the proposal id to check later with 'bivy automation proposal <id> --wait'. The card stays open for 30 minutes. Validate and plan first ('bivy automation validate', 'plan').`);
+    console.log(`${usage}\n\nInside an agent session, apply goes through this machine's approval mode: usually the user gets an approval card listing what would change and decides; with "never ask" it applies at once. The chat records what was applied. Waits up to --timeout seconds (default 90) for the answer; if it hasn't come, prints the proposal id to check later with 'bivy automation proposal <id> --wait'. The card stays open for 30 minutes. Validate and plan first ('bivy automation validate', 'plan').`);
     return;
   }
   const json = wantsJson(args);
@@ -2859,13 +2859,15 @@ async function cmdAutomationProposal(args = []) {
     if (status >= 400) return fail(sessionHttpError("Proposing the automations", status, body));
     proposal = body;
     if (!json) {
-      console.error(`Asked the user to approve these changes (${proposal.file}):`);
+      console.error(`Changes to apply (${proposal.file}):`);
       for (const change of proposal.changes) console.error(`  ${change.action === "create" ? "+" : change.action === "remove" ? "-" : "~"} ${change.id}`);
     }
   }
   const deadline = Date.now() + timeout * 1000;
+  let polls = 0;
   while (proposal.status === "pending" && Date.now() < deadline) {
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, polls === 0 ? 500 : 2000));
+    if (polls++ === 1 && !json) console.error("Waiting for the user to approve them…");
     const { status, body } = await nodeRequest("GET", `${base}/${encodeURIComponent(proposal.id)}`, undefined, { json, sessionId });
     if (status < 400) proposal = body;
   }

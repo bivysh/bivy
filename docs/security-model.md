@@ -263,11 +263,14 @@ bypass is off, and for an agent that can't read `.bivy/bootstrap.json`.
   injected `bivy` server entry, because some agents start MCP servers with a
   trimmed environment.
 
-An agent's `bivy automation apply` goes through the node as a proposal
-(`src/session/automation-proposals.ts`). It is an approval request with
-`alwaysAsk`, which the node shows and pushes even in "never ask" mode, and the
-node applies the file with its own credential only after the user approves.
-That keeps unattended, account-level work in front of the user.
+An agent's `bivy automation apply` goes through the node
+(`src/session/automation-proposals.ts`). The node lists the changes, raises an
+approval request that the node's approval mode handles like any other, and then
+applies the file with its own credential. In "never ask" mode it applies at
+once. In autonomous mode it asks, as it does for deploys and publishing. In the
+other modes it asks. Every apply leaves a notice in the chat listing the
+changes, and when nobody was asked it also pushes, so an automation is never
+added silently.
 
 A session token narrows what a request carrying it can do. It is not a sandbox:
 an agent running as the node's user can still read the bootstrap secret, or

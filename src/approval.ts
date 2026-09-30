@@ -19,10 +19,6 @@ export interface ApprovalRequest {
    *  (src/policy/session-allow.ts). The client shows that action only when
    *  this is set; the node sets it only for mode-driven asks. */
   rememberKey?: string;
-  /** Ask the user even when the node's approval mode would allow it on its own,
-   *  and push even mid-turn: for changes that outlive the session, like an
-   *  agent applying automations to the account. */
-  alwaysAsk?: boolean;
   createdAt: number;
   status: ApprovalStatus;
 }
@@ -76,7 +72,6 @@ export class ApprovalManager {
     repo?: string;
     branch?: string;
     rememberKey?: string;
-    alwaysAsk?: boolean;
     /** Caller-chosen id, so the caller can follow the request. */
     id?: string;
     timeoutMs?: number;
@@ -92,7 +87,6 @@ export class ApprovalManager {
       repo: input.repo,
       branch: input.branch,
       ...(input.rememberKey ? { rememberKey: input.rememberKey } : {}),
-      ...(input.alwaysAsk ? { alwaysAsk: true } : {}),
       createdAt: Date.now(),
       status: "pending",
     };

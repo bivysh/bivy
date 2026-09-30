@@ -692,18 +692,20 @@ app-created definitions. `apply --dry-run` lists what would be created, updated
 or removed, and changes nothing. See [automations-as-code.md](automations-as-code.md)
 for the schema, fixture fields, and safety behavior.
 
-**From an agent session, `apply` is a proposal.** Inside a session
-(`$BIVY_SESSION_ID` set), `apply` hands the file to the node instead of applying
-it:
+**From an agent session, `apply` goes through the node's approval mode.**
+Inside a session (`$BIVY_SESSION_ID` set), `apply` hands the file to the node
+instead of applying it:
 
 1. The node checks the file, which must be inside the session workspace, and
    works out the changes.
-2. The user gets an approval card and a push listing every change. They get it
-   even when the node's approval mode is "never ask".
-3. Only after they approve does the node apply the file, with the machine's own
-   account credential.
+2. It asks the user with an approval card listing every change, unless the
+   node's approval mode is "never ask". Autonomous mode asks, as it does for
+   deploys.
+3. It applies the file with the machine's own account credential.
+4. It posts a notice in the chat listing what changed, and pushes it when
+   nobody was asked.
 
-The command waits up to `--timeout` seconds (default 90) for the answer:
+The command waits up to `--timeout` seconds (default 90) for an answer:
 
 | Outcome | Exit |
 | --- | --- |

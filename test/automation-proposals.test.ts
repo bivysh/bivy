@@ -17,17 +17,19 @@ function setup(decision: "approved" | "rejected" | "expired", dryRun: CliRun = {
   fs.writeFileSync(path.join(workspace, ".bivy", "automations.yaml"), "version: 1\n");
   const runs: string[][] = [];
   const asked: Array<{ file: string; changes: AutomationChange[] }> = [];
+  const applied: string[] = [];
   let decide!: () => void;
   const proposals = new AutomationProposals({
     runCli: async (args) => { runs.push(args); return args.includes("--dry-run") ? dryRun : { code: 0, stdout: "+ nightly-tests\nApplied: 1 created, 0 updated, 0 removed.", stderr: "" }; },
     requestApproval: (input) => { asked.push(input); return new Promise((resolve) => { decide = () => resolve(decision); }); },
+    applied: (proposal) => applied.push(proposal.id),
   });
   const settle = async () => { decide(); await new Promise((resolve) => setImmediate(resolve)); await new Promise((resolve) => setImmediate(resolve)); };
-  return { workspace, proposals, runs, asked, settle };
+  return { workspace, proposals, runs, asked, applied, settle };
 }
 
-test("approved: the user sees the dry run's changes, then the file is applied", async () => {
-  const { workspace, proposals, runs, asked, settle } = setup("approved");
+test("approved: the approval sees the dry run's changes, then the file is applied and reported", async () => {
+  const { workspace, proposals, runs, asked, applied, settle } = setup("approved");
   const proposal = await proposals.propose("s", workspace, ".bivy/automations.yaml", false);
   assert.ok(!("error" in proposal));
   assert.equal(proposal.status, "pending");
@@ -38,16 +40,18 @@ test("approved: the user sees the dry run's changes, then the file is applied", 
   assert.equal(done?.status, "applied");
   assert.match(done?.output ?? "", /Applied: 1 created/);
   assert.ok(!runs[1]!.includes("--dry-run"));
+  assert.deepEqual(applied, [proposal.id], "the chat hears about it");
   assert.equal(proposals.get("other-session", proposal.id), undefined);
 });
 
 test("declined: nothing is applied", async () => {
-  const { workspace, proposals, runs, settle } = setup("rejected");
+  const { workspace, proposals, runs, applied, settle } = setup("rejected");
   const proposal = await proposals.propose("s", workspace, ".bivy/automations.yaml", false);
   assert.ok(!("error" in proposal));
   await settle();
   assert.equal(proposals.get("s", proposal.id)?.status, "rejected");
   assert.equal(runs.length, 1);
+  assert.equal(applied.length, 0);
 });
 
 test("a file outside the workspace, or one that doesn't check, never reaches the user", async () => {

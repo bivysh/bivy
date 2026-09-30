@@ -62,7 +62,7 @@ export const BIVY_AGENT_NOTE = [
     "its answer and any branch/PR; `--to codex,grok@<machine>` asks several to compare, `bivy delegate machines` " +
     "lists machines and their agents. Use your own sub-agents for everything else.",
   "- Work that should run on its own later (on a schedule, or when CI fails or an issue arrives) is a Bivy automation: " +
-    "`bivy guide automate`. Applying one asks the user first.",
+    "`bivy guide automate`. Applying one may ask the user first.",
   "- `bivy context` shows your session, workspace and published apps; `bivy guide` has short playbooks; " +
     "`bivy help` lists every command (`--json` for all).",
 ].join("\n");

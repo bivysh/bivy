@@ -29,9 +29,10 @@ format is in docs/automations-as-code.md):
           approval: risky
           sandbox: workspace-write
 
-From a session, `apply` doesn't apply by itself. The user gets a card listing
-every change and decides. The command waits up to 90 seconds for their answer
-and prints apply's output once they approve (exit 0). Exit 1 means they declined
+From a session, `apply` goes through the machine's approval mode. Usually the
+user gets a card listing every change and decides. With "never ask" it applies
+at once, and the chat records what changed either way. The command waits up to
+90 seconds for an answer and prints apply's output once it's applied (exit 0). Exit 1 means they declined
 (don't retry the same thing), and exit 5 means they haven't answered yet: carry
 on, and check later with `bivy automation proposal <id> --wait`.
 `apply --dry-run` shows the changes without asking anyone.

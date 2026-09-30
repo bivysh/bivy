@@ -531,8 +531,10 @@ setSessionTokenSigner(sessionTokens.sign);
 // them, and session.question(.resolved) is broadcast from its listeners.
 const questionManager = new QuestionManager();
 const agentQuestions = new AgentQuestions(questionManager);
-// `bivy automation apply` from an agent: shown to the user as an approval card,
-// applied with this machine's account credential only once they approve.
+// `bivy automation apply` from an agent: an approval request like any other, so
+// the node's approval mode decides whether the user is asked ("never" applies
+// at once; autonomous asks, as for deploys). Either way the result lands in the
+// chat, and pushes when nobody was asked.
 const automationProposals = new AutomationProposals({
   runCli: (args, cwd) => new Promise((resolve) => {
     const cli = process.env.BIVY_NODE_CLI ?? path.join(repoRoot, "bin", "bivy.mjs");
@@ -546,12 +548,25 @@ const automationProposals = new AutomationProposals({
   }),
   requestApproval: async ({ id, sessionId, file, changes, prune }) => {
     const approved = await approvals.request({
-      id, sessionId, toolName: "apply_automations", alwaysAsk: true, timeoutMs: 30 * 60_000,
+      id, sessionId, toolName: "apply_automations", timeoutMs: 30 * 60_000,
       toolInput: { file, prune, changes: changes.map(describeChange) },
       reason: "Automations run on their own, on your machines, until you turn them off.",
     });
     if (approved) return "approved";
     return approvals.list().find((request) => request.id === id)?.status === "expired" ? "expired" : "rejected";
+  },
+  applied: (proposal) => {
+    const record = openSessions.get(proposal.sessionId);
+    if (!record) return;
+    const lines = proposal.changes.map(describeChange);
+    const text = `Applied automations from ${proposal.file}:\n${lines.join("\n")}`.slice(0, MAX_NOTICE_TEXT);
+    const notice = { id: `notice-${randomBytes(8).toString("hex")}`, text };
+    eventLog.appendNotice(record.id, { afterMessageCount: record.session.getMessages().length, notice });
+    broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "notice", id: notice.id, notice } }));
+    // Nobody was asked: make sure the user hears about it.
+    if (approvalMode === "never") {
+      void sendNotificationHint({ kind: "agent_notice", sessionId: record.id, targetSessionId: record.id, title: sessionNotifyLabel(record), body: `Changed ${lines.length} automation${lines.length === 1 ? "" : "s"} on your account — tap to see what.` });
+    }
   },
 });
 questionManager.onRequest((request) => {
@@ -9459,7 +9474,7 @@ approvals.onRequest((request: ApprovalRequest) => {
   persistApprovalRequest(request);
   recordApprovalRequestAudit(request);
   scheduleAdvertise();
-  if (approvalMode === "never" && !request.alwaysAsk) {
+  if (approvalMode === "never") {
     resolveApproval(request.id, true);
     broadcast({ type: "approval.resolved", id: request.id, approved: true });
     scheduleAdvertise();
@@ -9468,13 +9483,13 @@ approvals.onRequest((request: ApprovalRequest) => {
   broadcast({ type: "approval.created", approval: request });
   const rec = resolveSession(request.sessionId);
   if (rec) broadcastSessionState(rec);
-  if (request.alwaysAsk || (!rec?.isWorking && !rec?.remoteActive)) {
+  if (!rec?.isWorking && !rec?.remoteActive) {
     void sendNotificationHint({
       kind: "approval_requested",
       sessionId: request.sessionId,
       attentionId: request.id,
       title: "Approval needed",
-      body: request.alwaysAsk ? `${sessionNotifyLabel(rec)} wants to change your automations — tap to review.` : `${sessionNotifyLabel(rec)} wants to run something — tap to approve or deny.`,
+      body: `${sessionNotifyLabel(rec)} wants to run something — tap to approve or deny.`,
     });
   }
 });
