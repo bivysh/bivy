@@ -186,7 +186,7 @@ if(framed){
     const el=under({clientX:start.client[0],clientY:start.client[1]});
     const r=el&&el.getBoundingClientRect();
     post(Object.assign(drawState(),{type:'mark-start',point:start.point,
-      element:el?{selector:selector(el),tag:el.localName,text:(el.innerText||el.getAttribute('aria-label')||el.getAttribute('alt')||'').trim().replace(/\s+/g,' ').slice(0,120),
+      element:el?{selector:selector(el),tag:el.localName,text:(el.innerText||el.getAttribute('aria-label')||el.getAttribute('alt')||'').trim().replace(/\\s+/g,' ').slice(0,120),
         rect:{x:Math.round(r.left+scrollX),y:Math.round(r.top+scrollY),width:Math.round(r.width),height:Math.round(r.height)}}:undefined}));
   };
   addEventListener('pointerdown',e=>{

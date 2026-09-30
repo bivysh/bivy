@@ -460,10 +460,16 @@ function askMarked(s){
   const [x,y]=onScreen([Math.min(...xs),Math.min(...ys)]);
   frame.contentWindow?.postMessage({type:'bivy:marks',id:s.id,rect:{x,y,width:Math.max(...xs)-Math.min(...xs),height:Math.max(...ys)-Math.min(...ys)}},metadata.origin);
 }
-/** Lays the marking layer over what's marked; returns where that is. */
+/** Lays the marking layer over what's marked; returns where that is. A Compare
+ *  shot scrolls inside its panel, and its box keeps the size it would have
+ *  unclipped: left as is, the layer would reach past the panel and swallow the
+ *  taps meant for the tools under it. Clipping the bottom keeps the top-left
+ *  origin the marks are measured from. */
 function placeInk(target){
   const r=(target==='compare'?$('compare-after'):frame).getBoundingClientRect();
-  Object.assign(ink.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px',height:r.height+'px'});
+  const limit=target==='compare'?$('compare').getBoundingClientRect().bottom:Infinity;
+  const height=Math.max(0,Math.min(r.height,limit-r.top));
+  Object.assign(ink.style,{left:r.left+'px',top:r.top+'px',width:r.width+'px',height:height+'px'});
   inkMarks.setAttribute('viewBox','0 0 '+r.width+' '+r.height);
   return {left:r.left,top:r.top,width:r.width,height:r.height};
 }
