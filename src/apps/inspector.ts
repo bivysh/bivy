@@ -136,6 +136,16 @@ addEventListener('message',e=>{
   }
   else if(d.type==='bivy:draw')post(drawState());
   else if(d.type==='bivy:scroll'){scrollBy({left:n(d.dx),top:n(d.dy),behavior:'instant'});post({type:'scrolled',scroll:{x:Math.round(scrollX),y:Math.round(scrollY)}});}
+  // Where the reader was before they took a new version. The page may still be
+  // laying out (or fetching what makes it long enough), so try again briefly.
+  else if(d.type==='bivy:restore'){
+    const panels=Array.isArray(d.elementScrolls)?d.elementScrolls.slice(0,50):[];
+    const put=()=>{
+      scrollTo({left:n(d.scroll?.x),top:n(d.scroll?.y),behavior:'instant'});
+      for(const p of panels){try{document.querySelector(p.selector)?.scrollTo({left:n(p.x),top:n(p.y),behavior:'instant'});}catch{}}
+    };
+    for(const ms of [0,150,500])setTimeout(put,ms);
+  }
   else if(d.type==='bivy:marks'&&d.rect)post({type:'marked',id:n(d.id),elements:marked({x:n(d.rect.x),y:n(d.rect.y),width:n(d.rect.width),height:n(d.rect.height)})});
 });
 addEventListener('message',e=>{

@@ -11,6 +11,7 @@ const singleViewport = [
   "**/pwa-lifecycle.spec.ts",
   "**/library.spec.ts",
   "**/share-landing.spec.ts",
+  "**/preview-update.spec.ts",
 ];
 
 // Specs whose layout, touch targets or visual baselines differ on a phone.

@@ -140,6 +140,7 @@ body.badged #dock:not([data-edge="top"]) { bottom:calc(var(--space-2) + var(--sp
     <button class="btn sm ghost" id="hide" aria-label="Hide Bivy controls" title="Tap to hide · Drag to move" aria-keyshortcuts="ArrowUp ArrowDown"><svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg></button>
     <button class="btn sm ghost" id="back" aria-label="Back to chat">‹ <span class="label-wide">Back to chat</span><span class="label-narrow">Chat</span></button>
     <span id="name"><span id="title">App preview</span><span id="stamp" class="muted" role="status"></span></span>
+    <button class="btn sm primary" id="update" type="button" hidden><span class="label-wide">Show new version</span><span class="label-narrow">New</span></button>
     <button class="btn sm ghost" id="point" aria-pressed="false" disabled>Point</button>
     <button class="btn sm ghost" id="draw" type="button" hidden>Draw</button>
     <button class="btn sm ghost" id="compare-btn" aria-pressed="false" hidden>Compare</button>
@@ -192,30 +193,65 @@ function show(data,launch){
   for(const b of [reload,$('point'),$('errors')])b.disabled=false;
   reviewerTools(false);
   status.textContent='Loading app…';
-  frame.onload=()=>{status.hidden=true;void loadCompare();if(revision===null){revision=-1;watch();}else if(wake)wake();};
+  frame.onload=()=>{
+    status.hidden=true;void loadCompare();
+    // Put them back where they were before an update they asked for.
+    if(restore){const at=restore;restore=null;frame.contentWindow?.postMessage(Object.assign({type:'bivy:restore'},at),metadata.origin);}
+    if(!watching){watching=true;latest=-1;shown=null;watch();}else if(wake)wake();
+  };
   // A Bivy client framing the shell says whether it can take dictation.
   if(embedded&&data.returnTo)toBivy({type:'hello'});
   // Store navigation metadata only, never tickets or cookies.
   try{sessionStorage.setItem(storageKey,JSON.stringify(data));}catch{}
 }
-// Reload when an agent turn changes files, returning to the page in view.
+// An agent turn changes files: never reload the app under the person looking
+// at it — a scroll position, a filled-in form or an open menu would go with it.
+// "shown" is the revision the frame is displaying, "latest" the newest the node
+// reports; while they differ the controls offer the new version, and taking it
+// is the user's tap.
 // Until the frame has redeemed its access cookie, polls fail; back off, and
 // let the next frame load retry at once.
-let revision=null,retry=0,wake=null;
+let shown=null,latest=null,watching=false,retry=0,wake=null,restore=null,newPath='/';
 async function watch(){
   wake=null;
   try{
-    const r=await fetch(metadata.origin+'/__bivy/revision?after='+revision,{credentials:'include',cache:'no-store'});
+    const r=await fetch(metadata.origin+'/__bivy/revision?after='+latest,{credentials:'include',cache:'no-store'});
     if(!r.ok)throw Error();
     const d=await r.json();
-    if(revision>=0&&d.revision!==revision){
-      open(currentPath!=='/'?currentPath:d.path,'Updating…');
-      $('stamp').textContent='Updated after the agent’s turn';
-      // Screenshots for Compare land a few seconds after the change.
-      for(const ms of [5000,15000])setTimeout(()=>void loadCompare(),ms);
-    }
-    revision=d.revision;retry=0;setTimeout(watch,0);
+    latest=d.revision;newPath=safePath(d.path);
+    // The first poll after a load describes what the frame already has.
+    if(shown===null)shown=latest;
+    waiting(latest!==shown);
+    retry=0;setTimeout(watch,0);
   }catch{retry=Math.min(30000,(retry||1000)*2);const t=setTimeout(watch,retry);wake=()=>{clearTimeout(t);watch();};}
+}
+/** Offers the newer version, or takes the offer away once it is on screen.
+ *  Only a change writes the stamp, which other statuses also use. */
+function waiting(on){
+  if($('update').hidden===!on)return;
+  $('update').hidden=!on;
+  $('stamp').textContent=on?'New version ready':'';
+}
+/** Asks the page where it is, so the update can put it back. Without an
+ *  inspector (a desktop app) there is nothing to ask. */
+function pageState(){
+  if(metadata.inspect===false)return Promise.resolve(null);
+  return new Promise(resolve=>{
+    const done=d=>{clearTimeout(timer);if(stateWaiter===done)stateWaiter=null;resolve(d||null);};
+    const timer=setTimeout(()=>done(null),500);
+    stateWaiter=done;
+    frame.contentWindow?.postMessage({type:'bivy:draw'},metadata.origin);
+  });
+}
+let stateWaiter=null;
+/** Take the version the agent just built, on the page in view. */
+async function takeUpdate(){
+  const at=await pageState();
+  restore=at&&{scroll:at.scroll,elementScrolls:at.elementScrolls};
+  shown=latest;waiting(false);
+  open(currentPath!=='/'?currentPath:newPath,'Updating…');
+  // Screenshots for Compare land a few seconds after the change.
+  for(const ms of [5000,15000])setTimeout(()=>void loadCompare(),ms);
 }
 // Owner drafts go to the session's composer. Reviewer drafts use only the
 // bounded notes endpoint, never the owner's command channel.
@@ -526,7 +562,7 @@ addEventListener('message',e=>{
     else if(d.type==='console'&&(d.level==='error'||d.level==='warn')){entries.push({level:d.level,text:String(d.text).slice(0,500)});if(entries.length>50)entries.shift();renderConsole();}
     else if(d.type==='picked')picked(d);
     else if(d.type==='release'&&heldAt){heldAt=0;stopListening();}
-    else if(d.type==='draw-state'&&draw&&draw.waiting){draw.waiting(d);}
+    else if(d.type==='draw-state'){if(draw&&draw.waiting)draw.waiting(d);else if(stateWaiter)stateWaiter(d);}
     else if(d.type==='scrolled'&&draw&&draw.target==='frame'){draw.scroll=pos(d.scroll);renderInk();}
     else if(d.type==='marked'&&draw){draw.elements[Number(d.id)]=Array.isArray(d.elements)?d.elements.slice(0,8):[];}
   }
@@ -534,7 +570,9 @@ addEventListener('message',e=>{
 ask.onclick=()=>toChat('The app preview "'+metadata.name+'" isn’t loading: nothing is answering on port '+downPort+'. Please find out why the server stopped, restart it, and tell me when it’s back.');
 addEventListener('keydown',e=>{if(e.key==='Escape'){if(listening)cancelListening();else if(!$('draft').hidden)$('draft-cancel').click();else if(draw&&!draw.done)endDraw();else if(point.getAttribute('aria-pressed')==='true')pointing(false);else panels(null);}});
 back.onclick=()=>{if(metadata?.returnTo){window.close();setTimeout(()=>location.replace(metadata.returnTo),100);}else{window.close();status.hidden=false;status.textContent='You can close this tab to return to Bivy.';}};
-reload.onclick=()=>{if(metadata)open(currentPath,'Reloading app…');};
+// A reload fetches the newest bytes, so it settles any waiting version too.
+reload.onclick=()=>{if(!metadata)return;shown=latest;waiting(false);open(currentPath,'Reloading app…');};
+$('update').onclick=()=>{void takeUpdate();};
 (async()=>{
   if(ticket){
     const response=await fetch('/__bivy/launch',{method:'POST',headers:{'Content-Type':'text/plain'},body:ticket});
