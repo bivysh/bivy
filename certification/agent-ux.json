@@ -1,0 +1,36 @@
+{
+  "about": "Tasks for `pnpm run eval:agent-ux`: can an agent, told nothing but Bivy's agent note, use Bivy well? Each task runs in a fresh git workspace seeded with `files`. `answer` is what the harness replies to a question card. In `expect`: `block` is a chat card type that must appear at least `min` times (default 1), `asked` means the agent raised a question card, `reply` is text its last answer must contain ({machine} is the node's name), and `file` is a path glob that must exist afterwards.",
+  "tasks": [
+    {
+      "id": "show-a-file",
+      "prompt": "Write a short report.md summarizing the files in this directory, and show it to me.",
+      "files": { "notes.txt": "Buy milk\nCall the bank\n", "todo.md": "- ship the release\n- fix the flaky test\n" },
+      "expect": [{ "block": "bivy_attachment" }]
+    },
+    {
+      "id": "notify-when-done",
+      "prompt": "Count the lines in every file here. I'm stepping away from my desk, so make sure I get notified with the totals when you're done.",
+      "files": { "a.txt": "1\n2\n3\n", "b.txt": "1\n2\n" },
+      "expect": [{ "block": "bivy_notice" }]
+    },
+    {
+      "id": "ask-before-acting",
+      "prompt": "I want a hello-world script here. Before you write anything, ask me whether it should be Python or Bash, then write it in the language I pick.",
+      "answer": "Bash",
+      "files": {},
+      "expect": [{ "asked": true }, { "file": "*.sh" }]
+    },
+    {
+      "id": "suggest-next-steps",
+      "prompt": "Look around this project and propose three follow-up tasks I could start later. Don't do any of them.",
+      "files": { "server.js": "const http = require('http');\nhttp.createServer((q, s) => s.end('ok')).listen(3000);\n", "README.md": "# Tiny server\n" },
+      "expect": [{ "block": "bivy_suggestion", "min": 2 }]
+    },
+    {
+      "id": "know-where-you-are",
+      "prompt": "According to Bivy, which machine is this session running on? Answer with just the machine's name.",
+      "files": {},
+      "expect": [{ "reply": "{machine}" }]
+    }
+  ]
+}

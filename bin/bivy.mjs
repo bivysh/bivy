@@ -5828,6 +5828,22 @@ function readSelfVersion() {
   }
 }
 
+// A command an agent tried that doesn't exist is the best hint for what it
+// expected Bivy to have. Inside a session, keep the word (never its arguments)
+// in <data-dir>/agent-cli-misses.jsonl for `pnpm run eval:agent-ux` and
+// whoever names the next command. Bounded: one rotation at 256 KiB.
+function recordAgentMiss(word) {
+  const session = resolveAttachSessionId({ env: process.env });
+  if (!session || typeof word !== "string" || word.length > 64) return;
+  try {
+    const file = path.join(appDir, "agent-cli-misses.jsonl");
+    if (fs.existsSync(file) && fs.statSync(file).size > 256 * 1024) fs.renameSync(file, `${file}.1`);
+    fs.appendFileSync(file, `${JSON.stringify({ ts: Date.now(), session, word })}\n`, { mode: 0o600 });
+  } catch {
+    // Best-effort: a miss log must never change what the command does.
+  }
+}
+
 function printHelp() {
   const details = { run: `Agents: ${[...AGENT_INTEGRATIONS.keys()].join(" | ")}, or -- <command>` };
   console.log(`\n${renderHelp({ paint: c.cyan, bold: c.bold, details })}\n`);
@@ -5905,13 +5921,27 @@ function cmdGuide(args = []) {
   console.log(guide.markdown.trimEnd());
 }
 
+// Inside an agent session the daemon names its own CLI ($BIVY_NODE_CLI). When
+// `bivy` was found on PATH (every installer links it by that name) and is
+// another file, run the node's, so the agent gets the commands its node
+// documents. Running a file on purpose (`node …/bin/bivy.mjs`) is left alone.
+function nodeCliToRun() {
+  const nodeCli = process.env.BIVY_NODE_CLI;
+  if (path.basename(process.argv[1] ?? "") !== "bivy") return undefined;
+  if (!nodeCli || !path.isAbsolute(nodeCli) || !fs.existsSync(nodeCli)) return undefined;
+  try { return fs.realpathSync(nodeCli) === fs.realpathSync(selfScript) ? undefined : nodeCli; } catch { return undefined; }
+}
+
 async function main() {
+  const nodeCli = nodeCliToRun();
+  if (nodeCli) process.exit(spawnSync(process.execPath, [nodeCli, ...process.argv.slice(2)], { stdio: "inherit", env: process.env }).status ?? 1);
   await hydrateCanonicalConfig();
   const argv = process.argv.slice(2);
   const [command, ...args] = argv;
   if (command === undefined) { printHelp(); return; }
   const entry = resolveCommand(command);
   if (!entry) {
+    recordAgentMiss(command);
     const close = suggestCommands(command);
     cliError({
       code: "unknown_command",

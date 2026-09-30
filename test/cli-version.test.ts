@@ -55,6 +55,20 @@ test("with --json, session commands fail with a machine-readable error and a spe
   assert.ok(error.hint && error.next, "an agent is told how to recover");
 });
 
+test("inside a session, another install's bivy hands the command to the node's own CLI", () => {
+  const nodeCli = path.join(dataDir, "node-bivy.mjs");
+  fs.writeFileSync(nodeCli, "console.log(`node cli: ${process.argv.slice(2).join(' ')}`); process.exit(7);\n");
+  // Installers put the CLI on PATH as a link named `bivy`.
+  const onPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bivy-path-")), "bivy");
+  fs.symlinkSync(cli, onPath);
+  const viaPath = (args: string[], env: NodeJS.ProcessEnv) => spawnSync(process.execPath, [onPath, ...args], { encoding: "utf8", env: { ...process.env, ...env, BIVY_DATA_DIR: dataDir } });
+  const handed = viaPath(["notify", "done"], { BIVY_NODE_CLI: nodeCli });
+  assert.equal(handed.status, 7, "the node CLI's exit code comes back");
+  assert.equal(handed.stdout.trim(), "node cli: notify done");
+  assert.equal(viaPath(["version"], { BIVY_NODE_CLI: cli }).stdout.trim(), pkgVersion, "the node's own CLI runs itself");
+  assert.equal(runCli(["version"], { BIVY_NODE_CLI: nodeCli }).stdout.trim(), pkgVersion, "a file run on purpose is left alone");
+});
+
 test("`bivy help --json` describes every visible command with its scope and JSON support", () => {
   const r = runCli(["help", "--json"]);
   assert.equal(r.status, 0, r.stderr);
