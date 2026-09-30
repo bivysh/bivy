@@ -9,6 +9,7 @@ import { EventLog } from "../src/session/event-log.js";
 import { renderHistory } from "../packages/core/src/store-render.js";
 import { SessionStore } from "../packages/core/src/store.js";
 import { focusEntries } from "../packages/web/src/focusTranscript.js";
+import { isTaskSuggestion } from "../src/session/suggestions.js";
 
 const suggestion = { id: "suggestion-0123456789abcdef", text: "Add a /version endpoint that returns the package version and git commit.", title: "Add /version" };
 
@@ -35,4 +36,9 @@ test("a live suggestion lands once, stays in Focus mode, and isn't a sign of wor
   assert.deepEqual(transcript.map((entry) => entry.suggestion), [suggestion]);
   assert.equal(working, false);
   assert.deepEqual(focusEntries([...transcript, { id: "final", role: "assistant", text: "Pick one." }], false).find((entry) => entry.suggestion)?.suggestion, suggestion);
+});
+
+test("a suggestion's recommended run is one of here, subagents or new", () => {
+  assert.equal(isTaskSuggestion({ ...suggestion, run: "subagents" }), true);
+  assert.equal(isTaskSuggestion({ ...suggestion, run: "later" }), false);
 });

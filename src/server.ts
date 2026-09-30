@@ -82,7 +82,7 @@ import { exportProviderAuth, exportAccountApiKeys, exportAccountOAuthCredentials
 import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
 import { sessionLikeFields } from "./session/start-like.js";
-import { MAX_SUGGESTION_TEXT, MAX_SUGGESTION_TITLE, isTaskSuggestion } from "./session/suggestions.js";
+import { MAX_SUGGESTION_TEXT, MAX_SUGGESTION_TITLE, SUGGESTION_RUNS, isTaskSuggestion } from "./session/suggestions.js";
 import { BIVY_AGENT_NOTE, mergeSyncedAgentInstructions, readAgentInstructions, sessionInstructions, writeAgentInstructions, MAX_AGENT_INSTRUCTIONS_BYTES } from "./agent-instructions.js";
 import { execEphemeralRequest, type EphemeralExecRequest } from "./ephemeral-exec.js";
 import { ApprovalManager, type ApprovalRequest } from "./approval.js";
@@ -92,8 +92,11 @@ import { canOpenBrowser, openBrowser } from "./browser-open.js";
 import { openOAuthLoginOnNode } from "./runtime/oauth/oauth-node-open.js";
 import { collectNodeStats } from "./node-stats.js";
 import { SessionEventCoalescer } from "./session-event-coalescer.js";
-import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed } from "./auth.js";
-import { RelayConnector, loadRelayConfig, soloCredentials, type ClientMessage } from "./remote/index.js";
+import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed, markRemoteListener } from "./auth.js";
+import { PairCodes } from "./pair-codes.js";
+import http from "node:http";
+import { webAppDirs, webAppRouter } from "./web-app.js";
+import { RelayConnector, loadRelayConfig, loadDirectListenerConfig, soloCredentials, type ClientMessage } from "./remote/index.js";
 import { readEphemeralTeardownConfig, shouldSelfTeardown, snapshotsDurableForTeardown, performSelfTeardown, type SnapshotFlushResult } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
 import { clearTurnActivity } from "./session/turn-activity.js";
@@ -1168,9 +1171,14 @@ const accessDevices = createAccessDeviceController({
   create: (name: string) => identity.createDevice(name),
   revoke: (id: string) => identity.revokeDevice(id),
   onCreated: (device) => broadcast({ type: "device.created", device }),
-  onRevoked: (id) => broadcast({ type: "device.revoked", id }),
+  onRevoked: (id) => {
+    broadcast({ type: "device.revoked", id });
+    // A revoked token loses its open sockets now, not at its next reconnect.
+    for (const socket of clients) if (socketDeviceIds.get(socket) === id) socket.close(1008, "Unauthorized");
+  },
 });
 const clients = new Set<WebSocket>();
+const socketDeviceIds = new WeakMap<WebSocket, string>();
 const commandProcesses = new Map<string, CommandHandle>();
 const oauthLogins = new Map<string, OAuthLoginState>();
 // A browser-initiated subscription login parks the node on `manualCodePromise`
@@ -9533,7 +9541,8 @@ app.use((_req, res, next) => {
 // (OAuth callback, GitHub App manifest). It does NOT host the web UI — the
 // React/Vite PWA (@bivy/web) is served exclusively by the hosted or self-hosted
 // control plane. `/` returns a small informational stub for anyone who points a
-// browser straight at the node.
+// browser straight at the node. The one exception is the direct listener for
+// `bivy tailscale` (below), which has no control plane and serves the app itself.
 app.get("/", (_req, res) => {
   res.setHeader("Cache-Control", "no-store, max-age=0");
   res
@@ -9638,6 +9647,20 @@ app.post("/api/auth/bootstrap", sensitiveRateLimiter, (req, res) => {
   res.json({ ok: true, device, token });
 });
 
+// Pairing a device that reaches the node directly (Tailscale): trade a one-time
+// code minted on this machine for a device token. Registered before the auth
+// middleware because the caller has no token yet; the code is the credential.
+const pairCodes = new PairCodes();
+app.post("/api/auth/pair", sensitiveRateLimiter, (req, res) => {
+  if (!requestOriginAllowed(req)) return res.status(403).json({ error: "Forbidden origin" });
+  if (!pairCodes.redeem(String(req.body?.code ?? ""))) {
+    return res.status(401).json({ error: "This pairing link is used or expired. Run 'bivy tailscale pair' on your machine for a new one." });
+  }
+  const name = String(req.body?.name ?? "").trim().slice(0, 80) || "Paired device";
+  const { device, token } = accessDevices.create(name);
+  res.json({ ok: true, device, token });
+});
+
 // All other /api routes require auth (loopback may bypass, per config and host
 // — see loopbackAllowed()/isMultiUserHost() in src/auth.ts).
 app.use("/api", authMiddleware(identity, {
@@ -9647,6 +9670,24 @@ app.use("/api", authMiddleware(identity, {
   // What an agent did through Bivy, per session (`bivy audit --session <id>`).
   used: (sessionId, call) => { if (call.method !== "GET") auditLog.record({ kind: "agent.call", session: sessionId, tool: `${call.method} ${call.path}` }); },
 }));
+
+// Mint a pairing code for a direct (Tailscale) device. Only callers already
+// trusted by this node get one: the owner's CLI, or an already-paired device.
+app.post("/api/auth/pair-codes", (_req, res) => {
+  const direct = loadDirectListenerConfig(appDir);
+  const { code, expiresAt } = pairCodes.issue();
+  const url = direct?.hostname ? `https://${direct.hostname}/#pair=${code}` : undefined;
+  res.json({ ok: true, code, expiresAt, url });
+});
+
+// Start, move or stop the direct listener after `bivy tailscale` changes it.
+app.post("/api/direct/reload", async (_req, res, next) => {
+  try {
+    res.json({ ok: true, ...(await reloadDirectListener()) });
+  } catch (error) {
+    next(error);
+  }
+});
 
 // Reload relay.json without forcing the user to restart the whole node. This is
 // used by `bivy relay:setup` after it enrolls the node.
@@ -11869,14 +11910,16 @@ app.get("/api/session/:id/automations/apply/:proposalId", (req, res) => {
 });
 
 // `bivy suggest "<task>"`: the agent proposes a task the user can start in one
-// tap, here or in a parallel session (see packages/web SuggestionCard).
+// tap, here, through this agent's sub-agents, or in a parallel session; `run`
+// is the one the agent recommends (see packages/web SuggestionCard).
 app.post("/api/session/:id/suggest", (req, res) => {
   const record = openSessions.get(String(req.params.id));
   if (!record) return res.status(404).json({ error: "Session not found" });
   const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
   const title = typeof req.body?.title === "string" && req.body.title.trim() ? req.body.title.trim() : undefined;
-  const suggestion = { id: `suggestion-${randomBytes(8).toString("hex")}`, text, ...(title ? { title } : {}) };
-  if (!isTaskSuggestion(suggestion)) return res.status(400).json({ error: `A suggestion needs text (up to ${MAX_SUGGESTION_TEXT} characters) and an optional title (up to ${MAX_SUGGESTION_TITLE}).` });
+  const run = req.body?.run || undefined;
+  const suggestion = { id: `suggestion-${randomBytes(8).toString("hex")}`, text, ...(title ? { title } : {}), ...(run ? { run } : {}) };
+  if (!isTaskSuggestion(suggestion)) return res.status(400).json({ error: `A suggestion needs text (up to ${MAX_SUGGESTION_TEXT} characters), an optional title (up to ${MAX_SUGGESTION_TITLE}) and an optional run (${SUGGESTION_RUNS.join(", ")}).` });
   eventLog.appendSuggestion(record.id, { afterMessageCount: record.session.getMessages().length, suggestion });
   broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "suggestion", id: suggestion.id, suggestion } }));
   res.json({ ok: true, id: suggestion.id });
@@ -12185,6 +12228,7 @@ const server = app.listen(port, host, async () => {
   console.log(`Agent data dir: ${piDir}`);
   console.log(`Workspace: ${defaultWorkspace}`);
   startRelayIfConfigured();
+  void reloadDirectListener().catch((error) => console.error("[direct] Could not start the direct listener:", error instanceof Error ? error.message : error));
   void syncAgentBridges().catch((error) => console.warn("[bridges] Could not install agent bridges; they will install on first use:", error instanceof Error ? error.message : error));
   if (appGateway) {
     appGateway.server.on("error", (error) => { console.error("[apps] Preview gateway could not start:", error); shutdown("preview gateway failure"); });
@@ -12246,6 +12290,45 @@ server.on("error", (error: NodeJS.ErrnoException) => {
 });
 
 const wss = new WebSocketServer({ server, path: "/ws" });
+
+// Direct listener (`bivy tailscale`): the same API and WebSocket, plus the web
+// app, on a loopback port `tailscale serve` exposes to the tailnet over HTTPS.
+// markRemoteListener keeps its proxied, loopback-looking connections from ever
+// getting loopback trust; every caller needs a device token.
+const directWebApp = webAppRouter(webAppDirs(repoRoot));
+let directListener: { port: number; server: http.Server; wss: WebSocketServer } | null = null;
+async function reloadDirectListener(): Promise<{ enabled: boolean; port?: number; webApp: boolean }> {
+  const config = loadDirectListenerConfig(appDir);
+  if (directListener && directListener.port !== config?.port) {
+    const previous = directListener;
+    directListener = null;
+    for (const client of previous.wss.clients) client.terminate();
+    previous.wss.close();
+    previous.server.closeAllConnections();
+    await new Promise<void>((resolve) => previous.server.close(() => resolve()));
+  }
+  if (config && !directListener) {
+    const directApp = express();
+    directApp.disable("x-powered-by");
+    if (directWebApp) directApp.use(directWebApp);
+    directApp.use(app);
+    const listener = http.createServer(directApp);
+    markRemoteListener(listener);
+    const directWss = new WebSocketServer({ server: listener, path: "/ws" });
+    directWss.on("connection", (socket, req) => wss.emit("connection", socket, req));
+    await new Promise<void>((resolve, reject) => {
+      listener.once("error", reject);
+      listener.listen(config.port, "127.0.0.1", () => {
+        listener.off("error", reject);
+        resolve();
+      });
+    });
+    listener.on("error", (error) => console.error("[direct] Listener error:", error));
+    directListener = { port: config.port, server: listener, wss: directWss };
+    console.log(`[direct] Listening on 127.0.0.1:${config.port}${config.hostname ? ` for https://${config.hostname}` : ""}${directWebApp ? "" : " (web app not built; API only)"}`);
+  }
+  return { enabled: Boolean(directListener), port: directListener?.port, webApp: Boolean(directWebApp) };
+}
 wss.on("connection", (socket, req) => {
   // Reject cross-origin / DNS-rebinding upgrades before auth: loopback bypasses
   // auth by default, so a page the user merely visited could otherwise open a
@@ -12254,11 +12337,13 @@ wss.on("connection", (socket, req) => {
     socket.close(1008, "Forbidden origin");
     return;
   }
-  if (!isAuthorized(resolveAuth(identity, req))) {
+  const socketAuth = resolveAuth(identity, req);
+  if (!isAuthorized(socketAuth)) {
     socket.close(1008, "Unauthorized");
     return;
   }
   clients.add(socket);
+  if (socketAuth.deviceId) socketDeviceIds.set(socket, socketAuth.deviceId);
   // Terminals opened on this socket; closed when the socket disconnects so a
   // dropped browser tab doesn't leak shells. Output is unicast to this socket.
   const ownedTerminals = new Set<string>();

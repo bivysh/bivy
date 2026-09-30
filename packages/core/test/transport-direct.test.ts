@@ -58,6 +58,32 @@ async function tick(): Promise<void> {
 }
 
 describe("DirectTransport", () => {
+  it("redeems a pairing code for a kept device token, replacing a stale one", async () => {
+    FakeWS.instances.length = 0;
+    const store = mem({ bivy_local_token: "revoked" });
+    const bodies: unknown[] = [];
+    const fetchImpl = (async (url: string, init?: RequestInit) => {
+      bodies.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) });
+      return { ok: true, json: async () => ({ token: "paired" }) };
+    }) as unknown as typeof fetch;
+    const transport = new DirectTransport({
+      origin: "https://box.tail1.ts.net",
+      tokenStore: store,
+      pairCode: "code-1",
+      deviceName: "iPhone",
+      fetchImpl,
+      webSocketImpl: FakeWS as unknown as typeof WebSocket,
+      handlers: { onEvent: () => {}, onStatus: () => {} },
+    });
+
+    await transport.connect();
+
+    expect(bodies).toEqual([{ url: "https://box.tail1.ts.net/api/auth/pair", body: { code: "code-1", name: "iPhone" } }]);
+    expect(store.getItem("bivy_local_token")).toBe("paired");
+    expect(FakeWS.instances[0].url).toContain("access_token=paired");
+    transport.close();
+  });
+
   it("sends ping over the raw event WebSocket instead of REST", async () => {
     FakeWS.instances.length = 0;
     const fetchCalls: string[] = [];

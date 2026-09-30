@@ -10,9 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Self-host with Kamal.** `deploy/kamal/` deploys the control plane, web app, relay and Postgres to your own server with `kamal setup`, using the published images at the release you pin, one domain, Let's Encrypt TLS and no registry account. `kamal owner-login` prints your sign-in link. See [Self-host with Kamal](docs/self-host-kamal.md).
+- **`bivy tailscale`** puts your machine's Bivy on `https://<machine>.<tailnet>.ts.net`, reachable from any device on your tailnet, with no account, control plane or relay. The node serves the web app itself. Pair a phone by opening the one-time link it prints; `bivy tailscale devices` and `bivy tailscale revoke <id>` manage who has access. See [Tailscale](docs/tailscale.md).
 
 ### Changed
 
+- **Suggested tasks: pick them, and the agent recommends where they run.** A suggestion can run here, through this session's sub-agents, or in new sessions. The agent passes `bivy suggest --run here|subagents|new` to pick the recommended action, which becomes the card's main button, and the other actions stay one tap away. Without it, a single card recommends *here* and several recommend *new sessions*. When an agent suggests several tasks, each card has a checkbox and the last card starts the selected ones together (e.g. **Run 3 as sub-agents**, **Do 3 here**). This replaces the ambiguous "Run all in parallel" button.
 - **Apps pill above the composer.** A session's published apps and running servers now have their own pill at the right end of the band above the composer, instead of hiding in the run pill. When people leave reviewer notes on a shared preview, the pill shows **N new notes** until you open the Apps sheet.
 
 ## [0.20.0] - 2026-09-30
