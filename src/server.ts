@@ -165,6 +165,7 @@ import { createSessionControlCommands } from "./controllers/session-control.js";
 import { createPresenceCommands } from "./controllers/presence-commands.js";
 import { createArtifactCommands } from "./controllers/artifact-commands.js";
 import { PresenceBook, deviceFrom, type DeviceRef, type DriveVia, type SessionPresence } from "./session/presence.js";
+import { buildAgentContext } from "./session/agent-context.js";
 import { createForkCommands } from "./controllers/fork-commands.js";
 import { createGithubCommands } from "./controllers/github-commands.js";
 import { createCredentialCommands } from "./controllers/credential-commands.js";
@@ -11716,6 +11717,31 @@ app.post("/api/session/:id/attach", (req, res) => {
   if ("error" in result) return res.status(400).json({ error: result.error });
   const { hash, name, mimeType, size, kind } = result.ref;
   res.json({ ok: true, hash, name, mimeType, size, kind });
+});
+
+// `bivy context`: what an agent in this session needs to orient itself.
+app.get("/api/session/:id/context", (req, res) => {
+  const record = openSessions.get(String(req.params.id));
+  if (!record) return res.status(404).json({ error: "Session not found" });
+  const { apps, previewAvailable } = appService.list(record.id);
+  res.json(buildAgentContext({
+    session: {
+      id: record.id,
+      name: record.session.getName() || undefined,
+      agent: record.runtimeId,
+      agentName: getRuntime(record.runtimeId).displayName,
+      workspace: harnessDirFor(record),
+      branch: record.worktree?.branch,
+      prUrl: record.prUrl,
+      forkedFrom: record.forkedFrom,
+      delegatedFrom: record.delegatedFrom?.sessionId,
+      busy: sessionBusy(record),
+    },
+    machine: { name: identity.name, platform: process.platform, arch: process.arch },
+    presence: presenceBook.get(record.id),
+    apps,
+    previewAvailable,
+  }));
 });
 
 // `bivy suggest "<task>"`: the agent proposes a task the user can start in one
