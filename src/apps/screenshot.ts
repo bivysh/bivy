@@ -117,6 +117,12 @@ export async function takeShots(views: RegisteredView[], request: ShotRequest, o
   let ws: WebSocket | undefined;
   let browser: ReturnType<typeof spawn> | undefined;
   const deadline = setTimeout(() => browser?.kill("SIGKILL"), 120_000);
+  // How long Chrome gets to print its DevTools line. Generous on purpose: this
+  // only bounds a browser that never comes up, and it costs nothing when one
+  // starts quickly. A tighter bound turned a loaded machine — a shared CI
+  // runner, a laptop mid-build — into "the browser didn't start in time" and a
+  // missing screenshot, which is a worse answer than waiting.
+  const START_MS = 60_000;
   // Chromium's sandbox is unavailable as root and where AppArmor blocks user
   // namespaces (Ubuntu 23.10+). The pages are the session's own apps, already
   // running as this user, so retrying without it doesn't widen what they can do.
@@ -125,7 +131,7 @@ export async function takeShots(views: RegisteredView[], request: ShotRequest, o
     const child = spawn(chrome, args, { stdio: ["ignore", "ignore", "pipe"] });
     browser = child;
     let text = "";
-    const timer = setTimeout(() => reject(new Error("The browser didn't start in time.")), 20_000);
+    const timer = setTimeout(() => reject(new Error("The browser didn't start in time.")), START_MS);
     child.stderr!.on("data", (chunk) => { text += chunk; const m = /DevTools listening on (ws:\/\/\S+)/.exec(text); if (m) { clearTimeout(timer); resolve(m[1]!); } });
     child.once("exit", () => { clearTimeout(timer); reject(Object.assign(new Error("The browser exited before it was ready."), { noSandbox: /No usable sandbox|--no-sandbox/i.test(text) })); });
   });
