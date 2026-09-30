@@ -4,17 +4,18 @@
 [![license: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-2b6cb0)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-2b6cb0)](https://nodejs.org)
 
-**Coding agents that show their work.**
+**Your local coding agents, from anywhere. Showing their work.**
 
-Bivy is the open-source workspace for coding agents. It runs Claude Code, Codex,
-Pi, OpenCode and other agents on your own machine, and puts the app they're
-building right in the chat. Try it, mark what's wrong, and send it back to the
-agent. At your desk, in a browser, or on your phone.
+Bivy is the open-source workspace for coding agents. Claude Code, Codex, Pi,
+OpenCode and other agents run on your own machine, and you reach them remotely
+from a browser or your phone: the live session, its terminal, its approvals,
+and the app it's building, right in the chat. Try the app, mark what's wrong,
+and send it back to the agent, wherever you are.
 
-Bivy is not another coding agent and not a cloud development machine. Your
-agent does the coding with your model provider. Your repos, tools, databases,
-and services stay where they are. Bivy adds the chat, terminal, live previews,
-automations, and review around them.
+Bivy is not another coding agent and not a cloud development machine. The agent
+stays local and does the coding with your model provider. Your repos, tools,
+databases, and services stay where they are. Bivy gives you remote access to all
+of it, plus live previews, automations, and review.
 
 - **Live previews.** The running app beside the chat. Mark it, send it back,
   share it with someone who has no Bivy account.
@@ -22,8 +23,9 @@ automations, and review around them.
   webhooks start the work. It comes back as a preview link or a pull request.
 - **Any agent.** Hit a usage limit? Fork the session to another agent, or let
   Bivy retry when the limit resets.
-- **Your machine.** Your real environment, reachable from anywhere. The machine
-  dials out, and session traffic is end-to-end encrypted.
+- **Your machine, remotely.** Start at your desk, pick the session up on your
+  phone. The machine dials out, so there are no ports to open, and session
+  traffic is end-to-end encrypted.
 
 **[Start free on Bivy Cloud](https://app.bivy.sh)** ·
 **[Quickstart](docs/quickstart.md)** ·
