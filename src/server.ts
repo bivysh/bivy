@@ -251,6 +251,11 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
+// Agents inherit this: the `bivy` on their PATH (another install, or an older
+// version) hands their commands to this node's own CLI, so the commands the
+// agent note names always exist. Agent shells that rebuild PATH from the
+// user's rc files keep ordinary variables like this one.
+if (!process.env.BIVY_NODE_CLI && fs.existsSync(path.join(repoRoot, "bin", "bivy.mjs"))) process.env.BIVY_NODE_CLI = path.join(repoRoot, "bin", "bivy.mjs");
 // Asset root holds read-only bundled files (public/, helper scripts); data dir
 // holds writable per-install state (.bivy). Both default to the repo when
 // running from source. Packaged/release builds may override them (BIVY_ASSET_ROOT,

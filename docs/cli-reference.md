@@ -65,6 +65,11 @@ get shell completion. Agents in a session should start with `bivy context`.
   [configuration.md](configuration.md) for how it is resolved.
 - Every command accepts `--help`. A mistyped command exits 2 and suggests the
   closest ones.
+- **Inside an agent session**, `bivy` runs the node's own CLI (`$BIVY_NODE_CLI`)
+  when the one on the agent's PATH is a different install, so agents get the
+  commands their node has. Unknown commands typed there are recorded, by name
+  only, in `<data-dir>/agent-cli-misses.jsonl`
+  (see [agent-ux-eval.md](agent-ux-eval.md)).
 - **JSON output.** Commands marked `json` in `bivy help --json` accept `--json`.
   `BIVY_OUTPUT=json` turns it on for all of them, which suits scripts and agents.
 - **Errors.** With JSON output on, `context`, `attach`, `suggest`, `app` and

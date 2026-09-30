@@ -62,6 +62,7 @@
     "certification:check": "node scripts/certification.mjs --check",
     "certification:latest": "node scripts/certification.mjs --latest",
     "certification:live": "node scripts/certification.mjs --live",
+    "eval:agent-ux": "tsx scripts/agent-ux-eval.ts",
     "check:links": "node scripts/check-links.mjs",
     "release": "node scripts/release.mjs",
     "release:version": "node scripts/set-release-version.mjs",
