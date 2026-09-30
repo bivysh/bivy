@@ -26,6 +26,7 @@ get shell completion. Agents in a session should start with `bivy context`.
 | List every command as JSON | `bivy help --json` |
 | Read the playbooks for agents | `bivy guide` |
 | Propose a task the user can start in one tap | `bivy suggest "<task>"` |
+| Rename the session an agent runs in | `bivy title "<title>"` |
 | Tell the user something when they're away | `bivy notify "<message>"` |
 | Ask the user a question and wait for the answer | `bivy ask "<question>" --option A --option B` |
 | Stop a session | `bivy kill <id>` |
@@ -474,6 +475,19 @@ bivy takeover 3f1c9a02-6b41-4a0f-9c2e-5d7f1b0a8e33
 These commands act on the session the agent runs in: they read
 `$BIVY_SESSION_ID` (or `$PI_SESSION_ID` under Pi), or take `--session <id>`.
 `bivy attach` and `bivy suggest` above belong here too.
+
+### `bivy title "<title>" [--session <id>] [--json]`
+
+Renames the session in the session list, for every device. Sessions are titled
+from their first message; an agent uses this when that made a poor title or the
+work changed direction. A title set this way is kept: the automatic namer won't
+replace it. Titles are 1 to 100 characters. The MCP tool is `set_session_title`.
+
+```bash
+bivy title "Fix login redirect loop"
+```
+
+`--json` prints `{"ok","title"}`.
 
 ### `bivy context [--json] [--session <id>]`
 
@@ -1360,6 +1374,7 @@ MCP `instructions`, the guides as resources, and these tools:
 | `notify_user` | `bivy notify` |
 | `ask_user` | `bivy ask` |
 | `suggest_task` | `bivy suggest` |
+| `set_session_title` | `bivy title` |
 | `app_publish`, `app_screenshot`, `app_present` | `bivy app publish`, `shot`, `present` |
 | `automation_plan`, `automation_apply` | `bivy automation plan`, `apply` (a proposal the user approves) |
 | `bivy_guide` | `bivy guide` |

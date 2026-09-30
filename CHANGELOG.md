@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **`bivy tailscale`** puts your machine's Bivy on `https://<machine>.<tailnet>.ts.net`, reachable from any device on your tailnet, with no account, control plane or relay. The node serves the web app itself. Pair a phone by opening the one-time link it prints; `bivy tailscale devices` and `bivy tailscale revoke <id>` manage who has access. See [Tailscale](docs/tailscale.md).
+- **Agents can rename their session.** `bivy title "<title>"` (MCP: `set_session_title`) renames the session the agent runs in, so a session titled from a vague first message can get a title that says what the work is. The agent instructions tell agents to use it when the title doesn't fit or the work changes direction. A title set this way, or by renaming in the app, now also wins over the automatic namer if that is still running.
 
 ### Changed
 

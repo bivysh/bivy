@@ -57,6 +57,8 @@ export const BIVY_AGENT_NOTE = [
     "project root. `--run` is the one you recommend: here when it builds on this conversation, subagents for " +
     "independent tasks you can split and supervise (only if you have sub-agents), new for bigger work worth its " +
     "own session.",
+  '- If this session\'s title (taken from the first message) doesn\'t say what the work is, or the work changes ' +
+    'direction: `bivy title "<short title>"`.',
   "- When you finish long work, get blocked, or need the user to look at something: " +
     '`bivy notify "<message>"` (a chat card, plus a push to their phone when they are away). To ask and wait for ' +
     'an answer: `bivy ask "<question>" [--option A --option B]` prints their answer (or use your own ask-the-user tool).',

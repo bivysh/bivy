@@ -2554,6 +2554,30 @@ async function cmdSuggest(args = []) {
   console.log(c.green("Suggested in the chat. The user can start it in one tap."));
 }
 
+// `bivy title "<title>" [--session <id>]` — rename the session the agent runs in.
+async function cmdTitle(args = []) {
+  const usage = 'Usage: bivy title "<title>" [--session <id>] [--json]';
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log(`${usage}\n\nRename this session in the user's session list. Use a short title that says what the work is, when the first message made a poor title or the work changed direction. --json prints {"ok","title"}.`);
+    return;
+  }
+  const json = wantsJson(args);
+  const fail = (error) => cliError(error, { json, paint: c.red });
+  const sessionFlag = args.indexOf("--session");
+  const title = args.filter((a, i) => !a.startsWith("-") && !(sessionFlag >= 0 && i === sessionFlag + 1)).join(" ").trim();
+  const sessionId = resolveAttachSessionId({ sessionFlag: sessionFlag >= 0 ? args[sessionFlag + 1] : undefined, env: process.env });
+  if (!title) return fail({ code: "usage", message: usage, exit: EXIT.usage });
+  if (!sessionId) return fail({ code: "no_session", message: "No session id.", hint: "Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.", next: "bivy sessions --json", exit: EXIT.usage });
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable });
+  const res = await sessionPost(config, sessionId, "title", { title }).catch((error) => error);
+  if (res instanceof Error) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node: ${res.message}`, next: "bivy status", exit: EXIT.unavailable });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) return fail(sessionHttpError("Title", res.status, body));
+  if (json) { console.log(JSON.stringify(body)); return; }
+  console.log(c.green(`Renamed this session to "${body.title}".`));
+}
+
 // Flags shared by the session commands: `--name value` pairs and bare switches,
 // with every other word collected as positional text.
 function parseSessionArgs(args, valueFlags) {
@@ -6203,6 +6227,9 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       break;
     case "suggest":
       await cmdSuggest(args);
+      break;
+    case "title":
+      await cmdTitle(args);
       break;
     case "notify":
       await cmdNotify(args);

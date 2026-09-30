@@ -218,6 +218,12 @@ export function createSessionNamer(deps: NamerDeps): SessionNamer {
           console.warn("Session naming suggestion failed", error);
         }
 
+        // A title set while the model was thinking (the user, or the agent with
+        // `bivy title`) wins over the refinement.
+        if (record.session.getName() !== fallback) {
+          record.namedFromFirstPrompt = true;
+          return;
+        }
         if (finalName !== fallback) {
           record.session.setName(finalName);
           deps.persistSessionMetadata(record);
@@ -248,8 +254,8 @@ export function createSessionNamer(deps: NamerDeps): SessionNamer {
     }
   }
 
-  /** Manually set a session's title (e.g. GitHub-issue pickup) and lock it so the
-   *  first-prompt namer won't overwrite it. */
+  /** Manually set a session's title (a rename in the app, `bivy title`, a
+   *  GitHub-issue pickup) and lock it so the first-prompt namer won't overwrite it. */
   function setSessionName(record: NamerSession, name: string): void {
     const clean = name.trim();
     if (!clean) return;
