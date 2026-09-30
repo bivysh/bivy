@@ -5900,7 +5900,7 @@ Setups stack: Tailscale can stay on alongside hosted or your own server.`);
     if (linked) console.log(c.yellow(`This machine is on ${linked.label}${report.controlPlaneUrl ? ` (${report.controlPlaneUrl})` : ""}. Switching keeps everything on this machine; your devices sign in again at the new address.`));
     if (verb === "hosted") return cmdRelaySetup([]);
     if (!target) {
-      console.log(`Usage: bivy access server <url> [--relay <wss-url>]\n\nThe address of your Bivy server, e.g. https://bivy.example.com. Set one up with docs/self-host-kamal.md or docs/self-host-quickstart.md.`);
+      console.log(`Usage: bivy access server <url> [--relay <wss-url>]\n\nThe address of your Bivy server, e.g. https://bivy.example.com. Set one up with docs/self-host-quickstart.md.`);
       process.exitCode = EXIT.usage;
       return;
     }

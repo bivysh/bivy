@@ -78,6 +78,13 @@ export const test = base.extend<{ apiIsolation: void }, { webApp: WebApp }>({
         } } });
         return;
       }
+      // How the machine is reached (Settings → Machines, feature nudges): by
+      // default a relay-linked machine with nothing missing, so no nudge shows.
+      if (request.method() === "POST" && url.pathname === "/api/access/get") {
+        const all = { devices: 2, machines: 2, push: 2, sharing: 2 };
+        await route.fulfill({ json: { features: [], setups: [], active: ["local", "hosted"], reach: all, next: [] } });
+        return;
+      }
       unexpected.push(`${request.method()} ${request.url()}`);
       await route.fulfill({ status: 501, json: { error: "Missing browser-test API mock" } });
     });

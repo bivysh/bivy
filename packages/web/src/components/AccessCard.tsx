@@ -10,16 +10,17 @@ import { openSettings, setSettingsView } from "../settingsRoute.js";
 
 const REACH_DETAIL = ["", "on your tailnet", "from anywhere"];
 
-function useAccess(): { report: AccessReport | null; error: string } {
+function useAccess(enabled = true): { report: AccessReport | null; error: string } {
   const [report, setReport] = useState<AccessReport | null>(null);
   const [error, setError] = useState("");
   useEffect(() => {
+    if (!enabled) return;
     let live = true;
     controller.getAccess()
       .then((next) => { if (live) setReport(next); })
       .catch((e) => { if (live) setError(String((e as Error)?.message || e)); });
     return () => { live = false; };
-  }, []);
+  }, [enabled]);
   return { report, error };
 }
 
@@ -90,7 +91,9 @@ export function AccessCard() {
 
 /** "Push notifications need Bivy hosted or your own server", when this machine can't do `feature`. */
 export function AccessNudge({ feature, inSettings = false }: { feature: AccessFeatureId; inSettings?: boolean }) {
-  const { report } = useAccess();
+  // Through the relay a machine always has push and sharing; only a directly
+  // reached machine (Tailscale) can lack them, so only that one is asked.
+  const { report } = useAccess(controller.direct);
   if (!report || report.reach[feature] > 0) return null;
   const label = report.features.find((f) => f.id === feature)?.label ?? feature;
   return (

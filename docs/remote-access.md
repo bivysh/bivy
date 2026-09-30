@@ -21,8 +21,7 @@ and `bivy access` shows which you have, what it gives you, and the next step:
 - `bivy access local` turns remote access off. `bivy status` shows the same
   summary in one line, and the app shows it under Settings → Machines.
 
-See [Tailscale](tailscale.md), [Self-host with Kamal](self-host-kamal.md) and
-the [Compose installer](self-host-quickstart.md).
+See [Tailscale](tailscale.md) and the [server installer](self-host-quickstart.md).
 
 ## Three parts
 
