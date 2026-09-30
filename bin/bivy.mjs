@@ -2684,6 +2684,140 @@ answer later and 'bivy ask status <id>' checks without waiting.
   finish(await waitFor(started.id, timeout + 5));
 }
 
+// One JSON request to the local node for the commands below: starts the node if
+// needed and returns { status, body }, or fails in the shared error shape.
+async function nodeRequest(method, pathname, body, { json = false } = {}) {
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) return cliError({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable }, { json, paint: c.red });
+  let token;
+  try { token = await localDeviceToken(config); } catch { token = undefined; }
+  const res = await fetch(`${url(config)}${pathname}`, {
+    method,
+    headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  }).catch((error) => error);
+  if (res instanceof Error) return cliError({ code: "node_unreachable", message: `Could not reach the Bivy node: ${res.message}`, next: "bivy status", exit: EXIT.unavailable }, { json, paint: c.red });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+}
+
+// `bivy fork [session-id]` — the app's Fork on this machine: a new session with
+// the same conversation, agent and uncommitted work, on its own branch. Give it
+// its next task with `bivy send <new-id> "…"`.
+async function cmdFork(args = []) {
+  const usage = "Usage: bivy fork [session-id] [--model <provider/id>] [--json]";
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log(`${usage}\n\nCopy a session (default: this one, $BIVY_SESSION_ID) into a new session on this machine: the same conversation and agent, with uncommitted work carried into a fresh worktree on its own branch. --model switches the fork's model. Prints the new session's id; send it work with 'bivy send <id> "…"'. --json prints {"sessionId","fidelity"}.`);
+    return;
+  }
+  const json = wantsJson(args);
+  const fail = (error) => cliError(error, { json, paint: c.red });
+  const parsed = parseSessionArgs(args, ["--model", "--session"]);
+  if (parsed.error) return fail({ code: "usage", message: parsed.error, exit: EXIT.usage });
+  const sessionId = parsed.positional[0] ?? resolveAttachSessionId({ sessionFlag: parsed.one("--session"), env: process.env });
+  if (!sessionId) return fail({ code: "no_session", message: "No session to fork.", hint: "Pass a session id, or run inside an agent session ($BIVY_SESSION_ID).", next: "bivy sessions --json", exit: EXIT.usage });
+  // "provider/id" or a bare model id, as the fork command takes it.
+  const modelArg = parsed.one("--model");
+  const slash = modelArg?.indexOf("/") ?? -1;
+  const model = modelArg ? (slash > 0 ? { provider: modelArg.slice(0, slash), id: modelArg.slice(slash + 1) } : { provider: "", id: modelArg }) : undefined;
+  const { status, body } = await nodeRequest("POST", "/api/session/fork", { sessionId, ...(model ? { model } : {}) }, { json });
+  if (status === 404) return fail({ code: "node_outdated", message: "This node is older than 'bivy fork'.", next: "bivy update", exit: EXIT.unavailable });
+  if (status >= 400 || body.error) return fail({ code: /not found/i.test(body.error ?? "") ? "session_not_found" : "failed", message: `Fork failed: ${body.error || `HTTP ${status}`}`, exit: /not found/i.test(body.error ?? "") ? EXIT.notFound : EXIT.failed });
+  if (json) { console.log(JSON.stringify({ sessionId: body.sessionId, fidelity: body.fidelity, ...(body.missing?.length ? { missing: body.missing } : {}) })); return; }
+  console.log(c.green(`Forked into ${body.sessionId}.`) + ` Give it work with: bivy send ${body.sessionId} "…"`);
+}
+
+// `bivy approvals` — tool calls waiting for a person, and answering them. For a
+// supervising agent or script; the app shows the same requests as cards.
+async function cmdApprovals(args = []) {
+  const usage = "Usage: bivy approvals [list] [--json]\n       bivy approvals approve <id> [--json]\n       bivy approvals reject <id> [--json]";
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log(`${usage}\n\nList the tool calls on this node waiting for approval, or answer one. The app shows the same requests as cards; answering here resolves them there too.`);
+    return;
+  }
+  const json = wantsJson(args);
+  const fail = (error) => cliError(error, { json, paint: c.red });
+  const [action = "list", id] = args.filter((a) => !a.startsWith("-"));
+  if (action === "list") {
+    const { body } = await nodeRequest("GET", "/api/approvals", undefined, { json });
+    const pending = (Array.isArray(body) ? body : []).filter((a) => a.status === "pending");
+    if (json) { console.log(JSON.stringify(pending, null, 2)); return; }
+    if (!pending.length) { console.log("No approvals waiting."); return; }
+    for (const a of pending) console.log(`${c.cyan(a.id)}  ${a.toolName}${a.risk ? c.dim(` (${a.risk})`) : ""}  session ${a.sessionId}\n    ${a.reason}`);
+    return;
+  }
+  if ((action === "approve" || action === "reject") && id) {
+    const { status } = await nodeRequest("POST", `/api/approvals/${encodeURIComponent(id)}/${action}`, {}, { json });
+    if (status === 404) return fail({ code: "not_found", message: `No pending approval ${id}.`, next: "bivy approvals --json", exit: EXIT.notFound });
+    if (json) { console.log(JSON.stringify({ ok: true, id, approved: action === "approve" })); return; }
+    console.log(c.green(action === "approve" ? `Approved ${id}.` : `Rejected ${id}.`));
+    return;
+  }
+  fail({ code: "usage", message: usage, exit: EXIT.usage });
+}
+
+// `bivy issues` — the node's GitHub issue pickup: open issues labelled for an
+// agent, and starting a session on one (it claims the issue with a label).
+async function cmdIssues(args = []) {
+  const usage = "Usage: bivy issues [list] [--json]\n       bivy issues pickup <number> [--json]";
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log(`${usage}\n\nOpen GitHub issues labelled for an agent in this node's repository, and picking one up: pickup claims the issue with its claim label and starts a session on it. Needs GitHub issue pickup configured (see docs/github-work-queue.md).`);
+    return;
+  }
+  const json = wantsJson(args);
+  const fail = (error) => cliError(error, { json, paint: c.red });
+  const [action = "list", number] = args.filter((a) => !a.startsWith("-"));
+  if (action === "list") {
+    const { status, body } = await nodeRequest("GET", "/api/github/issues", undefined, { json });
+    if (status >= 400) return fail({ code: "not_configured", message: body.error || `HTTP ${status}`, exit: EXIT.failed });
+    if (json) { console.log(JSON.stringify(body, null, 2)); return; }
+    if (!body.issues?.length) { console.log(`No open issues labelled ${body.label} in ${body.repo}.`); return; }
+    for (const issue of body.issues) console.log(`${c.cyan(`#${issue.number}`)}  ${issue.title}`);
+    return;
+  }
+  if (action === "pickup" && number) {
+    const { status, body } = await nodeRequest("POST", `/api/github/issues/${encodeURIComponent(number)}/pickup`, {}, { json });
+    if (status >= 400) return fail({ code: status === 404 ? "not_found" : status === 409 ? "conflict" : "failed", message: body.error || `HTTP ${status}`, exit: status === 404 ? EXIT.notFound : status === 409 ? EXIT.conflict : status === 400 ? EXIT.usage : EXIT.failed });
+    if (json) { console.log(JSON.stringify(body)); return; }
+    console.log(c.green(`Picked up #${body.issue?.number} in ${body.repo}; a session is starting on it.`));
+    return;
+  }
+  fail({ code: "usage", message: usage, exit: EXIT.usage });
+}
+
+// `bivy instructions` — the account-wide instructions every agent session gets
+// (Settings → Agent instructions). `set` refuses to overwrite a newer edit
+// made elsewhere since the text was read.
+async function cmdInstructions(args = []) {
+  const usage = "Usage: bivy instructions [show] [--json]\n       bivy instructions set <file|-> [--json]\n       bivy instructions path";
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log(`${usage}\n\nThe account-wide instructions every agent session receives (the same text as Settings → Agent instructions). 'set' replaces them from a file, or from stdin with '-'; it applies to sessions started afterwards. 'path' prints the file on this machine.`);
+    return;
+  }
+  const json = wantsJson(args);
+  const fail = (error) => cliError(error, { json, paint: c.red });
+  const [action = "show", source] = args.filter((a) => a === "-" || !a.startsWith("-"));
+  if (action === "path") { console.log(path.join(appDir, "AGENTS.md")); return; }
+  const { status, body } = await nodeRequest("GET", "/api/node/settings", undefined, { json });
+  const current = body.agentInstructions;
+  if (status >= 400 || !current) return fail({ code: "node_outdated", message: "This node does not report agent instructions.", next: "bivy update", exit: EXIT.unavailable });
+  if (action === "show") {
+    if (json) { console.log(JSON.stringify({ text: current.text, updatedAt: current.updatedAt, bivyNote: current.bivyNote })); return; }
+    console.log(current.text || c.dim("(none yet)"));
+    return;
+  }
+  if (action === "set" && source) {
+    let text;
+    try { text = source === "-" ? fs.readFileSync(0, "utf8") : fs.readFileSync(path.resolve(source), "utf8"); }
+    catch (error) { return fail({ code: "file_not_found", message: `Could not read ${source}: ${error?.message || error}`, exit: EXIT.notFound }); }
+    const saved = await nodeRequest("POST", "/api/node/settings", { agentInstructions: text, agentInstructionsBaseUpdatedAt: current.updatedAt }, { json });
+    if (saved.status >= 400) return fail({ code: /another device/.test(saved.body.error ?? "") ? "conflict" : "invalid", message: saved.body.error || `HTTP ${saved.status}`, exit: /another device/.test(saved.body.error ?? "") ? EXIT.conflict : EXIT.usage });
+    if (json) { console.log(JSON.stringify({ ok: true, bytes: Buffer.byteLength(text) })); return; }
+    console.log(c.green("Saved. Sessions started from now on get these instructions."));
+    return;
+  }
+  fail({ code: "usage", message: usage, exit: EXIT.usage });
+}
+
 // Cross-agent / cross-machine delegation (docs/agent-delegation.md): hand a
 // self-contained task from this session to another agent, optionally on another
 // account machine, and get its answer back. Agent-agnostic — any agent with a
@@ -5860,6 +5994,18 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       break;
     case "notify":
       await cmdNotify(args);
+      break;
+    case "fork":
+      await cmdFork(args);
+      break;
+    case "approvals":
+      await cmdApprovals(args);
+      break;
+    case "issues":
+      await cmdIssues(args);
+      break;
+    case "instructions":
+      await cmdInstructions(args);
       break;
     case "ask":
       await cmdAsk(args);

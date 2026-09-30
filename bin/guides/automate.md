@@ -13,6 +13,7 @@ infrastructure code:
     bivy automation list --json
     bivy automation trigger <id-or-key>            # run one now
 
-Always `validate` and `plan` before `apply`, and show the user the plan when it
+To pause one, set `enabled: false` on it and apply. Always `validate` and
+`plan` before `apply`, and show the user the plan when it
 changes something they didn't ask for. `apply --prune` also removes automations
 the file no longer has. `bivy automation --help` has every flag.

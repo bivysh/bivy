@@ -19,8 +19,13 @@ not render; a remote `https://` image does.
 
 Publish it once; the user opens it from the chat:
 
-    bivy app run -- pnpm dev                     # a desktop app, no manifest
+    bivy app run -- cargo run                    # a desktop app, no manifest
     bivy app publish app.json                    # web server, static build, terminal
+
+A `terminal` view is a command the user can watch and type into from the app,
+such as a REPL or a log tail:
+
+    {"kind":"terminal","name":"Console","command":"bin/rails","args":["console"]}
 
 A manifest with a server Bivy starts on first open:
 

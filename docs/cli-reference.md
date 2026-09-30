@@ -423,6 +423,24 @@ bivy suggest "Add a GET /version endpoint that returns the package version and g
 
 `--json` prints `{"ok","id"}`.
 
+### `bivy approvals [list|approve <id>|reject <id>] [--json]`
+
+Tool calls on this node that are waiting for a person to approve them, and
+answering one. The app shows the same requests as cards, and an answer from
+either place resolves both. Useful for a supervising agent or a script.
+
+```bash
+bivy approvals --json
+bivy approvals approve 6f1c…
+```
+
+### `bivy issues [list|pickup <number>] [--json]`
+
+GitHub issue pickup from the command line: `list` shows the open issues
+labelled for an agent in this node's repository, and `pickup` claims one with
+its claim label and starts a session on it (exit 6 if it's already claimed).
+Needs issue pickup configured; see [github-work-queue.md](github-work-queue.md).
+
 ### `bivy takeover <termId|session-id>`
 
 "Continue as chat." Stops the native TUI running in a pinned run-terminal
@@ -532,6 +550,19 @@ bivy app shot --widths 390,1280
 bivy app present --note "Header now wraps on mobile"
 ```
 
+### `bivy fork [session-id] [--model <provider/id>] [--json]`
+
+The app's **Fork** on this machine: a new session with the same conversation and
+agent, and the source's uncommitted work carried into a fresh worktree on its
+own branch. The default is this session (`$BIVY_SESSION_ID`). `--model` switches
+the fork's model. Prints the new session's id, and `--json` prints
+`{"sessionId","fidelity"}`. Give the fork its next task with `bivy send`.
+
+```bash
+id=$(bivy fork --json | jq -r .sessionId)
+bivy send "$id" "Try the same fix with a streaming parser instead."
+```
+
 ### `bivy delegate "<task>" [flags]`
 
 Hands a self-contained task to another agent, optionally on another machine on
@@ -579,6 +610,19 @@ bivy config validate --project
 The project form creates/validates `.bivy/policy.yaml`: repository-owned sandbox
 and approval bounds, deterministic checks, and retry/fallback rules. See
 [config-as-code.md](config-as-code.md).
+
+### `bivy instructions [show|set <file|->|path] [--json]`
+
+The account-wide instructions every agent session receives: the same text as
+**Settings → Agent instructions**. `set` replaces them from a file, or from
+stdin with `-`, for sessions started afterwards. It refuses (exit 6) if they
+were changed on another device since they were read. `path` prints the file on
+this machine. See [agent-instructions.md](agent-instructions.md).
+
+```bash
+bivy instructions
+bivy instructions set team-agents.md
+```
 
 ### `bivy credentials <list|add|remove|sync|preset|ingest|config>`
 

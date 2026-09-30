@@ -15,4 +15,10 @@ Write the task so it stands on its own: the other agent does not see this chat.
 get a run id: `bivy delegate status <id>`, `bivy delegate wait <id>`.
 Code comes back by git: fetch the branch or review the PR.
 
+To try another approach from the same point, fork this session and give the
+copy its task (it gets its own branch):
+
+    id=$(bivy fork --json | jq -r .sessionId)
+    bivy send "$id" "Try the same fix with a streaming parser instead."
+
 For unattended work with checks and a receipt, see `bivy guide long-work`.
