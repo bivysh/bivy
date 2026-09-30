@@ -243,7 +243,20 @@ test("inspector reports console errors and pointed elements to the pill", async 
     await page.getByRole("button", { name: "Show Bivy controls" }).click();
     await expect(page.getByRole("radiogroup", { name: "Preview width" })).toBeHidden();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    // One row on a phone, and dragging the grip moves it to the top edge, for next time too.
+    const nav = page.getByRole("navigation", { name: "Bivy preview controls" });
+    expect((await nav.boundingBox())!.height).toBeLessThan(72);
+    const grip = (await page.getByRole("button", { name: "Hide Bivy controls" }).boundingBox())!;
+    await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(grip.x + grip.width / 2, 100, { steps: 8 });
+    await page.mouse.up();
+    await expect(nav).toBeVisible();
+    await expect.poll(async () => (await nav.boundingBox())!.y).toBeLessThan(40);
+    expect(await page.evaluate(() => localStorage.getItem("bivy-preview-edge"))).toBe("top");
     await page.screenshot({ path: testInfo.outputPath("pill-mobile-dark.png") });
+    await page.getByRole("button", { name: "Hide Bivy controls" }).press("ArrowDown");
+    await expect.poll(async () => (await nav.boundingBox())!.y).toBeGreaterThan(700);
     await page.getByRole("button", { name: "Point" }).click();
     await pointAt(content, content.getByRole("heading", { name: "Ledger" }));
     await expect(draftBox).toBeFocused();
