@@ -1,7 +1,8 @@
 # Optional VPS self-host quickstart
 
 **Using a container platform or your own deployment tooling?** Start with
-[Deploy Bivy anywhere](deploy-images.md). It uses the same images and provides
+[Deploy Bivy anywhere](deploy-images.md). Deploying with Kamal? See
+[Self-host with Kamal](self-host-kamal.md). It uses the same images and provides
 browser owner setup without SSH. This guide is the optional Compose convenience
 path for a bare VPS.
 

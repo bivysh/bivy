@@ -40,6 +40,7 @@ import { nativeResumeRef, resolveSessionsLimit, truncateSavedSessions } from "./
 import { renderManagedBlock, upsertManagedBlock, removeManagedBlock, rcFileForShell } from "./shim-path.mjs";
 import { removeInstallAndState } from "./uninstall-paths.mjs";
 import { findAvailablePort, reconcilePort } from "./port-picker.mjs";
+import { parseTailscaleStatus, serveConflict, serveFailureHint, serveOffArgs, serveOnArgs, serveState } from "./tailscale.mjs";
 import { resolveAttachSessionId } from "./attach-session-id.mjs";
 import { detectInstallKind as classifyInstallKind, managedInstall, npmGlobalPrefix } from "./install-kind.mjs";
 import { hasConfiguredService as configuredServiceExists } from "./service-state.mjs";
@@ -2522,18 +2523,18 @@ async function cmdContext(args = []) {
   console.log(`\nEverything else: ${c.cyan("bivy help")} (or ${c.cyan("bivy help --json")}).`);
 }
 
-// `bivy suggest "<task>" [--title "…"] [--session <id>]` — propose a task the
-// user can start in one tap, beside this session or in it. For an agent
+// `bivy suggest "<task>" [--title "…"] [--run here|subagents|new] [--session <id>]`
+// — propose a task the user can start in one tap, in this session or beside it. For an agent
 // offering next steps: write the task as a complete instruction.
 async function cmdSuggest(args = []) {
-  const usage = 'Usage: bivy suggest "<task>" [--title "short label"] [--session <id>] [--json]';
+  const usage = 'Usage: bivy suggest "<task>" [--title "short label"] [--run here|subagents|new] [--session <id>] [--json]';
   if (args.includes("-h") || args.includes("--help")) {
-    console.log(`${usage}\n\nPost a task the user can start in one tap, in this session or in a parallel one that works in its own copy of the project. Write it as a complete instruction, with paths relative to the project root. --json prints {"ok","id"}.`);
+    console.log(`${usage}\n\nPost a task the user can start in one tap: in this session, through your sub-agents, or in a parallel session that works in its own copy of the project. Write it as a complete instruction, with paths relative to the project root.\n\n--run says where you recommend running it, which becomes the card's main button: here (builds on this conversation), subagents (independent tasks you can split across your own sub-agents; only if you have them), or new (bigger independent work the user will want to follow in its own session). Without it, one card recommends here and several recommend new.\n\n--json prints {"ok","id"}.`);
     return;
   }
   const json = wantsJson(args);
   const fail = (error) => cliError(error, { json, paint: c.red });
-  const flagsWithValue = new Set(["--session", "--title"]);
+  const flagsWithValue = new Set(["--session", "--title", "--run"]);
   const flag = (name) => {
     const i = args.indexOf(name);
     return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
@@ -2541,10 +2542,12 @@ async function cmdSuggest(args = []) {
   const text = args.filter((a, i) => !a.startsWith("-") && !(i > 0 && flagsWithValue.has(args[i - 1]))).join(" ").trim();
   const sessionId = resolveAttachSessionId({ sessionFlag: flag("--session"), env: process.env });
   if (!text) return fail({ code: "usage", message: usage, exit: EXIT.usage });
+  const run = flag("--run");
+  if (run !== undefined && !["here", "subagents", "new"].includes(run)) return fail({ code: "usage", message: `--run is here, subagents or new (got "${run}").`, exit: EXIT.usage });
   if (!sessionId) return fail({ code: "no_session", message: "No session id.", hint: "Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.", next: "bivy sessions --json", exit: EXIT.usage });
   const config = loadConfig();
   if (!(await ensureNodeRunning(config))) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable });
-  const res = await sessionPost(config, sessionId, "suggest", { text, title: flag("--title") }).catch((error) => error);
+  const res = await sessionPost(config, sessionId, "suggest", { text, title: flag("--title"), run }).catch((error) => error);
   if (res instanceof Error) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node: ${res.message}`, next: "bivy status", exit: EXIT.unavailable });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) return fail(sessionHttpError("Suggest", res.status, body));
@@ -5679,6 +5682,122 @@ async function cmdLinkPhone(args = []) {
   }
 }
 
+const tailscaleConfigPath = path.join(appDir, "tailscale.json");
+const LOCAL_TOKEN_NAMES = ["Bivy CLI", "Local Remote UI"];
+
+function runTailscale(args) {
+  const res = spawnSync("tailscale", args, { encoding: "utf8" });
+  if (res.error?.code === "ENOENT") return null;
+  return { ok: res.status === 0, stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
+}
+
+async function printPairLink(config) {
+  const data = await localApi(config, "/api/auth/pair-codes", { method: "POST", body: "{}" });
+  if (!data?.url) throw new Error("The node did not return a pairing link.");
+  const qr = terminalQr(data.url);
+  if (qr) console.log(qr);
+  console.log(`\nOpen on your phone (single use, 10 minutes):\n${c.cyan(data.url)}\n`);
+}
+
+// `bivy tailscale` — reach this machine from anywhere on your tailnet with no
+// control plane or relay: `tailscale serve` puts HTTPS on the machine's ts.net
+// name and forwards it to the node's direct listener, which serves the web app.
+async function cmdTailscale(args = []) {
+  const [verb = "on"] = args;
+  if (args.includes("-h") || args.includes("--help") || !["on", "pair", "status", "devices", "revoke", "off"].includes(verb)) {
+    console.log(`Usage: bivy tailscale [on|pair|status|devices|revoke <id>|off]
+
+  on           Serve this machine's Bivy on https://<machine>.<tailnet>.ts.net (tailnet only) and show a pairing link
+  pair         Show a new one-time pairing link for another device
+  status       Show the Tailscale address and whether it is served
+  devices      List the devices holding a token for this node
+  revoke <id>  Revoke a device's token and disconnect it
+  off          Stop serving Bivy over Tailscale`);
+    return;
+  }
+  const config = loadConfig();
+  if (!(await isReachable(config))) {
+    console.log(c.yellow(`The node is not reachable at ${url(config)}. Start it first: ${c.cyan(config.service ? "bivy restart" : "bivy start")}`));
+    process.exitCode = EXIT.unavailable;
+    return;
+  }
+  const saved = (() => { try { return JSON.parse(fs.readFileSync(tailscaleConfigPath, "utf8")); } catch { return null; } })();
+
+  if (verb === "pair") {
+    if (!saved) { console.log(`Tailscale access is off. Turn it on with ${c.cyan("bivy tailscale")}.`); process.exitCode = EXIT.failed; return; }
+    await printPairLink(config);
+    return;
+  }
+  if (verb === "devices") {
+    // The CLI and loopback web client mint their own tokens on this machine; list them as a count.
+    const all = (await localApi(config, "/api/auth/devices")) ?? [];
+    const devices = all.filter((device) => !LOCAL_TOKEN_NAMES.includes(device.name));
+    for (const device of devices) console.log(`${c.cyan(device.id)}  ${device.name}${device.createdAt ? c.dim(`  paired ${device.createdAt}`) : ""}`);
+    if (!devices.length) console.log("No paired devices.");
+    if (all.length > devices.length) console.log(c.dim(`(+${all.length - devices.length} tokens used on this machine by the CLI)`));
+    return;
+  }
+  if (verb === "revoke") {
+    const id = args[1];
+    if (!id) { console.log("Usage: bivy tailscale revoke <id>  (ids from 'bivy tailscale devices')"); process.exitCode = EXIT.usage; return; }
+    const res = await fetch(`${url(config)}/api/auth/devices/${encodeURIComponent(id)}`, { method: "DELETE", headers: { authorization: `Bearer ${await localDeviceToken(config)}` } });
+    if (!res.ok) { console.log(c.yellow(`No device ${id}.`)); process.exitCode = EXIT.notFound; return; }
+    console.log(`${c.green("✓")} Revoked ${id}.`);
+    return;
+  }
+  if (verb === "status") {
+    console.log(saved ? `${c.green("✓")} Served on ${c.cyan(`https://${saved.hostname}`)} (tailnet only) → 127.0.0.1:${saved.port}` : `Tailscale access is off. Turn it on with ${c.cyan("bivy tailscale")}.`);
+    return;
+  }
+  if (verb === "off") {
+    if (saved) {
+      const state = serveState(runTailscale(["serve", "status", "--json"])?.stdout, saved.hostname);
+      if (state.target === `http://127.0.0.1:${saved.port}`) runTailscale(serveOffArgs());
+    }
+    fs.rmSync(tailscaleConfigPath, { force: true });
+    await localApi(config, "/api/direct/reload", { method: "POST", body: "{}" });
+    console.log(`${c.green("✓")} Bivy is no longer served over Tailscale. Paired devices keep their tokens; see them with 'bivy tailscale devices' and revoke with 'bivy tailscale revoke <id>'.`);
+    return;
+  }
+
+  const status = runTailscale(["status", "--json"]);
+  if (!status) {
+    console.log(`${c.yellow("Tailscale isn't installed.")} Install it from ${c.cyan("https://tailscale.com/download")} (Arch: ${c.cyan("sudo pacman -S tailscale && sudo systemctl enable --now tailscaled")}), sign in with ${c.cyan("sudo tailscale up")}, then run ${c.cyan("bivy tailscale")} again.`);
+    process.exitCode = EXIT.unavailable;
+    return;
+  }
+  const { running, hostname } = parseTailscaleStatus(status.stdout);
+  if (!running || !hostname) {
+    console.log(`${c.yellow("Tailscale isn't connected.")} Sign in with ${c.cyan("sudo tailscale up")}, then run ${c.cyan("bivy tailscale")} again.`);
+    process.exitCode = EXIT.unavailable;
+    return;
+  }
+  const port = saved?.port ?? await findAvailablePort(config.port + 2, "127.0.0.1");
+  const conflict = serveConflict(serveState(runTailscale(["serve", "status", "--json"])?.stdout, hostname), port);
+  if (conflict) {
+    console.log(c.yellow(conflict));
+    process.exitCode = EXIT.conflict;
+    return;
+  }
+  fs.writeFileSync(tailscaleConfigPath, `${JSON.stringify({ port, hostname }, null, 2)}\n`, { mode: 0o600 });
+  const reload = await localApi(config, "/api/direct/reload", { method: "POST", body: "{}" });
+  const served = runTailscale(serveOnArgs(port));
+  if (!served?.ok) {
+    fs.rmSync(tailscaleConfigPath, { force: true });
+    await localApi(config, "/api/direct/reload", { method: "POST", body: "{}" }).catch(() => {});
+    console.error(c.red(`tailscale serve failed: ${(served?.stderr || served?.stdout || "").trim()}`));
+    const hint = serveFailureHint(served?.stderr);
+    if (hint) console.log(hint);
+    process.exitCode = EXIT.failed;
+    return;
+  }
+  console.log(c.bold(c.green(`\n  Bivy is on https://${hostname}\n`)));
+  console.log(c.dim("  Only devices on your tailnet can reach it. Pair each one once with a link from 'bivy tailscale pair'."));
+  if (!reload?.webApp) console.log(c.yellow("  This install has no built web app, so the address serves the API only. Run 'pnpm run build:web' in a source checkout."));
+  console.log("");
+  await printPairLink(config);
+}
+
 function printUninstallHelp() {
   console.log(`
 ${c.bold("bivy uninstall")} — remove Bivy and all its data from this machine
@@ -6275,6 +6394,9 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       break;
     case "link":
       await cmdLinkPhone(args);
+      break;
+    case "tailscale":
+      await cmdTailscale(args);
       break;
     case "relay:setup":
       await cmdRelaySetup(args);

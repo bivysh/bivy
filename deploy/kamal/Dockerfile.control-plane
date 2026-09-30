@@ -1,0 +1,5 @@
+# Kamal deploys an image carrying its `service` label. This adds that label to
+# the published control-plane image instead of rebuilding Bivy from source, so
+# a deploy runs exactly the release it names (BIVY_VERSION).
+ARG BIVY_VERSION
+FROM ghcr.io/bivysh/bivy-control-plane:${BIVY_VERSION}

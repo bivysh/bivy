@@ -1,0 +1,3 @@
+# See Dockerfile.control-plane: the published relay image, labelled by Kamal.
+ARG BIVY_VERSION
+FROM ghcr.io/bivysh/bivy-relay:${BIVY_VERSION}

@@ -153,6 +153,21 @@ export function isLoopbackAddress(address: string | undefined | null): boolean {
   return addr === "127.0.0.1" || addr === "::1" || addr === "localhost";
 }
 
+// Sockets accepted by a listener that fronts remote callers through a local
+// proxy (`tailscale serve` forwards tailnet traffic from 127.0.0.1). Their peer
+// address is loopback, but the caller is not, so they never get loopback trust.
+const remoteSockets = new WeakSet<object>();
+
+/** Treat every connection `server` accepts as remote, whatever its peer address. */
+export function markRemoteListener(server: { on(event: "connection", listener: (socket: object) => void): unknown }): void {
+  server.on("connection", (socket) => remoteSockets.add(socket));
+}
+
+/** True when a request physically arrived over loopback from a local caller. */
+export function isLoopbackRequest(req: IncomingMessage): boolean {
+  return !!req.socket && !remoteSockets.has(req.socket) && isLoopbackAddress(req.socket.remoteAddress);
+}
+
 export function extractToken(headerValue: string | undefined | null): string | null {
   if (!headerValue) return null;
   const match = /^Bearer\s+(.+)$/i.exec(headerValue.trim());
@@ -181,7 +196,7 @@ export function tokenFromRequest(req: IncomingMessage): string | null {
  * `/api/auth/bootstrap`) can rely on it even when the general bypass in
  * `isAuthorized` is off. */
 export function resolveAuth(identity: NodeIdentity, req: IncomingMessage): AuthContext {
-  const loopback = isLoopbackAddress(req.socket?.remoteAddress);
+  const loopback = isLoopbackRequest(req);
   const deviceId = identity.verifyToken(tokenFromRequest(req));
   return { deviceId, loopback };
 }
@@ -202,7 +217,8 @@ export function isAuthorized(ctx: AuthContext): boolean {
  * web client (?local=1), a LAN device browsing the node directly, or CLI/native
  * clients (no Origin).
  * Remote phones reach the node through the relay, which the node dials
- * *outbound* — those never arrive here as inbound upgrades. So we allow only
+ * *outbound* — those never arrive here as inbound upgrades — or over Tailscale
+ * on the `*.ts.net` name, which counts as local here. So we allow only
  * local/private hostnames and reject a public Host (rebinding) or public Origin
  * (cross-site). Escape hatches: BIVY_ALLOWED_HOSTS (comma-separated extra
  * hostnames, e.g. a reverse-proxy domain) and BIVY_ALLOW_ANY_ORIGIN=1.
@@ -306,7 +322,7 @@ export function authMiddleware(identity: NodeIdentity, sessionTokens?: SessionTo
         return;
       }
       sessionTokens.used?.(sessionId, call);
-      (req as Request & { auth: AuthContext }).auth = { deviceId: null, loopback: isLoopbackAddress(req.socket?.remoteAddress), sessionId };
+      (req as Request & { auth: AuthContext }).auth = { deviceId: null, loopback: isLoopbackRequest(req), sessionId };
       next();
       return;
     }

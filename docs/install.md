@@ -355,4 +355,4 @@ sudo journalctl -u bivy -f
 3. Choose **Link remote device** and scan/open the hosted sign-in link.
 4. On iOS Safari, tap Share → Add to Home Screen.
 
-The phone/browser never connects directly to the node over LAN/Wi-Fi; it uses the hosted control plane + relay path.
+With this setup the phone/browser never connects directly to the node over LAN/Wi-Fi; it uses the hosted control plane + relay path. To connect directly with no server in between, use [Tailscale](tailscale.md) (`bivy tailscale`).

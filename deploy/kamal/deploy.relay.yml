@@ -1,0 +1,51 @@
+# Kamal 2: Bivy's WebSocket relay, sharing the control plane's server, domain
+# and kamal-proxy at /relay. Deploy the control plane first (deploy.yml).
+#
+#   kamal setup -c deploy/kamal/deploy.relay.yml
+
+service: bivy-relay
+image: bivy-relay
+
+servers:
+  web:
+    hosts:
+      - <%= ENV.fetch("BIVY_HOST") %>
+
+proxy:
+  host: <%= ENV.fetch("BIVY_DOMAIN") %>
+  # wss://<domain>/relay/…, with /relay stripped before it reaches the relay.
+  path_prefix: /relay
+  app_port: 4500
+  ssl: true
+  # Relay traffic is long-lived WebSocket streams; pass it straight through.
+  buffering:
+    requests: false
+    responses: false
+  healthcheck:
+    path: /healthz
+
+registry:
+  server: localhost:5555
+
+builder:
+  arch: <%= ENV.fetch("BIVY_ARCH", "amd64") %>
+  context: deploy/kamal
+  dockerfile: deploy/kamal/Dockerfile.relay
+  args:
+    BIVY_VERSION: <%= ENV.fetch("BIVY_VERSION") %>
+
+env:
+  clear:
+    NODE_ENV: production
+    PORT: "4500"
+    CONTROL_PLANE_URL: http://bivy-control-plane:4400
+  secret:
+    - RELAY_SECRET
+
+aliases:
+  logs: app logs -f
+
+secrets_path: deploy/kamal/secrets
+
+ssh:
+  user: <%= ENV.fetch("BIVY_SSH_USER", "root") %>

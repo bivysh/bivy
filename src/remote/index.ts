@@ -14,3 +14,5 @@ export { RelayConnector, loadRelayConfig } from "./relay-client.js";
 export type { ClientMessage, RelayConfig } from "./relay-client.js";
 export { soloCredentials, buildDialUrl } from "./solo.js";
 export type { SoloCredentials } from "./solo.js";
+export { loadDirectListenerConfig, DIRECT_CONFIG_FILE } from "./direct.js";
+export type { DirectListenerConfig } from "./direct.js";
