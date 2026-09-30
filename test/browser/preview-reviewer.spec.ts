@@ -22,7 +22,7 @@ for (const theme of themes) test(`public preview sends annotations as notes with
   });
   await context.addInitScript(() => sessionStorage.setItem('bivy-preview', JSON.stringify({ name: 'Public website preview', origin: 'http://preview.test', reviewer: true, badge: true })));
   await page.goto(`${origin}/shell`);
-  await expect(page.getByRole('button', { name: 'Draw', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Mark', exact: true })).toBeEnabled();
   // "Made with Bivy" sits under the app, and the floating tools stay clear of it.
   const badge = page.getByRole('link', { name: /Made with Bivy/ });
   await expect(badge).toHaveAttribute('href', 'https://bivy.sh/?ref=preview');
@@ -32,14 +32,14 @@ for (const theme of themes) test(`public preview sends annotations as notes with
   await expect(page.locator('#back')).toBeHidden();
   await expect(page.locator('#mic')).toBeHidden();
   await expect(page.locator('#compare-btn')).toBeHidden();
+  await expect(page.locator('#update')).toBeHidden();
   await page.screenshot({ path: info.outputPath(`public-controls-${theme}.png`) });
-  await page.getByRole('button', { name: 'Draw', exact: true }).click();
-  for (const tool of ['Pen', 'Box']) {
-    await page.getByRole('radio', { name: tool, exact: true }).click();
-    await page.mouse.move(30, 30); await page.mouse.down();
-    await page.mouse.move(210, 150, { steps: 8 }); await page.mouse.up();
+  await page.getByRole('button', { name: 'Mark', exact: true }).click();
+  for (let i = 0; i < 2; i++) {
+    await page.mouse.move(30, 30 + i * 30); await page.mouse.down();
+    await page.mouse.move(210, 150 + i * 30, { steps: 8 }); await page.mouse.up();
   }
-  await expect(page.locator('#ink .mark')).toHaveCount(2);
+  await expect(page.locator('#ink polyline.mark')).toHaveCount(2);
   await page.screenshot({ path: info.outputPath(`public-marks-${theme}.png`) });
   await page.getByRole('button', { name: 'Done', exact: true }).click();
   const note = page.getByRole('textbox', { name: 'What should change?' });
@@ -56,15 +56,19 @@ for (const theme of themes) test(`public preview sends annotations as notes with
   release();
   await expect(page.locator('#note-status')).toContainText('wait a moment');
   await expect(note).toHaveValue('Make the title and button easier to read');
-  expect(submissions[0].mark.strokes.map((stroke: any) => stroke.tool)).toEqual(['pen', 'box']);
+  expect(submissions[0].mark.strokes.map((stroke: any) => stroke.tool)).toEqual(['pen', 'pen']);
   fail = false;
   await page.getByRole('button', { name: 'Send note', exact: true }).click();
   await expect(page.locator('#draft')).toBeHidden();
   await expect(page.locator('#status')).toContainText('picture sent');
   await expect(page.locator('#ink')).toBeHidden();
-  await expect(page.getByRole('button', { name: 'Point', exact: true })).toBeFocused();
-  await page.getByRole('button', { name: 'Point', exact: true }).click();
-  await page.frameLocator('#app').getByRole('button', { name: 'Buy a ticket' }).click({ force: true });
+  await expect(page.getByRole('button', { name: 'Mark', exact: true })).toBeFocused();
+  // A long press on the button is the whole gesture: it marks it and opens the note.
+  const buy = (await page.frameLocator('#app').getByRole('button', { name: 'Buy a ticket' }).boundingBox())!;
+  await page.mouse.move(buy.x + buy.width / 2, buy.y + buy.height / 2);
+  await page.mouse.down();
+  await expect(page.locator('#ink')).toBeVisible();
+  await page.mouse.up();
   await expect(note).toBeFocused();
   screenshot = false;
   await note.fill('Use a clearer label');

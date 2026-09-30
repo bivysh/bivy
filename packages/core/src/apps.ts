@@ -105,7 +105,7 @@ export type OpenAppViewResult = { kind: "web"; url: string } | { kind: "terminal
 export interface AppOffer { port: number; pid: number; command: string }
 export interface SessionAppOffersResult { offers: AppOffer[] }
 /** A reusable preview link; a bearer capability until `expiresAt` or revoke.
- * `controls`: people who open it get the reviewer tools (Point, Draw, notes). */
+ * `controls`: people who open it get the reviewer tools (marking, notes). */
 export interface ShareAppViewResult { url: string; expiresAt: number; controls: boolean }
 /** How long a new share link works. Links live in the machine's memory, so a
  * restart ends them sooner. Adding a choice means adding a row. */
