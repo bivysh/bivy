@@ -609,8 +609,11 @@ addEventListener('pointerdown',e=>{if(!menu.hidden&&!menu.contains(e.target)&&!m
 addEventListener('blur',()=>openMenu(false));
 $('edge').onclick=()=>edge(dock.dataset.edge==='top'?'bottom':'top',true);
 more.onkeydown=e=>{if(e.key==='ArrowUp'||e.key==='ArrowDown'){e.preventDefault();edge(e.key==='ArrowUp'?'top':'bottom',true);}};
-$('hide').onclick=()=>{dock.hidden=true;$('show').hidden=false;$('show').focus();};
-$('show').onclick=()=>{dock.hidden=false;$('show').hidden=true;more.focus();};
+/** Out of the way means out of the way: with the controls hidden, a long press
+ *  belongs to the app again (a canvas, a map, anything with its own). */
+const arm=on=>frame.contentWindow?.postMessage({type:'bivy:arm',on},metadata.origin);
+$('hide').onclick=()=>{dock.hidden=true;$('show').hidden=false;$('show').focus();arm(false);};
+$('show').onclick=()=>{dock.hidden=false;$('show').hidden=true;more.focus();arm(true);};
 // Width (desktop only: a phone is already the width it is)
 for(const b of menu.querySelectorAll('[data-lens]'))b.onclick=()=>{
   stage.dataset.lens=b.dataset.lens;

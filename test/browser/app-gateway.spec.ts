@@ -256,9 +256,16 @@ test("inspector reports console errors and pointed elements to the pill", async 
 
     await page.setViewportSize({ width: 390, height: 844 });
     const nav = page.getByRole("navigation", { name: "Bivy preview controls" });
-    // Controls collapse out of the app's way and come back.
+    // Controls collapse out of the app's way and come back — and out of the way
+    // includes the gesture, so an app with its own long press gets it back.
     await fromMenu(page, "Hide controls");
     await expect(nav).toBeHidden();
+    const save = (await content.getByRole("button", { name: "Add transaction" }).boundingBox())!;
+    await page.mouse.move(save.x + save.width / 2, save.y + save.height / 2);
+    await page.mouse.down();
+    await page.waitForTimeout(700);
+    await page.mouse.up();
+    await expect(page.locator("#ink")).toBeHidden();
     await page.getByRole("button", { name: "Show Bivy controls" }).click();
     // A phone is already the width it is, so the choice isn't offered there.
     await page.getByRole("button", { name: /Preview options/ }).click();

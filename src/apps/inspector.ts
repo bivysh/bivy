@@ -158,7 +158,7 @@ addEventListener('message',e=>{
 // layer cannot receive a gesture that began in this document — and its points
 // are streamed to the shell.
 if(framed){
-  let hold=null;
+  let hold=null,armed=true;
   const page=e=>[Math.round(e.clientX+scrollX),Math.round(e.clientY+scrollY)];
   // A long press already means something where the reader is typing or selecting.
   const theirs=el=>{
@@ -190,7 +190,7 @@ if(framed){
         rect:{x:Math.round(r.left+scrollX),y:Math.round(r.top+scrollY),width:Math.round(r.width),height:Math.round(r.height)}}:undefined}));
   };
   addEventListener('pointerdown',e=>{
-    if(hold?.marking||layer||(host&&e.composedPath?.().includes(host))||!e.isPrimary||theirs(e.target))return;
+    if(!armed||hold?.marking||layer||(host&&e.composedPath?.().includes(host))||!e.isPrimary||theirs(e.target))return;
     clear();
     hold={id:e.pointerId,client:[e.clientX,e.clientY],point:page(e),before:interactedBefore,timer:setTimeout(begin,450)};
   },true);
@@ -207,6 +207,13 @@ if(framed){
   },true);
   // Scrolling is never a mark, however still the finger was.
   addEventListener('scroll',()=>{if(hold&&!hold.marking)clear();},true);
+  // Hiding Bivy's controls means "let me use the app": an app with its own
+  // long press (a canvas, a map) gets it back, and showing them arms it again.
+  addEventListener('message',e=>{
+    if(e.origin!==SHELL||e.source!==parent||e.data?.type!=='bivy:arm')return;
+    armed=e.data.on!==false;
+    if(!armed&&hold&&!hold.marking)clear();
+  });
   // The app must not act on the gesture it already owns: no click on release,
   // no scroll, no selection, no callout.
   for(const type of ['click','auxclick','dblclick','contextmenu','mousedown','mouseup','touchstart','touchmove','touchend','selectstart'])

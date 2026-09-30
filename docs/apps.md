@@ -682,7 +682,9 @@ top/bottom**, and **Hide controls**, which collapses the pill to a small
   **Add to chat** puts your words and that context in the composer with a
   picture of what you marked, as an ordinary image attachment you can open or
   remove. A long press inside a field, or over text you are selecting, is left
-  to the app — a long press already means something there.
+  to the app — a long press already means something there. **Hide controls**
+  gives it back entirely, for an app with its own long press (a canvas, a map);
+  showing them arms it again.
 - **Speaking a note** (in the preview drawer inside Bivy): the note box has a
   mic. Hold it and speak, then let go; or tap to start and tap again to stop. A
   long press that lifts where it landed opens the note already listening. What
