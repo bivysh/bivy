@@ -17,6 +17,7 @@
 // is shared.
 
 import nodePath from "node:path";
+import { bivySessionEnv } from "../runtime/session-env.js";
 
 export interface McpServerSpec {
   /** stdio server: executable to spawn. */
@@ -133,7 +134,9 @@ export function parseProxiedArgs(args: string[]): { server?: string; command: st
 
 /** The server spec that launches `bivy mcp-serve` for a session. */
 export function bivyToolsServerSpec(opts: { sessionId: string; endpoint?: string; bivyCommand?: string; instructionsFile?: string }): McpServerSpec {
-  const env: Record<string, string> = { BIVY_SESSION_ID: opts.sessionId };
+  // Some agents start MCP servers with a trimmed environment, so the session's
+  // token travels in the spec rather than being inherited.
+  const env: Record<string, string> = { ...bivySessionEnv(opts.sessionId) };
   if (opts.endpoint) env.BIVY_MCP_ENDPOINT = opts.endpoint;
   // The user's account-wide instructions, advertised as the server's MCP
   // `instructions` — the best-effort channel for agents with no native one.

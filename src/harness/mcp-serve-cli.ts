@@ -115,11 +115,12 @@ export async function runAttachToChat(
 export interface CliResult { code: number; stdout: string; stderr: string }
 export type RunBivy = (args: string[]) => Promise<CliResult>;
 
-/** Run this install's `bivy` (bin/bivy.mjs, two levels up from src/ or dist/). */
-function defaultRunBivy(sessionId: string): RunBivy {
+/** Run this install's `bivy` (bin/bivy.mjs, two levels up from src/ or dist/),
+ *  against the node that injected this server. */
+function defaultRunBivy(sessionId: string, endpoint: string): RunBivy {
   const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../bin/bivy.mjs");
   return (args) => new Promise((resolve) => {
-    const child = spawn(process.execPath, [cli, ...args], { env: { ...process.env, BIVY_SESSION_ID: sessionId, NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [cli, ...args], { env: { ...process.env, BIVY_SESSION_ID: sessionId, BIVY_NODE_URL: endpoint, NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
@@ -167,12 +168,12 @@ function readInstructions(file: string | undefined): string | undefined {
 export function createBivyMcpServer(deps: McpServeDeps = {}): Server {
   const endpoint = deps.endpoint ?? process.env.BIVY_MCP_ENDPOINT ?? DEFAULT_ENDPOINT;
   const sessionId = deps.sessionId ?? process.env.BIVY_SESSION_ID ?? process.env.BIVY_MCP_SESSION ?? "";
-  const token = deps.token ?? process.env.BIVY_MCP_TOKEN ?? undefined;
+  const token = deps.token ?? process.env.BIVY_MCP_TOKEN ?? process.env.BIVY_SESSION_TOKEN ?? undefined;
   const fetchImpl = deps.fetchImpl ?? (globalThis.fetch as unknown as FetchLike);
 
   const instructions = readInstructions(deps.instructionsFile ?? process.env.BIVY_AGENT_INSTRUCTIONS_FILE);
 
-  const runBivy = deps.runBivy ?? defaultRunBivy(sessionId);
+  const runBivy = deps.runBivy ?? defaultRunBivy(sessionId, endpoint);
   let tools: Promise<CliTool[]> | undefined;
   const generated = () => (tools ??= cliTools(runBivy));
 

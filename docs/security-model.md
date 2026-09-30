@@ -243,6 +243,31 @@ the git credential helper uses to fetch short-lived repo tokens.
 `BIVY_OPEN_BOOTSTRAP=1` drops the secret requirement on a trusted single-user
 machine.
 
+**Agent sessions get a session token.** Each agent process the node starts has
+`BIVY_SESSION_TOKEN` in its environment, next to `BIVY_SESSION_ID`
+(`bivySessionEnv`, `src/runtime/session-env.ts`). The `bivy` CLI and the MCP
+tools use it for that session's own commands (`attach`, `suggest`, `notify`,
+`ask`, `context`, `app`, `fork`, `delegate`), so those work when the loopback
+bypass is off, and for an agent that can't read `.bivy/bootstrap.json`.
+
+- A token is `bst_<session id>.<HMAC-SHA256>` under a key held only in the
+  daemon's memory. It is never stored by the node, and it stops working when the
+  daemon restarts.
+- It reaches only the routes in `SESSION_TOKEN_ROUTES`
+  (`src/session/session-tokens.ts`), and only for its own session, even over
+  loopback. Anything else is refused with 403.
+- Each mutating call it makes is recorded in the audit log as `agent.call` with
+  the session id, so `bivy audit --session <id>` shows what the agent did
+  through Bivy.
+- For agents configured through an MCP file, the token is written into the
+  injected `bivy` server entry, because some agents start MCP servers with a
+  trimmed environment.
+
+A session token narrows what a request carrying it can do. It is not a sandbox:
+an agent running as the node's user can still read the bootstrap secret, or
+call loopback without a token where the bypass is on. Isolation comes from the
+session's sandbox tier (see [Sandboxing](#sandboxing)).
+
 **Cross-origin and DNS rebinding.** Because loopback callers may be tokenless,
 any web page you visit could otherwise open a cross-origin WebSocket to
 `ws://127.0.0.1:4317/ws` and drive the agent. The actionable surface (`/api`,

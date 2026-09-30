@@ -57,6 +57,10 @@ get shell completion. Agents in a session should start with `bivy context`.
   (via the installed background service, or as a detached background process).
 - Commands that need the node authenticate with a device token minted from
   `<data-dir>/bootstrap.json`. If that file is missing, restart the node.
+  Inside an agent session, the session commands (`attach`, `suggest`, `notify`,
+  `ask`, `context`, `app`, `fork`, `delegate`) use the session's own
+  `$BIVY_SESSION_TOKEN` instead; see
+  [security-model.md](security-model.md#local-daemon-exposure-cross-origin-and-dns-rebinding).
 - `<data-dir>` is the Bivy state directory. See
   [configuration.md](configuration.md) for how it is resolved.
 - Every command accepts `--help`. A mistyped command exits 2 and suggests the

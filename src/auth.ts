@@ -28,6 +28,19 @@ export interface AuthContext {
   deviceId: string | null;
   /** True when the request physically arrived over loopback (127.0.0.1/::1). */
   loopback: boolean;
+  /** Set when an agent session's token was presented (src/session/session-tokens.ts). */
+  sessionId?: string;
+}
+
+/** How the middleware recognizes and limits an agent session's token. */
+export interface SessionTokenScope {
+  /** The session a token speaks for, or undefined when it isn't a session token. */
+  verify(token: string | null): string | undefined;
+  /** True for a token that looks like a session token, valid or not. */
+  claims(token: string | null): boolean;
+  allows(sessionId: string, req: { method: string; path: string; body?: unknown }): boolean;
+  /** Called for each allowed request, e.g. to audit what the agent did. */
+  used?(sessionId: string, req: { method: string; path: string }): void;
 }
 
 interface MultiUserHostDeps {
@@ -272,10 +285,29 @@ export function requestOriginAllowed(req: IncomingMessage): boolean {
 }
 
 /** Express middleware enforcing auth on /api routes. */
-export function authMiddleware(identity: NodeIdentity) {
+export function authMiddleware(identity: NodeIdentity, sessionTokens?: SessionTokenScope) {
   return (req: Request, res: Response, next: NextFunction) => {
     if (!requestOriginAllowed(req)) {
       res.status(403).json({ error: "Forbidden origin" });
+      return;
+    }
+    // An agent session's token: only that session's own routes, even over
+    // loopback, so a token-carrying request is never more than its session.
+    const token = tokenFromRequest(req);
+    if (sessionTokens?.claims(token)) {
+      const sessionId = sessionTokens.verify(token);
+      if (!sessionId) {
+        res.status(401).json({ error: "Unknown or expired session token" });
+        return;
+      }
+      const call = { method: req.method, path: req.baseUrl + req.path, body: req.body };
+      if (!sessionTokens.allows(sessionId, call)) {
+        res.status(403).json({ error: `A session token can only reach its own session's routes, not ${call.method} ${call.path}.` });
+        return;
+      }
+      sessionTokens.used?.(sessionId, call);
+      (req as Request & { auth: AuthContext }).auth = { deviceId: null, loopback: isLoopbackAddress(req.socket?.remoteAddress), sessionId };
+      next();
       return;
     }
     const ctx = resolveAuth(identity, req);
