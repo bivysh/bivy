@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The app matches your Omarchy theme.** On a machine running [Omarchy](docs/omarchy.md), Bivy takes on the desktop's theme (colors, and light or dark) and follows `omarchy-theme-set` live, on every device connected to that machine. It's the new **Machine** choice in Settings → Appearance, and the default when the machine has a theme.
+
 ### Changed
 
 - **Apps pill above the composer.** A session's published apps and running servers now have their own pill at the right end of the band above the composer, instead of hiding in the run pill. When people leave reviewer notes on a shared preview, the pill shows **N new notes** until you open the Apps sheet.

@@ -12,7 +12,7 @@ import { ImportSessionContent } from "./ImportSessionSheet.js";
 import { MachineCapabilitiesSection } from "./MachineCapabilities.js";
 import { Segmented } from "./Segmented.js";
 import { Badge } from "./Badge.js";
-import { currentThemeSetting, setTheme, type ThemeSetting } from "../theme.js";
+import { currentThemeSetting, machineTheme, onMachineThemeChange, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalBack, useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
@@ -495,7 +495,10 @@ export function Settings({
 // ---- Appearance (theme) ----
 function AppearancePanel() {
   const [setting, setSetting] = useState<ThemeSetting>(currentThemeSetting());
+  const [machine, setMachine] = useState(machineTheme());
+  useEffect(() => onMachineThemeChange(() => setMachine(machineTheme())), []);
   const options: Array<{ id: ThemeSetting; label: string; icon: ReactNode }> = [
+    ...(machine ? [{ id: "machine" as const, label: "Machine", icon: <IconAppearance /> }] : []),
     { id: "system", label: "System", icon: <IconMonitor /> },
     { id: "light", label: "Light", icon: <IconSun /> },
     { id: "dark", label: "Dark", icon: <IconMoon /> },
@@ -505,14 +508,17 @@ function AppearancePanel() {
       <label className="field-label">Theme</label>
       <Segmented
         ariaLabel="Theme"
-        value={setting}
+        value={setting === "machine" && !machine ? "system" : setting}
         options={options}
         onChange={(id) => {
           setTheme(id);
           setSetting(id);
         }}
       />
-      <p className="muted">Choose how Bivy looks. <strong>System</strong> follows your device's light/dark setting.</p>
+      <p className="muted">
+        Choose how Bivy looks. <strong>System</strong> follows your device's light/dark setting.
+        {machine && <> <strong>Machine</strong> matches this machine's desktop theme, now {machine.name}, and changes with it.</>}
+      </p>
     </div>
   );
 }

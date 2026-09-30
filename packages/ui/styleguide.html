@@ -93,6 +93,46 @@
 }
 }
 
+/* ---- Machine theme: the palette of the desktop the node runs on (Omarchy's
+   colors.toml), when Appearance is set to Machine. The app sets only the raw
+   --machine-* inputs (packages/web/src/theme.ts) and data-theme to the
+   palette's mode; every token below is derived here, so the mapping stays in
+   this file. Placed after the light/dark blocks so it wins at equal specificity. ---- */
+:root[data-machine-theme] {
+  --bg: var(--machine-background);
+  --surface: var(--machine-background);
+  --surface-2: color-mix(in srgb, var(--machine-foreground) 6%, var(--machine-background));
+  --surface-3: color-mix(in srgb, var(--machine-foreground) 11%, var(--machine-background));
+  --ink: var(--machine-foreground);
+  --muted: color-mix(in srgb, var(--machine-foreground) 68%, var(--machine-background));
+  --line: color-mix(in srgb, var(--machine-foreground) 14%, var(--machine-background));
+  --line-strong: color-mix(in srgb, var(--machine-foreground) 28%, var(--machine-background));
+  --accent: var(--machine-accent);
+  --accent-contrast: var(--machine-background);
+  --accent-hover: color-mix(in srgb, var(--machine-accent) 80%, var(--machine-foreground));
+  --accent-soft: color-mix(in srgb, var(--machine-accent) 20%, var(--machine-background));
+  --danger: var(--machine-red);
+  --danger-soft: color-mix(in srgb, var(--machine-red) 20%, var(--machine-background));
+  --danger-contrast: var(--machine-background);
+  --ok: var(--machine-green);
+  --merged: var(--machine-magenta);
+  --unseen: var(--machine-yellow);
+  --unseen-contrast: var(--machine-background);
+  --warn: var(--machine-yellow);
+  --warn-soft: color-mix(in srgb, var(--machine-yellow) 20%, var(--machine-background));
+  --term-selection: color-mix(in srgb, var(--machine-selection) 70%, transparent);
+  --term-selection-inactive: color-mix(in srgb, var(--machine-selection) 40%, transparent);
+  --syntax-comment: var(--machine-muted);
+  --syntax-keyword: var(--machine-magenta);
+  --syntax-string: var(--machine-green);
+  --syntax-number: var(--machine-orange);
+  --syntax-title: var(--machine-blue);
+  --syntax-type: var(--machine-yellow);
+  --syntax-name: var(--machine-cyan);
+  --syntax-deletion: var(--machine-red);
+  --syntax-addition: var(--machine-green);
+}
+
 /* ============================================================================
    PAGE CHROME (styleguide-only layout — not part of the design system)
    ========================================================================== */
