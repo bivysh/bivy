@@ -54,6 +54,9 @@ export const BIVY_AGENT_NOTE = [
     '`bivy suggest "<complete instruction>" [--title "short label"]` instead of only listing them. The user can ' +
     "start each in one tap, in this session or in a parallel one that works in its own copy of the project, so " +
     "write it to stand on its own, with paths relative to the project root.",
+  "- When you finish long work, get blocked, or need the user to look at something: " +
+    '`bivy notify "<message>"` (a chat card, plus a push to their phone when they are away). To ask and wait for ' +
+    'an answer: `bivy ask "<question>" [--option A --option B]` prints their answer (or use your own ask-the-user tool).',
   "- Only when the user asks for another agent or another of their machines to take part: " +
     '`bivy delegate "<self-contained task>" --agent <id> [--machine <name>] --wait` runs it there and prints ' +
     "its answer and any branch/PR; `--to codex,grok@<machine>` asks several to compare, `bivy delegate machines` " +

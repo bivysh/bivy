@@ -3119,17 +3119,23 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
 /* Suggested task (SuggestionCard.tsx): a task the agent proposed, one tap to
    start in its own session. Shell from .card; layout only here. */
 .suggestion-card { max-inline-size: 440px; display: flex; flex-direction: column; gap: var(--space-1); }
-.suggestion-eyebrow { margin: 0; color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); }
+/* The small label above a chat card's content, shared by every agent-posted card. */
+.suggestion-eyebrow, .delegation-eyebrow, .notice-eyebrow { margin: 0; color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); }
 .suggestion-title { margin: 0; font-size: var(--text-base); font-weight: var(--weight-semibold); overflow-wrap: anywhere; }
 .suggestion-text { margin: 0; color: var(--muted); font-size: var(--text-sm); white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .suggestion-actions, .suggestion-all { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-top: var(--space-2); }
 .suggestion-all { padding-top: var(--space-2); border-top: 1px solid var(--line); }
 .suggestion-status { margin: var(--space-2) 0 0; display: flex; align-items: center; gap: var(--space-2); color: var(--ok); font-size: var(--text-sm); font-weight: var(--weight-medium); }
+/* Notice (NoticeCard.tsx): a message the agent sent with `bivy notify`.
+   Shell and tone from .card, the urgent marker from .badge. */
+.notice-card { max-inline-size: 440px; display: flex; flex-direction: column; gap: var(--space-1); }
+.notice-eyebrow { display: flex; align-items: center; gap: var(--space-2); }
+.notice-text { margin: 0; font-size: var(--text-base); white-space: pre-wrap; overflow-wrap: anywhere; }
+
 /* Delegation (DelegationCard.tsx): a task handed to another agent/machine.
    Shell from .card, status from .badge; layout only here. A fan-out renders as
    one group whose members sit side by side where there is room. */
 .delegation-card { max-inline-size: 440px; display: flex; flex-direction: column; gap: var(--space-1); }
-.delegation-eyebrow { margin: 0; color: var(--muted); font-size: var(--text-xs); font-weight: var(--weight-semibold); }
 .delegation-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
 .delegation-head { align-items: flex-start; }
 .delegation-target { display: flex; flex-direction: column; font-weight: var(--weight-semibold); overflow-wrap: anywhere; min-inline-size: 0; }

@@ -145,6 +145,7 @@ export interface PushSubscriptionRecord {
 // list in sync with the triggers in `src/server.ts`.
 export const NOTIFICATION_KINDS = [
   "question_asked",
+  "agent_notice",
   "approval_requested",
   "agent_waiting",
   "session_done",

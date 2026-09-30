@@ -166,6 +166,8 @@ import { createPresenceCommands } from "./controllers/presence-commands.js";
 import { createArtifactCommands } from "./controllers/artifact-commands.js";
 import { PresenceBook, deviceFrom, type DeviceRef, type DriveVia, type SessionPresence } from "./session/presence.js";
 import { buildAgentContext } from "./session/agent-context.js";
+import { AgentQuestions, askQuestionsFrom } from "./session/agent-questions.js";
+import { MAX_NOTICE_TEXT, isAgentNotice, noticePush } from "./session/notices.js";
 import { createForkCommands } from "./controllers/fork-commands.js";
 import { createGithubCommands } from "./controllers/github-commands.js";
 import { createCredentialCommands } from "./controllers/credential-commands.js";
@@ -517,6 +519,7 @@ const auditLog = createAuditLog(path.join(appDir, "audit"), { signer: auditKey.s
 // clarifying question across sessions; the guardian interceptor below raises
 // them, and session.question(.resolved) is broadcast from its listeners.
 const questionManager = new QuestionManager();
+const agentQuestions = new AgentQuestions(questionManager);
 questionManager.onRequest((request) => {
   scheduleAdvertise();
   broadcast({ type: "session.question", sessionId: request.sessionId, requestId: request.id, questions: request.questions, createdAt: request.createdAt });
@@ -11739,9 +11742,60 @@ app.get("/api/session/:id/context", (req, res) => {
     },
     machine: { name: identity.name, platform: process.platform, arch: process.arch },
     presence: presenceBook.get(record.id),
+    userConnected: clients.size > 0 || (relay?.clientCount ?? 0) > 0,
     apps,
     previewAvailable,
   }));
+});
+
+// `bivy notify "<message>"`: a card in the chat, and a push naming the session
+// (never the text) when nobody has the app open, or when it's urgent. At most
+// one push a minute per session; later notices still post a card.
+const lastNotifyPush = new Map<string, number>();
+app.post("/api/session/:id/notify", (req, res) => {
+  const record = openSessions.get(String(req.params.id));
+  if (!record) return res.status(404).json({ error: "Session not found" });
+  const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+  const notice = { id: `notice-${randomBytes(8).toString("hex")}`, text, ...(req.body?.urgent === true ? { urgent: true } : {}) };
+  if (!isAgentNotice(notice)) return res.status(400).json({ error: `A notice needs text (up to ${MAX_NOTICE_TEXT} characters).` });
+  eventLog.appendNotice(record.id, { afterMessageCount: record.session.getMessages().length, notice });
+  broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "notice", id: notice.id, notice } }));
+  const watching = clients.size > 0 || (relay?.clientCount ?? 0) > 0;
+  const push = noticePush({ urgent: notice.urgent, userWatching: watching, lastPushAt: lastNotifyPush.get(record.id), now: Date.now(), pushConfigured: Boolean(sessionAdvertiseTarget) });
+  if (push === "sent") {
+    lastNotifyPush.set(record.id, Date.now());
+    void sendNotificationHint({
+      kind: "agent_notice",
+      sessionId: record.id,
+      targetSessionId: record.id,
+      title: sessionNotifyLabel(record),
+      body: "Has a message for you — tap to read it.",
+    });
+  }
+  res.json({ ok: true, id: notice.id, push, userWatching: watching });
+});
+
+// `bivy ask`: the question card and "needs your input" push, for any agent.
+// Returns at once with an id; `/wait` blocks up to 240s per call (under common
+// HTTP client timeouts), so the CLI loops until the user answers.
+app.post("/api/session/:id/ask", (req, res) => {
+  const record = openSessions.get(String(req.params.id));
+  if (!record) return res.status(404).json({ error: "Session not found" });
+  const questions = askQuestionsFrom(req.body?.questions);
+  if (typeof questions === "string") return res.status(400).json({ error: questions });
+  const timeoutSeconds = Number(req.body?.timeoutSeconds);
+  res.status(201).json(agentQuestions.ask(record.id, questions, Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 ? timeoutSeconds * 1000 : 10 * 60 * 1000));
+});
+app.get("/api/session/:id/ask/:askId", (req, res) => {
+  const result = agentQuestions.get(String(req.params.id), String(req.params.askId));
+  if (!result) return res.status(404).json({ error: "Question not found" });
+  res.json(result);
+});
+app.post("/api/session/:id/ask/:askId/wait", async (req, res) => {
+  const seconds = Math.min(Math.max(Number(req.body?.timeoutSeconds) || 240, 1), 240);
+  const result = await agentQuestions.wait(String(req.params.id), String(req.params.askId), seconds * 1000);
+  if (!result) return res.status(404).json({ error: "Question not found" });
+  res.json(result);
 });
 
 // `bivy suggest "<task>"`: the agent proposes a task the user can start in one

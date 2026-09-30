@@ -9,6 +9,7 @@ import { contentThinking, contentToText, toolEntriesFromContent, embeddedAttachm
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
 import { isAppPin, isAppReference, isAppReview, type AppPin, type AppReference, type AppReview } from "./apps.js";
 import { isTaskSuggestion, type TaskSuggestion } from "./suggestions.js";
+import { isAgentNotice, type AgentNotice } from "./notices.js";
 import { isDelegationCard, type DelegationCard } from "./delegations.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -23,6 +24,7 @@ export interface TranscriptFoldEntry {
   review?: AppReview;
   pin?: AppPin;
   suggestion?: TaskSuggestion;
+  notice?: AgentNotice;
   delegation?: DelegationCard;
   id: string; role: "user" | "assistant" | "system" | "thinking" | "error"; text: string;
   html?: string; tool?: TranscriptFoldTool; streaming?: boolean; attachments?: PromptAttachment[];
@@ -207,6 +209,13 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
       const suggestion = (event as any).suggestion;
       if (!isTaskSuggestion(suggestion) || value.transcript.some((entry) => entry.suggestion?.id === suggestion.id)) break;
       value.transcript.push({ id: suggestion.id, role: "assistant", text: "", suggestion });
+      break;
+    }
+    case "notice": {
+      const notice = (event as any).notice;
+      if (!isAgentNotice(notice) || value.transcript.some((entry) => entry.notice?.id === notice.id)) break;
+      commitThinking(value); commitProse(value);
+      value.transcript.push({ id: notice.id, role: "assistant", text: "", notice });
       break;
     }
     case "app_review": {

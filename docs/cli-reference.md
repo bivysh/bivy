@@ -25,6 +25,8 @@ get shell completion. Agents in a session should start with `bivy context`.
 | Hand a task to another agent or machine | `bivy delegate "<task>" --agent <id> --wait` |
 | List every command as JSON | `bivy help --json` |
 | Propose a task the user can start in one tap | `bivy suggest "<task>"` |
+| Tell the user something when they're away | `bivy notify "<message>"` |
+| Ask the user a question and wait for the answer | `bivy ask "<question>" --option A --option B` |
 | Stop a session | `bivy kill <id>` |
 | Sign this machine into my Bivy account | `bivy login` |
 | Sign this machine out | `bivy logout` |
@@ -441,6 +443,55 @@ bivy context --json | jq .session.workspace
 
 Exits 3 when the session isn't open on this node, and 75 when the node can't be
 reached or is too old to answer.
+
+### `bivy notify "<message>" [--urgent] [--session <id>] [--json]`
+
+Sends the user a message. It appears as a card in the chat, and when nobody has
+the app open, the user's devices get a push notification that names the session
+and says it has a message. The push never carries the text; that stays in the
+chat. `--urgent` pushes even while the user has the app open. Each session
+pushes at most once a minute; later messages still reach the chat. Users can
+mute these pushes under **Agent messages** in the notification settings.
+
+Use it when long work finishes, when the agent is blocked, or when something
+needs a look.
+
+```bash
+bivy notify "Migration finished: 3 tables rewritten, all tests pass."
+bivy notify --urgent "The deploy failed and production is serving the old build."
+```
+
+`--json` prints `{"ok","id","push","userWatching"}`, where `push` is `sent`,
+`user_watching`, `rate_limited`, or `unavailable` (the machine isn't signed in to
+a Bivy account, so it can't push).
+
+### `bivy ask "<question>" [flags]`
+
+Asks the user a question in the chat and waits for the answer. It uses the same
+question card and "needs your input" push as an agent's own ask-the-user tool,
+so it works for any agent with a shell.
+
+| Flag | Meaning |
+| --- | --- |
+| `--option <label>` | A choice (2 to 8). Without options the user types an answer. The user can always write their own. |
+| `--multi` | Allow several choices; the answer joins them with `, ` |
+| `--header <label>` | Short label on the card (default "Question") |
+| `--timeout <duration>` | How long to wait: seconds or `90s`, `10m`, `2h` (default 10m, up to 24h). The card closes then. |
+| `--async` | Return the question's id at once instead of waiting |
+
+`bivy ask wait <id> [--timeout …]` waits for an earlier `--async` question, and
+`bivy ask status <id>` checks it without waiting. Answers are kept for a day.
+
+Prints the answer and exits 0. Exits 1 when the user dismisses the question and
+5 when it times out. `--json` prints
+`{"id","status":"pending"|"answered"|"dismissed"|"expired","answer"?}`.
+
+```bash
+bivy ask "Which database should the new service use?" --option Postgres --option SQLite
+bivy ask "What should the release be called?"
+id=$(bivy ask "Ship it tonight?" --option Yes --option No --async --json | jq -r .id)
+bivy ask wait "$id"
+```
 
 ### `bivy app <subcommand>`
 

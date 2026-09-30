@@ -220,14 +220,14 @@ export function normalizeCapabilitiesSnapshot(value: any): MachineCapabilities |
   return value as MachineCapabilities;
 }
 
-/** Defensive shape-check mirroring src/runtime/claude-code.ts's own
- *  `validQuestions`: QuestionCard has no ErrorBoundary above it, so a malformed
- *  item must be dropped here rather than reach render. */
+/** Defensive shape-check: QuestionCard has no ErrorBoundary above it, so a
+ *  malformed item must be dropped here rather than reach render. A question has
+ *  two or more options, or none (a free-text `bivy ask`). */
 export function validUserQuestions(value: unknown): UserQuestionItem[] | null {
   if (!Array.isArray(value) || !value.length) return null;
   for (const q of value) {
     if (typeof q?.question !== "string" || typeof q?.header !== "string") return null;
-    if (!Array.isArray(q.options) || q.options.length < 2) return null;
+    if (!Array.isArray(q.options) || q.options.length === 1) return null;
     for (const opt of q.options) {
       if (typeof opt?.label !== "string") return null;
     }

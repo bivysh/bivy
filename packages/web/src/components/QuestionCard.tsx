@@ -52,7 +52,10 @@ function QuestionCard({
   // instead of picking a provided option. Tracked separately from `selected`
   // (which holds provided-option labels) so custom text never collides with
   // an option label, and so an empty "Other" box can't count as answered.
-  const [otherActive, setOtherActive] = useState<Record<number, boolean>>({});
+  // A question with no options (`bivy ask` without --option) is free text: its
+  // answer box is open from the start.
+  const [otherActive, setOtherActive] = useState<Record<number, boolean>>(() =>
+    Object.fromEntries(request.questions.map((q, qi) => [qi, q.options.length === 0])));
   const [otherText, setOtherText] = useState<Record<number, string>>({});
 
   const toggle = (qi: number, label: string, multiSelect: boolean | undefined) => {
@@ -145,23 +148,26 @@ function QuestionCard({
                   {opt.description && <span className="question-option-desc">{opt.description}</span>}
                 </button>
               ))}
-              <button
-                type="button"
-                className={`question-option${otherActive[qi] ? " selected" : ""}`}
-                onClick={() => toggleOther(qi, q.multiSelect)}
-                disabled={pending}
-              >
-                <span className="question-option-label">Other</span>
-                <span className="question-option-desc">Write your own answer</span>
-              </button>
+              {q.options.length > 0 && (
+                <button
+                  type="button"
+                  className={`question-option${otherActive[qi] ? " selected" : ""}`}
+                  onClick={() => toggleOther(qi, q.multiSelect)}
+                  disabled={pending}
+                >
+                  <span className="question-option-label">Other</span>
+                  <span className="question-option-desc">Write your own answer</span>
+                </button>
+              )}
               {otherActive[qi] && (
                 <textarea
                   className="field question-other-input"
                   value={otherText[qi] || ""}
                   onChange={(e) => setOtherText((prev) => ({ ...prev, [qi]: e.target.value }))}
                   placeholder="Type your answer…"
+                  aria-label={q.question}
                   rows={2}
-                  autoFocus
+                  autoFocus={q.options.length > 0}
                   disabled={pending}
                 />
               )}

@@ -2,6 +2,7 @@
 // Pure projection for all active-session response/attention queues.
 
 import type { ServerEvent } from "./protocol.js";
+import { validUserQuestions } from "./store-normalize.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -14,12 +15,7 @@ export interface AttentionRowCommand { sessionId: string; status: "needs_action"
 export interface AttentionFoldResult { handled: boolean; value: AttentionValue; row?: AttentionRowCommand }
 
 function validQuestions(raw: unknown): AttentionQuestionItem[] | undefined {
-  if (!Array.isArray(raw) || raw.length === 0) return undefined;
-  for (const item of raw) {
-    if (!item || typeof item !== "object" || typeof item.question !== "string" || typeof item.header !== "string") return undefined;
-    if (!Array.isArray(item.options) || item.options.length < 2 || item.options.some((option: any) => typeof option?.label !== "string")) return undefined;
-  }
-  return raw as AttentionQuestionItem[];
+  return (validUserQuestions(raw) as AttentionQuestionItem[] | null) ?? undefined;
 }
 function stillNeeds(value: AttentionValue, sessionId: string): boolean {
   return value.approvals.some((item) => item.sessionId === sessionId) || value.questions.some((item) => item.sessionId === sessionId) || value.turnAttentions.some((item) => item.sessionId === sessionId);

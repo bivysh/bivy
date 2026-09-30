@@ -20,6 +20,8 @@ export interface AgentContext {
     busy: boolean;
   };
   machine: { name: string; platform: string; arch: string };
+  /** Some device has the app open right now (not necessarily on this session). */
+  userConnected: boolean;
   /** The device that last sent input, if any: a hint for whether the user is at a keyboard. */
   lastDriver?: { label: string; via: string; at: number };
   apps: { id: string; name: string; views: { id: string; name: string; kind: string }[] }[];
@@ -30,6 +32,7 @@ export interface AgentContextInput {
   session: AgentContext["session"];
   machine: AgentContext["machine"];
   presence: SessionPresence;
+  userConnected: boolean;
   apps: SessionApp[];
   previewAvailable: boolean;
 }
@@ -39,6 +42,7 @@ export function buildAgentContext(input: AgentContextInput): AgentContext {
   return {
     session: input.session,
     machine: input.machine,
+    userConnected: input.userConnected,
     ...(driver ? { lastDriver: { label: driver.label, via: driver.via, at: driver.at } } : {}),
     apps: input.apps.map((app) => ({
       id: app.id,
