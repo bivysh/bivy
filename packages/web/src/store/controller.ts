@@ -172,6 +172,7 @@ import { requiresAccountConnection, showAccountExtension, accountPresentationMes
 import { nativeSessionLink } from "../native-session-link.js";
 import { accountOrigin, clearNativeNotifications, clearNativeSubscriptions, clientStorage, flushClientStorage, hasNativeSubscriptions, isPackagedClient, nativeNotifications, onNativeOpenURL, onNativeForeground, synchronizeNativeSubscriptions } from "../packaged-client.js";
 import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
+import { setMachineTheme } from "../theme.js";
 import { runtimeBoolean } from "../runtime-config.js";
 import { cloudMachinesEnabled } from "../cloudMachines.js";
 import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
@@ -735,6 +736,10 @@ export class AppController {
         // A connected machine's catalog must not overwrite an account-backed
         // preview for a different, not-yet-created machine.
         if ((type === "models.list" || type === "model.updated") && this.isCloudModelDraft()) return;
+        if (type === "node.theme") {
+          setMachineTheme(event.theme);
+          return;
+        }
         if (type === "pong") {
           const rid = String(event.requestId || "");
           if (rid) this.pendingLivenessPings.delete(rid);

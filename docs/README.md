@@ -62,6 +62,7 @@ which subsystem or command you need.
 | Doc | Who it's for |
 | --- | --- |
 | [remote-access.md](remote-access.md) | Users pairing a phone or laptop to reach a node from anywhere. |
+| [omarchy.md](omarchy.md) | Users running Bivy on Omarchy: the app follows the machine's theme. |
 | [tailscale.md](tailscale.md) | Users reaching one machine over Tailscale with no account, control plane or relay (`bivy tailscale`). |
 | [relay-node-cli.md](relay-node-cli.md) | Users running `bivy run --node <account-node>` to drive a session on another node from the CLI, over the relay. |
 

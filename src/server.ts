@@ -92,6 +92,7 @@ import { canOpenBrowser, openBrowser } from "./browser-open.js";
 import { openOAuthLoginOnNode } from "./runtime/oauth/oauth-node-open.js";
 import { collectNodeStats } from "./node-stats.js";
 import { SessionEventCoalescer } from "./session-event-coalescer.js";
+import { readMachineTheme, watchMachineTheme } from "./machine-theme.js";
 import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed, markRemoteListener } from "./auth.js";
 import { PairCodes } from "./pair-codes.js";
 import http from "node:http";
@@ -1918,6 +1919,10 @@ const CLIENT_BACKPRESSURE_BYTES = 8 * 1024 * 1024;
 
 let projectClientMessage: ReturnType<typeof createClientProjection> | undefined;
 
+// The machine's desktop theme (Omarchy), so every connected app can match it.
+let machineTheme = readMachineTheme();
+const machineThemeEvent = () => ({ type: "node.theme", theme: machineTheme });
+
 function broadcast(payload: unknown) {
   const p = payload as { type?: string; sessionId?: string };
   if (p?.type === "session.event" && p.sessionId && projectClientMessage) payload = projectClientMessage(p.sessionId, payload);
@@ -2809,6 +2814,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     // Relay clients request the list on every connect/reconnect. Replay even an
     // empty update state so a banner from the previous daemon is cleared.
     relay?.sendEvent(nodeUpdates.snapshot());
+    relay?.sendEvent(machineThemeEvent());
     void checkBivyUpdate();
     relay?.sendEvent({ type: "sessions.list", sessions: await sessionListRows() });
   },
@@ -12237,6 +12243,10 @@ const server = app.listen(port, host, async () => {
   console.log(`Agent data dir: ${piDir}`);
   console.log(`Workspace: ${defaultWorkspace}`);
   startRelayIfConfigured();
+  watchMachineTheme((theme) => {
+    machineTheme = theme;
+    broadcast(machineThemeEvent());
+  });
   void reloadDirectListener().catch((error) => console.error("[direct] Could not start the direct listener:", error instanceof Error ? error.message : error));
   void syncAgentBridges().catch((error) => console.warn("[bridges] Could not install agent bridges; they will install on first use:", error instanceof Error ? error.message : error));
   if (appGateway) {
@@ -12368,6 +12378,7 @@ wss.on("connection", (socket, req) => {
   // a freshly-opened app surfaces a newly-available update without waiting for a
   // session turn.
   socket.send(JSON.stringify(nodeUpdates.snapshot()));
+  socket.send(JSON.stringify(machineThemeEvent()));
   void checkBivyUpdate();
   socket.on("message", (raw) => {
     let msg: { kind?: string };

@@ -2314,7 +2314,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
    cards, icon over label. Rendered by Segmented.tsx. */
 .segmented-cards { display: flex; gap: var(--space-2); flex-wrap: wrap; margin: 4px 0 10px; }
 .segmented-cards .selectable {
-  flex: 1; min-width: 92px; display: flex; flex-direction: column; align-items: center;
+  flex: 1; min-width: 72px; display: flex; flex-direction: column; align-items: center;
   gap: var(--space-2); padding: 16px 10px; font-size: var(--text-sm); font-weight: var(--weight-semibold);
 }
 .segmented-icon { display: inline-flex; }
