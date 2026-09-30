@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-09-30
+
 ### Added
 
 - **`bivy context`** tells an agent where it is running: its session, agent, workspace, git branch, machine, published apps and the device that last drove it, plus the commands that reach the user. Add `--json` for one object an agent can parse.
