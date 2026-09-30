@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+import os from "node:os";
 import type { AppManifest, AppPinState, ReviewCardMode, SessionApp, ShareDuration } from "../apps/types.js";
 import type { CommandEntries } from "../protocol/command-registry.js";
 import type { AppService } from "../apps/service.js";
 
 interface AppCommand { kind: string; requestId?: unknown; [key: string]: unknown }
-export function createAppCommands(service: AppService, workspaceFor: (sessionId: string) => string | undefined, published: (app: SessionApp) => void = () => {}): CommandEntries<AppCommand> {
+/** `machineRoot`: where servers are looked for before a session exists (the owner's home). */
+export function createAppCommands(service: AppService, workspaceFor: (sessionId: string) => string | undefined, published: (app: SessionApp) => void = () => {}, machineRoot: () => string = os.homedir): CommandEntries<AppCommand> {
   const workspaceOf = (sessionId: string) => {
     const workspace = workspaceFor(sessionId);
     if (!workspace) throw new Error("Open the session on this machine before publishing an app.");
@@ -19,7 +21,8 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
       published(app);
       return { app };
     },
-    "apps.offers": (msg) => service.offers(String(msg.sessionId), workspaceOf(String(msg.sessionId))),
+    // Without a session: servers anywhere in the owner's home, for a first session to open.
+    "apps.offers": (msg) => typeof msg.sessionId === "string" ? service.offers(msg.sessionId, workspaceOf(msg.sessionId)) : service.machineOffers(machineRoot()),
     "apps.adopt": async (msg) => {
       const sessionId = String(msg.sessionId);
       const app = await service.adopt(sessionId, workspaceOf(sessionId), Number(msg.port));

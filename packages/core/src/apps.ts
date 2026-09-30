@@ -147,7 +147,9 @@ export interface SessionAppsResult { apps: SessionApp[]; previewAvailable: boole
 export type OpenAppViewResult = { kind: "web"; url: string } | { kind: "terminal"; termId: string };
 /** A loopback server running inside the session workspace, not yet published.
  * An offer grants nothing; adopting it publishes a service view. */
-export interface AppOffer { port: number; pid: number; command: string }
+/** `project`: the folder the server runs in (its git root when it has one).
+ * Only on machine-wide offers, made before any session exists. */
+export interface AppOffer { port: number; pid: number; command: string; project?: string }
 export interface SessionAppOffersResult { offers: AppOffer[] }
 /** A reusable preview link; a bearer capability until `expiresAt` or revoke.
  * `controls`: people who open it get the reviewer tools (marking, notes). */

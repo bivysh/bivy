@@ -7,7 +7,7 @@ import { AppRegistry, type RegisteredView } from "./registry.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { scanListeners } from "./listeners.js";
+import { scanListeners, scanMachineListeners } from "./listeners.js";
 import { takeShots, type Shot, type ShotRequest } from "./screenshot.js";
 import { approximate, composite, crop, noteAnchor, readNotes, readStrokes, readElementScrolls, type ElementScroll, type MarkNote, type PageSignals, type Stroke } from "./annotate.js";
 import { captureFrame, encodePng, sendInput } from "./rfb.js";
@@ -95,6 +95,7 @@ export class AppService {
   private terminalStarts = new Map<string, Promise<string>>();
   private servers = new Map<string, { termId?: string; pending?: Promise<string>; restarts: number[]; timer?: NodeJS.Timeout }>();
   private readonly scan: (workspace: string) => Promise<AppOffer[]>;
+  private readonly scanMachine: (root: string) => Promise<AppOffer[]>;
   private readonly serverWatchMs: number;
   private readonly screenshots: { enabled: () => boolean; take: typeof takeShots };
   private readonly displays: AppDisplayProvider;
@@ -116,7 +117,7 @@ export class AppService {
   /** Screenshots in progress, so a card, Compare and a baseline share one browser run. */
   private inflight = new Map<string, Promise<Buffer | undefined>>();
   constructor(readonly registry: AppRegistry, readonly gateway: AppPreviewProvider | undefined, private readonly terminals: AppTerminalProvider, options: {
-    scan?: (workspace: string) => Promise<AppOffer[]>; serverWatchMs?: number;
+    scan?: (workspace: string) => Promise<AppOffer[]>; scanMachine?: (root: string) => Promise<AppOffer[]>; serverWatchMs?: number;
     /** Agent screenshots are a node setting, off by default. */
     screenshots?: { enabled: () => boolean; take?: typeof takeShots };
     displays?: AppDisplayProvider;
@@ -126,6 +127,7 @@ export class AppService {
     settleMs?: number;
   } = {}) {
     this.scan = options.scan ?? scanListeners;
+    this.scanMachine = options.scanMachine ?? scanMachineListeners;
     this.serverWatchMs = options.serverWatchMs ?? 5_000;
     this.screenshots = { enabled: options.screenshots?.enabled ?? (() => false), take: options.screenshots?.take ?? takeShots };
     this.displays = options.displays ?? NO_DISPLAYS;
@@ -353,6 +355,11 @@ export class AppService {
   async offers(sessionId: string, workspace: string): Promise<SessionAppOffersResult> {
     const claimed = this.registry.claimedPorts(sessionId);
     return { offers: (await this.scan(workspace)).filter((offer) => !claimed.has(offer.port)) };
+  }
+  /** Servers running anywhere under `root`, with their projects: what a first
+   *  session can start in and preview before it has a workspace of its own. */
+  async machineOffers(root: string): Promise<SessionAppOffersResult> {
+    return { offers: await this.scanMachine(root) };
   }
   /** Publish a detected server. Re-scanned so a client can't adopt an arbitrary port. */
   async adopt(sessionId: string, workspace: string, port: number): Promise<SessionApp> {

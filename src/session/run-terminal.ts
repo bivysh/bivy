@@ -73,7 +73,8 @@ export interface RunTerminalDeps {
   terminals: TerminalManager;
   broadcast(payload: unknown): void;
   sendRelayEvent(event: unknown): void;
-  sendNotificationHint(hint: { kind: string; title: string; body: string }): void;
+  /** `targetSessionId`: the session row a pinned run appears as, so a tap opens it. */
+  sendNotificationHint(hint: { kind: string; title: string; body: string; sessionId?: string; targetSessionId?: string }): void;
   createSession(workspace: string, sessionFile: string | undefined, opts: { runtimeId: string; makeActive?: boolean; source?: string }): Promise<{ id: string }>;
   resolveSession(sessionId?: unknown): RunSession | undefined;
   /** The open chat session a run's pinned id belongs to (by Bivy id or the
@@ -289,7 +290,7 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
       deps.broadcast({ type: "terminal.idle", termId: id, at: Date.now() });
       broadcastRunTerminalList();
       const who = displayName || "An agent";
-      deps.sendNotificationHint({ kind: "agent_waiting", title: `${who} is waiting`, body: `${who} has been quiet for a bit — it may be waiting for your input.` });
+      deps.sendNotificationHint({ kind: "agent_waiting", title: `${who} is waiting`, body: `${who} has been quiet for a bit — it may be waiting for your input.`, ...runTarget(id) });
     }, IDLE_NOTIFY_INTERVAL));
   }
 
@@ -307,7 +308,12 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
     lastBellNotify.set(id, now);
     const meta = terminals.meta(id);
     const who = meta?.name?.trim() || meta?.label?.trim() || "A terminal";
-    deps.sendNotificationHint({ kind: "terminal_bell", title: "Terminal bell", body: `${who} rang the terminal bell — it may be waiting for you.` });
+    deps.sendNotificationHint({ kind: "terminal_bell", title: "Terminal bell", body: `${who} rang the terminal bell — it may be waiting for you.`, ...runTarget(id) });
+  }
+
+  function runTarget(id: string): { sessionId?: string; targetSessionId?: string } {
+    const sessionId = terminals.meta(id)?.sessionId;
+    return sessionId ? { sessionId, targetSessionId: sessionId } : {};
   }
 
   function clearBellNotify(id: string) {

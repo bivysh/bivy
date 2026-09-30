@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { activationFromState, authProviderForRuntime, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionSummary } from "@bivy/core";
+import { activationFromState, authProviderForRuntime, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionApp, type SessionSummary } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -48,7 +48,7 @@ import { Spinner } from "./components/Spinner.js";
 import { StatusDot } from "./components/StatusDot.js";
 import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
-import { GetStarted, GET_STARTED_PROMPT } from "./components/GetStarted.js";
+import { GetStarted, FIRST_CHANGE_PROMPT, openAppPrompt } from "./components/GetStarted.js";
 import { NotifyOffer } from "./components/NotifyOffer.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
@@ -146,6 +146,18 @@ export function App() {
   useEffect(() => onAppsSheetRequest(setAppsSheet), []);
   // Leaving the session closes it; coming back must not reopen it.
   useEffect(() => setAppsSheet(null), [state.activeSession.activeSessionId]);
+  // The first task's app: once its session exists, preview the server there
+  // and open it, so the user can start marking.
+  const firstAppPort = useRef<number | null>(null);
+  useEffect(() => {
+    const port = firstAppPort.current, sessionId = state.activeSession.activeSessionId;
+    if (!port || !sessionId || state.connection.status !== "online") return;
+    firstAppPort.current = null;
+    void controller.appCommand("apps.adopt", sessionId, { port }).then((event) => {
+      const { app } = event as unknown as { app: SessionApp };
+      setAppsSheet({ sessionId, appId: app.id, openView: { viewId: app.views[0]!.id } });
+    }, () => setAppsSheet({ sessionId }));
+  }, [state.activeSession.activeSessionId, state.connection.status]);
   // Fork sheet opened from an inline notice (e.g. "reached its usage limit —
   // Fork to another agent"), so the way past a limit is one tap from the chat.
   const [forkSheetOpen, setForkSheetOpen] = useState(false);
@@ -980,9 +992,15 @@ export function App() {
             {activation.activated ? (
               <GetStarted
                 machineName={state.connection.nodes.find((n) => n.id === state.connection.currentNodeId)?.name || undefined}
-                onStart={() => {
+                onOpenApp={(app) => {
+                  firstAppPort.current = app.port;
                   setTurnActive(true);
-                  controller.sendPrompt(GET_STARTED_PROMPT);
+                  // The session starts in the app's own folder, never a fresh clone.
+                  controller.sendPrompt(openAppPrompt(app), undefined, { workspace: app.project, repo: undefined, branch: undefined });
+                }}
+                onFirstChange={() => {
+                  setTurnActive(true);
+                  controller.sendPrompt(FIRST_CHANGE_PROMPT);
                 }}
               />
             ) : <ReadinessChecklist
