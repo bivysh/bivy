@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.19.3] - 2026-09-30
+
+### Changed
+
+- The **Handed over** line in a forked session now links to the session it came from ("Handed over · from Claude Code · <session>"), and **Forked from** in the run details opens that session too.
+
 ## [0.19.2] - 2026-09-30
 
 ### Changed
