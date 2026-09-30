@@ -750,7 +750,10 @@ export function App() {
   // is resolved from the local session list when known; it may live on
   // another node or be gone by now, so this degrades to a bare id.
   const activeForkedFrom = activeSession?.forkedFrom
-    ? { sessionId: activeSession.forkedFrom, name: state.sessionIndex.sessions.find((s) => s.sessionId === activeSession.forkedFrom)?.name }
+    ? (() => {
+        const source = state.sessionIndex.sessions.find((s) => s.sessionId === activeSession.forkedFrom);
+        return { sessionId: activeSession.forkedFrom, name: source?.name, nodeId: source?.nodeId, openable: Boolean(source) };
+      })()
     : undefined;
   const activeSessionNodeId = activeSession?.nodeId || state.connection.currentNodeId || undefined;
   const activeSessionNode = state.connection.nodes.find((node) => node.id === activeSessionNodeId);
