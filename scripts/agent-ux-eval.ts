@@ -82,9 +82,16 @@ async function runTask(agent: string, task: AgentUxTask, machine: string) {
   const started = Date.now();
   const session = await api<{ id: string }>("POST", "/api/session", { agent, workspace: dir, name: `agent-ux ${task.id}` });
   let asked = false;
+  const approvalsSeen: string[] = [];
   const socket = new WebSocket(`${base.replace(/^http/, "ws")}/ws${token ? `?access_token=${encodeURIComponent(token)}` : ""}`);
   socket.on("message", (raw) => {
-    const msg = JSON.parse(String(raw)) as { type?: string; sessionId?: string; requestId?: string; questions?: Array<{ question: string; options: Array<{ label: string }> }> };
+    const msg = JSON.parse(String(raw)) as { type?: string; sessionId?: string; requestId?: string; questions?: Array<{ question: string; options: Array<{ label: string }> }>; approval?: { id: string; sessionId: string; toolName: string } };
+    // Approval cards are recorded and declined: an eval never changes the account.
+    if (msg.type === "approval.created" && msg.approval?.sessionId === session.id) {
+      approvalsSeen.push(msg.approval.toolName);
+      void api("POST", `/api/approvals/${encodeURIComponent(msg.approval.id)}/reject`, {}).catch(() => undefined);
+      return;
+    }
     if (msg.type !== "session.question" || msg.sessionId !== session.id || !msg.requestId) return;
     asked = true;
     const answers = Object.fromEntries((msg.questions ?? []).map((q) => [q.question, task.answer ?? q.options[0]?.label ?? "Go ahead"]));
@@ -106,6 +113,7 @@ async function runTask(agent: string, task: AgentUxTask, machine: string) {
   const checks: AgentUxCheck[] = scoreAgentUx(task.expect, {
     blocks: countCardBlocks(history.messages),
     asked,
+    approvals: approvalsSeen,
     reply: lastReply(history.messages),
     files: listFiles(dir),
   }, { machine });

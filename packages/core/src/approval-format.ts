@@ -43,10 +43,35 @@ export function approvalToolName(approval: any): string {
   return String(approval?.toolName || approval?.name || approval?.tool?.name || approval?.tool || approval?.toolCall?.name || "tool").toLowerCase();
 }
 
+/**
+ * Requests Bivy itself raises (not an agent's tool call) and how their card
+ * reads. Adding one is adding a row; everything else goes through the
+ * heuristics below.
+ */
+const BIVY_REQUESTS: Record<string, {
+  title: string;
+  consequence: (input: any) => string;
+  severity: (input: any) => ApprovalSeverity;
+  fields: (input: any) => Array<[string, unknown]>;
+}> = {
+  // An agent's `bivy automation apply` (src/session/automation-proposals.ts).
+  apply_automations: {
+    title: "Apply automations to your account?",
+    consequence: (input) => {
+      const count = Array.isArray(input.changes) ? input.changes.length : 0;
+      return `The agent wants to make ${count} change${count === 1 ? "" : "s"} to your automations.`;
+    },
+    severity: (input) => (Array.isArray(input.changes) && input.changes.some((c: unknown) => String(c).startsWith("Remove ")) ? "critical" : "high"),
+    fields: (input) => [["File", input.file], ["Changes", Array.isArray(input.changes) ? input.changes.join("\n") : ""]],
+  },
+};
+
 /** Destructive/permanent > sends-data/external > file-changing > everything else. */
 export function approvalSeverity(approval: any): ApprovalSeverity {
   const input = approvalToolInput(approval);
   const name = approvalToolName(approval);
+  const own = BIVY_REQUESTS[name];
+  if (own) return own.severity(input);
   const text = `${name} ${Object.values(input).map(safeString).join(" ")}`.toLowerCase();
   if (/\b(rm\s+-rf|rm\s+-r|delete|unlink|drop\s+table|shutdown|reboot|format|wipe)\b/.test(text)) return "critical";
   if (/\b(send|email|mail|post|publish|deploy|push|scp|curl|wget|ssh|chmod|chown|sudo)\b/.test(text)) return "high";
@@ -57,6 +82,7 @@ export function approvalSeverity(approval: any): ApprovalSeverity {
 export function approvalTitle(approval: any): string {
   const input = approvalToolInput(approval);
   const name = approvalToolName(approval);
+  if (BIVY_REQUESTS[name]) return BIVY_REQUESTS[name].title;
   const target = (input as any).path || (input as any).file || (input as any).filePath || (input as any).pathname;
   if (name.includes("bash") || name.includes("shell")) return "Run this command?";
   if (name.includes("mail") || name.includes("email") || name.includes("send")) return "Agent wants to send a message";
@@ -68,6 +94,7 @@ export function approvalTitle(approval: any): string {
 export function approvalConsequence(approval: any, severity: ApprovalSeverity = approvalSeverity(approval)): string {
   const input = approvalToolInput(approval) as any;
   const name = approvalToolName(approval);
+  if (BIVY_REQUESTS[name]) return BIVY_REQUESTS[name].consequence(input);
   const command = String(input.command || input.cmd || input.shell || "").trim();
   const target = input.path || input.file || input.filePath || input.pathname || input.cwd || input.directory;
   const recipients = input.to || input.recipients || input.recipient;
@@ -96,10 +123,15 @@ export function approvalFields(approval: any): Array<[string, string]> {
   const input = approvalToolInput(approval) as any;
   const name = approvalToolName(approval);
   const fields: Array<[string, string]> = [];
-  const add = (label: string, value: unknown) => {
+  const add = (label: string, value: unknown, limit = 420) => {
     const text = String(value ?? "").trim();
-    if (text) fields.push([label, text.length > 420 ? `${text.slice(0, 420)}…` : text]);
+    if (text) fields.push([label, text.length > limit ? `${text.slice(0, limit)}…` : text]);
   };
+  // Shown in full: this is what the user is approving.
+  if (BIVY_REQUESTS[name]) {
+    for (const [label, value] of BIVY_REQUESTS[name].fields(input)) add(label, value, Infinity);
+    return fields;
+  }
   add("Tool", name);
   add("File", input.path || input.file || input.filePath || input.pathname);
   add("Command", name.includes("bash") || name.includes("shell") ? "" : input.command);

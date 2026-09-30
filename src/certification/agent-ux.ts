@@ -10,6 +10,7 @@
 export type AgentUxExpectation =
   | { block: string; min?: number }
   | { asked: true }
+  | { approval: string }
   | { reply: string }
   | { file: string };
 
@@ -27,6 +28,8 @@ export interface AgentUxObservation {
   blocks: Record<string, number>;
   /** The agent raised at least one question card. */
   asked: boolean;
+  /** Tool names of the approval cards it raised (the harness declines them all). */
+  approvals: string[];
   /** The agent's last message text. */
   reply: string;
   /** Workspace files afterwards, relative paths. */
@@ -48,6 +51,7 @@ export function scoreAgentUx(expect: AgentUxExpectation[], seen: AgentUxObservat
       return { expectation: `${min}+ ${rule.block}`, passed: (seen.blocks[rule.block] ?? 0) >= min };
     }
     if ("asked" in rule) return { expectation: "asked a question", passed: seen.asked };
+    if ("approval" in rule) return { expectation: `asked to approve ${rule.approval}`, passed: seen.approvals.includes(rule.approval) };
     if ("reply" in rule) {
       const text = fill(rule.reply);
       return { expectation: `reply mentions "${text}"`, passed: seen.reply.toLowerCase().includes(text.toLowerCase()) };

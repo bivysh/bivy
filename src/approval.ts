@@ -72,10 +72,12 @@ export class ApprovalManager {
     repo?: string;
     branch?: string;
     rememberKey?: string;
+    /** Caller-chosen id, so the caller can follow the request. */
+    id?: string;
     timeoutMs?: number;
   }): Promise<boolean> {
     const request: ApprovalRequest = {
-      id: randomUUID(),
+      id: input.id ?? randomUUID(),
       sessionId: input.sessionId,
       toolName: input.toolName,
       input: input.toolInput,

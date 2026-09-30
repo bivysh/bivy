@@ -727,7 +727,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 }
 .approval-fields { display: grid; gap: 6px; margin-bottom: 8px; }
 .approval-field-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
-.approval-field-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; overflow-wrap: anywhere; word-break: break-word; }
+.approval-field-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; overflow-wrap: anywhere; word-break: break-word; white-space: pre-line; }
 .approval-raw-toggle { border: 0; background: transparent; color: var(--muted); font-size: 12px; padding: 0; margin-bottom: 8px; text-decoration: underline; }
 .approval-raw-toggle:hover { color: var(--ink); }
 .approval-summary { margin: 0 0 10px; background: var(--surface-2); border-radius: var(--radius-sm); padding: 8px 10px; overflow-x: auto; font-size: 12px; }

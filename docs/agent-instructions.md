@@ -20,6 +20,7 @@ something with a UI ([apps.md](apps.md)), `bivy suggest` to propose a task
 you can start in one tap, `bivy notify` and `bivy ask` to message you or wait
 for your answer, and `bivy delegate` to hand a task to another agent or
 machine when you ask for one ([agent-delegation.md](agent-delegation.md)). It
+mentions Bivy automations for work that should run on its own later. It
 ends by pointing at `bivy context` and `bivy help` for everything else. The
 commands find the session through
 `$BIVY_SESSION_ID`, so any agent with a shell can use them. The note is
