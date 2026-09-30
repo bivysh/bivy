@@ -157,7 +157,7 @@ export function RunPill({
    *  src/session/fork.ts on the node). `name` is resolved client-side from the
    *  local session list — the parent may live on another node or be gone by
    *  now, so it's best-effort and falls back to a shortened id. */
-  forkedFrom?: { sessionId: string; name?: string };
+  forkedFrom?: { sessionId: string; name?: string; nodeId?: string; openable?: boolean };
   /** The session that delegated this one (`bivy delegate`), maybe on another machine. */
   delegatedFrom?: { sessionId: string; nodeId?: string; machine?: string; title?: string };
   /** Unique files touched this session (across turns). Shown on the pill and as
@@ -274,7 +274,13 @@ export function RunPill({
 
             {forkedFrom && (
               <div className="run-sheet-rows">
-                <Row k="Forked from">{forkedFromLabel}</Row>
+                <Row k="Forked from">
+                  {forkedFrom.openable ? (
+                    <button type="button" className="btn sm ghost" onClick={() => controller.openSessionOnNode(forkedFrom.sessionId, undefined, forkedFrom.nodeId)}>
+                      {forkedFromLabel}
+                    </button>
+                  ) : forkedFromLabel}
+                </Row>
               </div>
             )}
 

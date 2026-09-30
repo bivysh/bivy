@@ -670,6 +670,20 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .tool-detail-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 10px; max-width: 100%; overflow-x: auto; white-space: pre; }
 .tool-detail-value.output { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; }
 .handoff-seed-text { max-height: none; }
+/* Hand-off line: label + summary, a link to the source session, then the rest
+   of the row (chevron) — two halves of one "show what was sent" target around
+   the link, since a button can't hold another button. */
+.handoff-line { display: flex; align-items: center; gap: 7px; }
+.handoff-line > .tool-group-line { width: auto; flex: none; }
+.handoff-line > .handoff-open { flex: 1 0 auto; justify-content: flex-end; }
+.handoff-line:hover .tool-group-summary, .handoff-line:hover .tool-chevron { color: var(--ink); }
+.handoff-source {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border: 0; background: transparent; padding: var(--space-1) 0; font: inherit; font-size: var(--text-xs);
+  color: var(--accent); text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.handoff-source:hover { color: var(--accent-hover); }
+.handoff-source::before { content: "\00b7"; display: inline-block; margin-right: 7px; color: var(--muted); text-decoration: none; }
 .tool-detail-value.output pre,
 .tool-detail-value.output code { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; }
 

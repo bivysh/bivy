@@ -40,18 +40,30 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("a hand-off seed reads as one line that opens the text that was sent", async ({ page }) => {
-  await page.evaluate((seed) => (window as any).c.store.apply({ type: "session.history", sessionId: "source", runtimeId: "claude", messages: [
+test("a hand-off seed reads as one line that opens the text that was sent and links to the source", async ({ page }) => {
+  await page.evaluate((seed) => {
+    const c = (window as any).c;
+    c.store.apply({ type: "sessions.list", sessions: [
+      { sessionId: "source", name: "Source conversation", runtimeId: "claude", status: "saved" },
+      { sessionId: "fork", name: "Forked conversation", runtimeId: "codex", status: "saved", forkedFrom: "source" },
+    ] });
+    c.openSession("fork");
+    c.store.apply({ type: "session.history", sessionId: "fork", runtimeId: "codex", messages: [
     { role: "user", content: "Original ask" },
     { role: "assistant", content: "Original answer" },
     { role: "user", content: seed },
-  ] }), SEED);
+  ] });
+  }, SEED);
   await expect(page.getByText("Original answer")).toBeVisible();
   await expect(page.getByText("I am continuing an existing Bivy session")).toHaveCount(0);
-  const line = page.getByRole("button", { name: /Handed over: Conversation context from Claude/ });
+  const line = page.getByRole("button", { name: /Handed over from Claude\. Show what was sent/ });
   await line.click();
   const sheet = page.getByRole("dialog", { name: "Context sent to the agent" });
   await expect(sheet).toContainText("/data/fork-transcripts/a.md");
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await page.getByRole("button", { name: "Open the original session: Source conversation" }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).c.store.getState().activeSession.activeSessionId)).toBe("source");
 });
 
 test("a cross-agent fork offers the target agent's models and only agents that can run here", async ({ page }) => {
