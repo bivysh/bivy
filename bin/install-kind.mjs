@@ -3,9 +3,29 @@
 import fs from "node:fs";
 import path from "node:path";
 
+/** The file a system package (pacman, …) writes into the install it owns. */
+export const MANAGED_INSTALL_FILE = ".bivy-install.json";
+
+/**
+ * `{ manager, update }` when a system package manager owns this install, so
+ * Bivy must not replace its files; null otherwise.
+ */
+export function managedInstall(repoRoot, readFileSync = fs.readFileSync) {
+  try {
+    const data = JSON.parse(readFileSync(path.join(repoRoot, MANAGED_INSTALL_FILE), "utf8"));
+    if (typeof data?.manager === "string" && data.manager) {
+      return { manager: data.manager, update: typeof data.update === "string" ? data.update : "" };
+    }
+  } catch {
+    /* not managed */
+  }
+  return null;
+}
+
 /** Classify a Bivy package root without assuming unscoped npm package layout. */
 export function detectInstallKind(repoRoot, existsSync = fs.existsSync) {
   if (existsSync(path.join(repoRoot, ".git"))) return "git";
+  if (existsSync(path.join(repoRoot, MANAGED_INSTALL_FILE))) return "managed";
 
   // npm installs an unscoped package at node_modules/name and a scoped package
   // at node_modules/@scope/name. Bivy uses the latter layout.

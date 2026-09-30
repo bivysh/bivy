@@ -13,6 +13,11 @@ test("scoped npm installs use the npm-global update path", () => {
   assert.equal(detectInstallKind(root, exists()), "npm-global");
 });
 
+test("a pacman-owned install is never updated in place", () => {
+  const root = path.join(path.sep, "usr", "lib", "node_modules", "@bivy", "bivy");
+  assert.equal(detectInstallKind(root, exists([path.join(root, ".bivy-install.json")])), "managed");
+});
+
 test("scoped npx installs remain ephemeral", () => {
   const root = path.join(path.sep, "home", "user", ".npm", "_npx", "123", "node_modules", "@bivy", "bivy");
   assert.equal(detectInstallKind(root, exists()), "npx");

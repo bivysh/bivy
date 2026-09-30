@@ -6,11 +6,11 @@ test.beforeAll(async ({ webApp }: { webApp: WebApp }) => { url = webApp.origin; 
 
 const suggestions = [
   { id: "suggestion-a", title: "Live status page", text: "Build a small status page for the relay's /metrics and publish it as a live preview I can open on my phone." },
-  { id: "suggestion-b", title: "Add /version", text: "Add a /version endpoint that returns the package version, git commit and uptime." },
+  { id: "suggestion-b", title: "Add /version", text: "Add a /version endpoint that returns the package version, git commit and uptime.", run: "subagents" },
   { id: "suggestion-c", text: "Document the metrics in the README." },
 ];
 
-for (const theme of themes) test(`suggested tasks start in one tap, beside this session or in it (${theme})`, async ({ page }, testInfo) => {
+for (const theme of themes) test(`suggested tasks are picked, then started in new sessions or here (${theme})`, async ({ page }, testInfo) => {
   await page.routeWebSocket(/.*/, () => {});
   for (const endpoint of ["auth/bootstrap", "sessions", "session/presence/get", "session/history", "auth/credentials/account-export", "models", "runtimes", "stt/config"]) {
     await page.route(new RegExp(`/api/${endpoint}(?:\\?|$)`), (route) => route.fulfill({ status: 503, json: { error: "Daemon offline in suggestion fixture" } }));
@@ -40,21 +40,30 @@ for (const theme of themes) test(`suggested tasks start in one tap, beside this 
   }, suggestions);
 
   const card = (name: string) => page.getByRole("region", { name: `Suggested task: ${name}` });
+  const last = card("Document the metrics in the README.");
   await expect(card("Live status page")).toContainText("publish it as a live preview");
-  // "Run all" belongs to the run, once: on its last card.
-  await expect(page.getByRole("button", { name: /Run all \d in parallel/ })).toHaveCount(1);
-  await expect(card("Document the metrics in the README.").getByRole("button", { name: "Run all 3 in parallel" })).toBeVisible();
+  // In a run, each card is a checkbox (all selected) and the run's last card holds the one action bar.
+  // Mixed recommendations fall back to new sessions; sub-agents show because one card offered them.
+  await expect(page.getByRole("checkbox", { checked: true })).toHaveCount(3);
+  await expect(page.getByRole("button", { name: /new session/ })).toHaveCount(1);
+  await expect(last.locator(".btn.primary")).toHaveText("Start 3 new sessions");
+  await expect(last.getByRole("button", { name: "Run 3 as sub-agents" })).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath(`suggestions-${theme}.png`), fullPage: true });
 
-  await card("Live status page").getByRole("button", { name: "Start in new session" }).click();
-  await expect(card("Live status page").getByRole("status")).toContainText("Started in a new session");
-  expect(await page.evaluate(() => (window as any).sent.filter((c: any) => c.kind === "session.new").map((c: any) => [c.like, c.prompt]))).toEqual([["s", suggestions[0].text]]);
+  await page.getByRole("checkbox", { name: "Add /version" }).uncheck();
+  await expect(last).toContainText("2 of 3 selected");
+  await last.getByRole("button", { name: "Start 2 new sessions" }).click();
+  await expect(card("Live status page")).toContainText("Started in a new session");
+  await expect(last).toContainText("Started in a new session");
+  expect(await page.evaluate(() => (window as any).sent.filter((c: any) => c.kind === "session.new").map((c: any) => [c.like, c.prompt]))).toEqual([["s", suggestions[0].text], ["s", suggestions[2].text]]);
 
-  await card("Add /version").getByRole("button", { name: "Do it here" }).click();
-  await expect(card("Add /version").getByRole("status")).toHaveText("✓ Sent here");
-  expect(await page.evaluate(() => (window as any).prompts)).toEqual([suggestions[1].text]);
-  // One left: nothing to run "all" of.
-  await expect(page.getByRole("button", { name: /Run all/ })).toHaveCount(0);
+  // The unticked one stays open, and alone its own recommendation leads.
+  await page.getByRole("checkbox", { name: "Add /version" }).check();
+  await expect(last.locator(".btn.primary")).toHaveText("Use a sub-agent");
+  await last.getByRole("button", { name: "Use a sub-agent" }).click();
+  await expect(card("Add /version")).toContainText("Sent to this session’s sub-agents");
+  expect(await page.evaluate(() => (window as any).prompts)).toEqual([`Please hand this task to a sub-agent, then report back:\n\n${suggestions[1].text}`]);
+  await expect(page.getByRole("checkbox")).toHaveCount(0);
 
   // Remembered per device, so a reload shows it as started rather than offering it again.
   expect(await page.evaluate(() => JSON.parse(localStorage.getItem("bivy:suggestion:suggestion-a") ?? "null"))).toEqual({ where: "new", sessionId: "new-1" });

@@ -1,0 +1,90 @@
+# Kamal 2: Bivy's control plane, web app and Postgres on your own server.
+# The relay is a second app on the same server and domain (deploy.relay.yml).
+# See docs/self-host-kamal.md.
+#
+#   BIVY_HOST=203.0.113.10 BIVY_DOMAIN=bivy.example.com BIVY_VERSION=v0.20.0 \
+#     kamal setup -c deploy/kamal/deploy.yml
+
+service: bivy
+image: bivy-control-plane
+
+servers:
+  web:
+    hosts:
+      - <%= ENV.fetch("BIVY_HOST") %>
+    options:
+      # A stable name on the kamal network for the relay to reach.
+      network-alias: bivy-control-plane
+
+# kamal-proxy terminates TLS (Let's Encrypt) and only routes to a new container
+# once /readyz passes, which includes the database.
+proxy:
+  host: <%= ENV.fetch("BIVY_DOMAIN") %>
+  app_port: 4400
+  ssl: true
+  healthcheck:
+    path: /readyz
+
+# Kamal runs a registry on your server and pushes over SSH: no Docker Hub account.
+registry:
+  server: localhost:5555
+
+builder:
+  arch: <%= ENV.fetch("BIVY_ARCH", "amd64") %>
+  context: deploy/kamal
+  dockerfile: deploy/kamal/Dockerfile.control-plane
+  args:
+    BIVY_VERSION: <%= ENV.fetch("BIVY_VERSION") %>
+
+env:
+  clear:
+    NODE_ENV: production
+    PORT: "4400"
+    TRUST_PROXY: uniquelocal
+    PUBLIC_CONTROL_PLANE_URL: https://<%= ENV.fetch("BIVY_DOMAIN") %>
+    RELAY_PUBLIC_URL: wss://<%= ENV.fetch("BIVY_DOMAIN") %>/relay
+    DISABLE_DEV_LOGIN: "1"
+    # The local owner account `kamal owner-login` signs you into.
+    SELF_HOST_OWNER_EMAIL: owner@self-host.invalid
+    WEB_PUSH_SUBJECT: mailto:admin@<%= ENV.fetch("BIVY_DOMAIN") %>
+  secret:
+    - DATABASE_URL
+    - RELAY_SECRET
+    # Optional sign-in without SSH, push notifications, and offline automations.
+    # Empty values leave each feature off.
+    - RESEND_API_KEY
+    - AUTH_EMAIL_FROM
+    - GITHUB_OAUTH_CLIENT_ID
+    - GITHUB_OAUTH_CLIENT_SECRET
+    - WEB_PUSH_VAPID_PUBLIC_KEY
+    - WEB_PUSH_VAPID_PRIVATE_KEY
+    - HOSTED_CREDENTIAL_KEY
+
+accessories:
+  postgres:
+    image: postgres:16-alpine
+    host: <%= ENV.fetch("BIVY_HOST") %>
+    env:
+      clear:
+        POSTGRES_DB: bivy_control_plane
+        POSTGRES_USER: bivy
+      secret:
+        - POSTGRES_PASSWORD
+    directories:
+      - data:/var/lib/postgresql/data
+    options:
+      restart: unless-stopped
+      memory: 1g
+      health-cmd: "pg_isready -U bivy -d bivy_control_plane"
+      health-interval: 10s
+      health-retries: 5
+
+aliases:
+  # A single-use, 15-minute sign-in link for the owner account.
+  owner-login: app exec --reuse "node dist/operator-login-cli.js"
+  logs: app logs -f
+
+secrets_path: deploy/kamal/secrets
+
+ssh:
+  user: <%= ENV.fetch("BIVY_SSH_USER", "root") %>

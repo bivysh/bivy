@@ -42,6 +42,7 @@ const PUBLIC_API_ROUTES = new Set([
   "GET /api/integrations/oauth/callback",
   "GET /api/git-credential",
   "POST /api/auth/bootstrap",
+  "POST /api/auth/pair",
 ]);
 const authLine = source.split("\n").findIndex((line) => line.includes('app.use("/api", authMiddleware(')) + 1;
 if (authLine === 0) {

@@ -62,6 +62,7 @@ which subsystem or command you need.
 | Doc | Who it's for |
 | --- | --- |
 | [remote-access.md](remote-access.md) | Users pairing a phone or laptop to reach a node from anywhere. |
+| [tailscale.md](tailscale.md) | Users reaching one machine over Tailscale with no account, control plane or relay (`bivy tailscale`). |
 | [relay-node-cli.md](relay-node-cli.md) | Users running `bivy run --node <account-node>` to drive a session on another node from the CLI, over the relay. |
 
 ## Configuration & reference
@@ -92,6 +93,7 @@ which subsystem or command you need.
 | --- | --- |
 | [deploy-images.md](deploy-images.md) | Deploy the same public images on any server/container platform: environment contract, browser owner setup, recovery and health checks. No provider templates required. |
 | [self-host-quickstart.md](self-host-quickstart.md) | Optional Compose installer for a VPS: automated Postgres, proxy/TLS, secrets and health checks. |
+| [self-host-kamal.md](self-host-kamal.md) | Deploying the same images with Kamal from your computer: `kamal setup`, zero-downtime upgrades, no registry account. |
 | [self-host.md](self-host.md) | Operators running their own relay and control plane instead of Bivy Cloud — the deeper ops reference (backups, restore drills, secret rotation, security boundary). |
 
 ## Integrations

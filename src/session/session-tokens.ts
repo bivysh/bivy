@@ -52,7 +52,7 @@ export function createSessionTokenCodec(key: Buffer = randomBytes(32)): SessionT
  */
 export const SESSION_TOKEN_ROUTES: readonly { method: "GET" | "POST"; path: RegExp; session: "path" | "body" | "none" }[] = [
   { method: "GET", path: /^\/api\/session\/([^/]+)\/context$/, session: "path" },
-  { method: "POST", path: /^\/api\/session\/([^/]+)\/(attach|suggest|notify)$/, session: "path" },
+  { method: "POST", path: /^\/api\/session\/([^/]+)\/(attach|suggest|notify|title)$/, session: "path" },
   { method: "POST", path: /^\/api\/session\/([^/]+)\/ask$/, session: "path" },
   { method: "GET", path: /^\/api\/session\/([^/]+)\/ask\/[^/]+$/, session: "path" },
   { method: "POST", path: /^\/api\/session\/([^/]+)\/ask\/[^/]+\/wait$/, session: "path" },
