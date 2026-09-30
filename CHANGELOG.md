@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Pick which suggested tasks to start, and where.** When an agent suggests several tasks, each card now has a checkbox and the last card has one action bar: **Start N new sessions** (each task gets its own agent) or **Do N here** (this session's agent does them in order). This replaces the ambiguous "Run all in parallel" button.
+- **Suggested tasks: pick them, and the agent recommends where they run.** A suggestion can run here, through this session's sub-agents, or in new sessions. The agent passes `bivy suggest --run here|subagents|new` to pick the recommended action, which becomes the card's main button, and the other actions stay one tap away. Without it, a single card recommends *here* and several recommend *new sessions*. When an agent suggests several tasks, each card has a checkbox and the last card starts the selected ones together (e.g. **Run 3 as sub-agents**, **Do 3 here**). This replaces the ambiguous "Run all in parallel" button.
 - **Apps pill above the composer.** A session's published apps and running servers now have their own pill at the right end of the band above the composer, instead of hiding in the run pill. When people leave reviewer notes on a shared preview, the pill shows **N new notes** until you open the Apps sheet.
 
 ## [0.20.0] - 2026-09-30

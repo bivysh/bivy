@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// A task the agent proposed with `bivy suggest`. A lone suggestion carries its
-// own two actions: start it in a new session beside this one, or send it here.
-// In a run of suggestions (consecutive cards) each card gets a checkbox and the
-// last card holds one action bar for whatever is selected, so "here" versus
-// "new sessions" is always a visible choice rather than implied by "parallel".
-// What was started is remembered per device, so a reload doesn't offer it again.
+// A task the agent proposed with `bivy suggest`. It can run here, through this
+// agent's sub-agents, or in a new session beside this one; the agent's `run`
+// recommendation is the primary button and the rest stay one tap away. In a run
+// of suggestions (consecutive cards) each card gets a checkbox and the last card
+// holds one action bar for whatever is selected. What was started is remembered
+// per device, so a reload doesn't offer it again.
 
 import { useEffect, useState } from "react";
-import type { TaskSuggestion, TranscriptEntry } from "@bivy/core";
+import type { SuggestionRun, TaskSuggestion, TranscriptEntry } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
 
 const startedKey = (id: string) => `bivy:suggestion:${id}`;
-type Started = { where: "new"; sessionId: string } | { where: "here" };
+type Started = { where: "new"; sessionId: string } | { where: "here" | "subagents" };
 const changed = () => window.dispatchEvent(new Event("bivy:suggestions"));
 
 function readStarted(id: string): Started | null {
@@ -42,11 +42,34 @@ function runAround(transcript: TranscriptEntry[], id: string): { run: TaskSugges
   return { run: transcript.slice(start, end + 1).map((entry) => entry.suggestion!), last: at === end };
 }
 
-/** One message asking this session's agent to do several tasks. */
-function combined(items: TaskSuggestion[]): string {
-  if (items.length === 1) return items[0]!.text;
-  return `Please do these ${items.length} tasks, one after another:\n\n${items.map((s, i) => `${i + 1}. ${s.title ? `${s.title}: ` : ""}${s.text}`).join("\n\n")}`;
-}
+const numbered = (items: TaskSuggestion[]) => items.map((s, i) => `${i + 1}. ${s.title ? `${s.title}: ` : ""}${s.text}`).join("\n\n");
+
+/** Each way to start the selected tasks; `hint` explains the recommended one. Order is the order of the secondary buttons. */
+const ACTIONS: Record<SuggestionRun, { label: (n: number) => string; hint: (n: number) => string; prompt?: (items: TaskSuggestion[]) => string; done: string }> = {
+  here: {
+    label: (n) => n > 1 ? `Do ${n} here` : "Do it here",
+    hint: (n) => n > 1 ? "this session’s agent does them one after another." : "this session’s agent does it next.",
+    prompt: (items) => items.length > 1 ? `Please do these ${items.length} tasks, one after another:\n\n${numbered(items)}` : items[0]!.text,
+    done: "✓ Sent to this session",
+  },
+  subagents: {
+    label: (n) => n > 1 ? `Run ${n} as sub-agents` : "Use a sub-agent",
+    hint: () => "this session’s agent hands the work to its sub-agents and reports back.",
+    prompt: (items) => items.length > 1
+      ? `Please do these ${items.length} tasks in parallel, one sub-agent per task, then report back on each:\n\n${numbered(items)}`
+      : `Please hand this task to a sub-agent, then report back:\n\n${items[0]!.text}`,
+    done: "✓ Sent to this session’s sub-agents",
+  },
+  new: {
+    label: (n) => n > 1 ? `Start ${n} new sessions` : "Start in new session",
+    hint: (n) => n > 1 ? "each task gets its own agent, running side by side." : "it gets its own agent, running side by side with this one.",
+    done: "✓ Started in a new session",
+  },
+};
+const ORDER = Object.keys(ACTIONS) as SuggestionRun[];
+
+/** What the agent recommends for `s`; without a choice, a lone card continues here and a set fans out. */
+const recommended = (s: TaskSuggestion, inSet: boolean): SuggestionRun => s.run ?? (inSet ? "new" : "here");
 
 /** Rendered inside the active session's transcript; that session is the one it runs beside. */
 export function SuggestionCard({ suggestion }: { suggestion: TaskSuggestion }) {
@@ -64,13 +87,26 @@ export function SuggestionCard({ suggestion }: { suggestion: TaskSuggestion }) {
     return () => window.removeEventListener("bivy:suggestions", sync);
   }, [suggestion.id]);
   const { run, last } = runAround(state.activeSession.transcript, suggestion.id);
-  const open = run.filter((s) => !readStarted(s.id));
   const inSet = run.length > 1;
-  const selected = open.filter((s) => !deselected.has(s.id));
+  const open = run.filter((s) => !readStarted(s.id));
+  const items = inSet ? open.filter((s) => !deselected.has(s.id)) : [suggestion];
   const label = suggestion.title || suggestion.text;
-  const disabled = busy || !online || !sessionId;
+  const disabled = busy || !online || !sessionId || items.length === 0;
 
-  const startNew = async (items: TaskSuggestion[]) => {
+  // The selection's shared recommendation leads; mixed picks fall back to new sessions.
+  const picks = new Set(items.map((s) => recommended(s, inSet)));
+  const primary: SuggestionRun = picks.size === 1 ? [...picks][0]! : "new";
+  // Sub-agents only show when the agent offered them: it knows whether it has any.
+  const offered = ORDER.filter((key) => key !== "subagents" || run.some((s) => s.run === "subagents"));
+  const actions = [primary, ...offered.filter((key) => key !== primary)];
+
+  const start = async (how: SuggestionRun) => {
+    const prompt = ACTIONS[how].prompt;
+    if (prompt) {
+      controller.sendPrompt(prompt(items));
+      for (const item of items) remember(item.id, { where: how as "here" | "subagents" });
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -85,16 +121,13 @@ export function SuggestionCard({ suggestion }: { suggestion: TaskSuggestion }) {
       setBusy(false);
     }
   };
-  const doHere = (items: TaskSuggestion[]) => {
-    controller.sendPrompt(combined(items));
-    for (const item of items) remember(item.id, { where: "here" });
-  };
 
-  const checkbox = inSet && !started;
+  const bar = inSet ? last && open.length > 0 : !started;
+  const n = items.length;
   return (
     <section className="card suggestion-card" aria-label={`Suggested task: ${label}`}>
       <p className="suggestion-eyebrow">Suggested task</p>
-      {checkbox ? (
+      {inSet && !started ? (
         <label className="suggestion-pick">
           <input type="checkbox" checked={!deselected.has(suggestion.id)} disabled={busy} onChange={(e) => setSelected(suggestion.id, e.target.checked)} />
           <span className="suggestion-title">{label}</span>
@@ -104,33 +137,21 @@ export function SuggestionCard({ suggestion }: { suggestion: TaskSuggestion }) {
       {error && <div className="banner inline" data-tone="danger" role="alert">{error}</div>}
       {started && (
         <p className="suggestion-status" role="status">
-          {started.where === "here" ? "✓ Sent to this session" : <>✓ Started in a new session <button type="button" className="btn sm ghost" onClick={() => controller.openSession(started.sessionId)}>Open</button></>}
+          {ACTIONS[started.where].done}
+          {started.where === "new" && <button type="button" className="btn sm ghost" onClick={() => controller.openSession(started.sessionId)}>Open</button>}
         </p>
       )}
-      {!started && !inSet && (
-        <div className="suggestion-actions">
-          <button type="button" className="btn sm primary" disabled={disabled} onClick={() => void startNew([suggestion])}>
-            {busy ? "Starting…" : "Start in new session"}
-          </button>
-          <button type="button" className="btn sm ghost" disabled={disabled} onClick={() => doHere([suggestion])}>Do it here</button>
-        </div>
-      )}
-      {inSet && last && open.length > 0 && (
-        <div className="suggestion-all">
-          <p className="suggestion-hint" role="status">
-            {selected.length === 0 ? "Select the tasks to start." : `${selected.length} of ${open.length} selected`}
-          </p>
+      {bar && (
+        <div className={inSet ? "suggestion-all" : "suggestion-bar"}>
+          {inSet && <p className="suggestion-hint" role="status">{n === 0 ? "Select the tasks to start." : `${n} of ${open.length} selected`}</p>}
           <div className="suggestion-actions">
-            <button type="button" className="btn sm primary" disabled={disabled || selected.length === 0} onClick={() => void startNew(selected)}>
-              {busy ? "Starting…" : selected.length > 1 ? `Start ${selected.length} new sessions` : "Start in new session"}
-            </button>
-            <button type="button" className="btn sm ghost" disabled={disabled || selected.length === 0} onClick={() => doHere(selected)}>
-              {selected.length > 1 ? `Do ${selected.length} here` : "Do it here"}
-            </button>
+            {actions.map((key) => (
+              <button key={key} type="button" className={`btn sm ${key === primary ? "primary" : "ghost"}`} disabled={disabled} onClick={() => void start(key)}>
+                {busy && key === "new" ? "Starting…" : ACTIONS[key].label(Math.max(n, 1))}
+              </button>
+            ))}
           </div>
-          <p className="suggestion-hint">
-            New sessions: each task gets its own agent, running side by side. Here: this session&rsquo;s agent does them one after another.
-          </p>
+          <p className="suggestion-hint">Recommended: {ACTIONS[primary].hint(n)}</p>
         </div>
       )}
     </section>

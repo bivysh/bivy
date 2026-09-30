@@ -82,7 +82,7 @@ import { exportProviderAuth, exportAccountApiKeys, exportAccountOAuthCredentials
 import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
 import { sessionLikeFields } from "./session/start-like.js";
-import { MAX_SUGGESTION_TEXT, MAX_SUGGESTION_TITLE, isTaskSuggestion } from "./session/suggestions.js";
+import { MAX_SUGGESTION_TEXT, MAX_SUGGESTION_TITLE, SUGGESTION_RUNS, isTaskSuggestion } from "./session/suggestions.js";
 import { BIVY_AGENT_NOTE, mergeSyncedAgentInstructions, readAgentInstructions, sessionInstructions, writeAgentInstructions, MAX_AGENT_INSTRUCTIONS_BYTES } from "./agent-instructions.js";
 import { execEphemeralRequest, type EphemeralExecRequest } from "./ephemeral-exec.js";
 import { ApprovalManager, type ApprovalRequest } from "./approval.js";
@@ -11869,14 +11869,16 @@ app.get("/api/session/:id/automations/apply/:proposalId", (req, res) => {
 });
 
 // `bivy suggest "<task>"`: the agent proposes a task the user can start in one
-// tap, here or in a parallel session (see packages/web SuggestionCard).
+// tap, here, through this agent's sub-agents, or in a parallel session; `run`
+// is the one the agent recommends (see packages/web SuggestionCard).
 app.post("/api/session/:id/suggest", (req, res) => {
   const record = openSessions.get(String(req.params.id));
   if (!record) return res.status(404).json({ error: "Session not found" });
   const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
   const title = typeof req.body?.title === "string" && req.body.title.trim() ? req.body.title.trim() : undefined;
-  const suggestion = { id: `suggestion-${randomBytes(8).toString("hex")}`, text, ...(title ? { title } : {}) };
-  if (!isTaskSuggestion(suggestion)) return res.status(400).json({ error: `A suggestion needs text (up to ${MAX_SUGGESTION_TEXT} characters) and an optional title (up to ${MAX_SUGGESTION_TITLE}).` });
+  const run = req.body?.run || undefined;
+  const suggestion = { id: `suggestion-${randomBytes(8).toString("hex")}`, text, ...(title ? { title } : {}), ...(run ? { run } : {}) };
+  if (!isTaskSuggestion(suggestion)) return res.status(400).json({ error: `A suggestion needs text (up to ${MAX_SUGGESTION_TEXT} characters), an optional title (up to ${MAX_SUGGESTION_TITLE}) and an optional run (${SUGGESTION_RUNS.join(", ")}).` });
   eventLog.appendSuggestion(record.id, { afterMessageCount: record.session.getMessages().length, suggestion });
   broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "suggestion", id: suggestion.id, suggestion } }));
   res.json({ ok: true, id: suggestion.id });
