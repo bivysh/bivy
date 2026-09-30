@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-09-30
+
 ### Added
 
 - **The app matches your Omarchy theme.** On a machine running [Omarchy](docs/omarchy.md), Bivy takes on the desktop's theme (colors, and light or dark) and follows `omarchy-theme-set` live, on every device connected to that machine. It's the new **Machine** choice in Settings → Appearance, and the default when the machine has a theme.
