@@ -16,8 +16,11 @@ any instructions. It tells the agent it runs inside Bivy, that you follow along 
 a chat and can't see its terminal or files on disk, and which commands reach you:
 `bivy attach` (or the `attach_to_chat` tool) to send a file or image,
 `bivy app publish` / `run` / `shot` / `present` to preview, check and hand over
-something with a UI ([apps.md](apps.md)), and `bivy suggest` to propose a task
-you can start in one tap. The commands find the session through
+something with a UI ([apps.md](apps.md)), `bivy suggest` to propose a task
+you can start in one tap, and `bivy delegate` to hand a task to another agent or
+machine when you ask for one ([agent-delegation.md](agent-delegation.md)). It
+ends by pointing at `bivy context` and `bivy help` for everything else. The
+commands find the session through
 `$BIVY_SESSION_ID`, so any agent with a shell can use them. The note is
 `BIVY_AGENT_NOTE` in `src/agent-instructions.ts` and uses the channels below.
 

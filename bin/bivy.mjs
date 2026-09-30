@@ -43,6 +43,7 @@ import { findAvailablePort, reconcilePort } from "./port-picker.mjs";
 import { resolveAttachSessionId } from "./attach-session-id.mjs";
 import { detectInstallKind as classifyInstallKind, npmGlobalPrefix } from "./install-kind.mjs";
 import { hasConfiguredService as configuredServiceExists } from "./service-state.mjs";
+import { COMMANDS, EXIT, cliError, completionWords, describeCli, describeCommand, renderHelp, resolveCommand, subcommandTable, suggestCommands, wantsJson } from "./cli-commands.mjs";
 
 const selfScript = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(selfScript);
@@ -1822,18 +1823,16 @@ function translateExecAgent(args = []) {
 }
 
 // `bivy completions <bash|zsh|fish>` — print a shell completion script to eval or
-// install. Covers the top-level commands and known integration ids.
+// install. Commands and their verbs come from bin/cli-commands.mjs; `run`
+// completes the known integration ids.
 function cmdCompletions(args = []) {
   const shell = (args[0] || "").toLowerCase();
-  const commands = [
-    "run", "runs", "sessions", "ls", "resume", "promote", "rename", "nodes", "agent", "agents", "agents:install", "shim", "takeover", "token", "exec",
-    "send", "attach", "suggest", "delegate", "kill", "setup", "start", "stop", "restart", "status", "doctor", "diagnostics", "capabilities", "logs", "login", "logout", "signout", "provider", "model",
-    "update", "update:log", "audit", "automation", "config", "plugin", "open", "service", "secrets", "voice", "link", "relay:setup",
-    "github:connect", "github:app-create", "github:app-connect", "github:app-sync", "prune", "uninstall", "help", "version",
-  ];
+  const commands = completionWords();
   const agents = [...AGENT_INTEGRATIONS.keys()];
+  const verbs = [{ words: ["run"], subcommands: agents }, ...subcommandTable()];
 
   if (shell === "bash") {
+    const cases = verbs.map((v) => `    ${v.words.join("|")}) COMPREPLY=( $(compgen -W "${v.subcommands.join(" ")}" -- "$cur") );;`).join("\n");
     console.log(`# bivy bash completion — add to ~/.bashrc:  eval "$(bivy completions bash)"
 _bivy_completions() {
   local cur prev
@@ -1843,41 +1842,42 @@ _bivy_completions() {
     COMPREPLY=( $(compgen -W "${commands.join(" ")}" -- "$cur") )
     return
   fi
+  [ "$COMP_CWORD" -eq 2 ] || return
   case "$prev" in
-    run) COMPREPLY=( $(compgen -W "${agents.join(" ")}" -- "$cur") );;
-    provider|model) COMPREPLY=( $(compgen -W "login" -- "$cur") );;
+${cases}
   esac
 }
 complete -F _bivy_completions bivy`);
     return;
   }
   if (shell === "zsh") {
+    const cases = verbs.map((v) => `    ${v.words.map((w) => `'${w}'`).join("|")}) compadd -- ${v.subcommands.map((x) => `'${x}'`).join(" ")} ;;`).join("\n");
     console.log(`# bivy zsh completion — add to ~/.zshrc:  eval "$(bivy completions zsh)"
 _bivy() {
-  local -a cmds agents
+  local -a cmds
   cmds=(${commands.map((x) => `'${x}'`).join(" ")})
-  agents=(${agents.map((x) => `'${x}'`).join(" ")})
   if (( CURRENT == 2 )); then
     compadd -- $cmds
-  elif [[ \${words[2]} == run ]]; then
-    compadd -- $agents
-  elif [[ \${words[2]} == provider || \${words[2]} == model ]]; then
-    compadd -- login
+    return
   fi
+  (( CURRENT == 3 )) || return
+  case \${words[2]} in
+${cases}
+  esac
 }
 compdef _bivy bivy`);
     return;
   }
   if (shell === "fish") {
+    const lines = verbs.map((v) => `complete -c bivy -n '__fish_seen_subcommand_from ${v.words.join(" ")}' -a '${v.subcommands.join(" ")}'`);
     console.log(`# bivy fish completion — save to ~/.config/fish/completions/bivy.fish
 complete -c bivy -f
 complete -c bivy -n '__fish_use_subcommand' -a '${commands.join(" ")}'
-complete -c bivy -n '__fish_seen_subcommand_from run' -a '${agents.join(" ")}'
-complete -c bivy -n '__fish_seen_subcommand_from provider model' -a 'login'`);
+${lines.join("\n")}`);
     return;
   }
   console.error(c.red("Usage: bivy completions <bash|zsh|fish>"));
-  process.exit(1);
+  process.exit(EXIT.usage);
 }
 
 // `bivy run <agent>` — launch a native agent in a daemon-owned PTY and bind this
@@ -2379,6 +2379,13 @@ async function cmdSend(args = []) {
 // surfacing in the session's Artifacts list) rather than an incidental inline
 // image — see packages/core/src/artifacts.ts.
 async function cmdAttach(args = []) {
+  const usage = 'Usage: bivy attach <file> [--caption "…"] [--artifact] [--name <name>] [--mime <type>] [--session <id>] [--json]';
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log(`${usage}\n\nShow a local file in the chat: images render inline, other files as downloads. The path must be inside the session workspace. --artifact also lists it in the session's Artifacts. --json prints {"ok","name","kind","size","mimeType","hash"}.`);
+    return;
+  }
+  const json = wantsJson(args);
+  const fail = (error) => cliError(error, { json, paint: c.red });
   const flag = (name) => {
     const i = args.indexOf(name);
     return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
@@ -2398,40 +2405,123 @@ async function cmdAttach(args = []) {
     file = a;
     break;
   }
-  if (!file) { console.error(c.red('Usage: bivy attach <file> [--caption "…"] [--artifact] [--session <id>]')); process.exit(1); return; }
-  if (!sessionId) { console.error(c.red("No session id. Set --session <id> or run inside an agent session ($BIVY_SESSION_ID).")); process.exit(1); return; }
+  if (!file) return fail({ code: "usage", message: usage, exit: EXIT.usage });
+  if (!sessionId) return fail({ code: "no_session", message: "No session id.", hint: "Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.", next: "bivy sessions --json", exit: EXIT.usage });
   const absPath = path.resolve(process.cwd(), file);
-  if (!fs.existsSync(absPath)) { console.error(c.red(`File not found: ${file}`)); process.exit(1); return; }
+  if (!fs.existsSync(absPath)) return fail({ code: "file_not_found", message: `File not found: ${file}`, exit: EXIT.notFound });
 
   const config = loadConfig();
-  if (!(await ensureNodeRunning(config))) { console.error(c.red(`Could not reach the Bivy node at ${url(config)}.`)); process.exit(1); return; }
-  // A token isn't required on a single-user host (loopback bypasses auth), but
-  // include it when available so multi-user hosts work too.
+  if (!(await ensureNodeRunning(config))) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable });
+  const res = await sessionPost(config, sessionId, "attach", { path: absPath, caption, name, mimeType, artifact }).catch((error) => error);
+  if (res instanceof Error) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node: ${res.message}`, next: "bivy status", exit: EXIT.unavailable });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) return fail(sessionHttpError("Attach", res.status, body));
+  if (json) { console.log(JSON.stringify(body)); return; }
+  console.log(c.green(`Attached ${body.name} (${body.kind}, ${body.size} bytes) to the chat.`));
+}
+
+// POST to a per-session route. A token isn't required on a single-user host
+// (loopback bypasses auth), but include one when available so multi-user
+// hosts work too.
+async function sessionPost(config, sessionId, action, body) {
   let token;
   try { token = await localDeviceToken(config); } catch { token = undefined; }
-  const headers = { "content-type": "application/json" };
-  if (token) headers.authorization = `Bearer ${token}`;
-  let res;
-  try {
-    res = await fetch(`${url(config)}/api/session/${encodeURIComponent(sessionId)}/attach`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ path: absPath, caption, name, mimeType, artifact }),
-    });
-  } catch (error) {
-    console.error(c.red(`Could not reach the Bivy node: ${error?.message || String(error)}`));
-    process.exit(1);
+  return fetch(`${url(config)}/api/session/${encodeURIComponent(sessionId)}/${action}`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify(body),
+  });
+}
+
+// A failed per-session request, in the shared error shape.
+function sessionHttpError(what, status, body) {
+  const message = `${what} failed (${status}): ${body?.error || "unknown error"}`;
+  if (status === 404) return { code: "session_not_found", message, hint: "The session must be open on this node.", next: "bivy context", exit: EXIT.notFound };
+  if (status === 401 || status === 403) return { code: "denied", message, exit: EXIT.denied };
+  if (status === 400) return { code: "invalid", message, exit: EXIT.usage };
+  return { code: "failed", message, exit: EXIT.failed };
+}
+
+// The checkout the agent is standing in, from git itself (no node needed).
+function gitContext(cwd) {
+  const git = (...gitArgs) => {
+    const out = spawnSync("git", gitArgs, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+    return out.status === 0 ? out.stdout.trim() : undefined;
+  };
+  const root = git("rev-parse", "--show-toplevel");
+  if (!root) return undefined;
+  const origin = git("remote", "get-url", "origin");
+  const repo = origin?.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?$/)?.[1];
+  const status = git("status", "--porcelain");
+  return { root, branch: git("branch", "--show-current") || undefined, ...(repo ? { repo } : {}), changedFiles: status ? status.split("\n").length : 0 };
+}
+
+// `bivy context [--json]` — the first thing an agent should run: which session,
+// workspace, branch and machine it is in, what it has published, and the
+// session commands it can use. Works outside a session too (session: null).
+async function cmdContext(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy context [--json] [--session <id>]\n\nWhere this agent is running: the Bivy session ($BIVY_SESSION_ID), its workspace and git branch, the machine, apps it has published, the device that last drove it, and the commands that reach the user. --json prints it as one object.");
     return;
   }
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) { console.error(c.red(`Attach failed (${res.status}): ${body?.error || "unknown error"}`)); process.exit(1); return; }
-  console.log(c.green(`Attached ${body.name} (${body.kind}, ${body.size} bytes) to the chat.`));
+  const json = wantsJson(args);
+  const flagAt = args.indexOf("--session");
+  const sessionId = resolveAttachSessionId({ sessionFlag: flagAt >= 0 ? args[flagAt + 1] : undefined, env: process.env });
+  const commands = COMMANDS.filter((command) => command.group === "session" && command.name !== "context")
+    .map((command) => ({ command: `bivy ${command.usage}`, does: command.summary }));
+  let node = { session: null };
+  if (sessionId) {
+    const config = loadConfig();
+    let token;
+    try { token = await localDeviceToken(config); } catch { token = undefined; }
+    try {
+      const res = await fetch(`${url(config)}/api/session/${encodeURIComponent(sessionId)}/context`, { headers: token ? { authorization: `Bearer ${token}` } : {} });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 404 && body?.error === "Session not found") {
+        cliError({ code: "session_not_found", message: `Session ${sessionId} is not open on this node.`, next: "bivy sessions --json", exit: EXIT.notFound }, { json, paint: c.red });
+        return;
+      }
+      if (res.status === 404) {
+        cliError({ code: "node_outdated", message: "This node is older than 'bivy context'.", hint: "Update it, then try again.", next: "bivy update", exit: EXIT.unavailable }, { json, paint: c.red });
+        return;
+      }
+      if (!res.ok) throw new Error(body?.error || `HTTP ${res.status}`);
+      node = body;
+    } catch (error) {
+      cliError({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}: ${error?.message || String(error)}`, next: "bivy status", exit: EXIT.unavailable }, { json, paint: c.red });
+      return;
+    }
+  }
+  const result = { ...node, git: gitContext(process.cwd()) ?? null, commands, more: "bivy help" };
+  if (json) { console.log(JSON.stringify(result, null, 2)); return; }
+  const s = result.session;
+  if (s) {
+    console.log(`${c.bold("Session")}   ${s.name ? `${s.name} ` : ""}${c.dim(s.id)}  ${s.agentName || s.agent}${s.busy ? " (working)" : ""}`);
+    console.log(`${c.bold("Machine")}   ${result.machine.name} (${result.machine.platform}/${result.machine.arch})`);
+    console.log(`${c.bold("Workspace")} ${s.workspace}`);
+    if (s.forkedFrom) console.log(`${c.bold("Forked")}    from ${s.forkedFrom}`);
+    if (result.lastDriver) console.log(`${c.bold("User")}      last typed from ${result.lastDriver.label} (${result.lastDriver.via}, ${new Date(result.lastDriver.at).toISOString()})`);
+    console.log(`${c.bold("Apps")}      ${result.apps.length ? result.apps.map((a) => `${a.name} [${a.views.map((v) => v.kind).join(", ")}]`).join("; ") : c.dim("none published")}${result.previewAvailable ? "" : c.dim("  (previews not available on this machine)")}`);
+  } else {
+    console.log(c.yellow("Not inside a Bivy session ($BIVY_SESSION_ID is unset). Session commands need --session <id>."));
+  }
+  if (result.git) console.log(`${c.bold("Git")}       ${result.git.repo ? `${result.git.repo} ` : ""}${result.git.branch ?? "(detached)"}, ${result.git.changedFiles} changed file(s)`);
+  console.log(`\n${c.bold("Reach the user")}`);
+  for (const row of commands) console.log(`  ${c.cyan(row.command)}\n      ${row.does}`);
+  console.log(`\nEverything else: ${c.cyan("bivy help")} (or ${c.cyan("bivy help --json")}).`);
 }
 
 // `bivy suggest "<task>" [--title "…"] [--session <id>]` — propose a task the
 // user can start in one tap, beside this session or in it. For an agent
 // offering next steps: write the task as a complete instruction.
 async function cmdSuggest(args = []) {
+  const usage = 'Usage: bivy suggest "<task>" [--title "short label"] [--session <id>] [--json]';
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log(`${usage}\n\nPost a task the user can start in one tap, in this session or in a parallel one that works in its own copy of the project. Write it as a complete instruction, with paths relative to the project root. --json prints {"ok","id"}.`);
+    return;
+  }
+  const json = wantsJson(args);
+  const fail = (error) => cliError(error, { json, paint: c.red });
   const flagsWithValue = new Set(["--session", "--title"]);
   const flag = (name) => {
     const i = args.indexOf(name);
@@ -2439,26 +2529,15 @@ async function cmdSuggest(args = []) {
   };
   const text = args.filter((a, i) => !a.startsWith("-") && !(i > 0 && flagsWithValue.has(args[i - 1]))).join(" ").trim();
   const sessionId = resolveAttachSessionId({ sessionFlag: flag("--session"), env: process.env });
-  if (!text) { console.error(c.red('Usage: bivy suggest "<task>" [--title "short label"] [--session <id>]')); process.exit(1); return; }
-  if (!sessionId) { console.error(c.red("No session id. Set --session <id> or run inside an agent session ($BIVY_SESSION_ID).")); process.exit(1); return; }
+  if (!text) return fail({ code: "usage", message: usage, exit: EXIT.usage });
+  if (!sessionId) return fail({ code: "no_session", message: "No session id.", hint: "Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.", next: "bivy sessions --json", exit: EXIT.usage });
   const config = loadConfig();
-  if (!(await ensureNodeRunning(config))) { console.error(c.red(`Could not reach the Bivy node at ${url(config)}.`)); process.exit(1); return; }
-  let token;
-  try { token = await localDeviceToken(config); } catch { token = undefined; }
-  let res;
-  try {
-    res = await fetch(`${url(config)}/api/session/${encodeURIComponent(sessionId)}/suggest`, {
-      method: "POST",
-      headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify({ text, title: flag("--title") }),
-    });
-  } catch (error) {
-    console.error(c.red(`Could not reach the Bivy node: ${error?.message || String(error)}`));
-    process.exit(1);
-    return;
-  }
+  if (!(await ensureNodeRunning(config))) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable });
+  const res = await sessionPost(config, sessionId, "suggest", { text, title: flag("--title") }).catch((error) => error);
+  if (res instanceof Error) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node: ${res.message}`, next: "bivy status", exit: EXIT.unavailable });
   const body = await res.json().catch(() => ({}));
-  if (!res.ok) { console.error(c.red(`Suggest failed (${res.status}): ${body?.error || "unknown error"}`)); process.exit(1); return; }
+  if (!res.ok) return fail(sessionHttpError("Suggest", res.status, body));
+  if (json) { console.log(JSON.stringify(body)); return; }
   console.log(c.green("Suggested in the chat. The user can start it in one tap."));
 }
 
@@ -2590,7 +2669,9 @@ async function cmdDelegate(args = []) {
 // Universal app publishing: every agent that can write JSON and run a command
 // uses the same contract. Relative static directories are manifest-relative.
 async function cmdApp(args = []) {
-  const [action, ...rest] = args;
+  // Output is JSON already; --json is accepted so every session command takes it.
+  const json = wantsJson(args);
+  const [action, ...rest] = args.filter((arg) => arg !== "--json");
   if (!action || rest.some((arg) => arg === "--help" || arg === "-h") || ["help", "--help", "-h"].includes(action)) {
     console.log(`Usage: bivy app publish <manifest.json> [--session <id>]
        bivy app list [--session <id>]
@@ -2658,7 +2739,7 @@ Web previews require operator setup; see docs/apps.md.`);
     return;
   }
   if (INPUT_ACTIONS[action]) return appInput(action, rest);
-  if (action === "menu") return appMenu(rest);
+  if (action === "menu") return appMenu(rest, { json });
   if (!["publish", "list", "remove", "shot", "run", "present", "share", "notes"].includes(action)) throw new Error("Unknown app command. Run bivy app --help.");
   // `run -- <command> [args…]`: publish a one-window desktop app without a manifest file.
   let runManifest;
@@ -2743,7 +2824,7 @@ Web previews require operator setup; see docs/apps.md.`);
   await appRequest(action === "run" ? "publish" : action, body);
 }
 
-async function appMenu(rest) {
+async function appMenu(rest, { json = false } = {}) {
   const options = {};
   const positional = [];
   for (let i = 0; i < rest.length; i++) {
@@ -2760,7 +2841,7 @@ async function appMenu(rest) {
   const body = { sessionId, ...(options["--app"] ? { target: options["--app"] } : {}) };
   if (positional[0]) body.path = positional[0].split(">").map((part) => part.trim());
   const result = await appRequest("menu", body, { print: false });
-  if (!result.menus) { console.log(JSON.stringify(result, null, 2)); return; }
+  if (json || !result.menus) { console.log(JSON.stringify(result, null, 2)); return; }
   // A tree an agent can read: one item per line, indented by level.
   const lines = [];
   const walk = (items, depth) => {
@@ -5464,81 +5545,53 @@ function readSelfVersion() {
 }
 
 function printHelp() {
-  console.log(`
-${c.bold("bivy")} — Bivy node CLI
+  const details = { run: `Agents: ${[...AGENT_INTEGRATIONS.keys()].join(" | ")}, or -- <command>` };
+  console.log(`\n${renderHelp({ paint: c.cyan, bold: c.bold, details })}\n`);
+}
 
-  ${c.cyan("bivy run claude")}   Run a native agent (real CLI/TUI) as a relay-visible session
-  ${c.cyan("bivy run <agent>")}  ${[...AGENT_INTEGRATIONS.keys()].join(" | ")} | -- <command>
-  ${c.cyan("bivy run <agent> --name <label>")}  Name the session (shown in 'bivy sessions' and the app)
-  ${c.cyan("bivy run <agent> --model <model>")}  Run with a specific model (passed to the agent, shown in the cockpit)
-  ${c.cyan("bivy run <agent> --node <name>")}  Start the session on another registered node
-  ${c.cyan("bivy run <agent> --clone [remote]")}  Start in a fresh clone (current repo, or a given remote)
-  ${c.cyan("bivy run <agent> --workspace <dir>")}  Start in an existing directory (default: current repo, else the configured workspace)
-  ${c.cyan("bivy rename <name>")}  Rename this node (takes effect immediately, no restart)
-  ${c.cyan("bivy nodes")}       List/add/remove other nodes (add <name> <url> --token <t>)
-  ${c.cyan("bivy agents")}      List the supported agents and which are installed (--json)
-  ${c.cyan("bivy shim install <agent>")}  Make interactive '<agent>' launch its native TUI in a Bivy PTY (remote-visible)
-  ${c.cyan("bivy shim")}        List installed agent shims (install/uninstall/status)
-  ${c.cyan("bivy takeover <id>")}  Stop a pinned run-terminal's native TUI and continue it as a governed chat
-  ${c.cyan("bivy token")}       Print a device token for this node (for 'bivy nodes add' elsewhere)
-  ${c.cyan("bivy sessions")}     List recent sessions (live + saved) and resume one (alias: ls)
-  ${c.cyan("bivy resume")} [n|id] Resume a session directly (default: most recent)
-  ${c.cyan("bivy app")}             Publish and list session apps (web and terminal views)
-  ${c.cyan("bivy send <id>")} "..."  Send a prompt to an existing session and stream the reply
-  ${c.cyan("bivy kill <id>")}    Stop a session/terminal (--delete also removes a saved session)
-  ${c.cyan("bivy prune")}         Delete old sessions/workspaces/worktrees (--keep N, --older-than 7d, --dry-run)
-  ${c.cyan("bivy exec")} "<prompt>"  One-shot headless session: prints the answer to stdout (pipe-friendly; --agent/--model/--name/--workspace/--session/--json)
-  ${c.cyan("bivy runs start")} "<instructions>"  Queue a one-off unattended Run with checks and a Receipt
-  ${c.cyan("bivy automation")}  list | trigger | init | validate | plan | test | apply
-  ${c.cyan("bivy config")}      init | validate | show | get | set | explain (typed node config)
-  ${c.cyan("bivy plugin")}      init | validate | doctor | test | install | list | remove
-  ${c.cyan("bivy")}              Show this help
-  ${c.cyan("bivy setup")}      First-run wizard: agent, model login, remote sign-in, background service
-  ${c.cyan("bivy start")}      Run the daemon in the foreground
-  ${c.cyan("bivy stop")}       Stop the background service
-  ${c.cyan("bivy restart")}    Restart the background service (waits for active sessions to finish a turn; --force to skip)
-  ${c.cyan("bivy status")}     Show config and whether the node is reachable
-  ${c.cyan("bivy doctor")}     Health check: deps, node, model, remote, agents
-  ${c.cyan("bivy capabilities")} [--json]  What this Machine unlocks: OS, agents, providers, Docker/GPU, plugins, workspaces
-  ${c.cyan("bivy logs")} [-f]   Tail the node logs (systemd journal, launchd, or background log)
-  ${c.cyan("bivy login")}      Sign this machine into a Bivy account (GitHub or email)
-  ${c.cyan("bivy logout")}     Sign this machine out (alias: signout)
-  ${c.cyan("bivy provider login")}  Sign into a model provider (alias: model login)
-  ${c.cyan("bivy auth import")}     Import local Claude, Codex, or Grok logins into the vault
-  ${c.cyan("bivy update")}     Update Bivy + install deps + restart service (waits for active sessions to finish a turn; --force to skip)
-  ${c.cyan("bivy update:log")} Show output of the last (or in-progress) update
-  ${c.cyan("bivy agent add")}        Connect an existing user-owned agent
-  ${c.cyan("bivy agents:install")}  Install known upstream agents (${KNOWN_AGENT_INSTALLS.map((a) => a.label).join(", ")})
-  ${c.cyan("bivy open")}       Open the remote web/PWA app
-  ${c.cyan("bivy service")}    install | uninstall | status
-  ${c.cyan("bivy uninstall")}    Remove Bivy and all its data (--keep-sessions, --keep-worktrees, --dry-run)
-  ${c.cyan("bivy link")}       Show a remote web/PWA link QR in the terminal
-  ${c.cyan("bivy relay:setup")}  Enable secure remote web/PWA access (sign in once)
-  ${c.cyan("bivy github:app-create")}            One-click: create + connect a GitHub App
-  ${c.cyan("bivy github:app-connect")}           Connect an existing GitHub App (--app-id --key)
-  ${c.cyan("bivy github:app-sync")} [on|off]     Sync connected GitHub App keys to this account's other opted-in nodes
-  ${c.cyan("bivy github:connect")} [owner/repo]  Connect GitHub in the app (or use a configured self-hosted device flow)
-  ${c.cyan("bivy secrets")}    list | set | ref | delete | doctor | resolve
-  ${c.cyan("bivy voice")}      Configure speech-to-text: provider | key | remove | status
-  ${c.cyan("bivy completions")} <bash|zsh|fish>  Print a shell completion script
-  ${c.cyan("bivy version")}    Print the installed Bivy version (alias: --version, -v)
-`);
+// `bivy help [command] [--json]`: the whole table, or one command's row. The
+// row's --help has the full flags; JSON is for agents and scripts.
+function cmdHelp(args = []) {
+  const json = wantsJson(args);
+  const word = args.find((a) => !a.startsWith("-"));
+  if (!word) {
+    if (json) console.log(JSON.stringify(describeCli(), null, 2));
+    else printHelp();
+    return;
+  }
+  const entry = resolveCommand(word);
+  if (!entry) {
+    const close = suggestCommands(word);
+    cliError({ code: "unknown_command", message: `Unknown command: ${word}`, hint: close.length ? `Did you mean: ${close.join(", ")}?` : undefined, next: "bivy help", exit: EXIT.usage }, { json, paint: c.red });
+    return;
+  }
+  const row = describeCommand(entry);
+  if (json) { console.log(JSON.stringify(row, null, 2)); return; }
+  console.log(`Usage: ${row.usage}\n\n${row.summary}${row.aliases.length ? `\nAliases: ${row.aliases.join(", ")}` : ""}${row.subcommands.length ? `\nSubcommands: ${row.subcommands.join(", ")}` : ""}\n\nFull options: ${row.help}`);
 }
 
 async function main() {
   await hydrateCanonicalConfig();
   const argv = process.argv.slice(2);
   const [command, ...args] = argv;
-  switch (command) {
-    case undefined:
-      printHelp();
-      break;
+  if (command === undefined) { printHelp(); return; }
+  const entry = resolveCommand(command);
+  if (!entry) {
+    const close = suggestCommands(command);
+    cliError({
+      code: "unknown_command",
+      message: `Unknown command: ${command}`,
+      hint: close.length ? `Did you mean: ${close.map((name) => `bivy ${name}`).join(", ")}?` : undefined,
+      next: "bivy help",
+      exit: EXIT.usage,
+    }, { json: wantsJson(args), paint: c.red });
+    return;
+  }
+  switch (entry.name) {
     case "setup":
-    case "init":
       await cmdSetup(args);
       break;
     case "start":
-    case "dev":
       await cmdStart(args);
       break;
     case "run":
@@ -5559,7 +5612,6 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       await cmdRun(args);
       break;
     case "sessions":
-    case "ls":
       await cmdSessions(args);
       break;
     case "resume":
@@ -5569,7 +5621,6 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       await cmdPromote(args);
       break;
     case "rename":
-    case "node:rename":
       await cmdRename(args);
       break;
     case "nodes":
@@ -5584,7 +5635,6 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       cmdAgents(args);
       break;
     case "shim":
-    case "listen":
       await cmdShim(args);
       break;
     case "takeover":
@@ -5600,7 +5650,6 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       await cmdKill(args);
       break;
     case "prune":
-    case "clean":
       await cmdPrune(args);
       break;
     case "send":
@@ -5619,7 +5668,6 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       await cmdDelegate(args);
       break;
     case "completions":
-    case "completion":
       cmdCompletions(args);
       break;
     case "runs": {
@@ -5649,8 +5697,7 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       process.exit(await run(nodeBin, [...nodeScriptArgs(automationEntry), internalAction, ...runArgs], { cwd: process.cwd(), env: process.env }));
       break;
     }
-    case "automation":
-    case "automations": {
+    case "automation": {
       if (!(await ensureDeps())) process.exit(1);
       process.exit(await run(nodeBin, [...nodeScriptArgs(automationEntry), ...args], { cwd: process.cwd(), env: process.env }));
       break;
@@ -5660,17 +5707,14 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       process.exit(await run(nodeBin, [...nodeScriptArgs(configEntry), ...args], { cwd: process.cwd(), env: process.env }));
       break;
     }
-    case "auth":
-    case "credentials":
-    case "creds": {
+    case "auth": {
       if (!(await ensureDeps())) process.exit(1);
       // Forward a subcommand-position --help to the CLI's first-arg help (like secrets).
       const forwardArgs = (args.includes("-h") || args.includes("--help")) ? ["--help"] : args;
       process.exit(await run(nodeBin, [...nodeScriptArgs(credentialsEntry), ...forwardArgs], { cwd: repoRoot, env: process.env }));
       break;
     }
-    case "plugin":
-    case "plugins": {
+    case "plugin": {
       if (!(await ensureDeps())) process.exit(1);
       const pluginEnv = { ...process.env };
       const configuredAgents = loadConfig().env?.BIVY_CUSTOM_AGENTS;
@@ -5724,11 +5768,9 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       await cmdAccountLogin(args);
       break;
     case "logout":
-    case "signout":
       await cmdAccountLogout(args);
       break;
-    case "provider":
-    case "model": {
+    case "provider": {
       const [action, ...providerArgs] = args;
       if (action === "login") {
         await cmdProviderLogin(providerArgs);
@@ -5750,7 +5792,6 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       cmdAudit(args);
       break;
     case "agents:install":
-    case "runtimes:install":
       if (args.includes("-h") || args.includes("--help")) {
         console.log(`Usage: bivy agents:install [--bridges]\n\nInstall known agent integrations (${KNOWN_AGENT_INSTALLS.map((a) => a.label).join(", ")}).\n\n  --bridges   only install the SDK bridges Bivy loads for Claude Code and Pi\n              (they otherwise install on first use)`);
         break;
@@ -5787,7 +5828,6 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       await cmdRelaySetup(args);
       break;
     case "github:connect":
-    case "connect-repo":
       if (args.includes("-h") || args.includes("--help")) {
         console.log("Usage: bivy github:connect [owner/repo]\n\nOpen Settings → GitHub App in the remote app. Self-hosted deployments with BIVY_GITHUB_OAUTH_CLIENT_ID configured use GitHub's device flow instead.");
         break;
@@ -5856,8 +5896,7 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       }
       break;
     }
-    case "secrets":
-    case "secret": {
+    case "secrets": {
       if (!(await ensureDeps())) process.exit(1);
       // secrets-cli.ts only recognizes "--help"/"help" as the FIRST argument, so
       // a subcommand-position --help (e.g. 'bivy secrets list --help') would
@@ -5866,8 +5905,7 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       process.exit(await run(nodeBin, [...nodeScriptArgs(secretsEntry), ...forwardArgs], { cwd: repoRoot, env: process.env }));
       break;
     }
-    case "voice":
-    case "stt": {
+    case "voice": {
       if (!(await ensureDeps())) process.exit(1);
       const forwardArgs = (args.includes("-h") || args.includes("--help")) ? ["--help"] : args;
       process.exit(await run(nodeBin, [...nodeScriptArgs(sttEntry), ...forwardArgs], { cwd: repoRoot, env: process.env }));
@@ -5888,25 +5926,23 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       await run(nodeBin, [...nodeScriptArgs(mcpServeEntry), ...args], { cwd: process.cwd(), env: process.env });
       break;
     case "help":
-    case "-h":
-    case "--help":
-      printHelp();
+      cmdHelp(args);
+      break;
+    case "context":
+      await cmdContext(args);
       break;
     case "version":
-    case "--version":
-    case "-v":
       console.log(readSelfVersion());
       break;
     default:
-      console.error(c.red(`Unknown command: ${command}`));
-      printHelp();
-      process.exit(1);
+      throw new Error(`bivy ${entry.name} is listed in bin/cli-commands.mjs but not dispatched.`);
   }
 }
 
 main().catch((error) => {
   // Show a clean message to users; the full stack is only useful with BIVY_DEBUG.
-  console.error(c.red(error?.message || String(error)));
+  if (wantsJson(process.argv.slice(2))) process.stderr.write(`${JSON.stringify({ error: { code: "failed", message: error?.message || String(error) } })}\n`);
+  else console.error(c.red(error?.message || String(error)));
   if (process.env.BIVY_DEBUG && error?.stack) console.error(c.dim(error.stack));
   process.exit(1);
 });

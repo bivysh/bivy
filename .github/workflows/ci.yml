@@ -250,6 +250,7 @@ jobs:
           "pnpm run check:secrets -- --current-only"
           "pnpm run check:boundaries"
           "pnpm run check:routes"
+          "pnpm run check:cli"
           "pnpm run check:design"
           "pnpm run certification:check"
           "grep -q '^## \[Unreleased\]' CHANGELOG.md || { echo 'CHANGELOG.md needs a ## [Unreleased] section.'; exit 1; }"

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`bivy context`** tells an agent where it is running: its session, agent, workspace, git branch, machine, published apps and the device that last drove it, plus the commands that reach the user. Add `--json` for one object an agent can parse.
+- **`bivy help --json`** lists every command with its usage, scope (session, node or account) and whether it takes `--json`. `bivy help <command>` shows one command. A mistyped command now says **Did you mean: bivy sessions?** and exits 2.
+- `bivy attach` and `bivy suggest` take `--json` and `--help`, and `BIVY_OUTPUT=json` turns on JSON output for every command that has it. With JSON on, failures come back as `{"error":{"code","message","hint","next"}}` with a specific exit code (2 usage, 3 not found, 4 denied, 75 node unreachable), so an agent can tell what went wrong and what to run next.
+
 - **Several notes in one message.** **Mark another** keeps the words you just wrote and hands the marking layer back, so "the button is too small" and "the total is misaligned" stay separate thoughts. Each mark keeps its number on the page and in the picture, and each becomes its own pin — so they are answered one at a time instead of as a lump.
 - **Pins.** Marks you send from a preview now stay in the chat as a card with a state, instead of vanishing into a paragraph of selectors and coordinates. A pin holds a crop of what you marked and the words you sent, and answers itself: **Changed** when a later run changed the pixels you marked, **Element gone** when what you marked left the page, **Done** when you say so. Only evidence moves a pin — a run that changes nothing there leaves it open.
 

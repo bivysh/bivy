@@ -38,10 +38,32 @@ for (const flag of ["version", "--version", "-v"]) {
   });
 }
 
-test("an unknown command exits non-zero and names the offending command", () => {
+test("an unknown command exits 2, names the offending command, and suggests close ones", () => {
   const r = runCli(["definitely-not-a-command"]);
-  assert.notEqual(r.status, 0, "unknown command must exit non-zero");
+  assert.equal(r.status, 2, "unknown command is a usage error");
   assert.match(r.stderr + r.stdout, /Unknown command: definitely-not-a-command/);
+  const typo = runCli(["sesions"]);
+  assert.equal(typo.status, 2);
+  assert.match(typo.stderr, /Did you mean: bivy sessions/);
+});
+
+test("with --json, session commands fail with a machine-readable error and a specific exit code", () => {
+  const r = runCli(["attach", "report.pdf", "--json"], { BIVY_SESSION_ID: "", PI_SESSION_ID: "" });
+  assert.equal(r.status, 2);
+  const { error } = JSON.parse(r.stderr);
+  assert.equal(error.code, "no_session");
+  assert.ok(error.hint && error.next, "an agent is told how to recover");
+});
+
+test("`bivy help --json` describes every visible command with its scope and JSON support", () => {
+  const r = runCli(["help", "--json"]);
+  assert.equal(r.status, 0, r.stderr);
+  const cli = JSON.parse(r.stdout);
+  const attach = cli.commands.find((command: { name: string }) => command.name === "attach");
+  assert.equal(attach.scope, "session");
+  assert.equal(attach.json, true);
+  assert.equal(cli.exitCodes.notFound, 3);
+  assert.ok(!cli.commands.some((command: { name: string }) => command.name === "mcp-serve"), "plumbing stays out of discovery");
 });
 
 test("account and model-provider login commands have distinct help", () => {
@@ -72,7 +94,7 @@ test("bare `bivy` shows the command overview without starting setup or an agent"
   assert.equal(r.status, 0, `expected exit 0, got ${r.status}: ${r.stderr}`);
   const out = r.stdout + r.stderr;
   assert.match(out, /bivy — Bivy node CLI/);
-  assert.match(out, /bivy run claude/);
+  assert.match(out, /bivy run <agent>/);
   assert.doesNotMatch(out, /Which agent do you want to try first|Installing dependencies/);
 });
 

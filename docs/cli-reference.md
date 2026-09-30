@@ -1,10 +1,12 @@
 # `bivy` CLI reference
 
-Complete reference for the `bivy` command. Every command here is dispatched by
-`bin/bivy.mjs`.
+Complete reference for the `bivy` command. The commands are listed once, in
+`bin/cli-commands.mjs`; `bin/bivy.mjs` dispatches only those, and `bivy help`,
+`bivy help --json` and shell completion are generated from the same table.
+`pnpm run check:cli` fails when this page is missing a section for one of them.
 
 Run `bivy help` for the short version. Run `bivy completions <bash|zsh|fish>` to
-get shell completion.
+get shell completion. Agents in a session should start with `bivy context`.
 
 ## I want to…
 
@@ -17,7 +19,11 @@ get shell completion.
 | Ask one question and get one answer | `bivy exec "…"` |
 | Delegate one-off unattended work with checks and a Receipt | `bivy runs start "…"` |
 | Continue an existing session non-interactively | `bivy send <id> "…"` |
+| See where an agent is running and what it can use | `bivy context` |
 | Send a file/image from the agent into the chat | `bivy attach <file>` |
+| Show the user a live preview of an app | `bivy app publish <manifest.json>`, then `bivy app present` |
+| Hand a task to another agent or machine | `bivy delegate "<task>" --agent <id> --wait` |
+| List every command as JSON | `bivy help --json` |
 | Propose a task the user can start in one tap | `bivy suggest "<task>"` |
 | Stop a session | `bivy kill <id>` |
 | Sign this machine into my Bivy account | `bivy login` |
@@ -50,6 +56,29 @@ get shell completion.
   `<data-dir>/bootstrap.json`. If that file is missing, restart the node.
 - `<data-dir>` is the Bivy state directory. See
   [configuration.md](configuration.md) for how it is resolved.
+- Every command accepts `--help`. A mistyped command exits 2 and suggests the
+  closest ones.
+- **JSON output.** Commands marked `json` in `bivy help --json` accept `--json`.
+  `BIVY_OUTPUT=json` turns it on for all of them, which suits scripts and agents.
+- **Errors.** With JSON output on, `context`, `attach`, `suggest`, `app` and
+  unknown commands print failures to stderr as
+  `{"error":{"code","message","hint"?,"next"?}}`, where `next` is a command that
+  helps (for example `bivy sessions --json`).
+- **Exit codes.** These commands, and new ones, use one table:
+
+  | Code | Meaning |
+  | --- | --- |
+  | 0 | Success |
+  | 1 | Failed |
+  | 2 | Usage error (missing argument, unknown command or flag) |
+  | 3 | Not found (session, file, run) |
+  | 4 | Denied or not signed in |
+  | 5 | Timed out |
+  | 6 | Conflict |
+  | 75 | Temporarily unavailable (node unreachable or too old); try again |
+
+  Older commands exit 1 on any failure. `bivy runs wait` keeps its own codes
+  (2 = timed out).
 
 ## Getting started
 
@@ -87,12 +116,37 @@ bivy setup
 Prints the short command overview. Use `bivy setup` for first-run configuration
 and `bivy run <agent>` to launch an agent.
 
+### `bivy help [command] [--json]`
+
+Aliases: `bivy -h`, `bivy --help`.
+
+Prints the command overview, grouped by what the commands are for. With a
+command name, prints that command's synopsis, aliases and subcommands; the
+command's own `--help` has every flag.
+
+`--json` prints the whole table: each command's name, aliases, usage, summary,
+scope (`session`, `node` or `account`), whether it accepts `--json`, and its
+subcommands, plus the exit codes above.
+
+```bash
+bivy help
+bivy help app
+bivy help --json | jq '.commands[] | select(.scope == "session") | .usage'
+```
+
+### `bivy version`
+
+Aliases: `bivy --version`, `bivy -v`.
+
+Prints the installed Bivy version.
+
 ### `bivy completions <bash|zsh|fish>`
 
 Alias: `bivy completion`.
 
-Prints a completion script to stdout. Completes top-level commands, and agent
-ids after `run`.
+Prints a completion script to stdout. Completes top-level commands, the
+subcommands of commands that have them (`bivy app <tab>`), and agent ids after
+`run`.
 
 ```bash
 eval "$(bivy completions bash)"    # ~/.bashrc
@@ -306,7 +360,7 @@ the same client `bivy exec` uses, with `--session <id>`.
 bivy send 3f1c9a02-… "now add a test for that"
 ```
 
-### `bivy attach <file> [--caption "…"] [--artifact] [--session <id>]`
+### `bivy attach <file> [--caption "…"] [--artifact] [--session <id>] [--json]`
 
 Surfaces a file the agent produced into the chat as an attachment — an image
 renders inline as a thumbnail, anything else as a downloadable file chip (the
@@ -332,7 +386,9 @@ bivy attach report.pdf
 bivy attach coverage/index.html --artifact --caption "Coverage report"
 ```
 
-### `bivy suggest "<task>" [--title "…"] [--session <id>]`
+`--json` prints `{"ok","name","kind","size","mimeType","hash"}`.
+
+### `bivy suggest "<task>" [--title "…"] [--session <id>] [--json]`
 
 Posts a **suggested task** card into the chat: a task the agent proposes (a next
 step, an idea, one of several options). The user starts it with one tap —
@@ -350,6 +406,8 @@ root: it becomes the first message of a session that works in its own copy.
 bivy suggest "Add a GET /version endpoint that returns the package version and git commit." --title "Add /version"
 ```
 
+`--json` prints `{"ok","id"}`.
+
 ### `bivy takeover <termId|session-id>`
 
 "Continue as chat." Stops the native TUI running in a pinned run-terminal
@@ -359,6 +417,78 @@ id; anything else as a run-terminal id.
 
 ```bash
 bivy takeover 3f1c9a02-6b41-4a0f-9c2e-5d7f1b0a8e33
+```
+
+## Inside an agent session
+
+These commands act on the session the agent runs in: they read
+`$BIVY_SESSION_ID` (or `$PI_SESSION_ID` under Pi), or take `--session <id>`.
+`bivy attach` and `bivy suggest` above belong here too.
+
+### `bivy context [--json] [--session <id>]`
+
+Orientation for an agent: the session (id, name, agent, workspace, branch, PR,
+the session it was forked or delegated from, whether a turn is running), the
+machine, the apps it has published, the device that last sent input, the git
+checkout in the current directory, and the commands that reach the user.
+Outside a session it still prints the git checkout and the commands, with
+`"session": null`.
+
+```bash
+bivy context
+bivy context --json | jq .session.workspace
+```
+
+Exits 3 when the session isn't open on this node, and 75 when the node can't be
+reached or is too old to answer.
+
+### `bivy app <subcommand>`
+
+Live previews of what the agent built: a web server's port, a static build, a
+terminal command, or a desktop app, shown in the chat and the app's preview
+pane. Output is JSON (`--json` is accepted too).
+
+| Subcommand | What it does |
+| --- | --- |
+| `publish <manifest.json>` | Register an app with web, terminal or display views |
+| `run [--name <n>] [--restart-on-change] -- <command…>` | Publish a one-window desktop app without a manifest |
+| `list` / `remove <app-id>` | List or remove this session's apps |
+| `shot [app-id] [--widths 390,1280] [--themes light,dark] [--path /page]` | Screenshot web views (or a desktop app) and print the PNG paths |
+| `present [view] [--path /page] [--note "…"]` | Tell the user a visible change is ready: a card in the chat, and the preview opens |
+| `share [app-id] [--view <v>] [--for 1h\|1d\|7d] [--view-only]` | Mint a link to one web view |
+| `notes [app-id] [--view <v>] [--since <time>]` | Read notes left through share links (untrusted text) |
+| `click`, `type`, `key`, `scroll`, `drag`, `move`, `menu` | Use a desktop app like a person would, in screenshot pixels |
+
+`bivy app --help` has the manifest format and the details of each subcommand.
+See [apps.md](apps.md).
+
+```bash
+bivy app publish app.json
+bivy app shot --widths 390,1280
+bivy app present --note "Header now wraps on mobile"
+```
+
+### `bivy delegate "<task>" [flags]`
+
+Hands a self-contained task to another agent, optionally on another machine on
+the same account, as a delegated Run tied to this session, and prints the
+child's answer and any branch or PR it produced. Meant for when the user asks
+for another agent or machine; agents should keep using their own sub-agents for
+routine work. See [agent-delegation.md](agent-delegation.md).
+
+| Form | What it does |
+| --- | --- |
+| `delegate "<task>" [--agent <id>] [--machine <name>] [--model <m>] [--repo owner/repo] [--wait [seconds]]` | Start one child Run; `--wait` blocks for the result |
+| `delegate "<task>" --to <agent>[@<machine>],…` | The same task to up to 3 targets, to compare |
+| `delegate machines` | The account's machines and the agents installed on each |
+| `delegate status <run-id>` / `delegate wait <run-id> [--timeout <s>]` | Follow a child Run |
+
+`--approval` and `--sandbox` override the safety the child inherits from this
+session. Every form takes `--json`.
+
+```bash
+bivy delegate machines
+bivy delegate "Review the diff on this branch for correctness bugs" --agent codex --wait
 ```
 
 ## Configuration as code
@@ -888,6 +1018,28 @@ unreachable). `git`, the service, the model and the agent list only warn.
 bivy doctor
 ```
 
+### `bivy capabilities [--json]`
+
+What this machine unlocks for agents: OS and architecture, installed maintained
+and custom agents, configured model providers and local model endpoints,
+Docker and GPU availability, installed plugins, and the workspace count.
+
+```bash
+bivy capabilities --json | jq '.agents.maintained[] | select(.installed) | .id'
+```
+
+### `bivy diagnostics [--out <file>]`
+
+Prints a redacted diagnostics bundle you can share when reporting a problem: no
+secrets, prompts, transcripts or repository content. `--out` writes it to a
+file.
+
+### `bivy audit [--session <id>] [--kind <kind>] [--limit <n>] [--json] [--verify]`
+
+Shows the node's governance audit trail (tool-call decisions and other
+governed events), newest last. `--verify` recomputes the tamper-evidence hash
+chain and checks signatures.
+
 ### `bivy logs [-f] [--n <lines>]`
 
 Tails the node's output from wherever it lands: the systemd journal
@@ -1025,6 +1177,12 @@ bivy uninstall --keep-sessions -y
 The Universal Agent Harness MCP proxy. Launched by an agent in front of its MCP
 servers; its stdin/stdout **are** the JSON-RPC stream. Not intended to be run by
 hand.
+
+### `bivy mcp-serve`
+
+Bivy's own MCP server for agents (stdio), injected into the MCP configuration
+of agents that don't run through an SDK. It exposes `attach_to_chat` and serves
+the Bivy agent note as the MCP `instructions`. Not intended to be run by hand.
 
 ## Notes on requirements
 
