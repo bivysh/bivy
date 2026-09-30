@@ -63,6 +63,7 @@ export const COMMANDS = [
   { name: "run", group: "sessions", scope: "node", usage: "run <agent> [--chat] [--name …] [--model …] [--node …] [--workspace …]", summary: "Run an agent (native CLI/TUI) as a session the app can see" },
   { name: "exec", group: "sessions", scope: "node", json: true, usage: 'exec "<prompt>" [--agent …] [--session …]', summary: "One-shot headless session: prints the answer to stdout" },
   { name: "send", group: "sessions", scope: "node", json: true, usage: 'send <id> "<message>"', summary: "Send a prompt to an existing session and stream the reply" },
+  { name: "tui", group: "sessions", scope: "node", usage: "tui", summary: "Sessions across your machines in the terminal: transcripts, approvals, messages" },
   { name: "sessions", aliases: ["ls"], group: "sessions", scope: "node", json: true, usage: "sessions [--json]", summary: "List recent sessions (live and saved) and resume one" },
   { name: "resume", group: "sessions", scope: "node", usage: "resume [n|id]", summary: "Resume a session directly (default: most recent)" },
   { name: "kill", group: "sessions", scope: "node", usage: "kill <id> [--delete]", summary: "Stop a session or terminal" },

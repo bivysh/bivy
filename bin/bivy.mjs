@@ -2132,6 +2132,31 @@ async function fetchJson(baseUrl, pathName, token) {
 //   --json          machine-readable list, no prompt
 //   --limit/-n N    cap how many saved sessions to show (default: unlimited — all of them)
 //   <n> | <id>      select non-interactively (index in the list, or a session id)
+// `bivy tui` — every session on this machine and your direct nodes in one
+// terminal view: live transcripts, approvals, messages to the agent.
+async function cmdTui(args = []) {
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log("Usage: bivy tui\n\nA terminal view of the sessions on this machine and on the nodes you added with 'bivy nodes add': live transcripts, approvals and messages to the agent, all from the keyboard. Press ? inside for keys.");
+    return;
+  }
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    console.error(c.red("bivy tui needs an interactive terminal."));
+    process.exitCode = EXIT.usage;
+    return;
+  }
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) {
+    console.error(c.red(`Could not start the Bivy node at ${url(config)}.`));
+    process.exitCode = EXIT.unavailable;
+    return;
+  }
+  const token = await localDeviceToken(config);
+  const info = await fetchJson(url(config), "/api/node/info", token).catch(() => ({}));
+  const direct = Object.entries(loadNodes().nodes).map(([name, node]) => ({ name, base: node.url, token: node.token }));
+  const { runTui } = await import("./tui/app.mjs");
+  await runTui({ machines: [{ name: info?.name || "this machine", base: url(config), token }, ...direct] });
+}
+
 async function cmdSessions(args = [], opts = {}) {
   if (args.includes("-h") || args.includes("--help")) {
     console.log(
@@ -6267,6 +6292,9 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       break;
     case "link":
       await cmdLinkPhone(args);
+      break;
+    case "tui":
+      await cmdTui(args);
       break;
     case "relay:setup":
       await cmdRelaySetup(args);

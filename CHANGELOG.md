@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`bivy tui`**: every session on this machine and on the nodes you added with `bivy nodes add`, in one keyboard-driven terminal view. Sessions waiting on you come first. The right pane follows the selected transcript live; press `a` or `r` to answer what the agent is asking, `i` to message it and `x` to stop it. It uses your terminal's colors, so it matches your theme.
+
 ### Changed
 
 - **Apps pill above the composer.** A session's published apps and running servers now have their own pill at the right end of the band above the composer, instead of hiding in the run pill. When people leave reviewer notes on a shared preview, the pill shows **N new notes** until you open the Apps sheet.
