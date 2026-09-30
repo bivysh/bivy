@@ -304,6 +304,14 @@ Escape hatches:
 
 ## Authentication and device enrollment
 
+**Direct access over Tailscale** (`bivy tailscale`, [tailscale.md](tailscale.md))
+adds a second listener on loopback for `tailscale serve` to forward to. Its
+connections arrive from 127.0.0.1 but are marked remote (`markRemoteListener` in
+`src/auth.ts`), so the loopback bypass, bootstrap and git-credential endpoints
+never apply; each device pairs once by redeeming a single-use, 10-minute code
+for a device token (`src/pair-codes.ts`). The CLI refuses to serve on a name
+with Tailscale Funnel on.
+
 - Remote callers (relay, paired devices) must present a valid device token.
 - Device tokens are `mesh_<32 random bytes, base64url>`. Only the SHA-256 hash
   is written to `.bivy/node.json` (mode `0600`); verification uses

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`bivy tailscale`** puts your machine's Bivy on `https://<machine>.<tailnet>.ts.net`, reachable from any device on your tailnet, with no account, control plane or relay. The node serves the web app itself. Pair a phone by opening the one-time link it prints; `bivy tailscale devices` and `bivy tailscale revoke <id>` manage who has access. See [Tailscale](docs/tailscale.md).
+
 ### Changed
 
 - **Apps pill above the composer.** A session's published apps and running servers now have their own pill at the right end of the band above the composer, instead of hiding in the run pill. When people leave reviewer notes on a shared preview, the pill shows **N new notes** until you open the Apps sheet.
