@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Arch Linux and Omarchy package.** `packaging/aur/PKGBUILD` packages Bivy for the AUR as `bivy` (`yay -S bivy`). A pacman-owned install tells you to update through your AUR helper, from `bivy update` and from the app's Update button, instead of overwriting files pacman owns.
+
 ### Changed
 
 - **Apps pill above the composer.** A session's published apps and running servers now have their own pill at the right end of the band above the composer, instead of hiding in the run pill. When people leave reviewer notes on a shared preview, the pill shows **N new notes** until you open the Apps sheet.

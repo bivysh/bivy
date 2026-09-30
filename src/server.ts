@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import fs from "node:fs";
-import { createNodeUpdateChecker, updateRegistryUrl } from "./node-update.js";
+import { createNodeUpdateChecker, managedInstall, updateRegistryUrl } from "./node-update.js";
 import { createRemoteSessionAdmission, RemoteSessionAdmissionError } from "./session/remote-session-admission.js";
 import { requiresExistingSession, resolveTargetSession } from "./session/target-session.js";
 import path from "node:path";
@@ -1014,6 +1014,9 @@ async function maybeNotifyBivyUpdate() {
 // in both. Returns a friendly error instead of throwing when it can't be found
 // (e.g. an unusual layout), so the banner can fall back to the manual command.
 function runBivyUpdate(): { ok: boolean; error?: string } {
+  // A system package (the AUR's `bivy`) owns this install; its manager updates it.
+  const managed = managedInstall(repoRoot);
+  if (managed) return { ok: false, error: `Bivy is installed by ${managed.manager} on this machine. Update it there${managed.update ? `: ${managed.update}` : ""}, then restart Bivy.` };
   const script = path.join(repoRoot, "bin", "bivy.mjs");
   if (!fs.existsSync(script)) {
     return { ok: false, error: "Could not locate the bivy CLI on this node — run `bivy update` in a terminal." };

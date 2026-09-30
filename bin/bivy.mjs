@@ -41,7 +41,7 @@ import { renderManagedBlock, upsertManagedBlock, removeManagedBlock, rcFileForSh
 import { removeInstallAndState } from "./uninstall-paths.mjs";
 import { findAvailablePort, reconcilePort } from "./port-picker.mjs";
 import { resolveAttachSessionId } from "./attach-session-id.mjs";
-import { detectInstallKind as classifyInstallKind, npmGlobalPrefix } from "./install-kind.mjs";
+import { detectInstallKind as classifyInstallKind, managedInstall, npmGlobalPrefix } from "./install-kind.mjs";
 import { hasConfiguredService as configuredServiceExists } from "./service-state.mjs";
 import { COMMANDS, EXIT, cliError, completionWords, describeCli, describeCommand, describeTools, renderHelp, resolveCommand, subcommandTable, suggestCommands, toolArgv, wantsJson } from "./cli-commands.mjs";
 
@@ -76,6 +76,7 @@ process.env.BIVY_DATA_DIR = appDir;
 //   - "npx"        ephemeral `npx bivy` run (repoRoot under an npm _npx cache)
 //   - "npm-global" `npm i -g @bivy/bivy` (repoRoot is below node_modules/@bivy)
 //   - "packaged"   install.sh tarball tree (user-owned, self-preserving)
+//   - "managed"    a system package (the AUR's `bivy`), updated by its manager
 function detectInstallKind() {
   return classifyInstallKind(repoRoot);
 }
@@ -5285,6 +5286,13 @@ async function showDetachedUpdateProgress(child, start) {
 async function cmdUpdate(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
     console.log("Usage: bivy update [--force|--no-wait] [--staging|--stable|--channel <name>]\n\nUpdate Bivy + install deps + restart service. Stays on the release channel recorded at install time (default 'latest'); --staging/--stable/--channel switch channels and are remembered for future updates. Waits for active sessions to finish a turn first; --force/--no-wait skips the wait. See 'bivy update:log' for the last run's output.");
+    return;
+  }
+  const managed = managedInstall(repoRoot);
+  if (managed) {
+    console.log(`Bivy is installed by ${managed.manager} here, so it updates through it${managed.update ? `: ${c.cyan(managed.update)}` : "."}`);
+    console.log(c.dim("Then run 'bivy restart' to pick up the new version."));
+    process.exitCode = EXIT.failed;
     return;
   }
   // Inside a Bivy web/PWA terminal the shell is a child of the node's own

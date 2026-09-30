@@ -3,6 +3,21 @@ import path from "node:path";
 import { gt, valid } from "semver";
 
 /** Match the channel recorded by install.sh and `bivy update`. */
+/**
+ * `{ manager, update }` when a system package manager owns this install (the
+ * AUR's `bivy` writes `.bivy-install.json`, as bin/install-kind.mjs reads it for
+ * the CLI), so the node must not replace its files; null otherwise.
+ */
+export function managedInstall(packageRoot: string): { manager: string; update: string } | null {
+  try {
+    const data = JSON.parse(fs.readFileSync(path.join(packageRoot, ".bivy-install.json"), "utf8")) as { manager?: unknown; update?: unknown };
+    if (typeof data.manager === "string" && data.manager) return { manager: data.manager, update: typeof data.update === "string" ? data.update : "" };
+  } catch {
+    /* not managed */
+  }
+  return null;
+}
+
 export function updateRegistryUrl(appDir: string, override?: string): string {
   if (override) return override;
   let channel = "latest";
