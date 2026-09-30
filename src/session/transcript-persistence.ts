@@ -219,8 +219,11 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
       // delegation that spawned them (toolEntriesFromContent → toolParentId),
       // exactly like the live stream does. Without this the parent id lived only
       // on the in-flight event and reopening a session flattened sub-agent work.
-      // Generic: any runtime whose tool_call event carries parentToolUseId nests.
-      const parentToolUseId = typeof event.parentToolUseId === "string" && event.parentToolUseId ? event.parentToolUseId : undefined;
+      // Generic: any runtime whose tool_call event names its parent nests —
+      // `parentToolUseId` (Claude, protocol agents) or `parentToolCallId` (Pi's
+      // nested calls from codemode / ctx.executeTool).
+      const rawParent = event.parentToolUseId ?? event.parentToolCallId;
+      const parentToolUseId = typeof rawParent === "string" && rawParent ? rawParent : undefined;
       eventLog.append(record.id, { ...base, id: `bivy-tool-call-${callId}`, content: [{ type: "tool_use", id: callId, name, input, ...(parentToolUseId ? { parentToolUseId } : {}), ...(event.detail ? { detail: event.detail } : {}) }] } as ToolActivityMessage);
     }
   }
