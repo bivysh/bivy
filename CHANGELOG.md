@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **The first task's app opens once there's something to show.** "Open … and mark what's wrong" used to open an empty Apps sheet straight away: in a GitHub checkout the session works in its own worktree, so the server you already had running wasn't found there, and the agent's fixes wouldn't have reached it anyway. The agent now publishes the app from the folder it works in (`bivy app publish`), and the preview opens as soon as it's published.
+- **Re-running `bivy setup` opens the app signed in.** With remote access already configured, setup skipped sign-in and opened the app on its sign-in screen. It now offers to sign in again (GitHub or email; the node keeps its identity), then opens the app signed in with this machine selected, as a first run does.
 
 ## [0.20.3] - 2026-10-01
 
