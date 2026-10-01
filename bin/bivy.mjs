@@ -548,6 +548,31 @@ function run(cmd, args, opts = {}) {
   });
 }
 
+// The installer runs `bivy setup </dev/tty`. macOS kqueue rejects that generic
+// device with EINVAL; Node falls back to select(), but Bun-built agents (Claude
+// Code among them) crash. Give an interactive agent the terminal's real device
+// (/dev/ttysNNN) instead. Null when stdin can be inherited as is.
+function openRealTerminal() {
+  if (process.platform !== "darwin" || !process.stdin.isTTY) return null;
+  try {
+    if (fs.fstatSync(0).rdev !== fs.statSync("/dev/tty").rdev) return null;
+    const name = runQuiet("ps", ["-o", "tty=", "-p", String(process.pid)]).stdout.trim();
+    return /^ttys\d+$/.test(name) ? fs.openSync(`/dev/${name}`, "r+") : null;
+  } catch {
+    return null;
+  }
+}
+
+/** run() for a full-screen agent the user drives from this terminal. */
+async function runInteractive(cmd, args, opts = {}) {
+  const tty = openRealTerminal();
+  try {
+    return await run(cmd, args, tty === null ? opts : { ...opts, stdio: [tty, "inherit", "inherit"] });
+  } finally {
+    if (tty !== null) fs.closeSync(tty);
+  }
+}
+
 /** Fixed executable + fixed entry point for setup's inline model-auth stage.
  * Keep this separate from the generic CLI forwarding helper: no user-provided
  * command or argv value reaches this process boundary. */
@@ -4743,7 +4768,7 @@ async function cmdSetup(args = []) {
       const signInNow = await askYesNo(`Open ${setupAgent.label} now to sign in? (Exit it when sign-in is complete.)`, true);
       if (signInNow) {
         rl.pause();
-        const loginCode = await run(setupAgent.command, [], { cwd: config.workspace, env: startEnv(config) });
+        const loginCode = await runInteractive(setupAgent.command, [], { cwd: config.workspace, env: startEnv(config) });
         rl.resume();
         agentAuthReady = loginCode === 0 || nativeAgentAuthDetected(setupAgent);
       }
