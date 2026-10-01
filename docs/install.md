@@ -163,8 +163,9 @@ picks sensible defaults for everything and asks a few questions:
 - **Model login** — if the chosen agent isn't signed in yet, an offer to open
   its login flow now.
 
-A browser or phone UI needs a control plane, because the node hosts none — so
-without enrollment Bivy is a local CLI: durable Sessions, resume, Runs, and
+A browser or phone UI needs a control plane, or `bivy tailscale` to serve the
+app over your tailnet (chat, approvals and terminals only; see
+[Tailscale](tailscale.md)). Without either, Bivy is a local CLI: durable Sessions, resume, Runs, and
 automations from the terminal, but no `bivy open`. If enrollment fails, setup
 offers to retry; run `bivy login` later to finish.
 
@@ -218,7 +219,7 @@ pnpm install
 pnpm run setup     # or: pnpm start
 ```
 
-The node has no local UI — `http://localhost:4317` is the data plane (API +
+The node serves no UI on its main port — `http://localhost:4317` is the data plane (API +
 WebSocket) and returns one line of plain text confirming it's up. Use
 `bivy open` to reach the browser/PWA UI, served by the control plane just
 like any other install (see [remote-access.md](remote-access.md)).

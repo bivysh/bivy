@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **What Tailscale gives you, stated plainly.** `bivy access`, the README and the docs now say that over Tailscale you get sessions, chat, approvals, questions, terminals and files, and that push notifications and app previews need Bivy hosted or your own server. The README no longer says the node can't serve the app.
 - **The agent shim is your choice.** `bivy setup` asks before installing it, and the default is now no. Without a terminal to answer from, it isn't installed. If you say no, or there's no terminal, setup prints `bivy shim install <agent>` so you can turn it on later.
 - **Forks carry the plan and the latest request.** A fork to another agent tells it where the previous agent's plan stands, and repeats the user's latest request in full when the summary had to shorten it.
 - **Agents refreshed:** Claude Agent SDK 0.3.286, Codex 0.159.2, Pi 0.99.2.

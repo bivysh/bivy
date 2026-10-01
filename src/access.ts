@@ -13,7 +13,7 @@ export const ACCESS_FEATURES = [
   { id: "devices", label: "Your phone and other devices" },
   { id: "machines", label: "All your machines in one app" },
   { id: "push", label: "Push notifications" },
-  { id: "sharing", label: "Shareable app previews" },
+  { id: "sharing", label: "App previews" },
 ] as const;
 export type AccessFeatureId = (typeof ACCESS_FEATURES)[number]["id"];
 
@@ -30,7 +30,7 @@ interface SetupRow {
 
 export const ACCESS_SETUPS: readonly SetupRow[] = [
   { id: "local", label: "This machine only", summary: "The terminal and a browser on this machine.", gives: { devices: 0, machines: 0, push: 0, sharing: 0 } },
-  { id: "tailscale", label: "Tailscale", summary: "Your devices reach your machines over your tailnet. No account, nothing in between.", command: "bivy access tailscale", gives: { devices: 1, machines: 1, push: 0, sharing: 0 } },
+  { id: "tailscale", label: "Tailscale", summary: "Chat, approvals and terminals on your devices, over your tailnet. No account, nothing in between.", command: "bivy access tailscale", gives: { devices: 1, machines: 1, push: 0, sharing: 0 } },
   { id: "hosted", label: "Bivy hosted", summary: "Sign in once. Sessions stay end-to-end encrypted.", command: "bivy access hosted", gives: { devices: 2, machines: 2, push: 2, sharing: 2 } },
   { id: "server", label: "Your own server", summary: "Like hosted, on a server you control.", command: "bivy access server <url>", gives: { devices: 2, machines: 2, push: 2, sharing: 2 } },
 ];
