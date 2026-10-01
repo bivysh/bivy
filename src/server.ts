@@ -58,7 +58,8 @@ import { passWebhookFilter } from "./automation-filter-gate.js";
 import { isModelAuthError, authProviderForSession, classifyModelAuthError } from "./runtime/auth-errors.js";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
 import { probeAnthropicAccess } from "./runtime/anthropic-preflight.js";
-import { credentialReadiness } from "./runtime/activation-readiness.js";
+import { agentCredentialReadiness, credentialReadiness } from "./runtime/activation-readiness.js";
+import { discoverNativeAuth } from "./runtime/native-auth-import.js";
 import { provisionAgentRun } from "./runtime/credential-provisioning.js";
 import { ingestAgentCredentials } from "./runtime/credential-ingest.js";
 import { createSessionNamer, fallbackSessionName } from "./session/session-namer.js";
@@ -11787,7 +11788,8 @@ app.get("/api/repos", async (_req, res) => {
 // Authoritative, read-only first-task probes. Unlike the web client's presence
 // flags, these checks run where the credential and repository access actually
 // live. Inconclusive provider/network failures remain "unknown" instead of
-// falsely blocking activation.
+// falsely blocking activation, and an agent that owns its login (Claude Code,
+// Codex) counts its own sign-in, not only Bivy's vault.
 async function activationReadinessSnapshot() {
   const [credential, repositoryChosen, workspaceReady] = await Promise.all([
     listProviders(credsDir, piDir).then((providers) => credentialReadiness(providers, async (provider) => {
@@ -11796,7 +11798,8 @@ async function activationReadinessSnapshot() {
       if (credential?.type === "oauth") return { probed: false, ok: true };
       return probeAnthropicAccess(credential?.type === "api_key" && typeof credential.key === "string"
         ? credential.key : process.env.ANTHROPIC_API_KEY);
-    })),
+    })).then((vault) => agentCredentialReadiness(canonicalAgentId(nodeConfiguredDefaultAgent()), vault,
+      (source) => discoverNativeAuth(source).status === "found")),
     gitRepoRoot(defaultWorkspace).then(Boolean),
     fs.promises.access(defaultWorkspace, fs.constants.R_OK | fs.constants.W_OK).then(() => true, () => false),
   ]);
