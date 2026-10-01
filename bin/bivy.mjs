@@ -4752,14 +4752,18 @@ async function cmdSetup(args = []) {
 
   // The terminal path to the same loop: the agent's own command starts a Bivy
   // session, so work begun in a terminal shows up in the app and reaches the
-  // phone. Offered after sign-in, which runs the real agent.
+  // phone. It changes the user's shell, so it is their choice: asked (default
+  // no) only with a terminal to answer from. Offered after sign-in, which runs
+  // the real agent.
   const shimAgent = setupAgent?.command;
   if (agentReady && shimAgent && AGENT_INTEGRATIONS.has(shimAgent) && !loadShims().shims[shimAgent]) {
     console.log(`\nWhen you type '${shimAgent}' in a terminal, Bivy can run it as a session: it shows up in the app, and your phone hears when it finishes or needs you.`);
-    if (await askYesNo(`Start a Bivy session whenever you run '${shimAgent}'?`, true)) {
+    if (process.stdin.isTTY && await askYesNo(`Start a Bivy session whenever you run '${shimAgent}'?`, false)) {
       rl.pause();
       await run(nodeBin, [selfScript, "shim", "install", shimAgent], { env: process.env });
       rl.resume();
+    } else {
+      console.log(c.dim(`Turn it on any time with: bivy shim install ${shimAgent}`));
     }
   }
 
