@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.5] - 2026-10-01
+
 ### Fixed
 
 - **A signed-in Claude Code or Codex counts as ready on first run.** On a new machine whose agent was already signed in, the app said "Credential valid · The model credential is missing or invalid" and offered an **Authenticate** button that only opened the model picker, so the first-task card never showed, even though the agent answered fine. The check only looked at Bivy's own credential vault. It now counts the default agent's own sign-in (`~/.claude`, `~/.codex`, `~/.grok`). When Bivy can't see the login (Claude Code on macOS keeps it in the Keychain, or an agent reads an API key from the environment), the check stays out of the way instead of failing. Pi, which runs on Bivy's vault, still needs a credential there.
