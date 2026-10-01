@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-10-01
+
 ### Added
 
 - **Agent plans show as a checklist.** When an agent keeps a todo list or plan (Grok, OpenCode, Codex `update_plan`, or any ACP agent), the turn shows one **Plan · 2 of 4 done** line where the plan was last updated, and it opens into the steps with their status. `bivy tui` shows the same progress as one line per turn. Before, Grok and other ACP plans were pasted into the agent's thinking after every update, and Codex plans didn't show at all.
