@@ -5,7 +5,7 @@
 // hosted and self-hosted deployments, including Node.js prerequisite setup.
 // Self-hosted commands pin BIVY_CONTROL_PLANE_URL / BIVY_RELAY_URL on the bash
 // side of the pipe so the node enrolls on THIS deployment, not app.bivy.sh. When the app is already signed in, include the
-// current account session as BIVY_SESSION_TOKEN so `bivy setup` can enroll the
+// current account session as BIVY_ACCOUNT_TOKEN so `bivy setup` can enroll the
 // new Machine without asking the user to authenticate again. Also expose a plain
 // no-token variant for users who prefer to authenticate on the new Machine.
 // Pure so it's testable without a DOM.
@@ -46,7 +46,7 @@ export function installCommand(origin: string, relayUrl?: string | null, session
     `BIVY_CONTROL_PLANE_URL=${shellQuote(cp)}`,
     ...(relay ? [`BIVY_RELAY_URL=${shellQuote(relay)}`] : []),
   ];
-  const authedEnv = sessionToken ? [`BIVY_SESSION_TOKEN=${shellQuote(sessionToken)}`, ...baseEnv] : baseEnv;
+  const authedEnv = sessionToken ? [`BIVY_ACCOUNT_TOKEN=${shellQuote(sessionToken)}`, ...baseEnv] : baseEnv;
   const hosted = isHostedControlPlane(origin);
   const build = (env: string[]) => env.length ? `curl -fsSL https://bivy.sh/install.sh | ${env.join(" ")} bash` : HOSTED_INSTALL_CMD;
 

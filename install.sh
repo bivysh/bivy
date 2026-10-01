@@ -562,8 +562,15 @@ first_agent_command() {
   ' "$STATE_DIR/cli.json" 2>/dev/null || printf 'claude'
 }
 
+# The Connect a Machine command's account token. Its old name, BIVY_SESSION_TOKEN,
+# is also every agent session's own route token, so it only counts outside an
+# agent session (BIVY_SESSION_ID unset); `bivy setup` applies the same rule.
+if [ -z "${BIVY_ACCOUNT_TOKEN:-}" ] && [ -z "${BIVY_SESSION_ID:-}" ] && [ -n "${BIVY_SESSION_TOKEN:-}" ]; then
+  export BIVY_ACCOUNT_TOKEN="$BIVY_SESSION_TOKEN"
+fi
+
 if [ -f "$STATE_DIR/cli.json" ]; then
-  if [ -n "${BIVY_SESSION_TOKEN:-}${BIVY_NODE_CLAIM_CODE:-}" ]; then
+  if [ -n "${BIVY_ACCOUNT_TOKEN:-}${BIVY_NODE_CLAIM_CODE:-}" ]; then
     info "Existing Bivy configuration found; enrolling with the provided account token."
     # The hosted "Connect a Machine" command intentionally includes a fresh
     # account session/claim. Treat that as an explicit re-pair request even when
