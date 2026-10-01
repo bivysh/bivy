@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.3] - 2026-10-01
+
 ### Fixed
 
 - **Signing in to Claude Code during setup works on macOS.** When the installer ran `bivy setup`, answering yes to "Open Claude Code now to sign in?" crashed Claude Code with `EINVAL: invalid argument, kqueue`. Setup now hands the agent the terminal's own device, so the sign-in opens normally.
