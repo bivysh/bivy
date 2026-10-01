@@ -4688,45 +4688,7 @@ async function cmdSetup(args = []) {
     }
 
     if (syncChoice !== "l" && syncChoice !== "t") {
-      if (!nodeClaimCode) {
-        const loginChoice = await askChoice(
-          "Remote login",
-          [
-            { key: "g", label: "GitHub" },
-            { key: "e", label: "email sign-in link (open or scan on any device)" },
-          ],
-          "g",
-        );
-        if (loginChoice === "e") {
-          const email = await ask("  Your account email:", config.env.BIVY_EMAIL || "");
-          if (email.trim()) relayArgs.push("--email", email.trim());
-          else relayArgs.push("--github");
-        } else {
-          relayArgs.push("--github");
-        }
-      }
-
-      const useGithub = relayArgs.includes("--github");
-      try { fs.rmSync(setupSessionPath, { force: true }); } catch { /* best effort */ }
-      let relayOk;
-      for (;;) {
-        console.log(c.dim(nodeClaimCode
-          ? "  Using the one-time machine claim from your Bivy account; no additional sign-in is required."
-          : useGithub
-            ? "  We'll open GitHub in your browser (or print the URL on a headless server). Authorize, and setup continues automatically."
-            : "  We'll email you a sign-in link. Open it in any browser and setup continues automatically."));
-        rl.pause();
-        const code = await run(nodeBin, [...nodeScriptArgs(relaySetupEntry), ...relayArgs, "--emit-session", setupSessionPath], {
-          cwd: repoRoot,
-          env: startEnv(config),
-        });
-        rl.resume();
-        relayOk = code === 0;
-        if (relayOk) break;
-        const retry = await askYesNo("Remote access setup failed. Try again?", true);
-        if (!retry) break;
-      }
-      if (!relayOk) {
+      if (!(await signInRemote(relayArgs, nodeClaimCode))) {
         rl.close();
         console.error(c.red("\nSetup is incomplete: Bivy could not connect this node to a relay/control plane."));
         console.error(`Re-run ${c.cyan("bivy setup")} to retry, or choose "local only" to skip remote access for now.`);
@@ -4737,6 +4699,58 @@ async function cmdSetup(args = []) {
     }
   } else {
     console.log(c.dim("\nRemote access already configured. 'bivy access' shows it and the other options."));
+    // A re-run has no account session, so the app would open on its sign-in
+    // screen. Signing in again re-enrolls the same node (same id) and lets setup
+    // open the app signed in, like a first run.
+    const relay = loadRelayConfig();
+    if (relay?.controlPlaneUrl && canOpenBrowser() && await askYesNo("Sign in so the app opens signed in when setup finishes?", true)) {
+      const relayArgs = ["--control-plane", relay.controlPlaneUrl, "--relay", relay.url];
+      if (relay.clientBaseUrl) relayArgs.push("--client", relay.clientBaseUrl);
+      if (await signInRemote(relayArgs)) setupSession = consumeSetupSession();
+      else console.log(c.yellow("Sign-in didn't finish. Remote access is unchanged; sign in from the app instead."));
+    }
+  }
+
+  // Runs relay:setup (sign-in + enrollment) with the account session handed back
+  // through setupSessionPath. Asks GitHub or email first unless a machine claim
+  // stands in for sign-in. Returns whether it succeeded.
+  async function signInRemote(relayArgs, nodeClaimCode = "") {
+    if (!nodeClaimCode) {
+      const loginChoice = await askChoice(
+        "Remote login",
+        [
+          { key: "g", label: "GitHub" },
+          { key: "e", label: "email sign-in link (open or scan on any device)" },
+        ],
+        "g",
+      );
+      if (loginChoice === "e") {
+        const email = await ask("  Your account email:", config.env.BIVY_EMAIL || "");
+        if (email.trim()) relayArgs.push("--email", email.trim());
+        else relayArgs.push("--github");
+      } else {
+        relayArgs.push("--github");
+      }
+    }
+
+    const useGithub = relayArgs.includes("--github");
+    try { fs.rmSync(setupSessionPath, { force: true }); } catch { /* best effort */ }
+    for (;;) {
+      console.log(c.dim(nodeClaimCode
+        ? "  Using the one-time machine claim from your Bivy account; no additional sign-in is required."
+        : useGithub
+          ? "  We'll open GitHub in your browser (or print the URL on a headless server). Authorize, and setup continues automatically."
+          : "  We'll email you a sign-in link. Open it in any browser and setup continues automatically."));
+      rl.pause();
+      const code = await run(nodeBin, [...nodeScriptArgs(relaySetupEntry), ...relayArgs, "--emit-session", setupSessionPath], {
+        cwd: repoRoot,
+        env: startEnv(config),
+      });
+      rl.resume();
+      if (code === 0) return true;
+      const retry = await askYesNo("Remote access setup failed. Try again?", true);
+      if (!retry) return false;
+    }
   }
 
   // GitHub App — connect it from the web app (Settings → GitHub App) or with
@@ -4967,10 +4981,11 @@ async function finishSetupRemote(config, setupSession = null) {
     return;
   }
 
-  const { remoteBase } = remote;
+  const { remoteBase, accountUrl } = remote;
+  const signedInHere = Boolean(accountUrl && openable);
 
   console.log("\n  Access Bivy from anywhere:");
-  if (remoteBase) console.log(`    • Remote app:     ${c.cyan(remoteBase)}  (sign in with the same GitHub/email you just used)`);
+  if (remoteBase) console.log(`    • Remote app:     ${c.cyan(remoteBase)}  (${signedInHere ? "opened signed in here; on other devices, " : ""}sign in with the same GitHub/email)`);
   console.log(`    • Check status:   ${c.cyan("bivy status")}`);
   if (!openable) {
     console.log(c.dim("\n  No browser on this machine (headless server)? Open the Remote app URL above"));
