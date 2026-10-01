@@ -117,7 +117,7 @@ for (const theme of themes) {
     await expect(page.getByText("It connects to your self-hosted server.", { exact: false })).toBeVisible();
     await page.getByRole("button", { name: "Copy regular sign-in command", exact: true }).click();
     const plain = await page.evaluate(() => (window as unknown as { copied: string }).copied);
-    expect(plain).not.toContain("BIVY_SESSION_TOKEN");
+    expect(plain).not.toContain("BIVY_ACCOUNT_TOKEN");
     expect(plain).toContain(`BIVY_CONTROL_PLANE_URL=${origin}`);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     if (testInfo.project.name === "mobile") {

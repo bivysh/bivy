@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **A signed-in Claude Code or Codex counts as ready on first run.** On a new machine whose agent was already signed in, the app said "Credential valid · The model credential is missing or invalid" and offered an **Authenticate** button that only opened the model picker, so the first-task card never showed, even though the agent answered fine. The check only looked at Bivy's own credential vault. It now counts the default agent's own sign-in (`~/.claude`, `~/.codex`, `~/.grok`). When Bivy can't see the login (Claude Code on macOS keeps it in the Keychain, or an agent reads an API key from the environment), the check stays out of the way instead of failing. Pi, which runs on Bivy's vault, still needs a credential there.
+- **Installing or setting up Bivy from inside an agent session no longer tries to enroll with the session's token.** Every agent session has `BIVY_SESSION_TOKEN`, a token for its own routes, and the Connect a Machine command used the same name for your account sign-in. So `install.sh` or `bivy setup` run by an agent took the token path, failed to enroll, and restarted the node the agent was running on. The command's account token is now `BIVY_ACCOUNT_TOKEN`. Commands copied before this change still work, except from inside an agent session.
+- **Re-running Connect a Machine on an installed machine doesn't ask you to sign in.** `bivy relay:setup` asked "Sign in with GitHub?" even when the command carried your account token or a machine claim. It now uses them.
 
 ## [0.20.4] - 2026-10-01
 

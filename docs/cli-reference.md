@@ -878,7 +878,7 @@ interactively whether to sign in with GitHub.
 | --- | --- | --- |
 | `--github` | chosen when no email/session token | Sign in with GitHub (device flow) |
 | `--email <addr>` | `$BIVY_EMAIL` | Sign in with an emailed magic link |
-| `--session-token <tok>` | `$BIVY_SESSION_TOKEN` | Skip sign-in; use an existing account session |
+| `--session-token <tok>` | `$BIVY_ACCOUNT_TOKEN` | Skip sign-in; use an existing account session |
 | `--control-plane <url>` | `$BIVY_CONTROL_PLANE_URL`, else the baked-in hosted endpoint | Self-host target |
 | `--relay <url>` | `$BIVY_RELAY_URL`, else the baked-in hosted endpoint | Relay `ws(s)://` URL |
 | `--client <url>` | `$BIVY_CLIENT_BASE_URL`, else the baked-in hosted endpoint | Where the web app is served |

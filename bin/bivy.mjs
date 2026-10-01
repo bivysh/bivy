@@ -109,6 +109,14 @@ const relayConfigPath = path.join(appDir, "relay.json");
 // (all nodes), not a node-scoped link grant that would show only this node.
 // Read once and deleted immediately — never a credential left at rest.
 const setupSessionPath = path.join(appDir, ".setup-session.json");
+
+// The Connect a Machine command's account token. BIVY_SESSION_TOKEN was its old
+// name and still works from old copied commands, but inside an agent session
+// (BIVY_SESSION_ID set) that name is the session's own route token, never an
+// account sign-in. Mirrors install.sh and src/relay-setup.ts.
+function accountTokenFromEnv() {
+  return process.env.BIVY_ACCOUNT_TOKEN || (process.env.BIVY_SESSION_ID ? "" : process.env.BIVY_SESSION_TOKEN || "");
+}
 const updateLogPath = path.join(appDir, "update.log");
 // The release channel (npm dist-tag) this install tracks, recorded at install
 // time by install.sh and here by `bivy update --channel`. Absent = `latest`, so
@@ -4561,7 +4569,7 @@ async function cmdSetup(args = []) {
   }
   // install.sh supplies these only for the Connect a Machine command. Keep
   // this branch before creating a readline prompter: there may be no TTY.
-  if (process.env.BIVY_SESSION_TOKEN || process.env.BIVY_NODE_CLAIM_CODE) {
+  if (accountTokenFromEnv() || process.env.BIVY_NODE_CLAIM_CODE) {
     await cmdTokenSetup();
     return;
   }
@@ -6127,7 +6135,9 @@ async function cmdRelaySetup(args) {
   if (!(await ensureDeps())) process.exit(1);
   const config = loadConfig();
   let passthrough = args;
-  if (!args.includes("--email") && !args.includes("--session-token") && !args.includes("--github")) {
+  // A Connect a Machine token or claim in the environment is the sign-in.
+  const signedInByEnv = Boolean(accountTokenFromEnv() || process.env.BIVY_NODE_CLAIM_CODE);
+  if (!signedInByEnv && !args.includes("--email") && !args.includes("--session-token") && !args.includes("--github")) {
     const rl = createPrompter();
     const useGithub = await rl.askYesNo("Sign in with GitHub?", true);
     if (useGithub) {

@@ -333,7 +333,7 @@ The hosted endpoints all derive from one domain, so you normally set nothing.
 | `BIVY_CLIENT_BASE_URL` | URL | the resolved control-plane URL | Supported — where the web app is served |
 | `BIVY_RELAY_TOKEN` | token | `relay.json`'s `enrollmentToken` | Supported. If neither a URL nor a token resolves, the relay stays off |
 | `BIVY_EMAIL` | email | unset | Supported — non-interactive `bivy relay:setup` |
-| `BIVY_SESSION_TOKEN` | token | unset | Supported — skip sign-in during `relay:setup` with an existing account session |
+| `BIVY_ACCOUNT_TOKEN` | token | unset | Supported — skip sign-in during `bivy setup` / `relay:setup` with an existing account session (the Connect a Machine command sets it). The old name `BIVY_SESSION_TOKEN` still works outside an agent session; inside one it is the session's own token |
 | `BIVY_AUTH` | `github` | unset | Supported — force GitHub sign-in. GitHub is used anyway when neither an email nor a session token is given |
 | `BIVY_NODE_LABEL` | label | unset | Supported override — an **extra** work-queue label this node serves, on top of `<base>` and `<base>/<node-name>`. Accepts `bivy/x` or a bare `x`. Rarely needed; the node name is used automatically |
 | `BIVY_URL` | URL | `http://localhost:<PORT>` | Supported — which node the `bivy exec` / attach clients talk to. `--url` wins |

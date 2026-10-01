@@ -59,6 +59,9 @@ for cmd in make g++ python3 bivy; do
   chmod +x "$WORK/stub/$cmd"
 done
 
+# The cases below set these themselves; never inherit them from an agent session.
+unset BIVY_ACCOUNT_TOKEN BIVY_SESSION_TOKEN BIVY_SESSION_ID
+
 run_installer() {
   # HOME is redirected so the installer's ~/.local symlink handling is contained.
   env -i \
@@ -66,7 +69,9 @@ run_installer() {
     HOME="$WORK/home" \
     BIVY_DATA_DIR="$1" \
     BIVY_HOME="$2" \
+    BIVY_ACCOUNT_TOKEN="${BIVY_ACCOUNT_TOKEN:-}" \
     BIVY_SESSION_TOKEN="${BIVY_SESSION_TOKEN:-}" \
+    BIVY_SESSION_ID="${BIVY_SESSION_ID:-}" \
     bash "$INSTALLER" >"$WORK/out.log" 2>&1
 }
 
@@ -99,8 +104,18 @@ check "second run leaves current state alone" "$(cat "$DATA/cli.json")" '{"servi
 
 # -------------------------------------- existing config + browser account token
 : > "$WORK/bivy-calls.log"
-BIVY_SESSION_TOKEN=sess_test run_installer "$DATA" "$LEGACY" || true
+BIVY_ACCOUNT_TOKEN=sess_test run_installer "$DATA" "$LEGACY" || true
 check "account-token reinstall re-enrolls before restart" "$(tr '\n' ',' < "$WORK/bivy-calls.log")" 'relay:setup,restart,'
+
+# An old copied command still carries the token as BIVY_SESSION_TOKEN.
+: > "$WORK/bivy-calls.log"
+BIVY_SESSION_TOKEN=sess_test run_installer "$DATA" "$LEGACY" || true
+check "old token name still re-enrolls" "$(tr '\n' ',' < "$WORK/bivy-calls.log")" 'relay:setup,restart,'
+
+# Inside an agent session that name is the session's own token, not a sign-in.
+: > "$WORK/bivy-calls.log"
+BIVY_SESSION_ID=s1 BIVY_SESSION_TOKEN=bst_agent run_installer "$DATA" "$LEGACY" || true
+check "agent session token never enrolls" "$(tr '\n' ',' < "$WORK/bivy-calls.log")" 'restart,'
 
 # ------------------------------------------------- fresh install, no legacy
 FRESH_HOME="$WORK/fresh"

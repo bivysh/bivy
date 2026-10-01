@@ -206,7 +206,10 @@ async function main() {
   // still wins for setups that serve the web app from a separate origin.
   const clientBaseUrl = (arg("client", process.env.BIVY_CLIENT_BASE_URL) ?? controlPlaneUrl).replace(/\/$/, "") || controlPlaneUrl;
   const email = arg("email", process.env.BIVY_EMAIL);
-  const sessionToken = arg("session-token", process.env.BIVY_SESSION_TOKEN);
+  // BIVY_SESSION_TOKEN is the old name for the account token, and inside an
+  // agent session it is that session's route token instead (see bin/bivy.mjs).
+  const sessionToken = arg("session-token", process.env.BIVY_ACCOUNT_TOKEN
+    || (process.env.BIVY_SESSION_ID ? undefined : process.env.BIVY_SESSION_TOKEN));
   const nodeClaimCode = process.env.BIVY_NODE_CLAIM_CODE?.trim();
   // GitHub is the primary sign-in: used when --github is passed, or by default
   // when neither an email, an existing session token, nor a one-time machine
