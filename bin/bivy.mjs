@@ -4846,7 +4846,7 @@ async function cmdSetup(args = []) {
   // fallback/next-step checklist after the remote app has been opened or linked.
   await finishSetupRemote(finalConfig, setupSession);
   if (signInAgent) {
-    console.log(`  Starting ${c.cyan(`bivy run ${signInAgent.command}`)} — sign in there (${signInAgent.loginHint}), then keep working. It's a Bivy session: it shows in the app.\n`);
+    console.log(`  Starting ${c.cyan(`bivy run ${signInAgent.command}`)} — sign in there, then keep working. It's a Bivy session: it shows in the app.\n`);
     await runInteractive(nodeBin, [selfScript, "run", signInAgent.command, "--workspace", finalConfig.workspace], { env: process.env });
     return;
   }
