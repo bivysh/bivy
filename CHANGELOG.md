@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Signing in to Claude Code during setup works on macOS.** When the installer ran `bivy setup`, answering yes to "Open Claude Code now to sign in?" crashed Claude Code with `EINVAL: invalid argument, kqueue`. Setup now hands the agent the terminal's own device, so the sign-in opens normally.
+- **The agent setup opens for sign-in is a Bivy session.** Setup used to start plain `claude` (or another agent) for sign-in before the node was running, so the machine showed as offline and nothing you did there appeared in the app until you exited. Setup now brings the node online and opens the app first, then starts the agent with `bivy run`: you sign in and keep working in a session the app shows.
 
 ## [0.20.2] - 2026-10-01
 

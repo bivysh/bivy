@@ -4748,6 +4748,10 @@ async function cmdSetup(args = []) {
   // is ready while the required credential is still absent. Agent-native auth is
   // explained in the readiness checklist below because those CLIs own the flow.
   let agentAuthReady = setupAgent?.needsBivyModel ? hasModelConfig(config) : nativeAgentAuthDetected(setupAgent);
+  // Native sign-in is asked here but runs last, through `bivy run`, once the
+  // node is up: the agent opens as a Bivy session the app shows, and the user
+  // can keep working in it after signing in instead of having to exit.
+  let signInAgent = null;
   if (setupAgent?.needsBivyModel && !agentAuthReady) {
     console.log("\nBivy stores this credential encrypted on your machine, reuses it with compatible agents, and syncs it E2E-encrypted to your other Bivy nodes. Bivy Cloud never receives it in plaintext.");
     const signInNow = await askYesNo("Sign in to a model now so your first task can run?", true);
@@ -4765,12 +4769,8 @@ async function cmdSetup(args = []) {
       console.log(c.green(`\n  ✓ Existing ${setupAgent.label} login detected — Bivy will connect without replacing the agent's credential store.`));
     } else if (setupAgent.command) {
       console.log(`\n${setupAgent.label} owns its login and configuration. Bivy connects to that existing agent state rather than copying it into a separate default credential store.`);
-      const signInNow = await askYesNo(`Open ${setupAgent.label} now to sign in? (Exit it when sign-in is complete.)`, true);
-      if (signInNow) {
-        rl.pause();
-        const loginCode = await runInteractive(setupAgent.command, [], { cwd: config.workspace, env: startEnv(config) });
-        rl.resume();
-        agentAuthReady = loginCode === 0 || nativeAgentAuthDetected(setupAgent);
+      if (await askYesNo(`Start ${setupAgent.label} to sign in when setup finishes? It runs as a Bivy session, so it shows in the app.`, true)) {
+        signInAgent = setupAgent;
       }
     }
   }
@@ -4778,8 +4778,7 @@ async function cmdSetup(args = []) {
   // The terminal path to the same loop: the agent's own command starts a Bivy
   // session, so work begun in a terminal shows up in the app and reaches the
   // phone. It changes the user's shell, so it is their choice: asked (default
-  // no) only with a terminal to answer from. Offered after sign-in, which runs
-  // the real agent.
+  // no) only with a terminal to answer from.
   const shimAgent = setupAgent?.command;
   if (agentReady && shimAgent && AGENT_INTEGRATIONS.has(shimAgent) && !loadShims().shims[shimAgent]) {
     console.log(`\nWhen you type '${shimAgent}' in a terminal, Bivy can run it as a session: it shows up in the app, and your phone hears when it finishes or needs you.`);
@@ -4846,6 +4845,11 @@ async function cmdSetup(args = []) {
   // Get the user into the product immediately; terminal commands are the
   // fallback/next-step checklist after the remote app has been opened or linked.
   await finishSetupRemote(finalConfig, setupSession);
+  if (signInAgent) {
+    console.log(`  Starting ${c.cyan(`bivy run ${signInAgent.command}`)} — sign in there, then keep working. It's a Bivy session: it shows in the app.\n`);
+    await runInteractive(nodeBin, [selfScript, "run", signInAgent.command, "--workspace", finalConfig.workspace], { env: process.env });
+    return;
+  }
   printFirstRunSteps(modelReady, setupAgent);
 }
 
