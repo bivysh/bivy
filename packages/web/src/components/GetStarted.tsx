@@ -4,8 +4,8 @@
 // The first thing a new user sees once setup passes: one tap starts the loop
 // Bivy is for. The agent works, the result reaches the phone, the user marks
 // or answers, and it ships. If a dev server is already running on the machine,
-// the first task is that app: open it, mark what's wrong, get a fix and a share
-// link. Otherwise the agent makes one small change and reports back by push.
+// the first task is that app: the agent publishes it, it opens, the user marks
+// what's wrong, and gets a fix and a share link. Otherwise the agent makes one small change and reports back by push.
 // Both are plain text in the user's voice, so they work with any agent and are
 // visible in the transcript. It only shows while the account has no sessions.
 
@@ -17,11 +17,15 @@ import { Spinner } from "./Spinner.js";
 /** A detected server's app, named for the folder it runs in. */
 export type FirstApp = AppOffer & { project: string };
 
-/** Sent when the user opens a running app. The agent waits for their marks. */
+/** Sent when the user opens a running app. The agent publishes it from the
+ *  folder it works in (a checkout's session gets a worktree, which the running
+ *  server doesn't serve), then waits for their marks. */
 export function openAppPrompt(app: FirstApp): string {
   return [
-    `I'm new to Bivy. I'm opening my app (\`${app.command}\` on port ${app.port}) in a preview to mark what's wrong.`,
-    "Don't change anything yet; reply in one short line that you're ready.",
+    `I'm new to Bivy. My app runs with \`${app.command}\` on port ${app.port}; I want to open it in a preview and mark what's wrong.`,
+    "Publish it with `bivy app publish` so the preview shows your edits: if you're working in the folder it already runs in, " +
+      `publish port ${app.port}; otherwise have Bivy run it from your folder on a free port (a "start" command in the manifest).`,
+    "Don't change anything else yet; once it's published, reply in one short line that it's ready.",
     "When my marks arrive, fix them and check your fix. Then make a share link with `bivy app share` " +
       "and send it to me with `bivy notify`, so it reaches my phone if I've closed the app.",
   ].join("\n");
@@ -86,8 +90,8 @@ export function GetStarted({ machineName, onOpenApp, onFirstChange }: {
       </> : first ? <>
         <h2 id="get-started-title" className="card-title">Mark what's wrong in {projectName(first.project)}</h2>
         <p className="card-sub">
-          It's running on {machine}. Open it here, tap what's off, and the agent fixes it and sends you
-          a link to share. It keeps working when you close this app.
+          It's running on {machine}. The agent opens it here, you tap what's off, and it fixes it and
+          sends you a link to share. It keeps working when you close this app.
         </p>
         <p className="get-started-app card-sub"><code>{first.command}</code> · port {first.port}</p>
         <div className="get-started-actions">
