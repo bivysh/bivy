@@ -58,6 +58,9 @@ const collabResultIndex = events.findIndex((event) => event.type === "tool_resul
 const agentEndIndex = events.findIndex((event) => event.type === "agent_end");
 assert.ok(collabResultIndex >= 0 && collabResultIndex < agentEndIndex, "late Codex collaboration completion drains before the turn is sealed");
 assert.ok(calls.some((event) => event.toolName === "shell"), "non-approved command item is still visible");
+const plan = calls.find((event) => event.toolName === "plan") as (RuntimeEvent & { detail?: { kind?: string }; input?: { plan?: Array<{ status: string }> } }) | undefined;
+assert.equal(plan?.detail?.kind, "plan", "turn/plan/updated becomes a plan tool call");
+assert.deepEqual(plan?.input?.plan?.map((step) => step.status), ["completed", "inProgress"], "with each step's status");
 assert.deepEqual(approvals, [], "already-started app-server items never request retroactive approval");
 
 const shellResult = events.find((event) => event.type === "tool_result" && (event as { toolName?: string }).toolName === "shell") as (RuntimeEvent & { detail?: { result?: { exitCode?: number; isError?: boolean } } }) | undefined;

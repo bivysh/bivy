@@ -25,6 +25,22 @@ export function toolSummary(block) {
   return detail ? `${name} ${detail.replace(/\s+/g, " ").trim()}` : name;
 }
 
+/** "plan · 2 of 4 done · <current step>" for a full plan update (the shapes
+ *  @bivy/core plan.ts reads), or undefined. A partial `merge` update is skipped:
+ *  the full list it amends is already shown. */
+export function planSummary(block) {
+  const input = block?.input ?? block?.arguments ?? {};
+  if (!input || typeof input !== "object" || input.merge === true) return undefined;
+  const list = ["todos", "plan", "entries", "items", "steps", "tasks"].map((k) => input[k]).find(Array.isArray);
+  const steps = (list ?? []).filter((e) => e && typeof e === "object");
+  if (!steps.length) return undefined;
+  const status = (e) => String(e.status ?? e.state ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  const text = (e) => String(e.content ?? e.step ?? e.text ?? e.title ?? e.subject ?? "").trim();
+  const done = steps.filter((e) => ["completed", "complete", "done"].includes(status(e))).length;
+  const current = steps.find((e) => ["inprogress", "active", "running"].includes(status(e)));
+  return `plan · ${done} of ${steps.length} done${current && text(current) ? ` · ${text(current)}` : ""}`;
+}
+
 /** `[{ role: "user"|"agent"|"tool", text }]` from `session.history` messages. */
 export function transcriptEntries(messages = []) {
   const entries = [];
@@ -46,7 +62,15 @@ export function transcriptEntries(messages = []) {
         const id = block.id ?? block.toolCallId;
         if (id && seenTools.has(id)) continue;
         if (id) seenTools.add(id);
-        entries.push({ role: "tool", text: toolSummary(block) });
+        const plan = planSummary(block);
+        if (plan) {
+          // One plan line per turn, showing the latest progress.
+          const previous = entries.findLastIndex((e) => e.role === "user" || e.plan);
+          if (previous >= 0 && entries[previous].plan) entries.splice(previous, 1);
+          entries.push({ role: "tool", text: plan, plan: true });
+        } else if (!/^(plan|todo_?write|update_?plan)$/i.test(String(block.name ?? ""))) {
+          entries.push({ role: "tool", text: toolSummary(block) });
+        }
       }
     }
   }

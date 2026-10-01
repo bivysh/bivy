@@ -219,6 +219,16 @@ function finishTurnDone() {
   bivy({ type: "session.done" });
 }
 
+// ACP `plan` updates carry the agent's whole todo list with a status per entry.
+// Forward each as a finished `plan` tool call: it persists in the turn like any
+// tool, and clients render the latest one as a checklist (@bivy/core plan.ts).
+let planSeq = 0;
+function emitPlan(entries) {
+  const toolCallId = `plan-${Date.now().toString(36)}-${++planSeq}`;
+  bivy({ type: "tool.observe", toolCallId, name: "plan", input: { entries } });
+  bivy({ type: "tool.result", toolCallId, name: "plan", result: "Plan updated" });
+}
+
 // --- tool-call field normalization -------------------------------------------
 // ACP's `tool_call`/`tool_call_update` carries a free-text `title` (whatever
 // prose the agent chose) AND a small fixed `kind` enum (read/edit/delete/move/
@@ -466,8 +476,7 @@ function onSessionUpdate(params) {
       break;
     }
     case "plan":
-      // Optional planning stream — fold into reasoning so nothing is lost.
-      if (!child && Array.isArray(u.entries)) bivy({ type: "message.reasoning", text: u.entries.map((e) => `• ${e.content ?? ""}`).join("\n") });
+      if (!child && Array.isArray(u.entries)) emitPlan(u.entries);
       break;
     default:
       break;

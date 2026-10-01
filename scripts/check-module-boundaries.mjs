@@ -39,6 +39,20 @@ const RULES = [
     note: "session wire values and their pure resolver are the canonical source for node and client builds and import no implementation.",
   },
   {
+    name: "plan-is-dependency-neutral",
+    dir: "packages/core/src/plan.ts",
+    forbid: [""],
+    enforce: true,
+    note: "the node compiles this file through src/session/plan.ts, so it imports nothing.",
+  },
+  {
+    name: "handoff-seed-is-dependency-neutral",
+    dir: "packages/core/src/handoff-seed.ts",
+    forbid: [""],
+    enforce: true,
+    note: "the node compiles this file through src/session/handoff-seed.ts, so it imports nothing.",
+  },
+  {
     name: "credentials-is-a-leaf",
     dir: "src/credentials",
     // The rule is architectural: no runtime/, agents/, session/, server, or
@@ -258,21 +272,25 @@ function specifiersOf(source) {
 let totalViolations = 0;
 let hardFailures = 0;
 
-// @bivy/core compiles the canonical source through this stable package-local
-// alias. Requiring identity (not equal copied text) prevents synchronization by
-// convention from returning while preserving both packages' existing output
-// paths and the root release artifact layout.
-const sessionContractAlias = path.join(repoRoot, "src/session/session-contract-values.ts");
-const canonicalSessionContract = path.join(repoRoot, "packages/core/src/session-contract.ts");
-const contractHasOneSource =
-  fs.existsSync(sessionContractAlias) &&
-  fs.existsSync(canonicalSessionContract) &&
-  fs.realpathSync(sessionContractAlias) === fs.realpathSync(canonicalSessionContract);
-console.log(`\n[${contractHasOneSource ? "CLEAN" : "FAIL"}] session-contract-has-one-canonical-source  — ${contractHasOneSource ? 0 : 1} violation(s)`);
-console.log("        node and @bivy/core must compile the same dependency-neutral session contract source.");
-if (!contractHasOneSource) {
-  totalViolations += 1;
-  hardFailures += 1;
+// Dependency-neutral sources both builds compile: the node reaches each through
+// a symlink under src/ (its tsc rootDir), @bivy/core owns the file. Requiring
+// identity (not equal copied text) prevents synchronization by convention from
+// returning while preserving both packages' output paths and the release layout.
+const SHARED_SOURCES = [
+  { alias: "src/session/session-contract-values.ts", canonical: "packages/core/src/session-contract.ts", name: "session-contract" },
+  { alias: "src/session/plan.ts", canonical: "packages/core/src/plan.ts", name: "plan" },
+  { alias: "src/session/handoff-seed.ts", canonical: "packages/core/src/handoff-seed.ts", name: "handoff-seed" },
+];
+for (const shared of SHARED_SOURCES) {
+  const alias = path.join(repoRoot, shared.alias);
+  const canonical = path.join(repoRoot, shared.canonical);
+  const oneSource = fs.existsSync(alias) && fs.existsSync(canonical) && fs.realpathSync(alias) === fs.realpathSync(canonical);
+  console.log(`\n[${oneSource ? "CLEAN" : "FAIL"}] ${shared.name}-has-one-canonical-source  — ${oneSource ? 0 : 1} violation(s)`);
+  console.log(`        node and @bivy/core must compile the same dependency-neutral ${shared.name} source.`);
+  if (!oneSource) {
+    totalViolations += 1;
+    hardFailures += 1;
+  }
 }
 
 // Compatibility entrypoints must enumerate the API they support. This keeps

@@ -122,6 +122,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         notify("session/update", { sessionId, update: { sessionUpdate: "tool_call", toolCallId: "auto1", title: "automatic read", kind: "read", rawInput: { path: "README.md" } } });
         notify("session/update", { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: "auto1", status: "completed", content: { type: "text", text: "done" } } });
       }
+      if (process.env.ACP_PLAN === "1") {
+        notify("session/update", { sessionId, update: { sessionUpdate: "plan", entries: [{ content: "Read the README", priority: "medium", status: "completed" }, { content: "Count its lines", priority: "medium", status: "in_progress" }] } });
+      }
       // Simulate opencode's execute tool: the command's stdout streams in an
       // in_progress update, and the closing (completed) update carries NO
       // content — the shim must still surface the streamed output, not "completed".

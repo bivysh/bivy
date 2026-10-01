@@ -1,3 +1,5 @@
+import { handoffSeedOf } from "./handoff-seed.js";
+import { applyPlanUpdate, planChecklist, planUpdateOf, type PlanEntry } from "./plan.js";
 import type { ForkHistoryMessage, RuntimeMessage } from "../runtime/types.js";
 
 /**
@@ -48,6 +50,8 @@ export interface NormalizedTranscriptHeader {
 export interface NormalizedTranscript {
   header: NormalizedTranscriptHeader;
   turns: NormalizedTurn[];
+  /** The agent's plan (todo list) after its last update, when it kept one. */
+  plan?: PlanEntry[];
 }
 
 /** Cap a tool payload down to a short, log-safe one-liner. */
@@ -67,6 +71,9 @@ interface Block {
   text?: string;
   name?: string;
   input?: unknown;
+  detail?: { kind?: string };
+  parentToolUseId?: string;
+  parentToolCallId?: string;
   content?: unknown;
   tool_use_id?: string;
   is_error?: boolean;
@@ -161,8 +168,10 @@ export function normalizeMessages(
   header: NormalizedTranscriptHeader,
 ): NormalizedTranscript {
   const turns: NormalizedTurn[] = [];
+  let plan: PlanEntry[] = [];
   for (const message of messages ?? []) {
     const m = message as { role?: unknown; content?: unknown; timestamp?: unknown; ts?: unknown };
+    plan = planAfter(plan, m.content);
     const { text, tools, toolResultOnly } = readContent(m.content);
     const role = normalizeRole(m.role, toolResultOnly);
     const namedTool = tools.find((t) => t.name)?.name;
@@ -177,7 +186,19 @@ export function normalizeMessages(
       ...(toTs(m.timestamp ?? m.ts) !== undefined ? { ts: toTs(m.timestamp ?? m.ts) } : {}),
     });
   }
-  return { header, turns };
+  return { header, turns, ...(plan.length ? { plan } : {}) };
+}
+
+/** Fold a message's top-level plan updates (see @bivy/core plan.ts) into `plan`. */
+function planAfter(plan: PlanEntry[], content: unknown): PlanEntry[] {
+  if (!Array.isArray(content)) return plan;
+  for (const block of content as Block[]) {
+    if (block?.type !== "tool_use" || block.parentToolUseId || block.parentToolCallId) continue;
+    if (block.detail?.kind && block.detail.kind !== "plan") continue;
+    const update = planUpdateOf(block.input);
+    if (update) plan = applyPlanUpdate(plan, update);
+  }
+  return plan;
 }
 
 export interface SeedPromptOptions {
@@ -212,6 +233,9 @@ export interface SeedPromptOptions {
   /** Repo / branch / PR context lines to carry, when known. */
   context?: { repoSlug?: string; branch?: string; prUrl?: string };
 }
+
+/** Cap for the latest request when the seed repeats it in full. */
+const REQUEST_CHARS = 4000;
 
 function truncate(text: string, max: number): string {
   const compact = String(text || "").replace(/\s+/g, " ").trim();
@@ -259,6 +283,14 @@ export function buildSeedPrompt(transcript: NormalizedTranscript, opts: SeedProm
   picked.reverse();
   const omitted = formatted.length - picked.length;
   const recent = picked.length ? picked.join("\n") : "- (no prior turns were available)";
+  // The user's latest request is what the new agent must act on. Repeat it in
+  // full when the recent block had to shorten it (or leave it out). An earlier
+  // hand-off seed is context, not a request.
+  const lastRequest = [...transcript.turns].reverse().find((t) => t.role === "user" && t.text.trim() && !handoffSeedOf(t.text))?.text.trim();
+  const requestCut = lastRequest && lastRequest.replace(/\s+/g, " ").length > perTurnChars;
+  const pinnedRequest = lastRequest && (requestCut || !picked.some((line) => line.startsWith("- user:")))
+    ? (lastRequest.length > REQUEST_CHARS ? `${lastRequest.slice(0, REQUEST_CHARS - 1)}…` : lastRequest)
+    : undefined;
 
   const file = opts.transcriptFile;
   const where = file ? "the conversation file above" : opts.transcriptUrl ? "the full transcript linked above" : "the full transcript";
@@ -277,6 +309,8 @@ export function buildSeedPrompt(transcript: NormalizedTranscript, opts: SeedProm
       ? `Recent conversation (most recent last; ${omitted} earlier turn${omitted === 1 ? "" : "s"} omitted — see ${where}):`
       : "Recent conversation (most recent last):",
     recent,
+    ...(pinnedRequest ? ["", "The user's latest request, in full:", pinnedRequest] : []),
+    ...(transcript.plan?.length ? ["", "The plan so far (from the previous agent):", planChecklist(transcript.plan)] : []),
     "",
     file
       ? "Read the conversation file above only if this summary is missing something you need; otherwise continue from here."
@@ -323,6 +357,13 @@ export function buildForkHistory(transcript: NormalizedTranscript): ForkHistoryM
     const last = history[history.length - 1];
     if (last && last.role === role) last.text = `${last.text}\n\n${text}`;
     else history.push({ role, text });
+  }
+  // The plan's latest state, in the agent's voice on its last reply, so the new
+  // agent picks up the open steps rather than re-deriving them from tool
+  // payloads. Never after a trailing user turn: that request is still open.
+  const lastReply = history.map((turn) => turn.role).lastIndexOf("assistant");
+  if (transcript.plan?.length && lastReply >= 0) {
+    history[lastReply]!.text += `\n\n[plan] Where the plan stands:\n${planChecklist(transcript.plan)}`;
   }
   return history;
 }

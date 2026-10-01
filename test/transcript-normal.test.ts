@@ -149,7 +149,8 @@ test("buildSeedPrompt: recent turns + transcript link, capped", () => {
   assert.ok(seed.includes("Branch: bivy/x"));
   assert.ok(seed.includes("turn 29"), "keeps the most recent turn");
   assert.ok(!seed.includes("turn 24"), "only the last 5 turns are inlined");
-  assert.ok(!seed.includes("y".repeat(1000)), "per-turn text is truncated");
+  assert.ok(!seed.includes(`turn 27 ${"y".repeat(1000)}`), "per-turn text is truncated");
+  assert.ok(seed.includes(`The user's latest request, in full:\nturn 28 ${"y".repeat(2000)}`), "the latest request is repeated in full");
 });
 
 test("buildSeedPrompt without a transcript URL still yields a usable prompt", () => {
@@ -236,7 +237,6 @@ test("buildForkHistory: a system/error notice folds into the assistant voice", (
   assert.ok(history[1].text.includes("[system] session was interrupted"));
 });
 
-console.log(`transcript-normal: all ${passed} tests passed`);
 
 test("buildSeedPrompt: a readable conversation file replaces the app link for the agent", () => {
   const seed = buildSeedPrompt({ header, turns: [{ role: "user", text: "hi" }] }, { transcriptUrl: "https://app.example/s/1", transcriptFile: "/data/fork-transcripts/a.md" });
@@ -249,3 +249,20 @@ test("renderForkTranscript: every turn, in order, as Markdown", () => {
   assert.ok(md.indexOf("first ask") < md.indexOf("first answer") && md.indexOf("first answer") < md.indexOf("second ask"));
   assert.match(md, /## User\n\nfirst ask/);
 });
+
+test("a plan kept by the agent reaches the seed and the replayed history, merges applied", () => {
+  const t = normalizeMessages([
+    { role: "user", content: "do the steps" },
+    { role: "assistant", content: [{ type: "tool_use", id: "p1", name: "todo_write", input: { todos: [{ id: "1", content: "Read", status: "in_progress" }, { id: "2", content: "Edit", status: "pending" }] } }] },
+    { role: "assistant", content: [{ type: "tool_use", id: "p2", name: "todo_write", input: { merge: true, todos: [{ id: "1", content: null, status: "completed" }] } }] },
+    { role: "assistant", content: [{ type: "tool_use", id: "c1", name: "todo_write", parentToolUseId: "task-1", input: { todos: [{ content: "sub-agent step", status: "pending" }] } }] },
+    { role: "assistant", content: "Read it; editing next." },
+    { role: "user", content: "keep going" },
+  ] as never, header);
+  assert.deepEqual(t.plan?.map((e) => [e.text, e.status]), [["Read", "completed"], ["Edit", "pending"]], "a sub-agent's plan is not the session's");
+  assert.match(buildSeedPrompt(t), /plan so far[^\n]*\n- \[x\] Read\n- \[ \] Edit/);
+  const history = buildForkHistory(t);
+  assert.equal(history.at(-1)?.text, "keep going", "the open request stays last");
+  assert.match(history.at(-2)!.text, /\[plan\][^\n]*\n- \[x\] Read\n- \[ \] Edit$/, "the plan closes the agent's last reply");
+});
+console.log(`transcript-normal: all ${passed} tests passed`);

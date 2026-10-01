@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { handoffSeedOf, looksLikeAuthFailure, stripAttachmentPlaceholders, toHtml, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
+import { applyPlanUpdate, handoffSeedOf, looksLikeAuthFailure, planUpdateOf, stripAttachmentPlaceholders, toHtml, type PlanEntry, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
 import { AppMessage } from "./AppMessage.js";
 import { ReviewCard } from "./ReviewCard.js";
@@ -10,6 +10,7 @@ import { SuggestionCard } from "./SuggestionCard.js";
 import { NoticeCard } from "./NoticeCard.js";
 import { DelegationCard } from "./DelegationCard.js";
 import { ToolGroup } from "./ToolGroup.js";
+import { PlanCard } from "./PlanCard.js";
 import { HandoffSeedLine } from "./HandoffSeedLine.js";
 import { ImageGallery } from "./ImageGallery.js";
 import { focusEntries } from "../focusTranscript.js";
@@ -527,9 +528,12 @@ const EntryView = memo(function EntryView({
   );
 });
 
+type ToolEntry = NonNullable<TranscriptEntry["tool"]>;
+
 type RenderItem =
   | { kind: "entry"; key: string; entry: TranscriptEntry }
-  | { kind: "tools"; key: string; tools: NonNullable<TranscriptEntry["tool"]>[] };
+  | { kind: "tools"; key: string; tools: ToolEntry[] }
+  | { kind: "plan"; key: string; callId: string };
 
 type RenderTurn = { kind: "turn"; key: string; user?: RenderItem; response: RenderItem[] };
 type RenderBlock = RenderTurn | { kind: "standalone"; key: string; item: RenderItem };
@@ -564,7 +568,48 @@ function groupTurns(items: RenderItem[]): RenderBlock[] {
     }
     current.response.push(item);
   }
+  for (const block of blocks) {
+    if (block.kind === "turn") block.response = latestPlanOnly(block.response, block.key);
+  }
   return blocks;
+}
+
+/** A top-level update to the agent's plan. A sub-agent's plan stays in its work group. */
+function isPlanTool(tool: ToolEntry): boolean {
+  return tool.detail?.kind === "plan" && !tool.parentToolUseId && planUpdateOf(tool.input) !== undefined;
+}
+
+/** The plan after each update, by call id. Folded over the whole transcript
+ *  because a merge update (entries by id) builds on an earlier turn's plan. */
+function planStates(entries: TranscriptEntry[]): Map<string, PlanEntry[]> {
+  const states = new Map<string, PlanEntry[]>();
+  let plan: PlanEntry[] = [];
+  for (const entry of entries) {
+    if (!entry.tool || !isPlanTool(entry.tool)) continue;
+    plan = applyPlanUpdate(plan, planUpdateOf(entry.tool.input)!);
+    states.set(entry.tool.callId, plan);
+  }
+  return states;
+}
+
+/** A turn shows its plan once, where it was last updated. Work groups that the
+ *  dropped earlier updates split apart join back into one. The card is keyed by
+ *  turn so it keeps its open/closed state as updates arrive. */
+function latestPlanOnly(response: RenderItem[], turnKey: string): RenderItem[] {
+  let last = -1;
+  response.forEach((item, index) => { if (item.kind === "plan") last = index; });
+  if (last < 0) return response;
+  const out: RenderItem[] = [];
+  response.forEach((item, index) => {
+    if (item.kind === "plan" && index !== last) return;
+    const previous = out[out.length - 1];
+    if (item.kind === "tools" && previous?.kind === "tools") {
+      out[out.length - 1] = { ...previous, tools: [...previous.tools, ...item.tools] };
+      return;
+    }
+    out.push(item.kind === "plan" ? { ...item, key: `plan-${turnKey}` } : item);
+  });
+  return out;
 }
 
 /** Keep consecutive tool calls together while preserving their chronological
@@ -573,14 +618,17 @@ function groupTurns(items: RenderItem[]): RenderBlock[] {
  * final answer arrives. */
 function groupEntries(entries: TranscriptEntry[]): RenderItem[] {
   const items: RenderItem[] = [];
-  let tools: NonNullable<TranscriptEntry["tool"]>[] = [];
+  let tools: ToolEntry[] = [];
   let key = "";
   const flush = () => {
     if (tools.length) items.push({ kind: "tools", key, tools });
     tools = [];
   };
   for (const entry of entries) {
-    if (entry.tool) {
+    if (entry.tool && isPlanTool(entry.tool)) {
+      flush();
+      items.push({ kind: "plan", key: `plan-${entry.tool.callId}`, callId: entry.tool.callId });
+    } else if (entry.tool) {
       if (!tools.length) key = `tools-${entry.tool.callId || entry.id}`;
       tools.push(entry.tool);
     } else {
@@ -782,6 +830,7 @@ export function ChatView({
     return () => ro.disconnect();
   }, [pinToBottom]);
 
+  const plans = useMemo(() => planStates(source), [source]);
   const visible = start > 0 ? source.slice(start) : source;
   const items = groupEntries(visible);
   const blocks = groupTurns(items);
@@ -792,7 +841,9 @@ export function ChatView({
 
   const renderItem = (it: RenderItem) => it.kind === "tools"
     ? <ToolGroup key={it.key} tools={it.tools} />
-    : <EntryView key={it.key} entry={it.entry} onAction={onAction} authAction={authAction} />;
+    : it.kind === "plan"
+      ? plans.get(it.callId)?.length ? <PlanCard key={it.key} plan={plans.get(it.callId)!} /> : null
+      : <EntryView key={it.key} entry={it.entry} onAction={onAction} authAction={authAction} />;
 
   return (
     <div className="chat-wrap">
