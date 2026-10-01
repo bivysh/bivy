@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The first task's app opens once there's something to show.** "Open … and mark what's wrong" used to open an empty Apps sheet straight away: in a GitHub checkout the session works in its own worktree, so the server you already had running wasn't found there, and the agent's fixes wouldn't have reached it anyway. The agent now publishes the app from the folder it works in (`bivy app publish`), and the preview opens as soon as it's published.
+
 ## [0.20.3] - 2026-10-01
 
 ### Fixed

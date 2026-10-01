@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { activationFromState, authProviderForRuntime, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionApp, type SessionSummary } from "@bivy/core";
+import { activationFromState, authProviderForRuntime, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionAppsResult, type SessionSummary } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { ChatView } from "./components/ChatView.js";
@@ -146,18 +146,27 @@ export function App() {
   useEffect(() => onAppsSheetRequest(setAppsSheet), []);
   // Leaving the session closes it; coming back must not reopen it.
   useEffect(() => setAppsSheet(null), [state.activeSession.activeSessionId]);
-  // The first task's app: once its session exists, preview the server there
-  // and open it, so the user can start marking.
-  const firstAppPort = useRef<number | null>(null);
+  // The first task's app: the agent publishes it from its own workspace (a
+  // checkout's session works in a worktree, which the server already running
+  // doesn't serve). The preview opens once it's published, so the user can
+  // start marking, not before, when there's nothing to show.
+  const firstAppPending = useRef(false);
   useEffect(() => {
-    const port = firstAppPort.current, sessionId = state.activeSession.activeSessionId;
-    if (!port || !sessionId || state.connection.status !== "online") return;
-    firstAppPort.current = null;
-    void controller.appCommand("apps.adopt", sessionId, { port }).then((event) => {
-      const { app } = event as unknown as { app: SessionApp };
-      setAppsSheet({ sessionId, appId: app.id, openView: { viewId: app.views[0]!.id } });
-    }, () => setAppsSheet({ sessionId }));
-  }, [state.activeSession.activeSessionId, state.connection.status]);
+    const sessionId = state.activeSession.activeSessionId;
+    if (!firstAppPending.current || !sessionId) return;
+    firstAppPending.current = false;
+    let done = false;
+    return controller.onAppsChanged((changed) => {
+      if (done || changed !== sessionId) return;
+      void controller.appCommand("apps.list", sessionId).then((event) => {
+        const app = (event as unknown as SessionAppsResult).apps.find((item) => item.views.some((view) => view.kind === "web"));
+        const view = app?.views.find((item) => item.kind === "web");
+        if (done || !app || !view) return;
+        done = true;
+        setAppsSheet({ sessionId, appId: app.id, openView: { viewId: view.id } });
+      }, () => {});
+    });
+  }, [state.activeSession.activeSessionId]);
   // Fork sheet opened from an inline notice (e.g. "reached its usage limit —
   // Fork to another agent"), so the way past a limit is one tap from the chat.
   const [forkSheetOpen, setForkSheetOpen] = useState(false);
@@ -993,7 +1002,7 @@ export function App() {
               <GetStarted
                 machineName={state.connection.nodes.find((n) => n.id === state.connection.currentNodeId)?.name || undefined}
                 onOpenApp={(app) => {
-                  firstAppPort.current = app.port;
+                  firstAppPending.current = true;
                   setTurnActive(true);
                   // The session starts in the app's own folder, never a fresh clone.
                   controller.sendPrompt(openAppPrompt(app), undefined, { workspace: app.project, repo: undefined, branch: undefined });
