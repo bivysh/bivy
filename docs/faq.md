@@ -35,8 +35,10 @@ PWA](remote-access.md#4-install-the-pwa).
 
 Not for the CLI. `bivy run`, `bivy resume`, `bivy sessions`, Runs and
 automations from the terminal all work with no account and no server; pick
-**local only for now** in `bivy setup`. You need a control plane only for a
-browser or phone UI, because the node hosts none: the hosted one at
+**local only for now** in `bivy setup`. For a browser or phone UI, either
+run `bivy tailscale` to serve the app from the machine over your tailnet (chat,
+approvals and terminals; no push notifications or app previews, see
+[Tailscale](tailscale.md)), or use a control plane: the hosted one at
 `app.bivy.sh` (GitHub or email sign-in; free tier plus a paid plan — see
 [bivy.sh#pricing](https://bivy.sh#pricing)) or one you
 [self-host](self-host-quickstart.md). Sign in any time with `bivy login`; use `bivy relay:setup` to switch to self-hosted endpoints.

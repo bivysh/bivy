@@ -7,13 +7,17 @@ How to reach a Bivy node from a browser, a phone, or another machine.
 There are four ways to reach a machine. Each one only adds to the one before,
 and `bivy access` shows which you have, what it gives you, and the next step:
 
-| | Your phone and other devices | All your machines in one app | Push notifications | Shareable app previews |
+| | Your phone and other devices | All your machines in one app | Push notifications | App previews |
 |---|---|---|---|---|
 | **This machine only** | — | — | — | — |
 | **Tailscale** (`bivy access tailscale`) | on your tailnet | on your tailnet | — | — |
 | **Bivy hosted** (`bivy access hosted`) | from anywhere | ✓ | ✓ | ✓ |
 | **Your own server** (`bivy access server <url>`) | from anywhere | ✓ | ✓ | ✓ |
 
+- Tailscale is the core: sessions, chat, approvals, questions, terminals and
+  files on every device on your tailnet. Each machine keeps its own session
+  list; the machine menu switches between them. For push notifications and app
+  previews, add hosted or your own server.
 - Setups stack. Tailscale can stay on after you add hosted or your own server.
 - Hosted and your own server are alternatives. Switching between them keeps
   everything on the machine (sessions, repositories, credentials); your

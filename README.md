@@ -344,8 +344,14 @@ your first automation.
 
 **Local-only works too.** `bivy run`, `bivy resume`, and `bivy sessions` need no
 account or server. Choose **local only for now** during setup; use `bivy login`
-later. Browser and phone access need a hosted or self-hosted control plane;
-the node itself does not serve a web UI.
+later.
+
+**Just your own devices?** `bivy tailscale` serves the app from the machine
+itself at `https://<machine>.<tailnet>.ts.net`, with no account, control plane
+or relay. You get the core over your tailnet: sessions, chat, approvals,
+questions, terminals and files. Push notifications, app previews and share
+links need Bivy Cloud or a self-hosted server. See [Tailscale](docs/tailscale.md)
+and [Remote access](docs/remote-access.md).
 
 [Full quickstart →](docs/quickstart.md) ·
 [Installer options, service management, and uninstall →](docs/install.md)

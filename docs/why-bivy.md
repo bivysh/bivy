@@ -65,8 +65,9 @@ routing metadata, but cannot decrypt their content.
 
 From a phone or another computer, a developer can reconnect to the same Session,
 answer a question, approve or deny an action, stop work, or leave it running.
-The CLI alone needs no account. A browser or phone needs a control plane —
-hosted or self-hosted — which also brings the node registry, notifications,
+The CLI alone needs no account. Over your tailnet, `bivy tailscale` serves the
+app from the machine itself for chat, approvals and terminals. Anything more
+needs a control plane — hosted or self-hosted — which also brings the node registry, notifications,
 Automations, and hosted provisioning options; a device paired by QR /
 `bivy link` reaches one Machine without signing in to the account.
 

@@ -4,6 +4,10 @@ Reach the agents on your own machines from your phone or laptop, anywhere, with
 nothing of Bivy's in between: no account, no control plane, no relay. Tailscale
 connects your devices; each machine serves the web app itself.
 
+It covers the core of Bivy: sessions, chat, approvals, questions, terminals and
+files. Push notifications and app previews need [Bivy hosted or your own
+server](remote-access.md); see [what works](#what-works-and-what-doesnt-yet).
+
 ```bash
 bivy tailscale
 ```

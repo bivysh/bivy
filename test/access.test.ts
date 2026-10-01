@@ -23,7 +23,7 @@ test("Tailscale reaches your devices and machines on your tailnet, and hosted wi
   assert.equal(report.reach.machines, 1);
   assert.equal(report.tailscaleUrl, "https://box.tail1.ts.net");
   assert.deepEqual(next(report), ["hosted:devices,machines,push,sharing", "server:devices,machines,push,sharing"]);
-  assert.equal(report.next[0]!.addsText, "your phone and other devices and all your machines in one app from anywhere, push notifications and shareable app previews");
+  assert.equal(report.next[0]!.addsText, "your phone and other devices and all your machines in one app from anywhere, push notifications and app previews");
 });
 
 test("a relay link is hosted or your own server by its control plane", () => {
