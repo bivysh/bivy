@@ -13,8 +13,10 @@ bivy shim status             # list installed shims + whether they win on PATH
 bivy shim uninstall claude   # remove it (restores the plain CLI)
 ```
 
-`shim` and `listen` are aliases for the same command. `bivy setup` offers to
-install the shim for the agent you pick, when that agent is installed.
+`shim` and `listen` are aliases for the same command. `bivy setup` asks
+whether to install the shim for the agent you pick (default: no). It is never
+installed without your yes; without a terminal to answer from, setup only
+prints the command.
 
 When the agent goes quiet or rings the terminal bell, your phone gets a
 notification. If the run is pinned to a session, tapping the notification opens it.
