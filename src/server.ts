@@ -6601,9 +6601,14 @@ function modelFrom(msg: Record<string, unknown>): { provider: string; id: string
 async function applyRequestedModel(record: SessionRecord, model: { provider: string; id: string } | undefined): Promise<void> {
   if (!model) return;
   try {
+    // Protocol agents only publish their catalog once running. A fork or a new
+    // session asks for its model before that, so warm the catalog first or the
+    // choice is dropped and the agent's default model answers instead.
+    if (!(await record.session.getModels()).length && record.session.warmModels) {
+      await record.session.warmModels().catch(() => {});
+    }
     // A provider-less id (CLI --model, `bivy-model:`) binds against the
-    // session's catalog. Protocol agents only publish theirs once running, so
-    // warm it when the first lookup can't place the id.
+    // session's catalog; warm it when the first lookup can't place the id.
     if (!model.provider) {
       const resolve = async () => resolveModelRef(await record.session.getModels(), model!, record.session.getCurrentModel());
       model = await resolve();

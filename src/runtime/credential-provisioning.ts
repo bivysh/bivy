@@ -21,6 +21,7 @@ import { createCredentialVault } from "./credential-store.js";
 import { buildAgentCredentialEnv, createCredentialStore } from "./credentials.js";
 import { ensureCodexAuth, ensureCodexTrusted } from "./codex-auth.js";
 import { ensureGrokAuth } from "./grok-auth.js";
+import { opencodeAuthEnv } from "./opencode-auth.js";
 import { refreshModelOAuth } from "./oauth/model-oauth.js";
 import { isNativeOAuthProvider } from "./oauth/model-oauth-providers.js";
 
@@ -83,6 +84,9 @@ export async function provisionAgentRun(credsDir: string, piDir: string, agentId
     // Pre-trust the run workspace so Codex doesn't stall on its first-run trust
     // prompt (which blocks it from writing the rollout takeover relies on).
     if (workspace) ensureCodexTrusted(workspace);
+  } else if (agentId === "opencode") {
+    // A ChatGPT plan connected in Bivy serves OpenCode too (OPENCODE_AUTH_CONTENT).
+    Object.assign(env, await opencodeAuthEnv(credsDir).catch(() => ({})));
   } else if (agentId === "grok") {
     // Official Grok CLI reads XAI_API_KEY/GROK_API_KEY (already in env for api
     // keys) or its own auth.json; mint the latter from a connected SuperGrok /

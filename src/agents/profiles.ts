@@ -15,7 +15,7 @@ export type AgentProfilePromptMode = "stdin" | "argv";
  * runtime behavior registry rather than in per-agent branches. */
 export type AgentProfileBehaviors = {
   preflight?: "codex" | "opencode" | "grok";
-  prepare?: "grok-auth";
+  prepare?: "grok-auth" | "opencode-auth";
   slashCommands?: "codex" | "opencode";
   sessionStore?: "codex" | "opencode";
   nativeSessions?: "grok" | "gemini" | "qwen";
@@ -213,7 +213,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
   },
   opencode: {
     displayName: "OpenCode",
-    behaviors: { preflight: "opencode", slashCommands: "opencode", sessionStore: "opencode" },
+    behaviors: { preflight: "opencode", prepare: "opencode-auth", slashCommands: "opencode", sessionStore: "opencode" },
     command: "opencode",
     packageName: "opencode-ai",
     // `opencode run "<prompt>"` runs one non-interactive turn and streams the
@@ -225,6 +225,9 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // Claude Code, and Codex clear. See `acp` below for the version fallback.
     supportTier: "supported",
     testedVersion: "1.18.33",
+    // Mixed: OpenCode keeps its own logins, and Bivy adds what it holds — API
+    // keys as env vars, a connected ChatGPT plan via the opencode-auth prepare.
+    authOwner: "mixed",
     blurb: "The most widely used open-source coding harness (OpenCode CLI).",
     // `opencode run -s <id> "<prompt>"` continues a prior session by its own id
     // (`-s, --session  session id to continue`, per `opencode run --help`).

@@ -472,6 +472,7 @@ assert.equal(streamedTool?.toolName, "shell", "the tool_call streamed live with 
 assert.equal(streamedTool?.detail?.kind, "shell", "the normalized ToolCallDetail rode along");
 assert.equal(ungovernedDecisions.length, 0, "no interceptor round-trip when interception is off");
 assert.ok(ungovernedEvents.some((event) => event.type === "tool_result"), "the tool result streamed too");
+assert.ok(!ungovernedEvents.some((event) => (event as { toolName?: string }).toolName === "agent_output"), "a live agent's stderr diagnostics stay out of the transcript");
 ungovernedSession.dispose();
 
 console.log("protocol-runtime: all tests passed");

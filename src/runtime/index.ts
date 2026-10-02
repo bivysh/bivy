@@ -63,6 +63,7 @@ import { codexCredentialPreflight } from "./codex-preflight.js";
 import { opencodeCredentialPreflight } from "./opencode-preflight.js";
 import { grokCredentialPreflight } from "./grok-preflight.js";
 import { ensureGrokAuth } from "./grok-auth.js";
+import { opencodeAuthEnv } from "./opencode-auth.js";
 import { parserFactoryFor } from "./cli-parsers.js";
 import { sandboxTier, sandboxArgsFor } from "../harness/sandbox.js";
 import type { McpConfig } from "../harness/mcp-config.js";
@@ -93,6 +94,16 @@ const PREFLIGHT_BEHAVIORS: Record<PreflightBehavior, NonNullable<import("./proce
   codex: (env) => codexCredentialPreflight(env),
   opencode: (env, ctx) => opencodeCredentialPreflight(env, ctx),
   grok: (env) => grokCredentialPreflight(env),
+};
+type PrepareBehavior = NonNullable<AgentProfileBehaviors["prepare"]>;
+/** Launch-env patches that project a Bivy-connected login into an agent's own
+ * credential store before it spawns (pipe and governed paths alike). */
+const PREPARE_BEHAVIORS: Record<PrepareBehavior, (credsDir: string) => Promise<Record<string, string>>> = {
+  "grok-auth": async (credsDir): Promise<Record<string, string>> => {
+    const home = await ensureGrokAuth(credsDir);
+    return home ? { GROK_HOME: home } : {};
+  },
+  "opencode-auth": (credsDir) => opencodeAuthEnv(credsDir),
 };
 const SLASH_COMMAND_BEHAVIORS: Record<SlashCommandsBehavior, () => SlashCommandProvider> = {
   codex: codexSlashCommands,
@@ -720,13 +731,8 @@ function acpRuntimeOptions(opts: { id: string; displayName: string; command: str
     // the shim spawns, and Grok's prepare materializes `auth.json` from Bivy's
     // vault (pinning GROK_HOME) so `grok agent stdio` starts authenticated.
     ...(opts.behaviors?.preflight ? { preflight: PREFLIGHT_BEHAVIORS[opts.behaviors.preflight] } : {}),
-    ...(opts.behaviors?.prepare === "grok-auth" && opts.credsDir
-      ? {
-          prepare: async (): Promise<Record<string, string>> => {
-            const home = await ensureGrokAuth(opts.credsDir!);
-            return home ? { GROK_HOME: home } : {};
-          },
-        }
+    ...(opts.behaviors?.prepare && opts.credsDir
+      ? { prepare: () => PREPARE_BEHAVIORS[opts.behaviors!.prepare!](opts.credsDir!) }
       : {}),
     // OpenCode's own store is SQLite under $XDG_DATA_HOME, so an ACP-promoted
     // opencode can both read a resumed session's transcript back for history
@@ -1276,12 +1282,8 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
       // mixed auth and may materialize a Bivy-connected subscription; Codex and
       // OpenCode retain their native stores without credential replacement.
       const preflight = behaviors?.preflight ? PREFLIGHT_BEHAVIORS[behaviors.preflight] : undefined;
-      const prepare = behaviors?.prepare === "grok-auth"
-        ? async (): Promise<Record<string, string>> => {
-            const home = await ensureGrokAuth(options.credsDir);
-            return home ? { GROK_HOME: home } : {};
-          }
-        : undefined;
+      const prepareBehavior = behaviors?.prepare;
+      const prepare = prepareBehavior ? () => PREPARE_BEHAVIORS[prepareBehavior](options.credsDir) : undefined;
       // Resume, the generic way. Codex keeps its verified path (rollout history +
       // tier-aware `codex exec resume <id> --json`). Every other CLI agent becomes
       // resumable purely as data: a spec.resume template (or a BIVY_<ID>_RESUME_

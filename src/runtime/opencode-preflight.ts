@@ -49,6 +49,15 @@ function hasNativeCredential(provider: string, ctx: PreflightContext): boolean {
   }
 }
 
+/** A login Bivy projected for this launch (OPENCODE_AUTH_CONTENT, see opencode-auth.ts). */
+function hasProjectedCredential(provider: string, env: Record<string, string | undefined>): boolean {
+  try {
+    return Boolean((JSON.parse(env.OPENCODE_AUTH_CONTENT ?? "{}") as Record<string, unknown>)[provider]);
+  } catch {
+    return false;
+  }
+}
+
 /** Actionable message shown when OpenCode's selected provider has no credential. */
 export function opencodeNoCredentialMessage(provider: string, envVar: string): string {
   const label = provider.charAt(0).toUpperCase() + provider.slice(1);
@@ -80,6 +89,6 @@ export function opencodeCredentialPreflight(
   // Anthropic can authenticate via the Claude Code OAuth token, not just a key.
   if (provider === "anthropic" && env.CLAUDE_CODE_OAUTH_TOKEN?.trim()) return undefined;
   const envVar = apiKeyEnvVar(provider);
-  if (env[envVar]?.trim() || hasNativeCredential(provider, ctx)) return undefined;
+  if (env[envVar]?.trim() || hasNativeCredential(provider, ctx) || hasProjectedCredential(provider, env)) return undefined;
   return opencodeNoCredentialMessage(provider, envVar);
 }

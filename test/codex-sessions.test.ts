@@ -48,6 +48,8 @@ function writeRollout(relDir: string, fileName: string, lines: unknown[]): strin
 const SESSION_A = "11111111-2222-4333-8444-555555555555";
 const fileA = writeRollout("2026/07/11", `rollout-2026-07-11T10-00-00-${SESSION_A}.jsonl`, [
   { type: "session_meta", timestamp: "2026-07-11T10:00:00.000Z", payload: { id: SESSION_A, cwd: "/work/repo", cli_version: "0.x" } },
+  // Context Codex injects as a "user" turn; not something the user said.
+  { type: "response_item", timestamp: "2026-07-11T10:00:00.500Z", payload: { role: "user", content: [{ type: "input_text", text: "<environment_context>\n  <cwd>/work/repo</cwd>\n</environment_context>" }] } },
   { type: "response_item", timestamp: "2026-07-11T10:00:01.000Z", payload: { role: "user", content: "add a test" } },
   { type: "response_item", timestamp: "2026-07-11T10:00:02.000Z", payload: { role: "assistant", content: [{ type: "text", text: "On it." }] } },
   { type: "event_msg", payload: { type: "token_count", total: 42 } }, // non-message, ignored
@@ -71,7 +73,7 @@ check("enumerates both sessions, newest first", () => {
   assert.equal(sessions[1].firstMessage, "add a test");
 });
 
-check("reconstructs a transcript (wrapped layout, string + block content)", () => {
+check("reconstructs a transcript (wrapped layout, string + block content, injected context skipped)", () => {
   const msgs = loadCodexTranscriptFile(fileA) as Array<{ role: string; content: string }>;
   assert.deepEqual(
     msgs.map((m) => [m.role, m.content]),

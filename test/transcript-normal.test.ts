@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { normalizeMessages, buildSeedPrompt, buildForkHistory, renderForkTranscript } from "../src/session/transcript-normal.js";
+import { normalizeMessages, buildSeedPrompt, buildForkHistory, relocateTranscript, renderForkTranscript } from "../src/session/transcript-normal.js";
 import type { NormalizedTranscriptHeader } from "../src/session/transcript-normal.js";
 
 // Unit tests for the runtime-neutral transcript used by session fork.
@@ -223,6 +223,25 @@ test("buildForkHistory: inlines tool activity as text and merges consecutive sam
   assert.ok(history[1].text.includes("[ran Read] Read(/etc/hosts)"), "the tool call is inlined as readable text");
   assert.ok(history[1].text.includes("[tool result] → 127.0.0.1 localhost"), "the tool result is inlined as readable text");
   assert.ok(!/tool_use|tool_result/.test(history[1].text), "no provider-specific structured blocks leak in");
+});
+
+test("relocateTranscript: a fork's history points at its own copy of the workspace", () => {
+  const moved = relocateTranscript({
+    header,
+    turns: [
+      { role: "user", text: "fix /work/repo/calc.py" },
+      { role: "assistant", text: "Edited it.", toolName: "Edit", toolSummary: 'Edit({"file_path":"/work/repo/calc.py"})' },
+      { role: "assistant", text: "Left /work/repo-other alone." },
+    ],
+  }, "/work/repo", "/work/repo/.bivy/worktrees/fork-1");
+  const history = buildForkHistory(moved);
+  assert.equal(history[0].text, "fix /work/repo/.bivy/worktrees/fork-1/calc.py");
+  assert.ok(history[1].text.includes('"/work/repo/.bivy/worktrees/fork-1/calc.py"'), "tool activity is relocated too");
+  assert.ok(history[1].text.includes("/work/repo-other"), "a sibling path that merely shares the prefix is untouched");
+  assert.ok(history[1].text.includes("[workspace] This conversation now continues in /work/repo/.bivy/worktrees/fork-1"), "the agent is told where the work lives");
+  assert.match(buildSeedPrompt(moved), /now continues in \/work\/repo\/\.bivy\/worktrees\/fork-1/, "a seeded fork says so too");
+  const same = { header, turns: [{ role: "user" as const, text: "x" }] };
+  assert.equal(relocateTranscript(same, "/a", "/a"), same, "an unmoved fork is unchanged");
 });
 
 test("buildForkHistory: a system/error notice folds into the assistant voice", () => {

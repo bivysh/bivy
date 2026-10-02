@@ -18,9 +18,16 @@ export interface ModelRef {
   id: string;
 }
 
+/** Bivy provider ids another agent knows under a different name: a ChatGPT
+ * plan is `openai-codex` in Bivy and Pi, but plain `openai` in OpenCode. */
+const PROVIDER_EQUIVALENTS: Record<string, string> = {
+  "openai-codex": "openai",
+};
+
 /**
  * Resolve `ref` against `models`. An explicit provider is kept as-is. Otherwise
- * match, in order: the exact id, a `provider/id` split, then an id that ends in
+ * match, in order: the exact id, a `provider/id` split, the same split under
+ * the provider's name in this agent (PROVIDER_EQUIVALENTS), then an id that ends in
  * `/<ref.id>` (a bare name for an ACP slash id). Ties prefer the current
  * model's provider. Unknown refs are returned unchanged so the runtime reports
  * its own error.
@@ -32,9 +39,16 @@ export function resolveModelRef(models: readonly ModelInfo[], ref: ModelRef, cur
   const tiers = [
     models.filter((m) => m.id === id),
     slash > 0 ? models.filter((m) => m.provider === id.slice(0, slash) && m.id === id.slice(slash + 1)) : [],
+    slash > 0 ? providerEquivalent(models, id.slice(0, slash), id.slice(slash + 1)) : [],
     models.filter((m) => m.id.endsWith(`/${id}`)),
   ];
   const candidates = tiers.find((tier) => tier.length) ?? [];
   const pick = candidates.find((m) => m.provider === current?.provider) ?? candidates[0];
   return pick ? { provider: pick.provider, id: pick.id } : ref;
+}
+
+function providerEquivalent(models: readonly ModelInfo[], provider: string, id: string): ModelInfo[] {
+  const other = PROVIDER_EQUIVALENTS[provider];
+  if (!other) return [];
+  return models.filter((m) => m.id === `${other}/${id}` || (m.provider === other && m.id === id));
 }

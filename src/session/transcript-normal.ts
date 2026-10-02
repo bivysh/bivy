@@ -52,6 +52,42 @@ export interface NormalizedTranscript {
   turns: NormalizedTurn[];
   /** The agent's plan (todo list) after its last update, when it kept one. */
   plan?: PlanEntry[];
+  /** Set when the conversation continues in another directory (a fork's own
+   * worktree): paths in the turns already point at `to`. */
+  workspace?: { from: string; to: string };
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * The transcript as it reads from a new working directory. A fork runs in its
+ * own copy of the workspace, but the history names files at the source's
+ * paths, and an agent that follows them edits the original checkout. Rewrite
+ * the source directory to the fork's wherever it appears as a path.
+ */
+export function relocateTranscript(transcript: NormalizedTranscript, from: string | undefined, to: string | undefined): NormalizedTranscript {
+  const source = from?.replace(/\/+$/, "");
+  const target = to?.replace(/\/+$/, "");
+  if (!source || !target || source === target) return transcript;
+  const pattern = new RegExp(`${escapeRegExp(source)}(?=$|[/\\s"'\`)\\],:;])`, "g");
+  const move = (text: string) => text.replace(pattern, target);
+  return {
+    ...transcript,
+    turns: transcript.turns.map((turn) => ({
+      ...turn,
+      text: move(turn.text),
+      ...(turn.toolSummary ? { toolSummary: move(turn.toolSummary) } : {}),
+    })),
+    ...(transcript.plan ? { plan: transcript.plan.map((entry) => ({ ...entry, text: move(entry.text) })) } : {}),
+    workspace: { from: source, to: target },
+  };
+}
+
+/** One line telling the new agent where the work lives now. */
+function workspaceNote(workspace: NonNullable<NormalizedTranscript["workspace"]>): string {
+  return `This conversation now continues in ${workspace.to}, a separate copy of ${workspace.from} where the earlier work happened. Paths above already point at the copy; work there.`;
 }
 
 /** Cap a tool payload down to a short, log-safe one-liner. */
@@ -304,6 +340,7 @@ export function buildSeedPrompt(transcript: NormalizedTranscript, opts: SeedProm
     opts.context?.repoSlug ? `Repository: ${opts.context.repoSlug}` : null,
     opts.context?.branch ? `Branch: ${opts.context.branch}` : null,
     opts.context?.prUrl ? `PR: ${opts.context.prUrl}` : null,
+    transcript.workspace ? workspaceNote(transcript.workspace) : null,
     "",
     omitted > 0
       ? `Recent conversation (most recent last; ${omitted} earlier turn${omitted === 1 ? "" : "s"} omitted — see ${where}):`
@@ -364,6 +401,9 @@ export function buildForkHistory(transcript: NormalizedTranscript): ForkHistoryM
   const lastReply = history.map((turn) => turn.role).lastIndexOf("assistant");
   if (transcript.plan?.length && lastReply >= 0) {
     history[lastReply]!.text += `\n\n[plan] Where the plan stands:\n${planChecklist(transcript.plan)}`;
+  }
+  if (transcript.workspace && lastReply >= 0) {
+    history[lastReply]!.text += `\n\n[workspace] ${workspaceNote(transcript.workspace)}`;
   }
   return history;
 }

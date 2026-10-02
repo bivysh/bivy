@@ -139,13 +139,40 @@ export function contentThinking(content: any): string {
  * diagnostics), not just text blocks. Unlike assistant content, a result has no
  * prose/tool ordering to preserve, so stringify unknown values rather than
  * silently rendering an empty card. */
-function toolResultText(content: any): string {
+export function toolResultText(content: any): string {
   if (Array.isArray(content)) {
     const text = content.filter(isTextBlock).map((b) => String(b?.text ?? b?.content ?? "")).join("\n");
-    if (text) return text;
+    if (text) return unwrapSubagentReport(text);
     try { return JSON.stringify(content); } catch { return String(content); }
   }
-  return contentToText(content);
+  return unwrapSubagentReport(contentToText(content));
+}
+
+/** Harness frames an agent wraps around a sub-agent's report before handing it
+ * to the model. The user should read the report, not the frame. Each row
+ * matches the frame's opening (and closing, if any) and how the report inside
+ * is indented. Mirrors
+ * SUBAGENT_REPORT_FRAMES in the node's src/runtime/tool-call-map.ts. */
+const SUBAGENT_REPORT_FRAMES: Array<{ header: RegExp; footer?: RegExp; indent: string }> = [
+  // Claude Code 2.1.28x: "[Subagent hand-back] … The report follows:\n  <report>"
+  { header: /^\[Subagent hand-back\][^\n]*The report follows:\n/, indent: "  " },
+  // OpenCode's task tool: <task id=… state=…>\n<task_result>\n<report>\n</task_result>\n</task>
+  { header: /^<task\b[^>\n]*>\s*<task_result>\n?/, footer: /\n?<\/task_result>\s*<\/task>\s*$/, indent: "" },
+];
+
+export function unwrapSubagentReport(text: string): string {
+  for (const frame of SUBAGENT_REPORT_FRAMES) {
+    const match = frame.header.exec(text);
+    if (!match) continue;
+    const inner = text.slice(match[0].length);
+    const body = frame.footer ? inner.replace(frame.footer, "") : inner;
+    if (!frame.indent) return body;
+    return body
+      .split("\n")
+      .map((line) => (line.startsWith(frame.indent) ? line.slice(frame.indent.length) : line))
+      .join("\n");
+  }
+  return text;
 }
 
 export function toolEntriesFromContent(content: any, parentToolUseId?: string, makeId: () => string = nextId): ToolActivity[] {

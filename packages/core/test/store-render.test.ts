@@ -127,6 +127,20 @@ describe("renderHistory block interleaving", () => {
     expect(tool?.detail).toMatchObject({ kind: "unknown", result: { isError: true } });
   });
 
+  it("shows a sub-agent's report without the harness hand-back frame", () => {
+    const framed = "[Subagent hand-back] The text below is the final report of a subagent. The report follows:\n  Found 2 files.\n    - a.ts";
+    const entries = renderHistory([
+      { role: "assistant", content: [{ type: "tool_use", id: "a1", name: "Agent", input: { description: "Find files" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "a1", content: [{ type: "text", text: framed }] }] },
+    ]);
+    expect(entries.find((entry) => entry.tool?.callId === "a1")?.tool?.result).toBe("Found 2 files.\n  - a.ts");
+    const opencode = renderHistory([
+      { role: "assistant", content: [{ type: "tool_use", id: "a2", name: "task", input: { description: "Count" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "a2", content: '<task id="ses_1" state="completed">\n<task_result>\n**1 line**\n</task_result>\n</task>' }] },
+    ]);
+    expect(opencode.find((entry) => entry.tool?.callId === "a2")?.tool?.result).toBe("**1 line**");
+  });
+
   it("pairs an id-less result with the newest matching running tool", () => {
     const entries = renderHistory([
       { role: "assistant", content: [{ type: "tool_use", name: "bash", input: { command: "pwd" } }] },
