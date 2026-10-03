@@ -14,7 +14,7 @@ test("session control commands share lookup and effect ports", async () => {
     resolve: (id) => id === "s1" ? session : undefined,
     pause: (value) => effects.push(`pause:${value.id}`),
     resume: (value) => effects.push(`resume:${value.id}`),
-    answer: (value, requestId) => effects.push(`answer:${value.id}:${requestId}`),
+    answer: (id, requestId) => id === "s1" && effects.push(`answer:${id}:${requestId}`) > 0,
   });
   const registry = new CommandRegistry(commands);
   const ctx = { reply: (event: unknown) => replies.push(event), broadcast: () => undefined };

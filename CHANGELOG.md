@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`bivy notify`, `bivy ask`, `bivy context` and `bivy app publish` work from an agent started with `bivy run` (or the agent shim).** The agent in a run got no `BIVY_SESSION_ID`, so these commands failed with "No session id", and `--session term-…` returned 404. A run's agent now gets the same session env a chat agent does: its pinned session id (Claude, Grok and Gemini), or otherwise the run's terminal id, plus a session token. The node accepts either id for these commands. A run has no chat, so a notice goes out as a push only, and the CLI says so. A question from the agent shows on the run's "running in the terminal" screen and can be answered there, including from a device that connected after it was asked.
+
 ## [0.20.5] - 2026-10-01
 
 ### Fixed

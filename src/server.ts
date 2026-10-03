@@ -175,7 +175,7 @@ import { createSessionControlCommands } from "./controllers/session-control.js";
 import { createPresenceCommands } from "./controllers/presence-commands.js";
 import { createArtifactCommands } from "./controllers/artifact-commands.js";
 import { PresenceBook, deviceFrom, type DeviceRef, type DriveVia, type SessionPresence } from "./session/presence.js";
-import { buildAgentContext } from "./session/agent-context.js";
+import { buildAgentContext, type AgentContext } from "./session/agent-context.js";
 import { AgentQuestions, askQuestionsFrom } from "./session/agent-questions.js";
 import { AutomationProposals, describeChange } from "./session/automation-proposals.js";
 import { createSessionTokenCodec, isSessionToken, sessionTokenAllows } from "./session/session-tokens.js";
@@ -592,7 +592,7 @@ questionManager.onRequest((request) => {
     sessionId: request.sessionId,
     attentionId: request.id,
     title: "Bivy needs your input",
-    body: `${sessionNotifyLabel(resolveSession(request.sessionId))} is asking a question — tap to answer.`,
+    body: `${sessionNotifyLabel(resolveSession(request.sessionId), runTerms.liveRun(request.sessionId)?.name)} is asking a question — tap to answer.`,
   });
 });
 questionManager.onResolved((request) => {
@@ -2488,7 +2488,7 @@ function currentAccess(): AccessReport {
 }
 
 const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
-  ...createAppCommands(appService, (id) => { const record = resolveSession(id); return record ? harnessDirFor(record) : undefined; }, (app) => {
+  ...createAppCommands(appService, (id) => { const record = resolveSession(id); return record ? harnessDirFor(record) : runTerms.liveRun(id)?.workspace; }, (app) => {
     const record = resolveSession(app.sessionId);
     if (!record) return;
     const ref = { appId: app.id, sessionId: app.sessionId, name: app.name };
@@ -2546,7 +2546,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     resolve: (sessionId) => resolveSession(sessionId),
     pause: pauseSession,
     resume: resumeSession,
-    answer: (record, requestId, input) => answerSessionQuestion(record, requestId, input),
+    answer: (sessionId, requestId, input) => answerSessionQuestion(sessionId, requestId, input),
   }),
   // Session fork/move command cluster, extracted to controllers/fork-commands.ts
   // (server.ts decomposition). Late-bound singletons (forkStandUp/forkRetire/
@@ -6557,9 +6557,12 @@ function recordMcpEvent(sessionId: string, event: unknown): void {
  *  out, or aborted) — same tolerance as resolveApproval. The resolved broadcast
  *  is emitted from questionManager.onResolved, not here, so it fires exactly
  *  when the question actually settles (never for an already-discarded id). */
-function answerSessionQuestion(_record: SessionRecord, requestId: string, msg: Record<string, unknown>) {
+/** A question's session may be an open chat or a live `bivy run` (`bivy ask`). */
+function answerSessionQuestion(sessionId: unknown, requestId: string, msg: Record<string, unknown>): boolean {
+  if (!resolveSession(sessionId) && !runTerms.liveRun(typeof sessionId === "string" ? sessionId : "")) return false;
   const answers = msg.answers && typeof msg.answers === "object" ? (msg.answers as Record<string, string>) : {};
   questionManager.resolve(requestId, msg.cancelled ? { behavior: "cancelled" } : { behavior: "completed", answers });
+  return true;
 }
 
 /** Agent id requested by a client command (`agent` or legacy `runtimeId`); empty = default. */
@@ -9398,6 +9401,7 @@ const runTerms = createRunTerminals({
   sessionBusy: (record) => sessionBusy(record as SessionRecord),
   sessionTerminalsRecord: (sessionId, val) => sessionTerminals.record(sessionId, val),
   sessionTerminalsForget: (sessionId) => sessionTerminals.forget(sessionId),
+  replayPendingInteractions: (sessionId) => replayPendingInteractions(sessionId),
   upsertSessionMetadata: (patch) => {
     const input = patch as Parameters<typeof metadata.upsertSession>[0];
     // A run continuing a saved session (`bivy resume`) only moves its status;
@@ -11874,10 +11878,9 @@ app.post("/api/session/:id/attach", (req, res) => {
 // `bivy context`: what an agent in this session needs to orient itself.
 app.get("/api/session/:id/context", (req, res) => {
   const record = openSessions.get(String(req.params.id));
-  if (!record) return res.status(404).json({ error: "Session not found" });
-  const { apps, previewAvailable } = appService.list(record.id);
-  res.json(buildAgentContext({
-    session: {
+  const run = record ? undefined : runTerms.liveRun(String(req.params.id));
+  const session: AgentContext["session"] | undefined = record
+    ? {
       id: record.id,
       name: record.session.getName() || undefined,
       agent: record.runtimeId,
@@ -11888,9 +11891,15 @@ app.get("/api/session/:id/context", (req, res) => {
       forkedFrom: record.forkedFrom,
       delegatedFrom: record.delegatedFrom?.sessionId,
       busy: sessionBusy(record),
-    },
+    }
+    // A `bivy run` terminal: the agent drives it from its own TUI, so it's live.
+    : run && { id: run.sessionId, name: run.name, agent: run.agent ?? "run", workspace: run.workspace, busy: true };
+  if (!session) return res.status(404).json({ error: "Session not found" });
+  const { apps, previewAvailable } = appService.list(session.id);
+  res.json(buildAgentContext({
+    session,
     machine: { name: identity.name, platform: process.platform, arch: process.arch },
-    presence: presenceBook.get(record.id),
+    presence: presenceBook.get(session.id),
     userConnected: clients.size > 0 || (relay?.clientCount ?? 0) > 0,
     apps,
     previewAvailable,
@@ -11899,41 +11908,46 @@ app.get("/api/session/:id/context", (req, res) => {
 
 // `bivy notify "<message>"`: a card in the chat, and a push naming the session
 // (never the text) when nobody has the app open, or when it's urgent. At most
-// one push a minute per session; later notices still post a card.
+// one push a minute per session; later notices still post a card. A `bivy run`
+// terminal has no chat to hold the card, so its notice is the push alone.
 const lastNotifyPush = new Map<string, number>();
 app.post("/api/session/:id/notify", (req, res) => {
   const record = openSessions.get(String(req.params.id));
-  if (!record) return res.status(404).json({ error: "Session not found" });
+  const run = record ? undefined : runTerms.liveRun(String(req.params.id));
+  const sessionId = record?.id ?? run?.sessionId;
+  if (!sessionId) return res.status(404).json({ error: "Session not found" });
   const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
   const notice = { id: `notice-${randomBytes(8).toString("hex")}`, text, ...(req.body?.urgent === true ? { urgent: true } : {}) };
   if (!isAgentNotice(notice)) return res.status(400).json({ error: `A notice needs text (up to ${MAX_NOTICE_TEXT} characters).` });
-  eventLog.appendNotice(record.id, { afterMessageCount: record.session.getMessages().length, notice });
-  broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "notice", id: notice.id, notice } }));
-  const watching = clients.size > 0 || (relay?.clientCount ?? 0) > 0;
-  const push = noticePush({ urgent: notice.urgent, userWatching: watching, lastPushAt: lastNotifyPush.get(record.id), now: Date.now(), pushConfigured: Boolean(sessionAdvertiseTarget) });
+  if (record) {
+    eventLog.appendNotice(record.id, { afterMessageCount: record.session.getMessages().length, notice });
+    broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "notice", id: notice.id, notice } }));
+  }
+  const watching = Boolean(record) && (clients.size > 0 || (relay?.clientCount ?? 0) > 0);
+  const push = noticePush({ urgent: notice.urgent, userWatching: watching, lastPushAt: lastNotifyPush.get(sessionId), now: Date.now(), pushConfigured: Boolean(sessionAdvertiseTarget) });
   if (push === "sent") {
-    lastNotifyPush.set(record.id, Date.now());
+    lastNotifyPush.set(sessionId, Date.now());
     void sendNotificationHint({
       kind: "agent_notice",
-      sessionId: record.id,
-      targetSessionId: record.id,
-      title: sessionNotifyLabel(record),
+      sessionId,
+      targetSessionId: sessionId,
+      title: sessionNotifyLabel(record, run?.name || "A terminal session"),
       body: "Has a message for you — tap to read it.",
     });
   }
-  res.json({ ok: true, id: notice.id, push, userWatching: watching });
+  res.json({ ok: true, id: notice.id, posted: Boolean(record), push, userWatching: watching });
 });
 
 // `bivy ask`: the question card and "needs your input" push, for any agent.
 // Returns at once with an id; `/wait` blocks up to 240s per call (under common
 // HTTP client timeouts), so the CLI loops until the user answers.
 app.post("/api/session/:id/ask", (req, res) => {
-  const record = openSessions.get(String(req.params.id));
-  if (!record) return res.status(404).json({ error: "Session not found" });
+  const sessionId = openSessions.get(String(req.params.id))?.id ?? runTerms.liveRun(String(req.params.id))?.sessionId;
+  if (!sessionId) return res.status(404).json({ error: "Session not found" });
   const questions = askQuestionsFrom(req.body?.questions);
   if (typeof questions === "string") return res.status(400).json({ error: questions });
   const timeoutSeconds = Number(req.body?.timeoutSeconds);
-  res.status(201).json(agentQuestions.ask(record.id, questions, Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 ? timeoutSeconds * 1000 : 10 * 60 * 1000));
+  res.status(201).json(agentQuestions.ask(sessionId, questions, Number.isFinite(timeoutSeconds) && timeoutSeconds > 0 ? timeoutSeconds * 1000 : 10 * 60 * 1000));
 });
 app.get("/api/session/:id/ask/:askId", (req, res) => {
   const result = agentQuestions.get(String(req.params.id), String(req.params.askId));

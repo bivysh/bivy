@@ -15,6 +15,7 @@
 // the unified agent-integration model (#433): only an integration that declares
 // bivy/mixed auth receives Bivy vault projections.
 
+import { randomUUID } from "node:crypto";
 import { provisionAgentRun } from "../runtime/credential-provisioning.js";
 import { ingestAgentCredentials } from "../runtime/credential-ingest.js";
 import { discoverCodexSessionForCwd } from "../runtime/codex-sessions.js";
@@ -22,6 +23,7 @@ import { discoverGrokSessionForCwd } from "../runtime/grok-sessions.js";
 import { discoverGeminiFamilySessionForCwd } from "../runtime/gemini-sessions.js";
 import { discoverOpenCodeSessionForCwd } from "../runtime/opencode-sessions.js";
 import { discoverPiSessionForCwd } from "../runtime/pi-session-discovery.js";
+import { bivySessionEnv } from "../runtime/session-env.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "../multiplexer.js";
 import type { TerminalManager } from "../terminal.js";
 import type { WebSocket } from "ws";
@@ -104,6 +106,9 @@ export interface RunTerminalDeps {
    *  unified agent-integration registry (#433). "agent" → no Bivy projection. */
   resolveAuthOwner(agent: string | undefined): string;
   broadcastTuiState(sessionId: string, active: boolean): void;
+  /** Re-send a session's still-pending cards (its `bivy ask` questions) to
+   *  clients that connected after they were raised. */
+  replayPendingInteractions(sessionId: string): void;
   refreshRecordAfterTui(record: RunSession): void;
   isEmptyUntitledTitle(name: string | undefined): boolean;
   getActiveSession(): { session?: { cwd?: string }; worktree?: { path?: string }; workspace?: string } | undefined;
@@ -115,6 +120,16 @@ export interface RunTerminalDeps {
   takeoverDiscoveryAttempts?: number;
   /** Test/diagnostic override for the delay between lazy native-session discovery attempts. */
   takeoverDiscoveryDelayMs?: number;
+}
+
+/** A live run as the agent inside it knows itself: `sessionId` is the
+ *  $BIVY_SESSION_ID it was given (its pinned session id, else its terminal id). */
+export interface LiveRun {
+  termId: string;
+  sessionId: string;
+  workspace: string;
+  name?: string;
+  agent?: string;
 }
 
 export interface RunTerminals {
@@ -130,6 +145,9 @@ export interface RunTerminals {
   /** A chat session just opened while a live run is pinned to it: lock the chat
    *  to that terminal, so the two never write the same conversation at once. */
   adoptLiveRun(record: RunSession): void;
+  /** The live run an agent's `bivy notify`/`ask`/`app` names: by the session id
+   *  it was given, or by its terminal id. */
+  liveRun(ref: string): LiveRun | undefined;
 }
 
 type TerminalClientMessage = { kind?: string; termId?: unknown; data?: unknown; cols?: unknown; rows?: unknown; workspace?: unknown; sessionId?: unknown; agent?: unknown; label?: unknown; name?: unknown; model?: unknown; command?: unknown; args?: unknown; mux?: unknown; standalone?: unknown };
@@ -231,6 +249,13 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
     record.tuiRefreshing = true;
     deps.broadcastTuiState(record.id, false);
     void deps.refreshRecordAfterTui(record);
+  }
+
+  function liveRun(ref: string): LiveRun | undefined {
+    if (!ref) return undefined;
+    const run = terminals.list((m) => m.kind === "run" && !m.mux)
+      .find((t) => runTerminals.has(t.id) && (t.id === ref || t.meta.sessionId === ref));
+    return run && { termId: run.id, sessionId: run.meta.sessionId ?? run.id, workspace: run.workspace, name: run.meta.name, agent: run.meta.agent };
   }
 
   function adoptLiveRun(record: RunSession): void {
@@ -390,12 +415,19 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
     const name = explicitName || (spec.mux ? undefined : defaultRunName(spec.agent, commandLine, workspace));
     const notifiable = !spec.mux;
     const createdAt = Date.now();
+    // The agent inside gets the same session env a chat session's agent does, so
+    // `bivy notify`/`ask`/`app` reach this run: under its pinned session id, else
+    // under the terminal's own id (see liveRun). A mux attach joins a shell that
+    // already has its environment.
+    const termId = `term-${randomUUID()}`;
+    const sessionEnv = spec.mux ? {} : bivySessionEnv(spec.sessionId ?? termId);
     try {
       const id = terminals.open({
+        id: termId,
         workspace,
         command: spec.command,
         args: spec.args,
-        env: { ...credentialEnv, ...spec.env },
+        env: { ...credentialEnv, ...sessionEnv, ...spec.env },
         cols: spec.cols,
         rows: spec.rows,
         clientId: spec.clientId,
@@ -547,7 +579,14 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
   function handleTerminalMessage(msg: TerminalClientMessage, emit: (event: unknown) => void, owned: Set<string>, clientId: string, viewRun?: (termId: string) => void): boolean {
     switch (msg.kind) {
       case "terminal.list":
-        void runTerminalList().then((listed) => emit({ type: "terminal.list", terminals: listed }));
+        // Every client asks on connect: also re-send what live runs are waiting
+        // on, as a chat's history request does for its own cards.
+        void runTerminalList().then((listed) => {
+          emit({ type: "terminal.list", terminals: listed });
+          for (const t of listed as Array<{ termId: string; sessionId?: string; mux?: string }>) {
+            if (!t.mux) deps.replayPendingInteractions(t.sessionId ?? t.termId);
+          }
+        });
         return true;
       case "terminal.takeover": {
         const takeoverTermId = typeof msg.termId === "string" && msg.termId ? msg.termId : undefined;
@@ -697,5 +736,5 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
     }
   }
 
-  return { runTerminalList, openRunTerminal, takeoverRunTerminal, handleTerminalMessage, addRunViewer, dropRunViewer, hasRunTerminal, hasLiveRunForSession, adoptLiveRun };
+  return { runTerminalList, openRunTerminal, takeoverRunTerminal, handleTerminalMessage, addRunViewer, dropRunViewer, hasRunTerminal, hasLiveRunForSession, adoptLiveRun, liveRun };
 }

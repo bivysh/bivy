@@ -13,7 +13,9 @@ export interface SessionControlPorts<TSession> {
   resolve(sessionId: unknown): TSession | undefined;
   pause(session: TSession): void;
   resume(session: TSession): void;
-  answer(session: TSession, requestId: string, input: SessionControlMessage): void;
+  /** Settle a question its session asked. False when no such session asks
+   *  here: neither an open chat nor a live `bivy run` (which has no TSession). */
+  answer(sessionId: unknown, requestId: string, input: SessionControlMessage): boolean;
 }
 
 /** Canonical pause/resume/question handlers shared by relay and generated HTTP
@@ -33,12 +35,10 @@ export function createSessionControlCommands<TSession>(ports: SessionControlPort
       ctx.reply({ type: "session.resume.result", ok: true });
     },
     "session.question.answer"(input, ctx) {
-      const session = ports.resolve(input.sessionId);
       const requestId = String(input.requestId ?? "");
-      if (!session || !requestId) {
+      if (!requestId || !ports.answer(input.sessionId, requestId, input)) {
         return ctx.reply({ type: "session.question.answer.error", httpStatus: 404, error: "No matching session/question" });
       }
-      ports.answer(session, requestId, input);
       ctx.reply({ type: "session.question.answer.result", ok: true, requestId });
     },
   };

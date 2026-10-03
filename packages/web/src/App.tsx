@@ -1043,6 +1043,9 @@ export function App() {
             const runNode = state.connection.nodes.find((n) => n.id === (run?.nodeId || pendingRunTerm.nodeId));
             // Same capability gate the Terminal overlay uses for "Continue in chat".
             const canTakeover = Boolean(run?.sessionId) || runtimeSupportsTerminalTakeover(run?.agent, state.catalogs.runtimes);
+            // The agent in a run asks (`bivy ask`) as its pinned session id, else as its terminal id.
+            const asker = run?.sessionId || pendingRunTerm.termId;
+            const runQuestions = state.activeSession.questions.filter((q) => q.sessionId === asker);
             return (
               <TuiLockedView
                 sessionId={run?.sessionId}
@@ -1051,7 +1054,17 @@ export function App() {
                 online={state.connection.status !== "offline"}
                 onOpenTerminal={openPendingRunTerminal}
                 onUseChat={canTakeover ? takeoverPendingRun : undefined}
-              />
+              >
+                {runQuestions.length > 0 && (
+                  <div className="tui-locked-attention" role="region" aria-live="polite" aria-label="Agent needs your response">
+                    <QuestionStack
+                      questions={runQuestions}
+                      onAnswer={(id, sessionId, answers) => controller.answerQuestion(id, sessionId, answers)}
+                      onCancel={(id, sessionId) => controller.cancelQuestion(id, sessionId)}
+                    />
+                  </div>
+                )}
+              </TuiLockedView>
             );
           })()
         ) : showSessionTerminal ? (
