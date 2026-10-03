@@ -284,6 +284,43 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .focus-view-btn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
 .focus-view-label { font-size: var(--text-xs); font-weight: var(--weight-semibold); }
 
+/* ---- Side pane (wide screens): the session's changes, apps and artifacts
+   beside the chat instead of in a sheet over it. Same bodies as the sheets
+   (components/Panel.tsx), docked; below the breakpoint in App.tsx the pane
+   is never rendered and the sheets are used. */
+.app.has-pane { grid-template-columns: minmax(300px, 22vw) minmax(0, 1fr) clamp(380px, 32vw, 600px); }
+.side-pane {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0; height: var(--app-h, 100dvh);
+  border-left: 1px solid var(--line); background: var(--surface);
+}
+.side-pane-head {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
+  min-height: var(--topbar-h, 57px); padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+.side-pane-tabs { min-width: 0; overflow-x: auto; }
+.side-pane-tab { display: inline-flex; align-items: center; gap: var(--space-1); }
+.side-pane-count { color: var(--muted); font-variant-numeric: tabular-nums; font-weight: var(--weight-normal); }
+.side-pane-close { flex: none; color: var(--muted); }
+.side-pane-close:hover { color: var(--ink); }
+.side-pane-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* A docked Panel: the sheet's title row becomes a quiet toolbar, its content
+   the pane's own scroller. */
+.pane-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pane-panel-head {
+  flex: none; display: flex; align-items: center; gap: var(--space-2);
+  min-height: 44px; padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+.pane-panel-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--text-sm); font-weight: var(--weight-semibold);
+}
+.pane-panel-content { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: var(--space-3); overscroll-behavior: contain; }
+.pane-panel[data-size="full"] .pane-panel-content { padding: 0; overflow: hidden; }
+.pane-panel[data-size="full"] .preview-peek { border-radius: 0; }
+.topbar-actions .side-pane-toggle[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+
 /* ---- Header session actions (dot-menu: rename / open PR / delete) ---- */
 .session-actions-wrap { position: relative; flex: none; }
 .session-actions-btn { border: 0; background: transparent; color: var(--ink); font-size: 20px; line-height: 1; padding: 4px 8px; border-radius: var(--radius-sm); }

@@ -77,7 +77,9 @@ import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { useModalEscape } from "./modalStack.js";
 import { SessionViewToggle } from "./components/SessionViewToggle.js";
 import { readSessionView, writeSessionView, type SessionView } from "./sessionView.js";
-import { CloseIcon } from "./components/UiIcons.js";
+import { CloseIcon, PanelRightIcon } from "./components/UiIcons.js";
+import { SidePane } from "./components/SidePane.js";
+import { useSidePane, type SidePaneTabId } from "./useSidePane.js";
 import { controller } from "./store/useStore.js";
 import { onAppsSheetRequest, type AppsSheetRequest } from "./appsSheetRequest.js";
 import { attentionRank, isUnseen, runStatusLabel, statusClass, type SessionStatusInput } from "./sessionStatus.js";
@@ -144,6 +146,13 @@ export function App() {
   // where transcript cards and notifications open it, at an app or a view.
   const [appsSheet, setAppsSheet] = useState<AppsSheetRequest | null>(null);
   useEffect(() => onAppsSheetRequest(setAppsSheet), []);
+  // On a wide screen these surfaces dock beside the chat instead (see
+  // useSidePane); every way of opening one goes through `sidePane.show`.
+  const sidePane = useSidePane();
+  const showInSidePane = sidePane.show;
+  // An apps request (a transcript card, a notification, the first task's app)
+  // lands in the pane's Apps tab when the pane is how apps are shown.
+  useEffect(() => { if (appsSheet) showInSidePane("apps"); }, [appsSheet, showInSidePane]);
   // Leaving the session closes it; coming back must not reopen it.
   useEffect(() => setAppsSheet(null), [state.activeSession.activeSessionId]);
   // The first task's app: the agent publishes it from its own workspace (a
@@ -788,9 +797,12 @@ export function App() {
     ? `${activeSessionNode.name || activeSessionNode.id} (${activeSessionNode.id})`
     : activeSessionNodeId;
   const isRepoSession = Boolean(activeSession?.source && String(activeSession.source).startsWith("repo:"));
+  const paneTab: SidePaneTabId | null = sidePane.wide && activeSession && !needsNode ? sidePane.tab : null;
+  const openChanges = () => { if (!sidePane.show("changes")) setChangesSheetOpen(true); };
+  const openArtifacts = () => { if (!sidePane.show("artifacts")) setArtifactsSheetOpen(true); };
 
   return (
-    <div className="app">
+    <div className={`app${paneTab ? " has-pane" : ""}`}>
       <div
         ref={drawerRef}
         className={`sidebar${drawerOpen ? " open" : ""}`}
@@ -929,6 +941,17 @@ export function App() {
             )}
           </div>
           <div className="topbar-actions">
+            {sidePane.wide && activeSession && !needsNode && (
+              <button
+                className="btn ghost icon side-pane-toggle"
+                onClick={() => sidePane.setTab(paneTab ? null : "changes")}
+                aria-pressed={Boolean(paneTab)}
+                aria-label={paneTab ? "Hide side pane" : "Show changes, apps and artifacts"}
+                title={paneTab ? "Hide side pane" : "Show changes, apps and artifacts"}
+              >
+                <PanelRightIcon size={18} />
+              </button>
+            )}
             {state.activeSession.activeSessionId && !showSessionTerminal && (
               <button
                 className="btn ghost focus-view-btn"
@@ -1181,7 +1204,7 @@ export function App() {
               </section>
             )}
 
-            {changesSheetOpen && (
+            {changesSheetOpen && !sidePane.wide && (
               <SessionChangesSheet
                 history={state.activeSession.changesHistory}
                 checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
@@ -1189,11 +1212,11 @@ export function App() {
               />
             )}
 
-            {artifactsSheetOpen && (
+            {artifactsSheetOpen && !sidePane.wide && (
               <ArtifactsSheet artifacts={artifacts} onClose={() => setArtifactsSheetOpen(false)} />
             )}
 
-            {appsSheet && appsSheet.sessionId === activeSession?.sessionId && (
+            {appsSheet && !sidePane.wide && appsSheet.sessionId === activeSession?.sessionId && (
               <AppsSheet key={`${appsSheet.sessionId}:${appsSheet.appId ?? ""}:${appsSheet.openView?.viewId ?? ""}`} {...appsSheet} onClose={() => setAppsSheet(null)} />
             )}
 
@@ -1220,9 +1243,9 @@ export function App() {
                   forkedFrom={activeForkedFrom}
                   delegatedFrom={activeSession?.delegatedFrom}
                   filesEdited={countUniqueEditedFiles(state.activeSession.changesHistory)}
-                  onOpenChanges={() => setChangesSheetOpen(true)}
+                  onOpenChanges={openChanges}
                   artifactsCount={artifacts.length}
-                  onOpenArtifacts={() => setArtifactsSheetOpen(true)}
+                  onOpenArtifacts={openArtifacts}
                   onOpenRun={(runId) => openRun(runId)}
                   onRecover={(kind) => {
                     // C2: recover a terminal run using existing capabilities. fix/retry
@@ -1251,7 +1274,7 @@ export function App() {
                   apps={liveApps.published ?? apps.length}
                   serverPorts={liveApps.offers.map((offer) => offer.port)}
                   newNotes={newNotes}
-                  onOpen={() => setAppsSheet({ sessionId: activeSession.sessionId })}
+                  onOpen={() => { if (!sidePane.show("apps")) setAppsSheet({ sessionId: activeSession.sessionId }); }}
                 />
               )}
             </div>
@@ -1285,6 +1308,37 @@ export function App() {
           </>
         )}
       </main>
+
+      {paneTab && activeSession && (
+        <SidePane
+          tabs={[
+            { id: "changes", label: "Changes", count: countUniqueEditedFiles(state.activeSession.changesHistory) },
+            { id: "apps", label: "Apps", count: liveApps.published ?? apps.length },
+            { id: "artifacts", label: "Artifacts", count: artifacts.length },
+          ]}
+          active={paneTab}
+          // A request scoped the Apps tab to one app or view; picking a tab
+          // yourself goes back to everything.
+          onSelect={(tab) => { setAppsSheet(null); sidePane.setTab(tab); }}
+          onClose={() => sidePane.setTab(null)}
+        >
+          {paneTab === "changes" && (
+            <SessionChangesSheet
+              docked
+              history={state.activeSession.changesHistory}
+              checks={runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status }))}
+              onClose={() => sidePane.setTab(null)}
+            />
+          )}
+          {paneTab === "apps" && (() => {
+            const request = appsSheet?.sessionId === activeSession.sessionId ? appsSheet : { sessionId: activeSession.sessionId };
+            return <AppsSheet docked key={`${request.sessionId}:${request.appId ?? ""}:${request.openView?.viewId ?? ""}`} {...request} onClose={() => setAppsSheet(null)} />;
+          })()}
+          {paneTab === "artifacts" && (
+            <ArtifactsSheet docked artifacts={artifacts} onClose={() => sidePane.setTab(null)} />
+          )}
+        </SidePane>
+      )}
 
       {automationsOpen && (
         <Suspense fallback={null}>

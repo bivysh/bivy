@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useMemo, useState } from "react";
 import type { SessionChangeEntry } from "@bivy/core";
-import { Sheet } from "./Sheet.js";
+import { Panel } from "./Panel.js";
 import { countLines, TreeNode, relTime } from "./ChangesCard.js";
 import { buildFileTree } from "../fileTree.js";
 import { controller } from "../store/useStore.js";
@@ -83,10 +83,13 @@ export function SessionChangesSheet({
   history,
   onClose,
   checks,
+  docked,
 }: {
   history: SessionChangeEntry[];
   onClose: () => void;
   checks?: { name: string; status: "passed" | "failed" | "skipped" }[];
+  /** In the side pane beside the chat rather than a sheet over it. */
+  docked?: boolean;
 }) {
   const [mode, setMode] = useState<DiffMode>("unified");
   const [undoing, setUndoing] = useState(false);
@@ -113,7 +116,8 @@ export function SessionChangesSheet({
       latest.files.map((file) => ({ ...file, ...countLines(file) })),
       checks,
     ));
-    onClose();
+    // The sheet covers the composer; docked, the composer is already in view.
+    if (!docked) onClose();
   };
   const undoLatest = () => {
     if (!latest?.before) return;
@@ -126,7 +130,8 @@ export function SessionChangesSheet({
     : "Session changes";
 
   return (
-    <Sheet
+    <Panel
+      docked={docked}
       title={title}
       onClose={onClose}
       autoFocusSearch={false}
@@ -162,6 +167,6 @@ export function SessionChangesSheet({
         {ordered.length === 0 && <div className="changes-binary">No file changes yet this session.</div>}
         {ordered.map((entry) => <TurnEntry key={entry.id} entry={entry} mode={mode} />)}
       </div>
-    </Sheet>
+    </Panel>
   );
 }
