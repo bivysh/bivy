@@ -423,3 +423,20 @@ export function renderForkTranscript(transcript: NormalizedTranscript): string {
   const turns = buildForkHistory(transcript).map((turn) => `## ${turn.role === "user" ? "User" : "Assistant"}\n\n${turn.text}`);
   return [...header, "", ...turns].join("\n\n").replace(/\n{3,}/g, "\n\n") + "\n";
 }
+
+/**
+ * The model the agent last answered with, as its own transcript records it
+ * (`model`, and `provider` when known, on an assistant message). A session
+ * resumed from a native transcript (a `bivy run <agent> --model …` taken over
+ * in chat) should keep that model, not fall back to the agent's default.
+ */
+export function lastTranscriptModel(messages: readonly RuntimeMessage[]): { provider: string; id: string } | undefined {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i] as { role?: unknown; model?: unknown; provider?: unknown; bivyKind?: unknown };
+    if (message?.role !== "assistant" || message.bivyKind) continue;
+    if (typeof message.model === "string" && message.model.trim()) {
+      return { provider: typeof message.provider === "string" ? message.provider : "", id: message.model.trim() };
+    }
+  }
+  return undefined;
+}

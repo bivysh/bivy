@@ -116,6 +116,12 @@ test("a streaming update without detail keeps the call's classification and pare
   assert.equal(latest.parentToolUseId, "parent-1");
 });
 
+test("a turn failure reported on the tool channel (no tool, no call id) is not persisted as a tool card", () => {
+  const { tp, eventLog } = harness();
+  tp.persistToolActivityFromEvent(sess(), { type: "tool_result", error: "error_during_execution", message: "" } as any);
+  assert.equal(eventLog.appended.length, 0);
+});
+
 test("intermediate coalescing: skips an unchanged non-final append, always writes final, re-opens after clear", () => {
   const { tp, eventLog } = harness();
   const ev = { assistantMessageEvent: { type: "thinking_end", content: "hello" } };

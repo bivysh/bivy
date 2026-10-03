@@ -21,6 +21,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tool cards show what the tool printed.** Pi's shell output showed as raw JSON with no exit code, and its card lost the command once output streamed.
 - **No agent log dumps in the transcript.** An ACP agent's stderr (for example OpenCode's request errors) appeared as an "Agent output" card. It now shows only when the agent crashes.
 - **Reopened Codex sessions don't show Codex's own context as your message.**
+- **Agents launched by a node that was started from an agent's shell work normally.** The node passed that shell's session markers on to every agent it launched, so Claude Code thought it was a sub-session and stopped saving its transcript, which history, "Use chat" and forks need. The node now drops them at startup.
+- **"Use chat" works for native `bivy run` sessions of every agent.**
+  - **Codex:** it no longer picks up a sub-agent's thread.
+  - **Codex:** it isn't blocked by Codex's background server ("thread already has an active writer").
+  - **Pi:** sessions in your own Pi folder can be continued.
+  - **All agents:** if a takeover fails, you stay on the run's screen instead of landing on an empty draft.
+- **A native session continued in chat keeps its model and shows its earlier turns in order.** Claude Code and Codex sessions kept running on the agent's default model instead of the one the run used. Reopened Codex sessions show the commands, edits and sub-agents the agent ran, including code-mode calls. Grok's earlier turns no longer appear after the chat that continued them.
+- **A message sent while an agent is still answering doesn't merge two replies.** For OpenCode, Grok and other ACP agents, what the agent had already said was dropped and the rest ran into the next answer.
+- **A forked agent can read its full earlier conversation.** The transcript file a fork points to now sits in the fork's own `.bivy/` folder, inside its workspace, instead of a folder a sandboxed agent can't open.
+- **Grok 4.7 is in the model list.**
 
 ## [0.20.5] - 2026-10-01
 

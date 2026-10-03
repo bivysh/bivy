@@ -18,7 +18,7 @@ import { piAgentDir, piCommandAvailable, piIntegration, LazyPiRuntime } from "..
 import { deleteCodexSession, loadCodexTranscript } from "./codex-sessions.js";
 import { deleteOpenCodeSession, exportOpenCodeSession, importOpenCodeSession, loadOpenCodeTranscript, writeOpenCodeHistory } from "./opencode-sessions.js";
 import { discoverNativeGrokSessions, listGrokSessions, loadGrokTranscript } from "./grok-sessions.js";
-import { discoverNativeGeminiFamilySessions, listGeminiFamilySessions, loadGeminiFamilyTranscript, type GeminiFamilyAgent } from "./gemini-sessions.js";
+import { discoverNativeGeminiFamilySessions, listGeminiFamilySessions, loadGeminiFamilyTranscript } from "./gemini-sessions.js";
 import { createCredentialStore } from "./credentials.js";
 import { AgentRegistry } from "../agents/registry.js";
 import { applyCertification } from "../certification/index.js";
@@ -57,7 +57,7 @@ function codexResumeArgs(sessionId: string, tier: string): string[] {
   // (read-only | workspace-write | danger-full-access), so `tier` needs no mapping.
   return ["exec", "--json", "--sandbox", tier, "resume", sessionId];
 }
-import type { ModelInfo, ForkHistoryMessage, ForkImportContext, ForkNativePayload } from "./types.js";
+import type { ModelInfo, ForkHistoryMessage, ForkImportContext, ForkNativePayload, RuntimeMessage } from "./types.js";
 import { ProcessRuntime, processRuntimeFromEnv, type ProcessModelConfig, type ProcessPromptMode, type ProcessThinkingConfig } from "./process.js";
 import { codexCredentialPreflight } from "./codex-preflight.js";
 import { opencodeCredentialPreflight } from "./opencode-preflight.js";
@@ -94,6 +94,15 @@ const PREFLIGHT_BEHAVIORS: Record<PreflightBehavior, NonNullable<import("./proce
   codex: (env) => codexCredentialPreflight(env),
   opencode: (env, ctx) => opencodeCredentialPreflight(env, ctx),
   grok: (env) => grokCredentialPreflight(env),
+};
+type HistoryLoader = NonNullable<NonNullable<AgentProfile["resume"]>["historyLoader"]>;
+/** Readers for an agent's own session store, by the profile's `historyLoader`.
+ *  The same reader serves the pipe path and the governed ACP path, so a session
+ *  reopened or taken over from a native run shows its earlier turns either way. */
+const HISTORY_LOADERS: Record<HistoryLoader, (sessionId: string) => RuntimeMessage[]> = {
+  grok: loadGrokTranscript,
+  gemini: (sessionId) => loadGeminiFamilyTranscript("gemini", sessionId),
+  qwen: (sessionId) => loadGeminiFamilyTranscript("qwen", sessionId),
 };
 type PrepareBehavior = NonNullable<AgentProfileBehaviors["prepare"]>;
 /** Launch-env patches that project a Bivy-connected login into an agent's own
@@ -701,7 +710,7 @@ function acpShimPath(): string {
  * through bin/acp-shim.mjs. Shared by the generic `acp` runtime and the per-agent
  * ACP promotion path so both wrap agents identically.
  */
-function acpRuntimeOptions(opts: { id: string; displayName: string; command: string; agentArgs: string[]; credsDir?: string; behaviors?: AgentProfileBehaviors; mcpConfig?: McpConfig; sandbox?: AgentSessionOptions["sandbox"]; instructionsEnv?: Record<string, string> }): ProtocolRuntimeOptions {
+function acpRuntimeOptions(opts: { id: string; displayName: string; command: string; agentArgs: string[]; credsDir?: string; behaviors?: AgentProfileBehaviors; historyLoader?: HistoryLoader; mcpConfig?: McpConfig; sandbox?: AgentSessionOptions["sandbox"]; instructionsEnv?: Record<string, string> }): ProtocolRuntimeOptions {
   const slashBehavior = opts.behaviors?.slashCommands;
   const slashCommands = slashBehavior ? SLASH_COMMAND_BEHAVIORS[slashBehavior]() : undefined;
   // Forward Bivy's configured MCP servers to the ACP agent: the shim reads
@@ -741,6 +750,7 @@ function acpRuntimeOptions(opts: { id: string; displayName: string; command: str
     // in that store (writeHistory → capabilities.forkHistoryImport → fidelity
     // "replayed" instead of a seeded summary prompt). Only opencode has this
     // layout; a bare ACP agent gets none of these hooks.
+    ...(opts.historyLoader ? { loadHistory: HISTORY_LOADERS[opts.historyLoader] } : {}),
     ...(opts.behaviors?.sessionStore === "opencode"
       ? {
           loadHistory: (sessionRef: string) => loadOpenCodeTranscript(sessionRef),
@@ -1254,6 +1264,7 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
           command: spec.command,
           agentArgs: spec.acp.args,
           behaviors: spec.behaviors,
+          historyLoader: spec.resume?.historyLoader,
           ...(spec.authOwner && spec.authOwner !== "agent" ? { credsDir: options.credsDir } : {}),
           sandbox: options.sandbox,
           mcpConfig: options.mcpConfig,
@@ -1303,11 +1314,7 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
         : resumeTemplate
           ? {
               resumable: true,
-              loadHistory: spec.resume?.historyLoader === "grok"
-                ? loadGrokTranscript
-                : spec.resume?.historyLoader === "gemini" || spec.resume?.historyLoader === "qwen"
-                  ? (sessionId: string) => loadGeminiFamilyTranscript(spec.resume!.historyLoader as GeminiFamilyAgent, sessionId)
-                  : undefined,
+              loadHistory: spec.resume?.historyLoader ? HISTORY_LOADERS[spec.resume.historyLoader] : undefined,
               // `{sandbox}` expands to that agent's native containment flags for
               // the tier (e.g. Gemini/Qwen's `--approval-mode <mode>`) — a whole
               // token, not a string substitution, since it can be multiple argv
@@ -1339,7 +1346,7 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
             sessionDiscovery: true,
             listDiskSessions: () => {
               if (nativeSessionBehavior === "grok") {
-                return listGrokSessions().map((s) => ({
+                return listGrokSessions().filter((s) => !s.subagent).map((s) => ({
                   id: s.id,
                   path: s.dir,
                   cwd: s.cwd,

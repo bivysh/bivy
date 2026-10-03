@@ -52,6 +52,9 @@ const fileA = writeRollout("2026/07/11", `rollout-2026-07-11T10-00-00-${SESSION_
   { type: "response_item", timestamp: "2026-07-11T10:00:00.500Z", payload: { role: "user", content: [{ type: "input_text", text: "<environment_context>\n  <cwd>/work/repo</cwd>\n</environment_context>" }] } },
   { type: "response_item", timestamp: "2026-07-11T10:00:01.000Z", payload: { role: "user", content: "add a test" } },
   { type: "response_item", timestamp: "2026-07-11T10:00:02.000Z", payload: { role: "assistant", content: [{ type: "text", text: "On it." }] } },
+  { type: "turn_context", timestamp: "2026-07-11T10:00:02.100Z", payload: { model: "gpt-5.6-sol" } },
+  { type: "response_item", timestamp: "2026-07-11T10:00:03.000Z", payload: { type: "function_call", name: "exec_command", arguments: "{\"cmd\":\"npm test\"}", call_id: "call_1" } },
+  { type: "response_item", timestamp: "2026-07-11T10:00:04.000Z", payload: { type: "function_call_output", call_id: "call_1", output: "1 passing" } },
   { type: "event_msg", payload: { type: "token_count", total: 42 } }, // non-message, ignored
 ]);
 
@@ -73,12 +76,18 @@ check("enumerates both sessions, newest first", () => {
   assert.equal(sessions[1].firstMessage, "add a test");
 });
 
-check("reconstructs a transcript (wrapped layout, string + block content, injected context skipped)", () => {
-  const msgs = loadCodexTranscriptFile(fileA) as Array<{ role: string; content: string }>;
+check("reconstructs a transcript (wrapped layout, string + block content, injected context skipped, tool calls kept)", () => {
+  const msgs = loadCodexTranscriptFile(fileA) as Array<{ role: string; content: unknown; model?: string }>;
   assert.deepEqual(
     msgs.map((m) => [m.role, m.content]),
-    [["user", "add a test"], ["assistant", "On it."]],
+    [
+      ["user", "add a test"],
+      ["assistant", "On it."],
+      ["assistant", [{ type: "tool_use", id: "call_1", name: "exec_command", input: { cmd: "npm test" } }]],
+      ["user", [{ type: "tool_result", tool_use_id: "call_1", content: "1 passing" }]],
+    ],
   );
+  assert.equal(msgs[2]!.model, "gpt-5.6-sol", "the turn's model rides on the agent's messages");
 });
 
 check("reconstructs a transcript (flat layout) and skips non-JSON lines", () => {
@@ -89,9 +98,31 @@ check("reconstructs a transcript (flat layout) and skips non-JSON lines", () => 
   );
 });
 
+check("a code-mode script reads back as the tool calls it made, with their output", () => {
+  const file = writeRollout("2026/07/12", "rollout-2026-07-12T10-00-00-eeeeeeee-ffff-4aaa-8bbb-cccccccccccc.jsonl", [
+    { type: "session_meta", payload: { id: "eeeeeeee-ffff-4aaa-8bbb-cccccccccccc", cwd: "/work/code-mode" } },
+    { type: "response_item", payload: { type: "custom_tool_call", name: "exec", call_id: "c1", input: 'text(await tools.exec_command({cmd:"cat a.py","max_output_tokens":1000}));\ntext(await tools.apply_patch("*** Begin Patch\\n*** Update File: /w/a.py\\n@@\\n+x\\n*** End Patch"));\n' } },
+    { type: "response_item", payload: { type: "custom_tool_call_output", call_id: "c1", output: [
+      { type: "input_text", text: "Script completed\nWall time 0.1 seconds\nOutput:\n" },
+      { type: "input_text", text: '{"chunk_id":"a","exit_code":0,"output":"print(1)\\n"}' },
+      { type: "input_text", text: "{}" },
+    ] } },
+  ]);
+  const msgs = loadCodexTranscriptFile(file) as Array<{ content: unknown }>;
+  assert.deepEqual(msgs[0]!.content, [
+    { type: "tool_use", id: "c1#0", name: "shell", input: { command: "cat a.py" } },
+    { type: "tool_use", id: "c1#1", name: "apply_patch", input: { changes: [{ path: "/w/a.py", kind: { type: "update" }, diff: "@@\n+x" }] } },
+  ]);
+  assert.deepEqual(msgs[1]!.content, [
+    { type: "tool_result", tool_use_id: "c1#0", content: { content: "print(1)\n", exitCode: 0 } },
+    { type: "tool_result", tool_use_id: "c1#1", content: "completed" },
+  ]);
+  fs.rmSync(file);
+});
+
 check("loadCodexTranscript resolves by session id", () => {
   const msgs = loadCodexTranscript(SESSION_A) as Array<{ role: string }>;
-  assert.equal(msgs.length, 2);
+  assert.equal(msgs.length, 4);
   assert.equal(loadCodexTranscript("no-such-id").length, 0);
 });
 
@@ -102,6 +133,18 @@ check("discoverCodexSessionForCwd matches by cwd + since", () => {
   assert.equal(discoverCodexSessionForCwd("/nope"), undefined);
   // `since` in the future (after the session started) → filtered out.
   assert.equal(discoverCodexSessionForCwd("/work/repo", Date.parse("2027-01-01T00:00:00Z")), undefined);
+});
+
+check("a sub-agent's own rollout is never taken for the run (its parent is)", () => {
+  const child = writeRollout("2026/07/11", "rollout-2026-07-11T10-05-00-cccccccc-dddd-4eee-8fff-000000000000.jsonl", [
+    { type: "session_meta", timestamp: "2026-07-11T10:05:00.000Z", payload: { id: "cccccccc-dddd-4eee-8fff-000000000000", parent_thread_id: SESSION_A, thread_source: "subagent", cwd: "/work/repo" } },
+  ]);
+  try {
+    assert.equal(discoverCodexSessionForCwd("/work/repo")?.id, SESSION_A, "the newer sub-agent thread does not win");
+    assert.ok(!discoverNativeCodexSessions(() => false).some((s) => s.ref === "cccccccc-dddd-4eee-8fff-000000000000"), "nor is it listed as a session");
+  } finally {
+    fs.rmSync(child);
+  }
 });
 
 check("missing sessions dir yields an empty list (no throw)", () => {

@@ -22,6 +22,7 @@ import type { AttachmentStore } from "./attachment-store.js";
 import { thinkingTextFromContent } from "./transcript-merge.js";
 import { extractInlineImageUrls, fetchInlineImage, isFetchImageError, inlineImageDisplayName, assistantTextForImageScan } from "./inline-image-fetch.js";
 import { historyDelta, type HistoryCursor } from "../history-sync.js";
+import { withToolDetails } from "../runtime/tool-call-map.js";
 import type { RuntimeMessage, RuntimeEvent } from "../runtime/index.js";
 import type { PrRef } from "../metadata.js";
 
@@ -202,6 +203,10 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
     const type = String(event.type || "");
     if (!["tool_call", "tool_execution_start", "tool_execution_update", "tool_execution_end", "tool_result", "function_call", "function_result"].includes(type)) return;
     const callId = toolEventId(event);
+    // A turn-level failure some runtimes report on the tool channel (Claude's
+    // non-success `result`) names no tool and no call: it is not tool activity,
+    // and persisting it left a blank error card keyed "tool:".
+    if (callId === "tool:" && !event.toolName && !event.name) return;
     const toolCall = event.toolCall as Record<string, unknown> | undefined;
     const input = (event.input || event.toolInput || event.args || toolCall?.input || {}) as Record<string, unknown>;
     const name = String(event.toolName || event.name || toolCall?.name || "tool");
@@ -285,7 +290,8 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
   }
 
   function buildHistoryEvent(opts: BuildHistoryEventOptions): Record<string, unknown> {
-    const messages = opts.sessionId ? project(opts.sessionId, opts.messages) as unknown[] : opts.messages;
+    const described = withToolDetails(opts.messages, opts.runtimeId);
+    const messages = opts.sessionId ? project(opts.sessionId, described) as unknown[] : described;
     const delta = historyDelta(messages, opts.cursor);
     const record = opts.sessionId ? deps.getOpenSession(opts.sessionId) : undefined;
     const bSess = record ? deps.bivySessionEnvelope(record) : undefined;

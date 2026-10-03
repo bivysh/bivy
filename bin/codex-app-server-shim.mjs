@@ -523,6 +523,19 @@ async function ensureInitialized() {
   initialized = true;
 }
 
+// Codex keeps one writer per thread. A thread still open in Codex elsewhere
+// (its TUI, or the shared background app-server Codex 0.160 runs for it) can't
+// be resumed here; say what to do instead of passing the bare error through.
+async function resumeThread(params) {
+  try {
+    return await asRequest("thread/resume", params);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/active writer/i.test(message)) throw error;
+    throw new Error(`${message}. The thread is still open in Codex outside Bivy: close it there, or stop Codex's background server with \`codex app-server daemon stop\`, then try again.`);
+  }
+}
+
 function threadParams(msg, extra = {}) {
   return {
     cwd: msg.workspace || process.cwd(),
@@ -549,7 +562,7 @@ async function onBivyCommand(msg) {
         // field on session.create. New hosts use the explicit session.resume
         // primitive below.
         if (typeof msg.resume === "string" && msg.resume) {
-          const resumed = await asRequest("thread/resume", threadParams(msg, { threadId: msg.resume }));
+          const resumed = await resumeThread(threadParams(msg, { threadId: msg.resume }));
           threadId = resumed?.thread?.id ?? resumed?.threadId ?? msg.resume;
           bivy({ replyTo: id, ok: true, runtimeSessionRef: threadId });
           return;
@@ -563,7 +576,7 @@ async function onBivyCommand(msg) {
         await ensureInitialized();
         const resumeRef = String(msg.runtimeSessionRef || msg.resumeRef || msg.sessionId || "");
         if (!resumeRef) { bivy({ replyTo: id, ok: false, error: "missing resume ref" }); return; }
-        const resumed = await asRequest("thread/resume", threadParams(msg, { threadId: resumeRef }));
+        const resumed = await resumeThread(threadParams(msg, { threadId: resumeRef }));
         threadId = resumed?.thread?.id ?? resumed?.threadId ?? resumeRef;
         bivy({ replyTo: id, ok: true, runtimeSessionRef: threadId });
         return;

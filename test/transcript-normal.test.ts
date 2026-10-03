@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { normalizeMessages, buildSeedPrompt, buildForkHistory, relocateTranscript, renderForkTranscript } from "../src/session/transcript-normal.js";
+import { normalizeMessages, buildSeedPrompt, buildForkHistory, lastTranscriptModel, relocateTranscript, renderForkTranscript } from "../src/session/transcript-normal.js";
 import type { NormalizedTranscriptHeader } from "../src/session/transcript-normal.js";
 
 // Unit tests for the runtime-neutral transcript used by session fork.
@@ -242,6 +242,16 @@ test("relocateTranscript: a fork's history points at its own copy of the workspa
   assert.match(buildSeedPrompt(moved), /now continues in \/work\/repo\/\.bivy\/worktrees\/fork-1/, "a seeded fork says so too");
   const same = { header, turns: [{ role: "user" as const, text: "x" }] };
   assert.equal(relocateTranscript(same, "/a", "/a"), same, "an unmoved fork is unchanged");
+});
+
+test("lastTranscriptModel: the model the agent last answered with, skipping Bivy's overlay records", () => {
+  assert.deepEqual(lastTranscriptModel([
+    { role: "assistant", content: "a", model: "claude-opus-4-8" },
+    { role: "user", content: "b" },
+    { role: "assistant", content: "c", model: "gpt-5.6-sol", provider: "openai-codex" },
+    { role: "assistant", bivyKind: "tool", content: [], model: "ignored" },
+  ]), { provider: "openai-codex", id: "gpt-5.6-sol" });
+  assert.equal(lastTranscriptModel([{ role: "assistant", content: "x" }]), undefined);
 });
 
 test("buildForkHistory: a system/error notice folds into the assistant voice", () => {

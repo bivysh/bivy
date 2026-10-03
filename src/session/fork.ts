@@ -256,7 +256,8 @@ export interface MaterializeForkOptions {
   seed?: SeedPromptOptions;
   /** Store the full conversation where the seeded agent can read it; returns
    *  the path, or undefined when it couldn't be written. Seed path only. */
-  saveTranscript?: (markdown: string) => string | undefined;
+  /** Save the readable transcript where the agent can read it; returns its path. */
+  saveTranscript?: (markdown: string, cwd: string) => string | undefined;
 }
 
 /**
@@ -310,7 +311,7 @@ export async function materializeFork(opts: MaterializeForkOptions): Promise<For
   // its tools can read — an app URL is a web page it can't fetch.
   let transcriptFile: string | undefined;
   try {
-    transcriptFile = opts.saveTranscript?.(renderForkTranscript(normalized));
+    transcriptFile = opts.saveTranscript?.(renderForkTranscript(normalized), ctx.cwd);
   } catch {
     transcriptFile = undefined;
   }

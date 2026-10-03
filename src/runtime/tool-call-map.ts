@@ -204,7 +204,7 @@ export function mapToolCall(toolName: string, input: unknown, context: ToolCallM
   }
 
   if (inToolSet(DELEGATE, toolName, key)) {
-    const label = str(o, "subagent_type", "subagentType", "agent", "agentType", "role", "name");
+    const label = str(o, "subagent_type", "subagentType", "agent", "agentType", "role", "name", "task_name", "taskName");
     const description = str(o, "description", "task", "prompt", "instructions", "goal", "message");
     return decorate({ kind: "delegation", ...(label ? { label } : {}), ...(description ? { description } : {}) }, toolName, input, context);
   }
@@ -265,4 +265,27 @@ export function mapToolResult(result: unknown, isError = false): ToolResultDetai
     ...(isError || o.isError === true || o.is_error === true ? { isError: true } : {}),
     ...(rawText.length > RAW_LIMIT ? { truncated: true } : {}),
   };
+}
+
+/**
+ * Fill in `detail` on tool_use blocks that lack it. Live tool events carry a
+ * detail, but a transcript reloaded from an agent's own store (a native session
+ * taken over, a reopened rollout) has bare blocks, which the client can only
+ * label generically. Messages without such blocks are returned as they were.
+ */
+export function withToolDetails<T>(messages: readonly T[], provider = "unknown"): T[] {
+  return messages.map((message) => {
+    const content = (message as { content?: unknown } | undefined)?.content;
+    if (!Array.isArray(content)) return message;
+    let changed = false;
+    const next = content.map((block) => {
+      const b = block as { type?: unknown; name?: unknown; input?: unknown; detail?: unknown } | undefined;
+      if (b?.type !== "tool_use" || b.detail || typeof b.name !== "string") return block;
+      const detail = mapToolCall(b.name, b.input, { provider, protocol: "unknown" });
+      if (!detail) return block;
+      changed = true;
+      return { ...b, detail };
+    });
+    return changed ? ({ ...(message as object), content: next } as T) : message;
+  });
 }

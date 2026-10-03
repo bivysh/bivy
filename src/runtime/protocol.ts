@@ -722,6 +722,20 @@ class ProtocolSession implements RuntimeSession {
     }
   }
 
+  /** Persist the live turn's content so far (prose, tools, their results) and
+   *  commit it on clients, so a steering message can follow it in order. */
+  private sealStreamedSoFar(): void {
+    const hadTools = this.turnContent.some((b) => b.type !== "thinking") || this.turnToolResults.length > 0;
+    if (hadTools) {
+      this.flushPendingTurnText();
+      if (this.turnContent.length) this.snapshotAssistantTurn([...this.turnContent]);
+      if (this.turnToolResults.length) this.messages.push({ role: "user", content: this.turnToolResults, timestamp: Date.now() });
+    } else if (this.assistantText) {
+      this.snapshotAssistantTurn(this.assistantText);
+    }
+    if (this.assistantText) this.emit({ type: "message_boundary", message: { role: "assistant", content: this.assistantText } });
+  }
+
   /**
    * Fold assistant text that arrives after the turn was sealed (session.done)
    * onto the last persisted assistant message — the ACP end_turn race (see the
@@ -1134,6 +1148,11 @@ class ProtocolSession implements RuntimeSession {
     } catch {
       textToSend = prompt;
     }
+    // A message sent while a turn is still streaming steers into it. Keep what
+    // the agent already said as its own message, before this one: resetting the
+    // turn here dropped that text, and the rest of the reply then ran into the
+    // answer to this message as one bubble.
+    if (this.streaming) this.sealStreamedSoFar();
     this.messages.push({ role: "user", content: prompt, timestamp: Date.now() });
     this.streaming = true;
     this.turnMessageIndex = undefined;

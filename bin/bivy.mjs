@@ -1221,6 +1221,18 @@ const AGENT_SESSION_ID_FLAG = {
   gemini: "--session-id",
 };
 
+// Args a native `bivy run <agent>` adds so the session stays one Bivy can take
+// over as a chat. Codex 0.160's TUI otherwise runs its threads in a shared
+// background app-server that outlives the terminal and keeps the thread's
+// writer lock, so "Use chat" failed with "thread … already has an active writer".
+const AGENT_RUN_ARGS = {
+  codex: ["--no-daemon"],
+};
+function applyAgentRunArgs(agentId, spec) {
+  const add = (AGENT_RUN_ARGS[agentId] ?? []).filter((arg) => !(spec.args ?? []).includes(arg));
+  if (add.length) spec.args = [...add, ...(spec.args ?? [])];
+}
+
 // Args that mean the caller already chose a session (pin or resume), so we must
 // not inject our own --session-id over the top.
 const SESSION_ID_CONFLICTS = ["--session-id", "--resume", "-r", "-c", "--continue"];
@@ -2057,6 +2069,7 @@ async function cmdRun(args = []) {
   // didn't already choose one), so the on-disk session is a known, deterministic
   // resume target — the anchor for later "continue as chat" adoption.
   const pinnedSessionId = bivySession ? undefined : pinRunSessionId(agentId, resolved.spec);
+  applyAgentRunArgs(agentId, resolved.spec);
   if (bivySession) resolved.spec.sessionId = bivySession;
   if (pinnedSessionId) {
     console.log(c.dim(`session id ${pinnedSessionId} — resume in a terminal with '${agentId} --resume ${pinnedSessionId}'`));

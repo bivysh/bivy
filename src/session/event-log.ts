@@ -174,15 +174,74 @@ export function mergeBases(logged: RuntimeMessage[], runtime: readonly RuntimeMe
     for (const [text, n] of consumed) loggedTexts.set(text, (loggedTexts.get(text) ?? 0) - n);
     return true;
   };
+  // The runtime's order, as either a message the merged list already has (its
+  // anchor) or one only the runtime had (fresh). Placement below uses it.
+  const sequence: Array<{ anchor: RuntimeMessage } | { fresh: RuntimeMessage }> = [];
+  let byAtom: Map<string, RuntimeMessage> | undefined; // first logged message holding each atom, built on first use
+  const anchorOf = (m: RuntimeMessage): RuntimeMessage | undefined => {
+    if (!byAtom) {
+      byAtom = new Map();
+      for (const other of merged) {
+        const theirs = messageContentAtoms(other);
+        for (const atom of [...theirs.toolIds, ...theirs.texts]) if (!byAtom.has(atom)) byAtom.set(atom, other);
+      }
+    }
+    const atoms = messageContentAtoms(m);
+    for (const atom of [...atoms.toolIds, ...atoms.texts]) {
+      const found = byAtom.get(atom);
+      if (found) return found;
+    }
+    return undefined;
+  };
   for (const m of runtime) {
     const key = JSON.stringify(m);
-    if (known.has(key)) continue;
+    if (known.has(key)) { sequence.push({ anchor: merged[keys.indexOf(key)]! }); continue; }
     const identity = identityOf(m);
-    if (identity && identities.has(identity)) { add(m); continue; } // streaming refinement of a known turn
-    if (coveredByLogged(m)) continue; // reopen re-serialization already in the base
-    add(m); // a genuinely new (resumed) turn
+    if (identity && identities.has(identity)) { add(m); sequence.push({ anchor: m }); continue; } // streaming refinement of a known turn
+    if (coveredByLogged(m)) { // reopen re-serialization already in the base
+      const anchor = anchorOf(m);
+      if (anchor) sequence.push({ anchor });
+      continue;
+    }
+    if (add(m)) sequence.push({ fresh: m }); // not in the logged base
   }
-  return merged;
+  return placeFresh(merged, sequence);
+}
+
+/**
+ * Put messages only the runtime had where they happened, not at the end. A
+ * reload can carry turns or detail the logged base never stored (a native run
+ * taken over as a chat; a Codex rollout's tool calls under a text-only base):
+ * appended, they land after turns that came later. Each goes right before the
+ * next message the runtime shares with the base, else right after the previous
+ * one. With nothing shared to anchor to, its timestamp places it, and a message
+ * with neither (or a genuinely new turn) goes last.
+ */
+function placeFresh(merged: RuntimeMessage[], sequence: ReadonlyArray<{ anchor: RuntimeMessage } | { fresh: RuntimeMessage }>): RuntimeMessage[] {
+  const freshSet = new Set(sequence.flatMap((item) => ("fresh" in item ? [item.fresh] : [])));
+  if (!freshSet.size) return merged;
+  const timeOf = (m: RuntimeMessage): number | undefined => {
+    const t = (m as { timestamp?: unknown }).timestamp;
+    return typeof t === "number" && Number.isFinite(t) ? t : undefined;
+  };
+  const placed = merged.filter((m) => !freshSet.has(m));
+  let previous: RuntimeMessage | undefined; // last anchor seen, or last fresh placed after it
+  for (let i = 0; i < sequence.length; i++) {
+    const item = sequence[i]!;
+    if ("anchor" in item) { previous = item.anchor; continue; }
+    const next = sequence.slice(i + 1).find((later): later is { anchor: RuntimeMessage } => "anchor" in later)?.anchor;
+    let at: number;
+    if (previous && placed.includes(previous)) at = placed.indexOf(previous) + 1;
+    else if (next && placed.includes(next)) at = placed.indexOf(next);
+    else {
+      const t = timeOf(item.fresh);
+      const later = t === undefined ? -1 : placed.findIndex((other) => (timeOf(other) ?? -Infinity) > t);
+      at = later < 0 ? placed.length : later;
+    }
+    placed.splice(at, 0, item.fresh);
+    previous = item.fresh;
+  }
+  return placed;
 }
 
 /** One appended overlay record: an intermediate-reasoning or tool-activity entry. */

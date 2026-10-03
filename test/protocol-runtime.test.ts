@@ -589,3 +589,28 @@ console.log("protocol-runtime: all tests passed");
   session.dispose();
   console.log("protocol-runtime-tool-observe: ok");
 }
+
+// --- a message sent while a turn is still streaming (a steer) ---
+{
+  const steerFixture = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "protocol-steer-agent.mjs");
+  const runtime = new ProtocolRuntime({ command: process.execPath, args: [steerFixture], displayName: "Steer Fixture" });
+  const { session } = await runtime.createSession({ workspace: process.cwd() });
+  const events: RuntimeEvent[] = [];
+  session.subscribe((event) => events.push(event));
+  try {
+    await session.prompt("continue the fork");
+    await waitFor(events, (event) => event.type === "message_update");
+    await session.prompt("summarize");
+    await waitFor(events, (event) => event.type === "agent_end");
+    const shape = session.getMessages().map((m) => [m.role, typeof m.content === "string" ? m.content : JSON.stringify(m.content)]);
+    assert.deepEqual(shape, [
+      ["user", "continue the fork"],
+      ["assistant", "The earlier work is done."],
+      ["user", "summarize"],
+      ["assistant", " Here is the summary."],
+    ], "what streamed before the steer stays its own message, in order");
+  } finally {
+    session.dispose();
+  }
+  console.log("protocol-runtime: steer mid-turn ok");
+}

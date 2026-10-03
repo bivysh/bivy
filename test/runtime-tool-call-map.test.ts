@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { boundedToolPayload, mapToolCall, mapToolResult } from "../src/runtime/tool-call-map.js";
+import { boundedToolPayload, mapToolCall, mapToolResult, withToolDetails } from "../src/runtime/tool-call-map.js";
 import { codexJsonParser, claudeStreamJsonParser } from "../src/runtime/cli-parsers.js";
 import type { RuntimeEvent } from "../src/runtime/types.js";
 
@@ -93,5 +93,14 @@ assert.deepEqual(
   mapToolResult({ content: [{ type: "text", text: "2\n" }], structuredContent: { output: "2\n", exit_code: 0 } }),
   { text: "2\n", exitCode: 0 },
 );
+
+// A reloaded transcript's bare tool blocks get the same detail live events carry.
+const plain = { role: "user", content: "hi" };
+const reloaded = withToolDetails([
+  plain,
+  { role: "assistant", content: [{ type: "tool_use", id: "t", name: "shell", input: { command: "ls" } }] },
+], "codex-approvals");
+assert.equal((reloaded[1] as any).content[0].detail.kind, "shell");
+assert.equal(reloaded[0], plain, "messages without tool blocks are passed through");
 
 console.log("runtime-tool-call-map: all tests passed");

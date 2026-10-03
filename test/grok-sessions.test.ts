@@ -19,7 +19,7 @@ function writeSession(
   home: string,
   cwd: string,
   id: string,
-  opts: { createdAt?: string; updatedAt?: string; title?: string; history?: string[] } = {},
+  opts: { createdAt?: string; updatedAt?: string; title?: string; history?: string[]; kind?: string } = {},
 ): string {
   const dir = path.join(home, "sessions", encodeURIComponent(cwd), id);
   fs.mkdirSync(dir, { recursive: true });
@@ -33,6 +33,7 @@ function writeSession(
       created_at: created,
       updated_at: updated,
       last_active_at: updated,
+      ...(opts.kind ? { session_kind: opts.kind } : {}),
     }),
   );
   const lines = opts.history ?? [
@@ -67,6 +68,13 @@ await check("listGrokSessions reads summary + first user query", () => {
   assert.equal(listed[0]!.cwd, "/Users/me/proj");
   assert.equal(listed[0]!.name, "Bug hunt");
   assert.equal(listed[0]!.firstMessage, "Fix the bug");
+});
+
+await check("a sub-agent's own session is not adopted for the run that spawned it", () => {
+  const cwd = "/Users/me/subagents";
+  writeSession(home, cwd, "parent-1", { createdAt: "2026-08-08T12:00:00.000Z" });
+  writeSession(home, cwd, "child-1", { createdAt: "2026-08-08T11:59:58.000Z", kind: "subagent" });
+  assert.equal(discoverGrokSessionForCwd(cwd, Date.parse("2026-08-08T11:59:57.000Z"))?.id, "parent-1");
 });
 
 await check("loadGrokTranscript drops meta wrappers and keeps real turns", () => {
