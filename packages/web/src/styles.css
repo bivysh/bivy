@@ -927,7 +927,8 @@ button.sheet-action:last-child { border-bottom: 0; }
    would occupy and centers a compact card; the buttons are the old lock
    banner's escape hatches (open the terminal / take over in chat) at a more
    deliberate, explanatory scale. */
-.tui-locked { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 24px 16px; overflow-y: auto; }
+.tui-locked { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: safe center; gap: var(--space-4); padding: 24px 16px; overflow-y: auto; }
+.tui-locked-attention { width: min(440px, 100%); }
 .tui-locked-card { width: min(440px, 100%); display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
 .tui-locked-icon { display: inline-flex; align-items: center; justify-content: center; width: 52px; height: 52px; border-radius: var(--radius-md); background: color-mix(in srgb, var(--accent) 12%, var(--surface-2)); color: var(--accent); }
 .tui-locked-title { margin: 2px 0 0; font-size: 18px; font-weight: 700; }

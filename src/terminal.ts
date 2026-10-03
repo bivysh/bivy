@@ -97,6 +97,9 @@ export interface TerminalOpenOptions {
    * opener and reflow its TUI.
    */
   clientId?: string;
+  /** The terminal's id, when the caller needs it before the PTY starts (to put
+   *  it in the child's env). Defaults to a fresh `term-<uuid>`. */
+  id?: string;
   env?: Record<string, string>;
   /**
    * Program to run instead of the login shell (with `args`). Used to launch an
@@ -240,7 +243,7 @@ export class TerminalManager {
   }
 
   open(options: TerminalOpenOptions): string {
-    const id = `term-${randomUUID()}`;
+    const id = options.id ?? `term-${randomUUID()}`;
     const shell = options.command || defaultShell();
     const shellArgs = options.command ? (options.args ?? []) : [];
     // Ensure a UTF-8 locale so TUIs (e.g. Claude Code) render box-drawing and

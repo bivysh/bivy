@@ -2691,7 +2691,14 @@ blocked, or need the user to look at something. --json prints
   const body = await res.json().catch(() => ({}));
   if (!res.ok) return fail(sessionHttpError("Notify", res.status, body));
   if (json) { console.log(JSON.stringify(body)); return; }
-  const pushed = { sent: "and pushed to the user's devices", user_watching: "(no push: the user has the app open; add --urgent to push anyway)", rate_limited: "(no push: this session pushed less than a minute ago)", unavailable: "(no push: this machine isn't signed in to a Bivy account)" }[body.push] ?? "";
+  const noPush = { user_watching: "the user has the app open; add --urgent to push anyway", rate_limited: "this session pushed less than a minute ago", unavailable: "this machine isn't signed in to a Bivy account" }[body.push];
+  // A terminal run (`bivy run`) has no chat to hold a card: the push is the notice.
+  if (body.posted === false) {
+    if (body.push === "sent") console.log(c.green("Pushed to the user's devices."));
+    else console.log(c.yellow(`Not delivered: a terminal run has no chat to post in, and no push was sent (${noPush ?? body.push}).`));
+    return;
+  }
+  const pushed = body.push === "sent" ? "and pushed to the user's devices" : noPush ? `(no push: ${noPush})` : "";
   console.log(c.green(`Posted in the chat ${pushed}.`.replace(" .", ".")));
 }
 

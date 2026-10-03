@@ -8,6 +8,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 
+import { setSessionTokenSigner } from "../src/runtime/session-env.js";
 import { createRunTerminals, type RunTerminalDeps } from "../src/session/run-terminal.js";
 
 function fakeTerminals(over: any = {}) {
@@ -56,6 +57,7 @@ function harness(over: any = {}) {
     listPiSessions: over.listPiSessions ?? (async () => []),
     resolveAuthOwner: over.resolveAuthOwner ?? (() => "agent"),
     broadcastTuiState: over.broadcastTuiState ?? (() => {}),
+    replayPendingInteractions: over.replayPendingInteractions ?? (() => {}),
     refreshRecordAfterTui: over.refreshRecordAfterTui ?? (() => {}),
     isEmptyUntitledTitle: (n) => !n || n === "Untitled",
     getActiveSession: () => undefined,
@@ -90,13 +92,39 @@ test("takeover returns 404 when there is no matching live run-terminal", async (
 });
 
 test("an agent-owned integration launches with NO Bivy credential projection (#433)", async () => {
-  // "unknown" resolves to no integration → authOwner defaults to "agent" → env {}.
+  // "unknown" resolves to no integration → authOwner defaults to "agent" → only
+  // the session env the agent finds its run by.
   const { rt, terminals, emit } = harness();
   const id = await rt.openRunTerminal({ command: "foo", args: [], agent: "unknown" }, emit);
   assert.equal(id, "t1");
   assert.equal(terminals.calls.open.length, 1);
-  assert.deepEqual(terminals.calls.open[0].env, {}, "no vault projection for an agent-owned integration");
+  assert.deepEqual(Object.keys(terminals.calls.open[0].env), ["BIVY_SESSION_ID"], "no vault projection for an agent-owned integration");
   assert.ok(emit.length === undefined || true);
+});
+
+test("a run's agent gets the session env `bivy notify`/`ask` resolve back to the run", async () => {
+  // A PTY registry that keeps what was opened, so liveRun sees real meta.
+  const open: any[] = [];
+  const terminals = fakeTerminals({ list: (filter?: (meta: any) => boolean) => open.filter((o) => !filter || filter(o.meta)).map((o) => ({ id: o.id, workspace: o.workspace, createdAt: 0, meta: o.meta })), meta: (id: string) => open.find((o) => o.id === id)?.meta });
+  terminals.open = (opts: any) => { open.push(opts); return opts.id; };
+  setSessionTokenSigner((id) => `bst_${id}`);
+  try {
+    const { rt, emit } = harness({ terminals });
+    // Pinned (`claude --session-id`): the agent knows itself by that id.
+    const pinned = await rt.openRunTerminal({ command: "claude", args: [], agent: "claude", sessionId: "uuid-1", workspace: "/w" }, emit);
+    assert.deepEqual(open[0].env, { BIVY_SESSION_ID: "uuid-1", BIVY_SESSION_TOKEN: "bst_uuid-1" });
+    assert.deepEqual(rt.liveRun("uuid-1"), { termId: pinned, sessionId: "uuid-1", workspace: "/w", name: "claude · w", agent: "claude" });
+    // Unpinned: by the terminal's own id, which is what `terminal.created` shows.
+    const plain = await rt.openRunTerminal({ command: "codex", args: [], agent: "codex", workspace: "/w" }, emit);
+    assert.equal(open[1].env.BIVY_SESSION_ID, plain);
+    assert.equal(rt.liveRun(plain!)?.sessionId, plain);
+    // A mux attach joins a shell that already has its env, and isn't a session.
+    const mux = await rt.openRunTerminal({ command: "tmux", args: ["attach"], agent: "tmux", mux: "tmux:main" }, emit);
+    assert.equal(open[2].env.BIVY_SESSION_ID, undefined);
+    assert.equal(rt.liveRun(mux!), undefined);
+  } finally {
+    setSessionTokenSigner(undefined);
+  }
 });
 
 test("takeover of an unsupported agent returns 409 after it is live", async () => {

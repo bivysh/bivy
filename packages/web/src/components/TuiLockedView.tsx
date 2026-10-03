@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+import type { ReactNode } from "react";
 import { thisDevice } from "../device.js";
 import { useSessionPresence } from "../useSessionPresence.js";
 import { relTime } from "./ChangesCard.js";
@@ -20,6 +21,7 @@ export function TuiLockedView({
   online,
   onOpenTerminal,
   onUseChat,
+  children,
 }: {
   /** When known, names the device typing into the terminal (device handoff). */
   sessionId?: string;
@@ -29,12 +31,14 @@ export function TuiLockedView({
   onOpenTerminal: () => void;
   /** Undefined hides "Use chat" when takeover isn't supported for this agent. */
   onUseChat?: () => void;
+  /** Cards the agent raised while it runs here (its `bivy ask` questions). */
+  children?: ReactNode;
 }) {
   const presence = useSessionPresence(sessionId);
   const driver = presence?.driver?.via === "terminal" && presence.driver.id !== thisDevice().id ? presence.driver : undefined;
   return (
-    <div className="tui-locked" role="status" aria-live="polite">
-      <div className="card tui-locked-card">
+    <div className="tui-locked">
+      <div className="card tui-locked-card" role="status" aria-live="polite">
         <span className="tui-locked-icon" aria-hidden>
           <svg viewBox="0 0 24 24" width="26" height="26" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
             <rect x="3" y="4" width="18" height="16" rx="2" />
@@ -73,6 +77,7 @@ export function TuiLockedView({
           </p>
         )}
       </div>
+      {children}
     </div>
   );
 }
