@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Side pane on wide screens.** On a desktop-width window (1200px and up), a session's Changes, Apps and Artifacts open in a pane beside the chat instead of a sheet over it, so you can read a diff or use a running app while you keep talking to the agent. App previews open inside the pane, with Draw and reviewer notes working as before. Toggle it from the new button in the session header or close it from the pane; the open tab is remembered. Narrower screens and phones keep the sheets.
+- **Terminal tab in the side pane.** The side pane gains a Terminal tab: a shell in the session's workspace, next to the chat, so you can run a command while the agent works without covering the conversation. It is separate from the agent's own terminal (the Chat | Terminal switch). Switching tabs detaches and coming back reattaches to the same shell; End closes it. The terminal header's buttons now scroll into view when they don't fit, instead of being cut off on the left.
 
 ### Fixed
 

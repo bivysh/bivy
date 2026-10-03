@@ -319,6 +319,12 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .pane-panel-content { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: var(--space-3); overscroll-behavior: contain; }
 .pane-panel[data-size="full"] .pane-panel-content { padding: 0; overflow: hidden; }
 .pane-panel[data-size="full"] .preview-peek { border-radius: 0; }
+/* The pane's tab already says Terminal: keep the head to the pane toolbar's
+   height, with the live status and the actions that matter beside a chat. */
+.side-pane .term-head { min-height: 44px; padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3); gap: var(--space-2); }
+.side-pane .term-title-label, .side-pane .term-zoom { display: none; }
+.side-pane .term-title { flex: none; }
+.side-pane .term-status { margin-left: 0; }
 .topbar-actions .side-pane-toggle[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
 
 /* ---- Header session actions (dot-menu: rename / open PR / delete) ---- */
@@ -2648,9 +2654,12 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .term-head-actions {
   display: flex; align-items: center; gap: 8px;
   flex: 1 1 auto; min-width: 0; overflow-x: auto;
-  justify-content: flex-end;
+  /* Right-aligned by an auto margin, not justify-content: flex-end, which
+     would push overflow off the left edge where it can't be scrolled to. */
+  justify-content: flex-start;
   scrollbar-width: none; -webkit-overflow-scrolling: touch;
 }
+.term-head-actions > :first-child { margin-left: auto; }
 .term-head-actions::-webkit-scrollbar { display: none; }
 .term-head-actions > * { flex: 0 0 auto; }
 .term-attach-wrap { position: relative; }

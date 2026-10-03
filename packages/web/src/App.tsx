@@ -946,8 +946,8 @@ export function App() {
                 className="btn ghost icon side-pane-toggle"
                 onClick={() => sidePane.setTab(paneTab ? null : "changes")}
                 aria-pressed={Boolean(paneTab)}
-                aria-label={paneTab ? "Hide side pane" : "Show changes, apps and artifacts"}
-                title={paneTab ? "Hide side pane" : "Show changes, apps and artifacts"}
+                aria-label={paneTab ? "Hide side pane" : "Show changes, apps, artifacts and terminal"}
+                title={paneTab ? "Hide side pane" : "Show changes, apps, artifacts and terminal"}
               >
                 <PanelRightIcon size={18} />
               </button>
@@ -1315,6 +1315,7 @@ export function App() {
             { id: "changes", label: "Changes", count: countUniqueEditedFiles(state.activeSession.changesHistory) },
             { id: "apps", label: "Apps", count: liveApps.published ?? apps.length },
             { id: "artifacts", label: "Artifacts", count: artifacts.length },
+            { id: "terminal", label: "Terminal" },
           ]}
           active={paneTab}
           // A request scoped the Apps tab to one app or view; picking a tab
@@ -1336,6 +1337,20 @@ export function App() {
           })()}
           {paneTab === "artifacts" && (
             <ArtifactsSheet docked artifacts={artifacts} onClose={() => sidePane.setTab(null)} />
+          )}
+          {/* A shell in the session's workspace, beside the chat. It keeps its
+              own scope, so it never collides with the agent's TUI (the
+              Chat | Terminal toggle); switching tabs detaches and coming back
+              reattaches. Ending the shell returns to Changes. */}
+          {paneTab === "terminal" && (
+            <Suspense fallback={null}>
+              <TerminalOverlay
+                key={activeSession.sessionId}
+                embedded
+                sessionId={activeSession.sessionId}
+                onClose={() => sidePane.setTab("changes")}
+              />
+            </Suspense>
           )}
         </SidePane>
       )}

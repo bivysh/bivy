@@ -18,6 +18,7 @@ for (const theme of themes) {
       import { SessionChangesSheet } from '/src/components/SessionChangesSheet.tsx';
       import { ArtifactsSheet } from '/src/components/ArtifactsSheet.tsx';
       import { AppsSheet } from '/src/components/AppsSheet.tsx';
+      import { TerminalOverlay } from '/src/components/Terminal.tsx';
       import { controller } from '/src/store/controller.ts';
       import '/@fs/${path.resolve("packages/ui/tokens.css")}';
       import '/src/styles.css';
@@ -30,6 +31,14 @@ for (const theme of themes) {
         if (kind === 'apps.list') return { apps: [app], previewAvailable: true };
         if (kind === 'apps.open') return { kind: 'web', url: 'https://pane.preview.example.net/__bivy/open#ticket' };
         return { ok: true };
+      };
+      // The shell runs on the machine; record what the pane asks it for.
+      window.terminalCommands = [];
+      const terminalListeners = new Set();
+      controller.onTerminal = (fn) => { terminalListeners.add(fn); return () => terminalListeners.delete(fn); };
+      controller.sendTerminal = (command) => {
+        window.terminalCommands.push(command);
+        if (command.kind === 'terminal.open') setTimeout(() => terminalListeners.forEach((fn) => fn({ type: 'terminal.opened', termId: 'shell-1', workspace: '/work/bivy' })), 20);
       };
       const lines = (n, word) => Array.from({ length: n }, (_, i) => word + i).join('\\n');
       const file = (p, a, b) => ({ path: p, status: 'modified', oldText: lines(a, 'old '), newText: lines(b, 'new ') });
@@ -52,12 +61,13 @@ for (const theme of themes) {
               h('div', { className: 'assistant-row' }, h('div', { className: 'msg assistant' }, h('p', null, 'Done. Changes, apps and artifacts now sit in a pane on the right on wide screens.')))))),
             h('section', { className: 'composer' }, h('div', { className: 'composer-card' }, h('textarea', { className: 'composer-input', rows: 1, 'aria-label': 'Message', placeholder: 'Ask a follow-up…' })))),
           tab && h(SidePane, {
-            tabs: [{ id: 'changes', label: 'Changes', count: 3 }, { id: 'apps', label: 'Apps' }, { id: 'artifacts', label: 'Artifacts', count: 1 }],
+            tabs: [{ id: 'changes', label: 'Changes', count: 3 }, { id: 'apps', label: 'Apps' }, { id: 'artifacts', label: 'Artifacts', count: 1 }, { id: 'terminal', label: 'Terminal' }],
             active: tab, onSelect: setTab, onClose: () => setTab(null),
           },
             tab === 'changes' && h(SessionChangesSheet, { docked: true, history, onClose() {} }),
             tab === 'apps' && h(AppsSheet, { docked: true, sessionId: 's', onClose() {} }),
-            tab === 'artifacts' && h(ArtifactsSheet, { docked: true, artifacts, onClose() {} })));
+            tab === 'artifacts' && h(ArtifactsSheet, { docked: true, artifacts, onClose() {} }),
+            tab === 'terminal' && h(TerminalOverlay, { embedded: true, sessionId: 's', onClose: () => setTab('changes') })));
       }
       createRoot(document.getElementById('root')).render(h(Shell));
     </script></body></html>`);
@@ -108,6 +118,22 @@ for (const theme of themes) {
     await expect(pane.getByRole("tab", { name: /Artifacts/ })).toHaveAttribute("aria-selected", "true");
     await expect(pane.getByText("coverage-report.html")).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`side-pane-artifacts-${theme}.png`) });
+
+    // Terminal: a shell in this session's workspace, in the pane's flow (not
+    // the full-screen overlay), and ending it goes back to Changes.
+    await page.keyboard.press("ArrowRight");
+    const shell = pane.locator(".term-overlay.term-embedded");
+    await expect(shell).toBeVisible();
+    await expect.poll(() => page.evaluate(() => (window as any).terminalCommands.filter((c: any) => c.kind === "terminal.open").map((c: any) => c.sessionId))).toEqual(["s"]);
+    await expect(shell.locator(".term-status")).toHaveText("Connected");
+    const term = (await shell.boundingBox())!;
+    expect(term.x).toBeGreaterThanOrEqual(box.x);
+    expect(term.x + term.width).toBeLessThanOrEqual(box.x + box.width + 1);
+    expect(term.y + term.height).toBeLessThanOrEqual(900 + 1);
+    await expect(page.locator(".composer")).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath(`side-pane-terminal-${theme}.png`) });
+    await shell.getByRole("button", { name: "End" }).click();
+    await expect(pane.getByRole("tab", { name: /Changes/ })).toHaveAttribute("aria-selected", "true");
 
     await pane.getByRole("button", { name: "Hide side pane" }).click();
     await expect(pane).toHaveCount(0);
