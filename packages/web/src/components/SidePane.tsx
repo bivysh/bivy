@@ -49,7 +49,7 @@ export function SidePane<T extends string>({ tabs, active, onSelect, onClose, ch
               onKeyDown={(event) => onKeyDown(event, index)}
             >
               {tab.label}
-              {tab.count ? <span className="side-pane-count">{tab.count}</span> : null}
+              {tab.count ? <span className="seg-count">{tab.count}</span> : null}
             </button>
           ))}
         </div>

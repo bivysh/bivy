@@ -124,7 +124,7 @@ for (const theme of themes) {
     await page.keyboard.press("ArrowRight");
     const shell = pane.locator(".term-overlay.term-embedded");
     await expect(shell).toBeVisible();
-    await expect.poll(() => page.evaluate(() => (window as any).terminalCommands.filter((c: any) => c.kind === "terminal.open").map((c: any) => c.sessionId))).toEqual(["s"]);
+    await expect.poll(() => page.evaluate(() => (window as unknown as { terminalCommands: { kind: string; sessionId?: string }[] }).terminalCommands.filter((c) => c.kind === "terminal.open").map((c) => c.sessionId))).toEqual(["s"]);
     await expect(shell.locator(".term-status")).toHaveText("Connected");
     const term = (await shell.boundingBox())!;
     expect(term.x).toBeGreaterThanOrEqual(box.x);

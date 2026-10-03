@@ -79,6 +79,7 @@ import { SessionViewToggle } from "./components/SessionViewToggle.js";
 import { readSessionView, writeSessionView, type SessionView } from "./sessionView.js";
 import { CloseIcon, PanelRightIcon } from "./components/UiIcons.js";
 import { SidePane } from "./components/SidePane.js";
+import { SessionSectionToggle, type SessionSection } from "./components/SessionSectionToggle.js";
 import { useSidePane, type SidePaneTabId } from "./useSidePane.js";
 import { controller } from "./store/useStore.js";
 import { onAppsSheetRequest, type AppsSheetRequest } from "./appsSheetRequest.js";
@@ -134,7 +135,10 @@ export function App() {
   const [ephemeralOpen, setEphemeralOpen] = useState(false);
   // Full-session file changes sheet — opened from the run pill / summary sheet
   // ("N files edited"), not a card stacked above the composer.
-  const [changesSheetOpen, setChangesSheetOpen] = useState(false);
+  // On a narrow screen (no side pane) the session's changes take the main
+  // column instead of the chat: Agent | Changes in the top bar.
+  const [sessionSection, setSessionSection] = useState<SessionSection>("agent");
+  useEffect(() => setSessionSection("agent"), [state.activeSession.activeSessionId]);
   // Session/Run artifacts sheet — opened from the run pill ("N artifacts"),
   // mirroring the changes sheet above. The projection itself is a pure fold
   // over the transcript the store already holds (see deriveArtifacts) — no
@@ -741,6 +745,9 @@ export function App() {
   const activeApprovals = state.activeSession.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSession.activeSessionId);
   const activeQuestions = state.activeSession.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSession.activeSessionId);
   const activeTurnAttention = state.activeSession.turnAttentions.find((a) => a.sessionId === state.activeSession.activeSessionId);
+  // The agent asking for something lives in the chat: bring it back into view.
+  const needsAnswer = activeApprovals.length + activeQuestions.length + (activeTurnAttention ? 1 : 0);
+  useEffect(() => { if (needsAnswer > 0) setSessionSection("agent"); }, [needsAnswer]);
   const attentionFooterRef = useRef<HTMLDivElement>(null);
   const attentionKey = [activeApprovals[0]?.id, activeQuestions[0]?.id, activeTurnAttention?.sessionId].filter(Boolean).join(":");
   useEffect(() => {
@@ -798,7 +805,13 @@ export function App() {
     : activeSessionNodeId;
   const isRepoSession = Boolean(activeSession?.source && String(activeSession.source).startsWith("repo:"));
   const paneTab: SidePaneTabId | null = sidePane.wide && activeSession && !needsNode ? sidePane.tab : null;
-  const openChanges = () => { if (!sidePane.show("changes")) setChangesSheetOpen(true); };
+  const changedFiles = countUniqueEditedFiles(state.activeSession.changesHistory);
+  // Offered once there is something to show; the main view, not the agent's
+  // TUI or a run handoff, is what it swaps.
+  const canShowChangesSection = !sidePane.wide && Boolean(activeSession) && !needsNode && changedFiles > 0
+    && !showSessionTerminal && !pendingRunTerm && !activeTuiLocked;
+  const showChangesSection = canShowChangesSection && sessionSection === "changes";
+  const openChanges = () => { if (!sidePane.show("changes")) setSessionSection("changes"); };
   const openArtifacts = () => { if (!sidePane.show("artifacts")) setArtifactsSheetOpen(true); };
 
   return (
@@ -909,7 +922,7 @@ export function App() {
 
       {drawerOpen && <div className="scrim" onClick={closeDrawer} />}
 
-      <main ref={mainRef} className={`main${needsNode ? " needs-node" : ""}`}>
+      <main ref={mainRef} className={`main${needsNode ? " needs-node" : ""}${showChangesSection ? " changes-section" : ""}`}>
         <header className="topbar">
           <button
             ref={burgerRef}
@@ -933,10 +946,11 @@ export function App() {
                 on a brand-new/draft session exactly as it is on a live one.
                 The Chat | Terminal switch shares that line, so the title keeps
                 the full first line on a phone. */}
-            {(showNodeSwitcher || canToggleSessionView) && (
+            {(showNodeSwitcher || canToggleSessionView || canShowChangesSection) && (
               <div className="topbar-subline">
                 {showNodeSwitcher && (showTailnetSwitcher ? <TailnetSwitcher /> : <NodeSwitcher />)}
                 {canToggleSessionView && <SessionViewToggle value={sessionView} onChange={setSessionView} />}
+                {canShowChangesSection && <SessionSectionToggle value={sessionSection} onChange={setSessionSection} changes={changedFiles} />}
               </div>
             )}
           </div>
@@ -1204,12 +1218,19 @@ export function App() {
               </section>
             )}
 
-            {changesSheetOpen && !sidePane.wide && (
-              <SessionChangesSheet
-                history={state.activeSession.changesHistory}
-                checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
-                onClose={() => setChangesSheetOpen(false)}
-              />
+            {/* Changes in place of the chat. The chat and composer stay
+                mounted underneath (hidden), so scroll position and a draft
+                survive the switch. */}
+            {showChangesSection && (
+              <div className="main-changes">
+                <SessionChangesSheet
+                  docked
+                  history={state.activeSession.changesHistory}
+                  checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
+                  onClose={() => setSessionSection("agent")}
+                  onComposerFilled={() => setSessionSection("agent")}
+                />
+              </div>
             )}
 
             {artifactsSheetOpen && !sidePane.wide && (
@@ -1312,7 +1333,7 @@ export function App() {
       {paneTab && activeSession && (
         <SidePane
           tabs={[
-            { id: "changes", label: "Changes", count: countUniqueEditedFiles(state.activeSession.changesHistory) },
+            { id: "changes", label: "Changes", count: changedFiles },
             { id: "apps", label: "Apps", count: liveApps.published ?? apps.length },
             { id: "artifacts", label: "Artifacts", count: artifacts.length },
             { id: "terminal", label: "Terminal" },

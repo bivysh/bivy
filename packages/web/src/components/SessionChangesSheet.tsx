@@ -84,12 +84,15 @@ export function SessionChangesSheet({
   onClose,
   checks,
   docked,
+  onComposerFilled,
 }: {
   history: SessionChangeEntry[];
   onClose: () => void;
   checks?: { name: string; status: "passed" | "failed" | "skipped" }[];
-  /** In the side pane beside the chat rather than a sheet over it. */
+  /** Docked (side pane, or the phone's Changes view) rather than a sheet. */
   docked?: boolean;
+  /** "Review with agent" put a prompt in the composer: show it. */
+  onComposerFilled?: () => void;
 }) {
   const [mode, setMode] = useState<DiffMode>("unified");
   const [undoing, setUndoing] = useState(false);
@@ -116,8 +119,9 @@ export function SessionChangesSheet({
       latest.files.map((file) => ({ ...file, ...countLines(file) })),
       checks,
     ));
-    // The sheet covers the composer; docked, the composer is already in view.
+    // The sheet covers the composer; docked, the host decides how to show it.
     if (!docked) onClose();
+    onComposerFilled?.();
   };
   const undoLatest = () => {
     if (!latest?.before) return;
