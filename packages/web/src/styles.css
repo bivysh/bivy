@@ -325,13 +325,11 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .side-pane .term-title-label, .side-pane .term-zoom { display: none; }
 .side-pane .term-title { flex: none; }
 .side-pane .term-status { margin-left: 0; }
-/* Narrow screens: Agent | Changes swaps the chat for the changes, full
-   height. Everything else in the column stays mounted, just hidden. */
+/* Narrow screens: Changes in the session view switch covers the column's
+   view, full height. Everything else in the column stays mounted, hidden. */
 .main.changes-section > :not(.topbar):not(.banner):not(.main-changes) { display: none; }
 .main-changes { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--surface); }
 .main-changes .pane-panel-content { padding-bottom: max(var(--space-3), env(safe-area-inset-bottom)); }
-.session-section-toggle { flex: none; padding: 2px; }
-.session-section-toggle .seg-btn { display: inline-flex; align-items: center; gap: var(--space-1); padding: 2px var(--space-2); line-height: 1.25; }
 .topbar-actions .side-pane-toggle[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
 
 /* ---- Header session actions (dot-menu: rename / open PR / delete) ---- */

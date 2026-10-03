@@ -10,11 +10,6 @@
 
 export type SessionView = "chat" | "terminal";
 
-export const SESSION_VIEWS: ReadonlyArray<{ id: SessionView; label: string }> = [
-  { id: "chat", label: "Chat" },
-  { id: "terminal", label: "Terminal" },
-];
-
 const KEY = "bivy.sessionView";
 /** Only non-default choices are stored; keep the map from growing forever. */
 const MAX_REMEMBERED = 50;

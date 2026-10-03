@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { expect, test, themes, type WebApp } from "./fixtures.js";
 
-// On a phone there is no side pane: Agent | Changes in the top bar swaps the
-// chat for the session's changes, full height, instead of a bottom sheet. This
+// On a phone there is no side pane: Changes joins Chat | Terminal in the top
+// bar's one view switch and covers the column, full height, instead of a
+// bottom sheet. This
 // runs the real app with a controller that records instead of reaching a node.
 let url: string;
 test.beforeAll(async ({ webApp }: { webApp: WebApp }) => {
@@ -12,7 +13,7 @@ test.beforeAll(async ({ webApp }: { webApp: WebApp }) => {
 type Win = { viewController: { store: { apply(event: unknown): void } } };
 
 for (const theme of themes) {
-  test(`Agent | Changes swaps the chat for the changes (${theme})`, async ({ page }, testInfo) => {
+  test(`Changes in the session view switch covers the chat (${theme})`, async ({ page }, testInfo) => {
     const errors: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
     await page.routeWebSocket(/.*/, () => {});
@@ -35,9 +36,9 @@ for (const theme of themes) {
       c.store.apply({ type: "session.history", sessionId: "first", runtimeId: "claude", messages: [{ role: "user", content: "Chat transcript" }] });
     });
     await expect(page.getByText("Chat transcript")).toBeVisible();
-    const sections = page.getByRole("radiogroup", { name: "Show" });
-    // Nothing to show yet: no switch.
-    await expect(sections).toHaveCount(0);
+    const sections = page.getByRole("radiogroup", { name: "Session view" });
+    // Nothing changed yet: Chat | Terminal only.
+    await expect(sections.getByRole("radio")).toHaveCount(2);
 
     await page.evaluate(() => (window as unknown as Win).viewController.store.apply({
       type: "session.changes", sessionId: "first", before: "c0", after: "c1",
@@ -46,11 +47,12 @@ for (const theme of themes) {
         { path: "packages/web/src/styles.css", status: "modified", oldText: "x", newText: "x\ny" },
       ],
     }));
-    await expect(sections).toBeVisible();
-    // The top bar's second line holds machine, Chat | Terminal and this, at 390px.
+    // One switch, not a second control beside it.
+    await expect(sections.getByRole("radio")).toHaveCount(3);
+    await expect(page.getByRole("radiogroup")).toHaveCount(1);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
 
-    await sections.getByRole("radio", { name: /Changes/ }).click();
+    await sections.getByRole("radio", { name: "Changes, 2 files" }).click();
     const changes = page.locator(".main-changes");
     await expect(changes.getByText("2 files edited")).toBeVisible();
     await expect(page.getByText("Chat transcript")).toBeHidden();
@@ -67,7 +69,7 @@ for (const theme of themes) {
 
     // Review with agent puts the prompt in the composer and shows it.
     await changes.getByRole("button", { name: "Review with agent" }).click();
-    await expect(sections.getByRole("radio", { name: "Agent" })).toHaveAttribute("aria-checked", "true");
+    await expect(sections.getByRole("radio", { name: "Chat" })).toHaveAttribute("aria-checked", "true");
     await expect(page.getByText("Chat transcript")).toBeVisible();
     await expect(page.locator(".composer textarea")).toHaveValue(/GetStarted\.tsx/);
     expect(errors).toEqual([]);

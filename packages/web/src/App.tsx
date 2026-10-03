@@ -75,11 +75,10 @@ const LibraryView = lazy(() => import("./components/LibraryView.js").then((m) =>
 import { onAppVisible } from "./onAppVisible.js";
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { useModalEscape } from "./modalStack.js";
-import { SessionViewToggle } from "./components/SessionViewToggle.js";
+import { SessionViewToggle, type SessionPaneView } from "./components/SessionViewToggle.js";
 import { readSessionView, writeSessionView, type SessionView } from "./sessionView.js";
 import { CloseIcon, PanelRightIcon } from "./components/UiIcons.js";
 import { SidePane } from "./components/SidePane.js";
-import { SessionSectionToggle, type SessionSection } from "./components/SessionSectionToggle.js";
 import { useSidePane, type SidePaneTabId } from "./useSidePane.js";
 import { controller } from "./store/useStore.js";
 import { onAppsSheetRequest, type AppsSheetRequest } from "./appsSheetRequest.js";
@@ -135,10 +134,10 @@ export function App() {
   const [ephemeralOpen, setEphemeralOpen] = useState(false);
   // Full-session file changes sheet — opened from the run pill / summary sheet
   // ("N files edited"), not a card stacked above the composer.
-  // On a narrow screen (no side pane) the session's changes take the main
-  // column instead of the chat: Agent | Changes in the top bar.
-  const [sessionSection, setSessionSection] = useState<SessionSection>("agent");
-  useEffect(() => setSessionSection("agent"), [state.activeSession.activeSessionId]);
+  // On a narrow screen (no side pane) the session's changes can take the main
+  // column: a third choice in the Chat | Terminal switch. Not remembered.
+  const [changesView, setChangesView] = useState(false);
+  useEffect(() => setChangesView(false), [state.activeSession.activeSessionId]);
   // Session/Run artifacts sheet — opened from the run pill ("N artifacts"),
   // mirroring the changes sheet above. The projection itself is a pure fold
   // over the transcript the store already holds (see deriveArtifacts) — no
@@ -747,7 +746,7 @@ export function App() {
   const activeTurnAttention = state.activeSession.turnAttentions.find((a) => a.sessionId === state.activeSession.activeSessionId);
   // The agent asking for something lives in the chat: bring it back into view.
   const needsAnswer = activeApprovals.length + activeQuestions.length + (activeTurnAttention ? 1 : 0);
-  useEffect(() => { if (needsAnswer > 0) setSessionSection("agent"); }, [needsAnswer]);
+  useEffect(() => { if (needsAnswer > 0) setChangesView(false); }, [needsAnswer]);
   const attentionFooterRef = useRef<HTMLDivElement>(null);
   const attentionKey = [activeApprovals[0]?.id, activeQuestions[0]?.id, activeTurnAttention?.sessionId].filter(Boolean).join(":");
   useEffect(() => {
@@ -806,12 +805,19 @@ export function App() {
   const isRepoSession = Boolean(activeSession?.source && String(activeSession.source).startsWith("repo:"));
   const paneTab: SidePaneTabId | null = sidePane.wide && activeSession && !needsNode ? sidePane.tab : null;
   const changedFiles = countUniqueEditedFiles(state.activeSession.changesHistory);
-  // Offered once there is something to show; the main view, not the agent's
-  // TUI or a run handoff, is what it swaps.
-  const canShowChangesSection = !sidePane.wide && Boolean(activeSession) && !needsNode && changedFiles > 0
-    && !showSessionTerminal && !pendingRunTerm && !activeTuiLocked;
-  const showChangesSection = canShowChangesSection && sessionSection === "changes";
-  const openChanges = () => { if (!sidePane.show("changes")) setSessionSection("changes"); };
+  // Offered once there is something to show. It covers whatever the column
+  // shows (chat, the agent's TUI, the lock notice), which stays mounted.
+  const canShowChangesView = !sidePane.wide && Boolean(activeSession) && !needsNode && changedFiles > 0 && !pendingRunTerm;
+  const showChangesView = canShowChangesView && changesView;
+  const openChanges = () => { if (!sidePane.show("changes")) setChangesView(true); };
+  const paneViews: SessionPaneView[] = [
+    ...(canToggleSessionView ? ["chat", "terminal"] as const : canShowChangesView ? ["chat"] as const : []),
+    ...(canShowChangesView ? ["changes"] as const : []),
+  ];
+  const pickPaneView = (view: SessionPaneView) => {
+    setChangesView(view === "changes");
+    if (view !== "changes") setSessionView(view);
+  };
   const openArtifacts = () => { if (!sidePane.show("artifacts")) setArtifactsSheetOpen(true); };
 
   return (
@@ -922,7 +928,7 @@ export function App() {
 
       {drawerOpen && <div className="scrim" onClick={closeDrawer} />}
 
-      <main ref={mainRef} className={`main${needsNode ? " needs-node" : ""}${showChangesSection ? " changes-section" : ""}`}>
+      <main ref={mainRef} className={`main${needsNode ? " needs-node" : ""}${showChangesView ? " changes-section" : ""}`}>
         <header className="topbar">
           <button
             ref={burgerRef}
@@ -946,11 +952,17 @@ export function App() {
                 on a brand-new/draft session exactly as it is on a live one.
                 The Chat | Terminal switch shares that line, so the title keeps
                 the full first line on a phone. */}
-            {(showNodeSwitcher || canToggleSessionView || canShowChangesSection) && (
+            {(showNodeSwitcher || paneViews.length > 1) && (
               <div className="topbar-subline">
                 {showNodeSwitcher && (showTailnetSwitcher ? <TailnetSwitcher /> : <NodeSwitcher />)}
-                {canToggleSessionView && <SessionViewToggle value={sessionView} onChange={setSessionView} />}
-                {canShowChangesSection && <SessionSectionToggle value={sessionSection} onChange={setSessionSection} changes={changedFiles} />}
+                {paneViews.length > 1 && (
+                  <SessionViewToggle
+                    views={paneViews}
+                    value={showChangesView ? "changes" : canToggleSessionView ? sessionView : "chat"}
+                    onChange={pickPaneView}
+                    changes={changedFiles}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -966,7 +978,7 @@ export function App() {
                 <PanelRightIcon size={18} />
               </button>
             )}
-            {state.activeSession.activeSessionId && !showSessionTerminal && (
+            {state.activeSession.activeSessionId && !showSessionTerminal && !showChangesView && (
               <button
                 className="btn ghost focus-view-btn"
                 onClick={toggleFocusView}
@@ -1218,20 +1230,6 @@ export function App() {
               </section>
             )}
 
-            {/* Changes in place of the chat. The chat and composer stay
-                mounted underneath (hidden), so scroll position and a draft
-                survive the switch. */}
-            {showChangesSection && (
-              <div className="main-changes">
-                <SessionChangesSheet
-                  docked
-                  history={state.activeSession.changesHistory}
-                  checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
-                  onClose={() => setSessionSection("agent")}
-                  onComposerFilled={() => setSessionSection("agent")}
-                />
-              </div>
-            )}
 
             {artifactsSheetOpen && !sidePane.wide && (
               <ArtifactsSheet artifacts={artifacts} onClose={() => setArtifactsSheetOpen(false)} />
@@ -1327,6 +1325,20 @@ export function App() {
               onError={(message) => controller.store.setError(message)}
             />
           </>
+        )}
+        {/* Changes in place of the column's view. That view (chat and
+            composer, or the agent's TUI) stays mounted underneath, hidden,
+            so scroll position, a draft or a live terminal survive. */}
+        {showChangesView && (
+          <div className="main-changes">
+            <SessionChangesSheet
+              docked
+              history={state.activeSession.changesHistory}
+              checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
+              onClose={() => setChangesView(false)}
+              onComposerFilled={() => setChangesView(false)}
+            />
+          </div>
         )}
       </main>
 
