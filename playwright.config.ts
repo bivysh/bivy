@@ -34,6 +34,7 @@ const mobileSpecs = [
   "**/notify-offer.spec.ts",
   "**/followup-new-session.spec.ts",
   "**/suggestion-card.spec.ts",
+  "**/session-changes-section.spec.ts",
 ];
 
 // Mobile-specific specs whose mobile run does everything the desktop run does
@@ -46,6 +47,7 @@ const mobileOnlySpecs = [
   "**/review-card.spec.ts",
   "**/pin-card.spec.ts",
   "**/notify-offer.spec.ts",
+  "**/session-changes-section.spec.ts",
 ];
 
 export default defineConfig({

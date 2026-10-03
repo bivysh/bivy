@@ -103,6 +103,16 @@ export function GearIcon({ size = 20, ...props }: IconProps) {
   return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><circle cx="12" cy="12" r="6.4" /><circle cx="12" cy="12" r="2.5" /><path d="M12 4v1.6M12 18.4V20M4 12h1.6M18.4 12H20M6.3 6.3l1.2 1.2M16.5 16.5l1.2 1.2M17.7 6.3l-1.2 1.2M7.5 16.5l-1.2 1.2" /></svg>;
 }
 
+/** A page with a plus and a minus — changed files. */
+export function DiffIcon({ size = 20, ...props }: IconProps) {
+  return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /><path d="M12 10v6M9 13h6M9 18h6" /></svg>;
+}
+
+/** A window with its right column marked — show or hide a side pane. */
+export function PanelRightIcon({ size = 20, ...props }: IconProps) {
+  return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></svg>;
+}
+
 /** Circular arrow — refresh. */
 export function RefreshIcon({ size = 20, ...props }: IconProps) {
   return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><path d="M20 12a8 8 0 1 1-2.34-5.66L20 8.5" /><path d="M20 4v4.5h-4.5" /></svg>;

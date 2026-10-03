@@ -1389,7 +1389,7 @@ export function TerminalOverlay({
       ) : (
         <div className="term-head">
           <span className="term-title">
-            Terminal
+            <span className="term-title-label">Terminal</span>
             {standalone && workspace && (
               <small className="term-scope" title={workspace}>
                 {" "}

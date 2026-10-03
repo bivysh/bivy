@@ -284,6 +284,54 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .focus-view-btn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
 .focus-view-label { font-size: var(--text-xs); font-weight: var(--weight-semibold); }
 
+/* ---- Side pane (wide screens): the session's changes, apps and artifacts
+   beside the chat instead of in a sheet over it. Same bodies as the sheets
+   (components/Panel.tsx), docked; below the breakpoint in App.tsx the pane
+   is never rendered and the sheets are used. */
+.app.has-pane { grid-template-columns: minmax(300px, 22vw) minmax(0, 1fr) clamp(380px, 32vw, 600px); }
+.side-pane {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0; height: var(--app-h, 100dvh);
+  border-left: 1px solid var(--line); background: var(--surface);
+}
+.side-pane-head {
+  flex: none; display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
+  min-height: var(--topbar-h, 57px); padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+.side-pane-tabs { min-width: 0; overflow-x: auto; }
+.side-pane-tab { display: inline-flex; align-items: center; gap: var(--space-1); }
+.seg-count { color: var(--muted); font-variant-numeric: tabular-nums; font-weight: var(--weight-normal); }
+.side-pane-close { flex: none; color: var(--muted); }
+.side-pane-close:hover { color: var(--ink); }
+.side-pane-body { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+/* A docked Panel: the sheet's title row becomes a quiet toolbar, its content
+   the pane's own scroller. */
+.pane-panel { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pane-panel-head {
+  flex: none; display: flex; align-items: center; gap: var(--space-2);
+  min-height: 44px; padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3);
+  border-bottom: 1px solid var(--line);
+}
+.pane-panel-title {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--text-sm); font-weight: var(--weight-semibold);
+}
+.pane-panel-content { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: var(--space-3); overscroll-behavior: contain; }
+.pane-panel[data-size="full"] .pane-panel-content { padding: 0; overflow: hidden; }
+.pane-panel[data-size="full"] .preview-peek { border-radius: 0; }
+/* The pane's tab already says Terminal: keep the head to the pane toolbar's
+   height, with the live status and the actions that matter beside a chat. */
+.side-pane .term-head { min-height: 44px; padding: var(--space-1) var(--space-2) var(--space-1) var(--space-3); gap: var(--space-2); }
+.side-pane .term-title-label, .side-pane .term-zoom { display: none; }
+.side-pane .term-title { flex: none; }
+.side-pane .term-status { margin-left: 0; }
+/* Narrow screens: Changes in the session view switch covers the column's
+   view, full height. Everything else in the column stays mounted, hidden. */
+.main.changes-section > :not(.topbar):not(.banner):not(.main-changes) { display: none; }
+.main-changes { flex: 1; min-height: 0; display: flex; flex-direction: column; background: var(--surface); }
+.main-changes .pane-panel-content { padding-bottom: max(var(--space-3), env(safe-area-inset-bottom)); }
+.topbar-actions .side-pane-toggle[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
+
 /* ---- Header session actions (dot-menu: rename / open PR / delete) ---- */
 .session-actions-wrap { position: relative; flex: none; }
 .session-actions-btn { border: 0; background: transparent; color: var(--ink); font-size: 20px; line-height: 1; padding: 4px 8px; border-radius: var(--radius-sm); }
@@ -2611,9 +2659,12 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .term-head-actions {
   display: flex; align-items: center; gap: 8px;
   flex: 1 1 auto; min-width: 0; overflow-x: auto;
-  justify-content: flex-end;
+  /* Right-aligned by an auto margin, not justify-content: flex-end, which
+     would push overflow off the left edge where it can't be scrolled to. */
+  justify-content: flex-start;
   scrollbar-width: none; -webkit-overflow-scrolling: touch;
 }
+.term-head-actions > :first-child { margin-left: auto; }
 .term-head-actions::-webkit-scrollbar { display: none; }
 .term-head-actions > * { flex: 0 0 auto; }
 .term-attach-wrap { position: relative; }

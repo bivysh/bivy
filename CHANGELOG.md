@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Side pane on wide screens.** On a desktop-width window (1200px and up), a session's Changes, Apps and Artifacts open in a pane beside the chat instead of a sheet over it, so you can read a diff or use a running app while you keep talking to the agent. App previews open inside the pane, with Draw and reviewer notes working as before. Toggle it from the new button in the session header or close it from the pane; the open tab is remembered. Narrower screens and phones keep the sheets.
+- **Terminal tab in the side pane.** The side pane gains a Terminal tab: a shell in the session's workspace, next to the chat, so you can run a command while the agent works without covering the conversation. It is separate from the agent's own terminal (the Chat | Terminal switch). Switching tabs detaches and coming back reattaches to the same shell; End closes it. The terminal header's buttons now scroll into view when they don't fit, instead of being cut off on the left.
+- **Changes view on phones.** Below the side pane's width, once the agent has changed files, the session's view switch under the title gains **Changes** next to Chat and Terminal (or next to Chat alone when the agent has no terminal view), with a count of changed files. It covers the column with the session's changes, full height, instead of a bottom sheet; the "N files edited" link opens it too. Your draft, the chat's place and a running terminal are kept underneath. **Review with agent** switches back with the prompt in the composer, and an approval or question from the agent brings the chat back on its own.
+
 ### Fixed
 
 - **`bivy notify`, `bivy ask`, `bivy context` and `bivy app publish` work from an agent started with `bivy run` (or the agent shim).** The agent in a run got no `BIVY_SESSION_ID`, so these commands failed with "No session id", and `--session term-…` returned 404. A run's agent now gets the same session env a chat agent does: its pinned session id (Claude, Grok and Gemini), or otherwise the run's terminal id, plus a session token. The node accepts either id for these commands. A run has no chat, so a notice goes out as a push only, and the CLI says so. A question from the agent shows on the run's "running in the terminal" screen and can be answered there, including from a device that connected after it was asked.
