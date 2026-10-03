@@ -204,7 +204,7 @@ export function mapToolCall(toolName: string, input: unknown, context: ToolCallM
   }
 
   if (inToolSet(DELEGATE, toolName, key)) {
-    const label = str(o, "subagent_type", "subagentType", "agent", "agentType", "role", "name");
+    const label = str(o, "subagent_type", "subagentType", "agent", "agentType", "role", "name", "task_name", "taskName");
     const description = str(o, "description", "task", "prompt", "instructions", "goal", "message");
     return decorate({ kind: "delegation", ...(label ? { label } : {}), ...(description ? { description } : {}) }, toolName, input, context);
   }
@@ -212,16 +212,80 @@ export function mapToolCall(toolName: string, input: unknown, context: ToolCallM
   return undefined;
 }
 
+/** The text of MCP-style content blocks (`[{type:"text",text}]`), the shape
+ * Claude, Pi and most MCP tools return. Undefined when there is no text block,
+ * so image-only or unknown payloads keep their JSON form. */
+function blockText(content: unknown): string | undefined {
+  if (!Array.isArray(content)) return undefined;
+  const texts = content
+    .map((block) => asRecord(block))
+    .filter((block) => block.type === "text" && typeof block.text === "string")
+    .map((block) => block.text as string);
+  return texts.length ? texts.join("\n") : undefined;
+}
+
+/** Harness frames an agent wraps around a sub-agent's report before handing it
+ * to the model. The user should read the report, not the frame. Each row
+ * matches the frame's opening (and closing, if any) and how the report inside
+ * is indented. */
+const SUBAGENT_REPORT_FRAMES: Array<{ header: RegExp; footer?: RegExp; indent: string }> = [
+  // Claude Code 2.1.28x: "[Subagent hand-back] … The report follows:\n  <report>"
+  { header: /^\[Subagent hand-back\][^\n]*The report follows:\n/, indent: "  " },
+  // OpenCode's task tool: <task id=… state=…>\n<task_result>\n<report>\n</task_result>\n</task>
+  { header: /^<task\b[^>\n]*>\s*<task_result>\n?/, footer: /\n?<\/task_result>\s*<\/task>\s*$/, indent: "" },
+];
+
+function unwrapSubagentReport(text: string): string {
+  for (const frame of SUBAGENT_REPORT_FRAMES) {
+    const match = frame.header.exec(text);
+    if (!match) continue;
+    const inner = text.slice(match[0].length);
+    const body = frame.footer ? inner.replace(frame.footer, "") : inner;
+    if (!frame.indent) return body;
+    return body
+      .split("\n")
+      .map((line) => (line.startsWith(frame.indent) ? line.slice(frame.indent.length) : line))
+      .join("\n");
+  }
+  return text;
+}
+
 export function mapToolResult(result: unknown, isError = false): ToolResultDetail {
   const o = asRecord(result);
+  const structured = asRecord(o.structuredContent ?? o.details);
   const content = o.content ?? o.output ?? o.text ?? o.aggregated_output ?? result;
-  const rawText = typeof content === "string" ? content : content == null ? "" : JSON.stringify(boundedToolPayload(content));
+  const rawText = unwrapSubagentReport(
+    typeof content === "string" ? content : content == null ? "" : blockText(content) ?? JSON.stringify(boundedToolPayload(content)),
+  );
   const text = rawText.length > RAW_LIMIT ? rawText.slice(0, RAW_LIMIT) : rawText;
-  const exit = o.exitCode ?? o.exit_code ?? o.code;
+  const exit = o.exitCode ?? o.exit_code ?? o.code ?? structured.exitCode ?? structured.exit_code;
   return {
     ...(text ? { text } : {}),
     ...(typeof exit === "number" ? { exitCode: exit } : {}),
     ...(isError || o.isError === true || o.is_error === true ? { isError: true } : {}),
     ...(rawText.length > RAW_LIMIT ? { truncated: true } : {}),
   };
+}
+
+/**
+ * Fill in `detail` on tool_use blocks that lack it. Live tool events carry a
+ * detail, but a transcript reloaded from an agent's own store (a native session
+ * taken over, a reopened rollout) has bare blocks, which the client can only
+ * label generically. Messages without such blocks are returned as they were.
+ */
+export function withToolDetails<T>(messages: readonly T[], provider = "unknown"): T[] {
+  return messages.map((message) => {
+    const content = (message as { content?: unknown } | undefined)?.content;
+    if (!Array.isArray(content)) return message;
+    let changed = false;
+    const next = content.map((block) => {
+      const b = block as { type?: unknown; name?: unknown; input?: unknown; detail?: unknown } | undefined;
+      if (b?.type !== "tool_use" || b.detail || typeof b.name !== "string") return block;
+      const detail = mapToolCall(b.name, b.input, { provider, protocol: "unknown" });
+      if (!detail) return block;
+      changed = true;
+      return { ...b, detail };
+    });
+    return changed ? ({ ...(message as object), content: next } as T) : message;
+  });
 }

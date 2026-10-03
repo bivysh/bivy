@@ -616,7 +616,8 @@ function loadClaudeTranscript(sessionId: string): RuntimeMessage[] {
         continue;
       }
       if (role === "user" && !(Array.isArray(content) && content.some((block: any) => block?.type === "tool_result"))) lastPrompt = content;
-      messages.push({ role, content, timestamp: new Date(entry?.timestamp ?? entry?.createdAt ?? Date.now()).getTime() });
+      const model = role === "assistant" && typeof entry?.message?.model === "string" && entry.message.model !== "<synthetic>" ? entry.message.model : undefined;
+      messages.push({ role, content, timestamp: new Date(entry?.timestamp ?? entry?.createdAt ?? Date.now()).getTime(), ...(model ? { model } : {}) });
       lastErrorIdx = entry?.isApiErrorMessage === true ? messages.length - 1 : -1;
     }
   } catch {

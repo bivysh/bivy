@@ -645,9 +645,17 @@ export function App() {
     if (!pendingRunTerm) return;
     // Clear the handoff immediately so the next openSession (from
     // terminal.takeover.result) paints the chat rather than this screen.
-    const termId = pendingRunTerm.termId;
+    const pending = pendingRunTerm;
     setPendingRunTerm(null);
-    controller.sendTerminal({ kind: "terminal.takeover", termId });
+    // If the node can't take it over, the run is still live: come back to its
+    // handoff screen (the error shows as a toast) instead of an empty draft.
+    const off = controller.onTerminal((event) => {
+      const result = event as { type?: string; termId?: string; ok?: boolean };
+      if (result.type !== "terminal.takeover.result" || result.termId !== pending.termId) return;
+      off();
+      if (!result.ok) setPendingRunTerm(pending);
+    });
+    controller.sendTerminal({ kind: "terminal.takeover", termId: pending.termId });
   }, [pendingRunTerm]);
 
   // Drop the run-terminal handoff if its live PTY disappears (exited/takeover).

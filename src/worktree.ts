@@ -53,6 +53,22 @@ export async function gitRepoRoot(dir: string): Promise<string | undefined> {
   }
 }
 
+/**
+ * The main working tree of the repo containing `dir`. From inside a linked
+ * worktree (a session's or a fork's), `--show-toplevel` names that worktree;
+ * new worktrees and the `.bivy/` exclude rule belong to the main one, or a fork
+ * of a fork nests its checkout inside its parent's tree.
+ */
+async function gitMainRoot(dir: string): Promise<string | undefined> {
+  try {
+    const { stdout } = await exec("git", ["-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir"]);
+    const common = stdout.trim();
+    return common && path.basename(common) === ".git" ? path.dirname(common) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function currentRef(repoRoot: string): Promise<string> {
   try {
     const { stdout } = await exec("git", ["-C", repoRoot, "rev-parse", "--abbrev-ref", "HEAD"]);
@@ -87,14 +103,20 @@ export async function createWorktree(opts: {
   base?: string;
   root?: string;
 }): Promise<Worktree> {
-  const repoRoot = await gitRepoRoot(opts.repoDir);
-  if (!repoRoot) throw new Error(`Not a git repository: ${opts.repoDir}`);
+  const sourceRoot = await gitRepoRoot(opts.repoDir);
+  if (!sourceRoot) throw new Error(`Not a git repository: ${opts.repoDir}`);
+  const repoRoot = (await gitMainRoot(sourceRoot)) ?? sourceRoot;
 
   const slug = branchSlug(opts.id);
   const branch = opts.branch ?? `bivy/${slug}`;
   const root = opts.root ?? path.join(repoRoot, ".bivy", "worktrees");
   const wtPath = path.join(root, slug);
-  let base = opts.base ?? (await currentRef(repoRoot));
+  // Branch from the checkout asked for: a fork of a fork starts at its parent's HEAD.
+  let base = opts.base ?? (await currentRef(sourceRoot));
+  // A detached "HEAD" means the source's commit, not the main tree's HEAD.
+  if (base === "HEAD" && sourceRoot !== repoRoot) {
+    base = await exec("git", ["-C", sourceRoot, "rev-parse", "HEAD"]).then(({ stdout }) => stdout.trim() || "HEAD", () => "HEAD");
+  }
 
   excludeMeshDir(repoRoot);
   fs.mkdirSync(root, { recursive: true });

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+// First: drop agent-session markers the node inherited before anything reads them.
+import "./node-env.js";
 import fs from "node:fs";
 import { createNodeUpdateChecker, managedInstall, updateRegistryUrl } from "./node-update.js";
 import { createRemoteSessionAdmission, RemoteSessionAdmissionError } from "./session/remote-session-admission.js";
@@ -76,7 +78,7 @@ import { listCodexSessions, loadCodexTranscript, discoverCodexSessionForCwd } fr
 import { discoverGrokSessionForCwd } from "./runtime/grok-sessions.js";
 import { dedupeSessionSummaries } from "./session-identity.js";
 import { discoverPiSessionForCwd } from "./runtime/pi-session-discovery.js";
-import { listNativePiSessions } from "./agents/pi/integration.js";
+import { listNativePiSessions, piAgentDir } from "./agents/pi/integration.js";
 import type { BivySessionRecord, BivySessionStatus } from "./session/bivy-session.js";
 import { deriveSessionState, type SessionState } from "./session/session-state.js";
 import type { SessionRecord, PromptOptions, StreamingBehavior, PromptImage } from "./session/record.js";
@@ -191,7 +193,7 @@ import { resolveResumeRef, resumeRefFor, storedResumeRef } from "./session-ref.j
 import { materializeFork, type ForkBundle, type ForkRecord, type ForkPlan } from "./session/fork.js";
 import { applyDirtyPatch } from "./session/fork-dirty.js";
 import { thinkingTextFromContent } from "./session/transcript-merge.js";
-import { normalizeMessages } from "./session/transcript-normal.js";
+import { lastTranscriptModel, normalizeMessages } from "./session/transcript-normal.js";
 import { buildNativeImportSeedPrompt } from "./session/native-import.js";
 import { EventLog, mergeBases } from "./session/event-log.js";
 import { SessionEventSequencer } from "./session/event-sequencer.js";
@@ -354,6 +356,9 @@ const piDir = path.join(appDir, "pi");
 // the plaintext auth.json its native TUI reads, and its sessions.
 const credsDir = path.join(appDir, "credentials");
 const sessionsDir = path.join(piDir, "sessions");
+// Where a path-based session may be resumed from: Bivy's own Pi sessions, and
+// the native Pi store `bivy run pi` writes to (taken over or opened as chat).
+const resumeRoots = [sessionsDir, path.join(piAgentDir(), "sessions")];
 const intermediateMessagesDir = path.join(appDir, "intermediate-messages");
 const toolActivitiesDir = path.join(appDir, "tool-activities");
 // One append-only per-session log.
@@ -5317,6 +5322,13 @@ async function reconcileInterruptedSessions(): Promise<void> {
       console.log(`[resume] auto-resuming interactive session ${id} interrupted by a restart`);
       const record = await resolveOrResumeSession(id, meta.path);
       if (!record) continue; // transcript gone / unresolvable — nothing to resume
+      // "Pick up where you left off" needs a conversation to pick up. A native
+      // terminal session whose agent kept no transcript reopens empty, and the
+      // prompt would only start a confused turn with no context.
+      if (!transcripts.conversationMessages(record).length) {
+        console.log(`[resume] skipped ${id}: no conversation to resume`);
+        continue;
+      }
       await runSessionTurn(record, buildInteractiveResumePrompt());
     } catch (error) {
       // Clear any marker so a persistently-failing session can't loop forever.
@@ -6601,9 +6613,14 @@ function modelFrom(msg: Record<string, unknown>): { provider: string; id: string
 async function applyRequestedModel(record: SessionRecord, model: { provider: string; id: string } | undefined): Promise<void> {
   if (!model) return;
   try {
+    // Protocol agents only publish their catalog once running. A fork or a new
+    // session asks for its model before that, so warm the catalog first or the
+    // choice is dropped and the agent's default model answers instead.
+    if (!(await record.session.getModels()).length && record.session.warmModels) {
+      await record.session.warmModels().catch(() => {});
+    }
     // A provider-less id (CLI --model, `bivy-model:`) binds against the
-    // session's catalog. Protocol agents only publish theirs once running, so
-    // warm it when the first lookup can't place the id.
+    // session's catalog; warm it when the first lookup can't place the id.
     if (!model.provider) {
       const resolve = async () => resolveModelRef(await record.session.getModels(), model!, record.session.getCurrentModel());
       model = await resolve();
@@ -8547,7 +8564,7 @@ function fastHistoryEvent(msg: ClientMessage): ReturnType<typeof transcripts.bui
     const ref = pathRef || meta?.path;
     if (!ref) return null;
     const runtimeId = agentFrom(msg) ?? meta?.runtimeId;
-    const file = resolveResumeRef({ ref, resumesByPath: runtimeResumesByPath(runtimeId), sessionsDir });
+    const file = resolveResumeRef({ ref, resumesByPath: runtimeResumesByPath(runtimeId), sessionsDir: resumeRoots });
     const rt = getRuntime(runtimeId);
     // Prefer the runtime's build-free read (pi/claude-code); otherwise use the
     // transcript Bivy persisted itself, so process agents (Codex, generic CLIs)
@@ -8775,7 +8792,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // refs could likewise resume the wrong id. Explicit path refs remain unchanged.
   const durableRef = requestedRef ? storedResumeRef(requestedRef, requestedMeta) : undefined;
   const requestedSessionFile = durableRef
-    ? resolveResumeRef({ ref: durableRef, resumesByPath: runtimeResumesByPath(refRuntimeId), sessionsDir })
+    ? resolveResumeRef({ ref: durableRef, resumesByPath: runtimeResumesByPath(refRuntimeId), sessionsDir: resumeRoots })
     : undefined;
   const storedMeta = requestedSessionFile ? metadata.getSession(requestedSessionFile) : undefined;
   const restoredWorktree = requestedSessionFile ? restoredWorktreeFromMetadata(storedMeta) : undefined;
@@ -9020,6 +9037,12 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
       // Best-effort; never block session creation.
     }
   }
+  // A resumed session with no model of its own keeps the one its transcript
+  // last answered with, instead of silently switching to the agent's default.
+  if (requestedSessionFile && !record.session.getCurrentModel()) {
+    const model = lastTranscriptModel(record.session.getMessages());
+    if (model) await record.session.setModel(model.provider, model.id).catch(() => undefined);
+  }
   rememberSession(record);
   rememberWorkspace(sessionWorkspace);
 
@@ -9097,7 +9120,7 @@ async function resolveOrResumeSession(sessionId?: unknown, sessionPath?: unknown
   const resumesByPath = runtimeResumesByPath(runtimeId);
   let key: string;
   try {
-    key = resolveResumeRef({ ref, resumesByPath, sessionsDir });
+    key = resolveResumeRef({ ref, resumesByPath, sessionsDir: resumeRoots });
   } catch (error) {
     // The sessions-dir path-traversal guard rejected this ref (path-based
     // runtime whose ref resolved outside sessionsDir). Fall back to the raw ref;
@@ -9480,13 +9503,22 @@ const forkStandUp = createForkStandUp<SessionRecord>({
   applyDirtyPatch,
   gitRepoRoot,
   materializeFork,
-  saveForkTranscript: (markdown) => {
-    // Outside the worktree, so the hand-off never shows up as a repo change.
-    const dir = path.join(appDir, "fork-transcripts");
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const file = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}.md`);
-    fs.writeFileSync(file, markdown, { mode: 0o600 });
-    return file;
+  saveForkTranscript: (markdown, cwd) => {
+    // In the fork's own `.bivy/` (git-excluded, like its worktrees), so the
+    // agent can read it even when sandboxed to its workspace, and it never
+    // shows up as a repo change. The node's data dir is the fallback.
+    const name = `fork-transcript-${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID().slice(0, 8)}.md`;
+    for (const dir of [path.join(cwd, ".bivy"), path.join(appDir, "fork-transcripts")]) {
+      try {
+        fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+        const file = path.join(dir, name);
+        fs.writeFileSync(file, markdown, { mode: 0o600 });
+        return file;
+      } catch {
+        // try the next place
+      }
+    }
+    return undefined;
   },
   getRuntime,
   listRuntimes,
@@ -10908,7 +10940,7 @@ app.get("/api/multiplexers", async (_req, res) => {
 // runtimes (`codex` or governed `codex-approvals`), while this endpoint stays a
 // safe read-side view plus a `codex resume <id>` terminal handoff.
 app.get("/api/codex/sessions", (_req, res) => {
-  const sessions = listCodexSessions().map((s) => ({
+  const sessions = listCodexSessions().filter((s) => !s.parentThreadId).map((s) => ({
     id: s.id,
     cwd: s.cwd,
     createdAt: s.createdAt,

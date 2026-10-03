@@ -97,7 +97,7 @@ export interface ForkStandUpDeps<R extends ForkStandUpSession> {
   gitRepoRoot(cwd: string): Promise<string | undefined>;
   materializeFork(args: MaterializeForkOptions): Promise<ForkPlan>;
   /** Where a seeded fork's full conversation is written for the agent to read. */
-  saveForkTranscript?(markdown: string): string | undefined;
+  saveForkTranscript?(markdown: string, cwd: string): string | undefined;
   getRuntime(id: string, sandbox?: SandboxTier): AgentRuntime;
   listRuntimes(): Array<{ id: string; status?: string; displayName?: string }>;
   reposRoot: string;
@@ -288,7 +288,7 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
           };
         }
         if (applied.warning) dirtyWarning = applied.warning;
-        workspace = forkRepoRoot;
+        workspace = wt.repoRoot;
         cwd = wt.path;
         worktree = wt;
       }

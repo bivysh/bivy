@@ -18,6 +18,8 @@ test("a provider-less model id binds to a catalog entry for any runtime's id sha
   assert.deepEqual(bind("openai/gpt-5.6-sol"), { provider: "openai", id: "gpt-5.6-sol" }, "provider/id shorthand");
   assert.deepEqual(bind("big-pickle"), { provider: "opencode", id: "opencode/big-pickle" }, "bare name of an ACP slash id");
   assert.deepEqual(bind("opencode/big-pickle"), { provider: "opencode", id: "opencode/big-pickle" }, "full ACP id");
+  const opencode = [{ provider: "openai", id: "openai/gpt-5.6-sol", name: "GPT-5.6 Sol" }, { provider: "opencode", id: "opencode/gpt-5.6-sol", name: "GPT-5.6 Sol" }];
+  assert.deepEqual(resolveModelRef(opencode, { provider: "", id: "openai-codex/gpt-5.6-sol" }, { provider: "opencode" }), { provider: "openai", id: "openai/gpt-5.6-sol" }, "a ChatGPT-plan model binds to the agent's own name for that provider");
   assert.deepEqual(bind("unknown"), { provider: "", id: "unknown" }, "unknown ids pass through for the runtime to reject");
   assert.deepEqual(resolveModelRef(models, { provider: "anthropic", id: "x" }), { provider: "anthropic", id: "x" }, "explicit provider wins");
 });

@@ -32,11 +32,14 @@ export function sessionIdFromRef(ref: string): string {
  *
  * Throws for a path-based ref that escapes `sessionsDir`.
  */
-export function resolveResumeRef(opts: { ref: string; resumesByPath: boolean; sessionsDir: string }): string {
-  const { ref, resumesByPath, sessionsDir } = opts;
+export function resolveResumeRef(opts: { ref: string; resumesByPath: boolean; sessionsDir: string | readonly string[] }): string {
+  const { ref, resumesByPath } = opts;
   if (!resumesByPath) return sessionIdFromRef(ref);
   const resolved = path.resolve(ref);
-  if (!resolved.startsWith(path.resolve(sessionsDir) + path.sep)) {
+  // Every directory the node keeps or reads path-based transcripts in: its own,
+  // and the agent's native store (a `bivy run pi` session lives in Pi's).
+  const roots = typeof opts.sessionsDir === "string" ? [opts.sessionsDir] : opts.sessionsDir;
+  if (!roots.some((root) => resolved.startsWith(path.resolve(root) + path.sep))) {
     throw new Error("Session file is outside the sessions directory");
   }
   return resolved;

@@ -107,6 +107,21 @@ test("an enriching tool_execution_update (with detail or real input) is still pe
   assert.equal(eventLog.appended[0].entry.content[0].input.command, "npm test");
 });
 
+test("a streaming update without detail keeps the call's classification and parent (Pi's bash output)", () => {
+  const { tp, eventLog } = harness();
+  tp.persistToolActivityFromEvent(sess(), { type: "tool_execution_start", toolName: "bash", args: { command: "npm test" }, toolCallId: "call-7", parentToolCallId: "parent-1", detail: { kind: "shell", command: "npm test" } } as any);
+  tp.persistToolActivityFromEvent(sess(), { type: "tool_execution_update", toolName: "bash", args: { command: "npm test" }, toolCallId: "call-7", partialResult: { content: [{ type: "text", text: "ok" }] } } as any);
+  const latest = eventLog.appended[eventLog.appended.length - 1].entry.content[0];
+  assert.equal(latest.detail?.kind, "shell");
+  assert.equal(latest.parentToolUseId, "parent-1");
+});
+
+test("a turn failure reported on the tool channel (no tool, no call id) is not persisted as a tool card", () => {
+  const { tp, eventLog } = harness();
+  tp.persistToolActivityFromEvent(sess(), { type: "tool_result", error: "error_during_execution", message: "" } as any);
+  assert.equal(eventLog.appended.length, 0);
+});
+
 test("intermediate coalescing: skips an unchanged non-final append, always writes final, re-opens after clear", () => {
   const { tp, eventLog } = harness();
   const ev = { assistantMessageEvent: { type: "thinking_end", content: "hello" } };

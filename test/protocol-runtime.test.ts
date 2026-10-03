@@ -472,6 +472,7 @@ assert.equal(streamedTool?.toolName, "shell", "the tool_call streamed live with 
 assert.equal(streamedTool?.detail?.kind, "shell", "the normalized ToolCallDetail rode along");
 assert.equal(ungovernedDecisions.length, 0, "no interceptor round-trip when interception is off");
 assert.ok(ungovernedEvents.some((event) => event.type === "tool_result"), "the tool result streamed too");
+assert.ok(!ungovernedEvents.some((event) => (event as { toolName?: string }).toolName === "agent_output"), "a live agent's stderr diagnostics stay out of the transcript");
 ungovernedSession.dispose();
 
 console.log("protocol-runtime: all tests passed");
@@ -587,4 +588,29 @@ console.log("protocol-runtime: all tests passed");
 
   session.dispose();
   console.log("protocol-runtime-tool-observe: ok");
+}
+
+// --- a message sent while a turn is still streaming (a steer) ---
+{
+  const steerFixture = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "protocol-steer-agent.mjs");
+  const runtime = new ProtocolRuntime({ command: process.execPath, args: [steerFixture], displayName: "Steer Fixture" });
+  const { session } = await runtime.createSession({ workspace: process.cwd() });
+  const events: RuntimeEvent[] = [];
+  session.subscribe((event) => events.push(event));
+  try {
+    await session.prompt("continue the fork");
+    await waitFor(events, (event) => event.type === "message_update");
+    await session.prompt("summarize");
+    await waitFor(events, (event) => event.type === "agent_end");
+    const shape = session.getMessages().map((m) => [m.role, typeof m.content === "string" ? m.content : JSON.stringify(m.content)]);
+    assert.deepEqual(shape, [
+      ["user", "continue the fork"],
+      ["assistant", "The earlier work is done."],
+      ["user", "summarize"],
+      ["assistant", " Here is the summary."],
+    ], "what streamed before the steer stays its own message, in order");
+  } finally {
+    session.dispose();
+  }
+  console.log("protocol-runtime: steer mid-turn ok");
 }

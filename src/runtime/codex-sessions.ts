@@ -47,6 +47,9 @@ export interface CodexSessionSummary {
   cwd?: string;
   /** Epoch ms of the session start, from meta or the file mtime. */
   createdAt?: number;
+  /** Set on a sub-agent's own thread: the thread that spawned it. Not a session
+   *  to resume or adopt on its own; its parent is. */
+  parentThreadId?: string;
   /** First user prompt, truncated — a readable list label. */
   firstMessage?: string;
 }
@@ -84,14 +87,15 @@ function findRolloutFiles(root: string): string[] {
 }
 
 /** Session metadata from a rollout's first line (id / cwd / start time). */
-function metaFromFirstLine(line: string): { id?: string; cwd?: string; createdAt?: number } {
+function metaFromFirstLine(line: string): { id?: string; cwd?: string; createdAt?: number; parentThreadId?: string } {
   try {
     const rec = JSON.parse(line) as Record<string, unknown>;
     const p = inner(rec);
     const id = typeof p.id === "string" ? p.id : typeof p.session_id === "string" ? (p.session_id as string) : undefined;
     const cwd = typeof p.cwd === "string" ? (p.cwd as string) : undefined;
     const createdAt = toEpoch(p.timestamp ?? rec.timestamp);
-    return { id, cwd, createdAt };
+    const parentThreadId = typeof p.parent_thread_id === "string" && p.parent_thread_id ? p.parent_thread_id : undefined;
+    return { id, cwd, createdAt, ...(parentThreadId ? { parentThreadId } : {}) };
   } catch {
     return {};
   }
@@ -111,6 +115,19 @@ function textOf(content: unknown): string {
     .trim();
 }
 
+/** Context Codex injects as "user" turns: its environment block, plugin hints,
+ * and AGENTS.md instructions. They are not something the user said, so a
+ * reopened transcript must not show them as user messages. */
+const INJECTED_USER_TURNS: RegExp[] = [
+  /^<(environment_context|recommended_plugins|user_instructions|permissions instructions)\b/,
+  /^# AGENTS\.md instructions for /,
+];
+
+function isInjectedUserTurn(text: string): boolean {
+  const start = text.trimStart();
+  return INJECTED_USER_TURNS.some((pattern) => pattern.test(start));
+}
+
 /**
  * Reconstruct a session's conversation from its rollout file as normalized
  * RuntimeMessages (role + content + timestamp) — the same shape loadClaudeTranscript
@@ -119,6 +136,8 @@ function textOf(content: unknown): string {
  */
 export function loadCodexTranscriptFile(file: string): RuntimeMessage[] {
   const messages: RuntimeMessage[] = [];
+  // The model of the turn being read (from its turn_context record).
+  let model: string | undefined;
   let raw: string;
   try {
     raw = fs.readFileSync(file, "utf8");
@@ -134,15 +153,136 @@ export function loadCodexTranscriptFile(file: string): RuntimeMessage[] {
       continue;
     }
     const p = inner(rec);
+    const timestamp = toEpoch(p.timestamp ?? rec.timestamp) ?? Date.now();
+    if (rec.type === "turn_context" && typeof p.model === "string" && p.model) {
+      model = p.model;
+      continue;
+    }
+    // Tool activity: a call and its output, paired by call_id. Kept as the same
+    // tool_use / tool_result blocks every other transcript uses, so a reopened,
+    // taken-over or forked Codex session still shows what ran and what it printed.
+    const tools = toolBlocksOf(p);
+    if (tools.length) {
+      messages.push(tools[0]!.type === "tool_use"
+        ? { role: "assistant", content: tools, timestamp, ...(model ? { model } : {}) }
+        : { role: "user", content: tools, timestamp });
+      continue;
+    }
     // A message item: either {role, content} directly or an item with type "message".
     const role = p.role ?? (p.type === "message" ? (p as Record<string, unknown>).role : undefined);
     if (role !== "user" && role !== "assistant") continue;
     const content = p.content ?? p.text;
     const text = textOf(content);
-    if (!text) continue;
-    messages.push({ role, content: text, timestamp: toEpoch(p.timestamp ?? rec.timestamp) ?? Date.now() });
+    if (!text || (role === "user" && isInjectedUserTurn(text))) continue;
+    messages.push({ role, content: text, timestamp, ...(role === "assistant" && model ? { model } : {}) });
   }
   return messages;
+}
+
+/** Rollout tool items as tool_use / tool_result blocks (empty when `p` is not
+ *  one). Codex writes `function_call` (JSON `arguments`) and `custom_tool_call`
+ *  (free-form `input`), each followed by an `…_output`. A code-mode `exec` call
+ *  is a script of `tools.<name>(<arg>)` calls with one output chunk each; it is
+ *  unwrapped into those calls, in the shapes the live app-server path uses, so a
+ *  reloaded card reads like the live one. */
+function toolBlocksOf(p: Record<string, unknown>): Array<Record<string, unknown>> {
+  const id = typeof p.call_id === "string" ? p.call_id : undefined;
+  if (!id) return [];
+  if (p.type === "custom_tool_call" && typeof p.input === "string") {
+    const calls = codeModeCalls(p.input);
+    if (calls.length) return calls.map((call, i) => ({ type: "tool_use", id: codeModeId(id, i, calls.length), ...call }));
+  }
+  if (p.type === "function_call" || p.type === "custom_tool_call") {
+    let input: unknown = p.input !== undefined ? { input: p.input } : {};
+    if (typeof p.arguments === "string") {
+      try { input = withoutOpaqueValues(JSON.parse(p.arguments)); } catch { input = { arguments: p.arguments }; }
+    }
+    return [{ type: "tool_use", id, name: String(p.name || "tool"), input }];
+  }
+  if (p.type === "function_call_output" || p.type === "custom_tool_call_output") {
+    const blocks = Array.isArray(p.output) ? p.output.map((block) => textOf([block])) : [];
+    const chunks = blocks.slice(1).map(codeModeResult);
+    if (blocks.length > 1 && /^Script completed\b/.test(blocks[0] ?? "") && chunks.every(Boolean)) {
+      return chunks.map((content, i) => ({ type: "tool_result", tool_use_id: codeModeId(id, i, chunks.length), content }));
+    }
+    const output = typeof p.output === "string" ? p.output : blocks.filter(Boolean).join("\n");
+    return [{ type: "tool_result", tool_use_id: id, content: output }];
+  }
+  return [];
+}
+
+/** The id of the i-th call in a code-mode script; a single call keeps the item's. */
+function codeModeId(id: string, index: number, count: number): string {
+  return count === 1 ? id : `${id}#${index}`;
+}
+
+/** Calls in a code-mode script, one `text(await tools.<name>(<arg>));` per line. */
+function codeModeCalls(script: string): Array<{ name: string; input: Record<string, unknown> }> {
+  const calls: Array<{ name: string; input: Record<string, unknown> }> = [];
+  for (const line of script.split("\n")) {
+    const match = /^\s*text\(await tools\.(\w+)\(([\s\S]*)\)\);?\s*$/.exec(line);
+    if (!match) {
+      if (line.trim()) return []; // any other code: keep the script as one opaque call
+      continue;
+    }
+    const arg = parseLooseJson(match[2]!);
+    if (arg === undefined) return [];
+    calls.push(codeModeCall(match[1]!, arg));
+  }
+  return calls;
+}
+
+function codeModeCall(name: string, arg: unknown): { name: string; input: Record<string, unknown> } {
+  if (name === "exec_command" && arg && typeof arg === "object" && typeof (arg as { cmd?: unknown }).cmd === "string") {
+    const { cmd, workdir } = arg as { cmd: string; workdir?: unknown };
+    return { name: "shell", input: { command: cmd, ...(typeof workdir === "string" ? { cwd: workdir } : {}) } };
+  }
+  if (name === "apply_patch" && typeof arg === "string") return { name: "apply_patch", input: { changes: patchChanges(arg) } };
+  return { name, input: arg && typeof arg === "object" ? withoutOpaqueValues(arg) as Record<string, unknown> : { input: arg } };
+}
+
+/** One code-mode output chunk as the live shell result shape, or the raw text. */
+function codeModeResult(chunk: string): unknown {
+  try {
+    const parsed = JSON.parse(chunk) as { output?: unknown; exit_code?: unknown };
+    if (typeof parsed.output === "string") {
+      return { content: parsed.output, ...(typeof parsed.exit_code === "number" ? { exitCode: parsed.exit_code } : {}) };
+    }
+    return chunk === "{}" ? "completed" : chunk;
+  } catch {
+    return chunk || undefined;
+  }
+}
+
+/** JSON, or the JS object literal code mode writes (bare keys like `{cmd:"…"}`). */
+function parseLooseJson(text: string): unknown {
+  try { return JSON.parse(text); } catch { /* bare keys below */ }
+  try { return JSON.parse(text.replace(/([{,]\s*)([A-Za-z_$][\w$]*)\s*:/g, '$1"$2":')); } catch { return undefined; }
+}
+
+/** Codex's own patch text as the app-server's `changes` list ({path, kind, diff}). */
+function patchChanges(patch: string): Array<Record<string, unknown>> {
+  const changes: Array<Record<string, unknown>> = [];
+  let current: { path: string; kind: string; lines: string[] } | undefined;
+  const flush = () => { if (current) changes.push({ path: current.path, kind: { type: current.kind }, diff: current.lines.join("\n") }); };
+  for (const line of patch.split("\n")) {
+    const header = /^\*\*\* (Add|Update|Delete) File: (.+)$/.exec(line);
+    if (header) {
+      flush();
+      current = { path: header[2]!.trim(), kind: header[1]!.toLowerCase(), lines: [] };
+    } else if (current && !/^\*\*\* (Begin|End) Patch/.test(line)) {
+      current.lines.push(line);
+    }
+  }
+  flush();
+  return changes;
+}
+
+/** Drop values that are opaque encrypted blobs (Codex encrypts some sub-agent
+ *  messages in its rollout); they are noise on a card. */
+function withoutOpaqueValues(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).filter(([, v]) => !(typeof v === "string" && /^gAAAAA[\w-]{40,}={0,2}$/.test(v))));
 }
 
 /**
@@ -303,7 +443,7 @@ export function listCodexSessions(): CodexSessionSummary[] {
     // etc. — which make useless list labels. Prefer the first turn that isn't one
     // of these XML-ish blocks (i.e. the user's real prompt), falling back to the
     // first turn only if that's genuinely all there is.
-    const userTurns = transcript.filter((m) => (m as { role?: string }).role === "user");
+    const userTurns = transcript.filter((m) => (m as { role?: string }).role === "user" && typeof (m as { content?: unknown }).content === "string");
     const contentOf = (m: unknown) => String((m as { content?: unknown })?.content ?? "");
     const isInjectedBlock = (text: string) => /^<[a-z][\w-]*>/i.test(text.trimStart());
     const firstUser = userTurns.find((m) => !isInjectedBlock(contentOf(m))) ?? userTurns[0];
@@ -314,6 +454,7 @@ export function listCodexSessions(): CodexSessionSummary[] {
       cwd: meta.cwd,
       createdAt: meta.createdAt ?? mtime,
       firstMessage,
+      ...(meta.parentThreadId ? { parentThreadId: meta.parentThreadId } : {}),
     });
   }
   return sessions.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
@@ -353,8 +494,10 @@ export function deleteCodexSession(sessionId: string): boolean {
 export function discoverCodexSessionForCwd(cwd: string, since = 0): CodexSessionSummary | undefined {
   const target = path.resolve(cwd);
   const skewMs = 5_000;
+  // A sub-agent writes its own rollout in the same cwd, after its parent: the
+  // run is the parent's thread.
   return listCodexSessions().find(
-    (s) => s.cwd != null && path.resolve(s.cwd) === target && (s.createdAt ?? 0) >= since - skewMs,
+    (s) => !s.parentThreadId && s.cwd != null && path.resolve(s.cwd) === target && (s.createdAt ?? 0) >= since - skewMs,
   );
 }
 
@@ -370,7 +513,7 @@ export function discoverNativeCodexSessions(
   hasLiveProcess: (cwd: string) => boolean = (cwd) => hasLiveProcessForCwd(cwd, CODEX_BIN_NAMES),
 ): DiscoveredNativeSession[] {
   return listCodexSessions()
-    .filter((s): s is CodexSessionSummary & { id: string } => Boolean(s.id))
+    .filter((s): s is CodexSessionSummary & { id: string } => Boolean(s.id) && !s.parentThreadId)
     .map((s) => ({
       runtimeId: "codex-approvals",
       ref: s.id,

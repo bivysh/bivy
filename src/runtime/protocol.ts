@@ -531,9 +531,12 @@ class ProtocolSession implements RuntimeSession {
     });
     this.child = child;
     child.stdout.on("data", (chunk: Buffer) => this.onData(chunk.toString("utf8")));
+    // A protocol agent reports its errors in-band (session.error), so its stderr
+    // is diagnostics: shim logs and the agent's own request dumps, which in the
+    // transcript read as a broken tool card. Keep it for when the shim dies
+    // without a word (see "close" below).
     child.stderr.on("data", (chunk: Buffer) => {
       this.stderrOutput += chunk.toString("utf8");
-      this.emit({ type: "tool_execution_update", toolName: "agent_output", toolCallId: "agent-output", input: { stream: "stderr", output: stripAnsi(this.stderrOutput.slice(-4000)) } });
     });
     // The agent's stdin pipe can break (EPIPE) when the shim exits mid-turn — for
     // example a dispose()/abort() racing an in-flight write (a tool.decision reply,
@@ -560,6 +563,10 @@ class ProtocolSession implements RuntimeSession {
       // event from a prior child can't null a freshly respawned one.
       if (this.child === child) this.markChildGone();
       this.failAll(new Error(`Protocol agent exited (${code ?? signal ?? "unknown"})`));
+      const stderr = stripAnsi(this.stderrOutput.slice(-4000)).trim();
+      if (typeof code === "number" && code !== 0 && stderr) {
+        this.emit({ type: "tool_execution_update", toolName: "agent_output", toolCallId: "agent-output", input: { stream: "stderr", output: stderr } });
+      }
       this.emit({ type: "agent_end", code, signal });
     });
     await new Promise<void>((resolve, reject) => {
@@ -713,6 +720,20 @@ class ProtocolSession implements RuntimeSession {
     } else {
       this.messages[this.turnMessageIndex] = { ...this.messages[this.turnMessageIndex]!, content };
     }
+  }
+
+  /** Persist the live turn's content so far (prose, tools, their results) and
+   *  commit it on clients, so a steering message can follow it in order. */
+  private sealStreamedSoFar(): void {
+    const hadTools = this.turnContent.some((b) => b.type !== "thinking") || this.turnToolResults.length > 0;
+    if (hadTools) {
+      this.flushPendingTurnText();
+      if (this.turnContent.length) this.snapshotAssistantTurn([...this.turnContent]);
+      if (this.turnToolResults.length) this.messages.push({ role: "user", content: this.turnToolResults, timestamp: Date.now() });
+    } else if (this.assistantText) {
+      this.snapshotAssistantTurn(this.assistantText);
+    }
+    if (this.assistantText) this.emit({ type: "message_boundary", message: { role: "assistant", content: this.assistantText } });
   }
 
   /**
@@ -884,6 +905,9 @@ class ProtocolSession implements RuntimeSession {
       }
       this.emit({ type: "message_end", message });
       this.streaming = false;
+      // The sealed turn owns its message slot. Anything that streams after this
+      // (a late tool or a turn the host never opened) must not overwrite it.
+      this.turnMessageIndex = undefined;
       this.assistantText = "";
       this.assistantItemBoundary = false;
       this.reasoningText = "";
@@ -916,6 +940,7 @@ class ProtocolSession implements RuntimeSession {
       const errored = { role: "assistant", content: "", stopReason: "error", errorMessage: errorText, timestamp: Date.now() };
       this.messages.push(errored);
       this.streaming = false;
+      this.turnMessageIndex = undefined;
       this.assistantText = "";
       this.assistantItemBoundary = false;
       this.reasoningText = "";
@@ -1123,6 +1148,11 @@ class ProtocolSession implements RuntimeSession {
     } catch {
       textToSend = prompt;
     }
+    // A message sent while a turn is still streaming steers into it. Keep what
+    // the agent already said as its own message, before this one: resetting the
+    // turn here dropped that text, and the rest of the reply then ran into the
+    // answer to this message as one bubble.
+    if (this.streaming) this.sealStreamedSoFar();
     this.messages.push({ role: "user", content: prompt, timestamp: Date.now() });
     this.streaming = true;
     this.turnMessageIndex = undefined;

@@ -42,6 +42,8 @@ const events: RuntimeEvent[] = [];
 session.subscribe((event) => events.push(event));
 await session.prompt("exercise Codex item events");
 await waitFor(events, (event) => event.type === "agent_end");
+// Let anything that would (wrongly) follow an early seal arrive before asserting.
+await new Promise((resolve) => setTimeout(resolve, 300));
 
 const calls = events.filter((event) => event.type === "tool_call") as Array<RuntimeEvent & { toolName?: string; detail?: { kind?: string; label?: string } }>;
 const delegation = calls.find((event) => event.toolName === "spawn_agent");
@@ -58,12 +60,15 @@ const collabResultIndex = events.findIndex((event) => event.type === "tool_resul
 const agentEndIndex = events.findIndex((event) => event.type === "agent_end");
 assert.ok(collabResultIndex >= 0 && collabResultIndex < agentEndIndex, "late Codex collaboration completion drains before the turn is sealed");
 assert.ok(calls.some((event) => event.toolName === "shell"), "non-approved command item is still visible");
+const childShell = calls.find((event) => event.toolCallId === "child-shell") as (RuntimeEvent & { parentToolUseId?: string }) | undefined;
+assert.equal(childShell?.parentToolUseId, "subagent-child-thread", "a child thread's tool nests under its sub-agent card");
+assert.equal(events.filter((event) => event.type === "agent_end").length, 1, "a child thread's turn/completed does not seal the parent turn");
 const plan = calls.find((event) => event.toolName === "plan") as (RuntimeEvent & { detail?: { kind?: string }; input?: { plan?: Array<{ status: string }> } }) | undefined;
 assert.equal(plan?.detail?.kind, "plan", "turn/plan/updated becomes a plan tool call");
 assert.deepEqual(plan?.input?.plan?.map((step) => step.status), ["completed", "inProgress"], "with each step's status");
 assert.deepEqual(approvals, [], "already-started app-server items never request retroactive approval");
 
-const shellResult = events.find((event) => event.type === "tool_result" && (event as { toolName?: string }).toolName === "shell") as (RuntimeEvent & { detail?: { result?: { exitCode?: number; isError?: boolean } } }) | undefined;
+const shellResult = events.find((event) => event.type === "tool_result" && (event as { toolCallId?: string }).toolCallId === "shell-1") as (RuntimeEvent & { detail?: { result?: { exitCode?: number; isError?: boolean } } }) | undefined;
 assert.equal(shellResult?.detail?.result?.exitCode, 7, "Codex exit code reaches transcript detail");
 assert.equal(shellResult?.detail?.result?.isError, true, "failed Codex command is visibly failed");
 

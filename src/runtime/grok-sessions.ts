@@ -39,6 +39,9 @@ export interface GrokSessionSummary {
   name?: string;
   /** First user-visible prompt, truncated — a readable list label. */
   firstMessage?: string;
+  /** A sub-agent's own session (`session_kind: "subagent"`): not a session to
+   *  list, adopt or resume on its own; the one that spawned it is. */
+  subagent?: boolean;
 }
 
 function toEpoch(value: unknown): number | undefined {
@@ -65,6 +68,7 @@ function readSummary(dir: string): Partial<GrokSessionSummary> | undefined {
       createdAt: toEpoch(raw.created_at),
       updatedAt: toEpoch(raw.last_active_at ?? raw.updated_at),
       name,
+      ...(raw.session_kind === "subagent" ? { subagent: true } : {}),
     };
   } catch {
     return undefined;
@@ -181,6 +185,7 @@ export function listGrokSessions(): GrokSessionSummary[] {
         updatedAt,
         name: summary.name,
         firstMessage: firstUserMessage(dir),
+        ...(summary.subagent ? { subagent: true } : {}),
       });
     }
   }
@@ -251,7 +256,7 @@ export function discoverGrokSessionForCwd(cwd: string, since = 0): GrokSessionSu
   const wanted = process.platform === "win32" ? target.toLowerCase() : target;
   return listGrokSessions()
     .filter((s) => {
-      if (!s.cwd) return false;
+      if (!s.cwd || s.subagent) return false;
       const resolved = process.platform === "win32" ? path.resolve(s.cwd).toLowerCase() : path.resolve(s.cwd);
       return resolved === wanted;
     })
@@ -268,7 +273,7 @@ export function discoverGrokSessionForCwd(cwd: string, since = 0): GrokSessionSu
 export function discoverNativeGrokSessions(
   hasLiveProcess: (cwd: string) => boolean = (cwd) => hasLiveProcessForCwd(cwd, GROK_BIN_NAMES),
 ): DiscoveredNativeSession[] {
-  return listGrokSessions().map((s) => ({
+  return listGrokSessions().filter((s) => !s.subagent).map((s) => ({
     runtimeId: "grok",
     ref: s.id,
     file: s.dir,
