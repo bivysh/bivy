@@ -38,6 +38,16 @@ async function main() {
     const exclude = fs.readFileSync(path.join(dir, ".git", "info", "exclude"), "utf8");
     assert.ok(exclude.includes(".bivy/"), ".bivy/ is excluded");
 
+    // A worktree cut from inside a worktree (a fork of a fork) sits beside it
+    // under the main tree, on a branch from its parent's HEAD, not nested inside.
+    fs.writeFileSync(path.join(wt.path, "fork.txt"), "parent work\n");
+    await exec("git", ["-C", wt.path, "add", "-A"]);
+    await exec("git", ["-C", wt.path, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "parent"]);
+    const child = await createWorktree({ repoDir: wt.path, id: "fork-child" });
+    assert.equal(path.dirname(child.path), path.dirname(wt.path), "the child worktree is a sibling of its parent");
+    assert.ok(fs.existsSync(path.join(child.path, "fork.txt")), "the child starts from its parent's HEAD");
+    await removeWorktree(child.repoRoot, child.path);
+
     await removeWorktree(wt.repoRoot, wt.path);
     const after = await exec("git", ["-C", dir, "worktree", "list"]);
     assert.ok(!after.stdout.includes(wt.path), "worktree removed");

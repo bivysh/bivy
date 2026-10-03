@@ -70,6 +70,10 @@ const itemOutputs = new Map();
 const agentMessageItems = new Set();
 const reasoningItems = new Set();
 const activeObservedItems = new Set();
+// Child thread id -> the card that represents that sub-agent in the parent
+// transcript, so the child's own tool calls nest under it instead of reading
+// as the parent's work.
+const childThreadCards = new Map();
 let pendingTurnCompletion = false;
 let turnCompletionTimer = null;
 
@@ -95,8 +99,31 @@ function paramsItemId(params, fallback) {
   return String(params?.itemId || params?.callId || item?.id || fallback || "");
 }
 
+function rememberChildThreads(item) {
+  if (item.type === "subAgentActivity" && item.agentThreadId) {
+    childThreadCards.set(item.agentThreadId, `subagent-${item.agentThreadId}`);
+  } else if (item.type === "collabAgentToolCall" && item.id) {
+    for (const child of item.receiverThreadIds ?? []) {
+      if (!childThreadCards.has(child)) childThreadCards.set(child, String(item.id));
+    }
+  }
+}
+
+/** True when a notification belongs to a delegated child thread, not ours. */
+function fromChildThread(params) {
+  return Boolean(params?.threadId && threadId && params.threadId !== threadId);
+}
+
+/** `{ parentToolCallId }` for an item a child thread ran, else `{}`. */
+function childParent(params) {
+  if (!fromChildThread(params)) return {};
+  const card = childThreadCards.get(params.threadId) ?? `subagent-${params.threadId}`;
+  return { parentToolCallId: card };
+}
+
 function rememberItem(item) {
   if (!item || typeof item !== "object") return;
+  rememberChildThreads(item);
   const id = item.type === "subAgentActivity" && item.agentThreadId
     ? `subagent-${item.agentThreadId}`
     : String(item.id || "");
@@ -146,18 +173,18 @@ function appendOutput(itemId, delta) {
   return output;
 }
 
-function emitToolUpdate(itemId, name, input) {
+function emitToolUpdate(itemId, name, input, parent = {}) {
   if (!itemId) return;
-  bivy({ type: "tool.update", toolCallId: itemId, name, input });
+  bivy({ type: "tool.update", toolCallId: itemId, name, input, ...parent });
 }
 
 // App-server item/started is observational: approval-capable shell/patch calls
 // were already surfaced by requestApproval, while MCP, dynamic, and collaboration
 // items may already be running. `tool.observe` gives all of them a live,
 // persisted card without asking the user to approve work that has already begun.
-function emitToolObserved(itemId, name, input) {
+function emitToolObserved(itemId, name, input, parent = {}) {
   if (!itemId) return;
-  bivy({ type: "tool.observe", toolCallId: itemId, name, input });
+  bivy({ type: "tool.observe", toolCallId: itemId, name, input, ...parent });
 }
 
 // `turn/plan/updated` (the update_plan tool) carries the whole plan with a
@@ -214,11 +241,12 @@ function handleCompletedItem(params) {
   rememberItem(item);
   const itemId = paramsItemId(params);
   if (!item || typeof item !== "object" || !itemId) return;
+  const parent = childParent(params);
   switch (item.type) {
     case "agentMessage":
       // Child-thread prose belongs to the delegated agent, not the parent's
       // answer stream. Its lifecycle is represented by the collaboration items.
-      if (params?.threadId && threadId && params.threadId !== threadId) return;
+      if (fromChildThread(params)) return;
       if (!agentMessageItems.has(itemId) && item.text) {
         agentMessageItems.add(itemId);
         bivy({ type: "message.delta", text: String(item.text) });
@@ -240,7 +268,7 @@ function handleCompletedItem(params) {
     case "commandExecution": {
       const output = text(item.aggregatedOutput ?? itemOutputs.get(itemId));
       if (output) itemOutputs.set(itemId, output.slice(-4000));
-      emitToolUpdate(itemId, "shell", updateInput(itemId, { output }));
+      emitToolUpdate(itemId, "shell", updateInput(itemId, { output }), parent);
       const exitCode = typeof item.exitCode === "number" ? item.exitCode : undefined;
       bivy({
         type: "tool.result",
@@ -248,36 +276,37 @@ function handleCompletedItem(params) {
         name: "shell",
         result: { content: output || text(item.status || "completed"), ...(exitCode === undefined ? {} : { exitCode }) },
         isError: (exitCode !== undefined && exitCode !== 0) || item.status === "failed",
+        ...parent,
       });
       return;
     }
     case "fileChange": {
       const status = text(item.status || "completed");
       itemInputs.set(itemId, updateInput(itemId, { changes: item.changes ?? [], status }));
-      emitToolUpdate(itemId, "apply_patch", updateInput(itemId));
-      bivy({ type: "tool.result", toolCallId: itemId, name: "apply_patch", result: status, isError: status === "failed" });
+      emitToolUpdate(itemId, "apply_patch", updateInput(itemId), parent);
+      bivy({ type: "tool.result", toolCallId: itemId, name: "apply_patch", result: status, isError: status === "failed", ...parent });
       return;
     }
     case "mcpToolCall": {
       const name = text(item.tool || "mcp");
       const result = text(item.result ?? item.error ?? "");
-      bivy({ type: "tool.result", toolCallId: itemId, name, result, isError: Boolean(item.error) || item.status === "failed" });
+      bivy({ type: "tool.result", toolCallId: itemId, name, result, isError: Boolean(item.error) || item.status === "failed", ...parent });
       return;
     }
     case "dynamicToolCall": {
       const name = text(item.tool || "tool");
       const result = text(item.contentItems ?? item.result ?? item.status ?? "completed");
-      bivy({ type: "tool.result", toolCallId: itemId, name, result, isError: item.success === false || item.status === "failed" });
+      bivy({ type: "tool.result", toolCallId: itemId, name, result, isError: item.success === false || item.status === "failed", ...parent });
       return;
     }
     case "collabAgentToolCall": {
       const result = text(item.status || "completed");
-      bivy({ type: "tool.result", toolCallId: itemId, name: "spawn_agent", result, isError: item.status === "failed" });
+      bivy({ type: "tool.result", toolCallId: itemId, name: "spawn_agent", result, isError: item.status === "failed", ...parent });
       return;
     }
     case "subAgentActivity": {
       const result = text(item.kind || "completed");
-      bivy({ type: "tool.result", toolCallId: itemId, name: "subagent_activity", result, isError: item.kind === "interrupted" });
+      bivy({ type: "tool.result", toolCallId: itemId, name: "subagent_activity", result, isError: item.kind === "interrupted", ...parent });
       return;
     }
     default:
@@ -356,7 +385,8 @@ function onNotification(m) {
   // both token streams together produces character-level corruption whenever a
   // delegated agent answers concurrently. Child lifecycle remains visible via
   // collabAgentToolCall/subAgentActivity; only prose/reasoning is scoped here.
-  const fromCurrentThread = !params?.threadId || !threadId || params.threadId === threadId;
+  const fromCurrentThread = !fromChildThread(params);
+  const parent = childParent(params);
   switch (method) {
     case "item/agentMessage/delta": {
       const itemId = paramsItemId(params);
@@ -384,19 +414,19 @@ function onNotification(m) {
     case "item/commandExecution/outputDelta": {
       const itemId = paramsItemId(params);
       const output = appendOutput(itemId, params.delta);
-      emitToolUpdate(itemId, "shell", updateInput(itemId, { output }));
+      emitToolUpdate(itemId, "shell", updateInput(itemId, { output }), parent);
       return;
     }
     case "item/fileChange/outputDelta": {
       const itemId = paramsItemId(params);
       const output = appendOutput(itemId, params.delta);
-      emitToolUpdate(itemId, "apply_patch", updateInput(itemId, { output }));
+      emitToolUpdate(itemId, "apply_patch", updateInput(itemId, { output }), parent);
       return;
     }
     case "item/fileChange/patchUpdated": {
       const itemId = paramsItemId(params);
       itemInputs.set(itemId, updateInput(itemId, { changes: params.changes ?? [] }));
-      emitToolUpdate(itemId, "apply_patch", updateInput(itemId));
+      emitToolUpdate(itemId, "apply_patch", updateInput(itemId), parent);
       return;
     }
     case "item/started": {
@@ -404,12 +434,12 @@ function onNotification(m) {
       rememberItem(item);
       const itemId = paramsItemId(params);
       if (["commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall", "collabAgentToolCall", "subAgentActivity"].includes(item?.type) && itemId) activeObservedItems.add(itemId);
-      if (item?.type === "commandExecution") emitToolObserved(itemId, "shell", updateInput(itemId));
-      if (item?.type === "fileChange") emitToolObserved(itemId, "apply_patch", updateInput(itemId));
-      if (item?.type === "mcpToolCall") emitToolObserved(itemId, text(item.tool || "mcp"), updateInput(itemId));
-      if (item?.type === "dynamicToolCall") emitToolObserved(itemId, text(item.tool || "tool"), updateInput(itemId));
-      if (item?.type === "collabAgentToolCall") emitToolObserved(itemId, "spawn_agent", updateInput(itemId));
-      if (item?.type === "subAgentActivity") emitToolObserved(itemId, "subagent_activity", updateInput(itemId));
+      if (item?.type === "commandExecution") emitToolObserved(itemId, "shell", updateInput(itemId), parent);
+      if (item?.type === "fileChange") emitToolObserved(itemId, "apply_patch", updateInput(itemId), parent);
+      if (item?.type === "mcpToolCall") emitToolObserved(itemId, text(item.tool || "mcp"), updateInput(itemId), parent);
+      if (item?.type === "dynamicToolCall") emitToolObserved(itemId, text(item.tool || "tool"), updateInput(itemId), parent);
+      if (item?.type === "collabAgentToolCall") emitToolObserved(itemId, "spawn_agent", updateInput(itemId), parent);
+      if (item?.type === "subAgentActivity") emitToolObserved(itemId, "subagent_activity", updateInput(itemId), parent);
       return;
     }
     case "item/completed": {
@@ -419,15 +449,20 @@ function onNotification(m) {
       return;
     }
     case "thread/tokenUsage/updated":
-      if (params?.tokenUsage) bivy({ type: "usage", usage: params.tokenUsage.last ?? params.tokenUsage.total ?? params.tokenUsage });
+      if (fromCurrentThread && params?.tokenUsage) bivy({ type: "usage", usage: params.tokenUsage.last ?? params.tokenUsage.total ?? params.tokenUsage });
       return;
     case "rawResponse/completed":
       if (params?.usage) bivy({ type: "usage", usage: params.usage });
       return;
+    // A delegated child runs its own turns on the same connection. Only the
+    // parent thread's turn lifecycle opens and seals the Bivy turn: sealing on
+    // a child's turn/completed ended the parent turn early and the parent's
+    // remaining tools and answer landed after it was closed.
     case "turn/started":
-      bivy({ type: "session.status", status: "working" });
+      if (fromCurrentThread) bivy({ type: "session.status", status: "working" });
       return;
     case "turn/completed": {
+      if (!fromCurrentThread) return;
       // The completion event is authoritative about a terminal failure: a turn
       // that hit a usage limit (or any provider error) arrives here as
       // `status: "failed"` carrying `turn.error`. Capture it directly instead of
@@ -448,6 +483,7 @@ function onNotification(m) {
       return;
     }
     case "turn/failed": {
+      if (!fromCurrentThread) return;
       // A failed turn is TERMINAL in the app-server — no `turn/completed` follows
       // it — so end the turn here rather than merely stashing the error for a
       // completion event that never arrives. Stashing (the old behavior) left the
@@ -470,7 +506,9 @@ function onNotification(m) {
       // A non-turn-scoped error notification (e.g. transient reconnect noise, per
       // the codex exec parser's read of this event). Stash it so a following
       // turn/completed surfaces it; a genuinely turn-ending failure arrives as
-      // turn/failed above, which never leaves the turn open.
+      // turn/failed above, which never leaves the turn open. A child thread's
+      // error is reported on its sub-agent card, not as the parent's failure.
+      if (!fromCurrentThread) return;
       sawError = params?.error?.message || params?.message || "Codex turn failed";
       return;
     default:

@@ -3,6 +3,7 @@ import {
   normalizeMessages,
   buildSeedPrompt,
   buildForkHistory,
+  relocateTranscript,
   renderForkTranscript,
   type ForkFidelity,
   type NormalizedTranscript,
@@ -269,6 +270,8 @@ export interface MaterializeForkOptions {
 export async function materializeFork(opts: MaterializeForkOptions): Promise<ForkPlan> {
   const { bundle, targetRuntime, ctx } = opts;
   const intended = resolveForkFidelity(bundle, targetRuntime);
+  // The portable history as it reads from the fork's own working directory.
+  const normalized = relocateTranscript(bundle.normalized, bundle.record.cwd, ctx.cwd);
   const validImport = (result: { sessionFile?: unknown; id?: unknown } | undefined): result is { sessionFile: string; id: string } =>
     typeof result?.sessionFile === "string" && result.sessionFile.trim().length > 0 &&
     typeof result.id === "string" && result.id.trim().length > 0;
@@ -293,7 +296,7 @@ export async function materializeFork(opts: MaterializeForkOptions): Promise<For
     typeof targetRuntime.importHistoryForFork === "function";
   if (canReplay) {
     try {
-      const history = buildForkHistory(bundle.normalized);
+      const history = buildForkHistory(normalized);
       if (history.length > 0) {
         const imported = await targetRuntime.importHistoryForFork!(history, ctx);
         if (validImport(imported)) return { kind: "resume", fidelity: "replayed", ...imported };
@@ -307,11 +310,11 @@ export async function materializeFork(opts: MaterializeForkOptions): Promise<For
   // its tools can read — an app URL is a web page it can't fetch.
   let transcriptFile: string | undefined;
   try {
-    transcriptFile = opts.saveTranscript?.(renderForkTranscript(bundle.normalized));
+    transcriptFile = opts.saveTranscript?.(renderForkTranscript(normalized));
   } catch {
     transcriptFile = undefined;
   }
-  const seedPrompt = buildSeedPrompt(bundle.normalized, {
+  const seedPrompt = buildSeedPrompt(normalized, {
     targetAgent: targetRuntime.displayName,
     context: { repoSlug: bundle.record.repoSlug, branch: bundle.record.branch, prUrl: bundle.record.prUrl },
     ...(transcriptFile ? { transcriptFile } : {}),

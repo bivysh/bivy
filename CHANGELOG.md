@@ -7,9 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **OpenCode can run on a ChatGPT plan connected in Bivy.** A ChatGPT subscription signed in through Bivy now serves OpenCode too (`openai/gpt-5.6-sol` and the rest of the plan's models), with no separate `opencode auth login`. Your own OpenCode logins win and are never rewritten. `--model openai-codex/gpt-5.6-sol` picks the same model in OpenCode as in Pi and Codex.
+
 ### Fixed
 
 - **`bivy notify`, `bivy ask`, `bivy context` and `bivy app publish` work from an agent started with `bivy run` (or the agent shim).** The agent in a run got no `BIVY_SESSION_ID`, so these commands failed with "No session id", and `--session term-…` returned 404. A run's agent now gets the same session env a chat agent does: its pinned session id (Claude, Grok and Gemini), or otherwise the run's terminal id, plus a session token. The node accepts either id for these commands. A run has no chat, so a notice goes out as a push only, and the CLI says so. A question from the agent shows on the run's "running in the terminal" screen and can be answered there, including from a device that connected after it was asked.
+- **Codex turns with a sub-agent keep their answer.** When a Codex sub-agent finished before its parent, the parent's turn ended early and its answer, plan text and sub-agent card were lost from the saved transcript. The sub-agent's own commands now also show under its card instead of as the parent's work.
+- **A fork knows where its work is.** A fork works in its own copy of the repo, but its history still pointed at the original checkout, so the next agent could edit the wrong files. The history now points at the fork's copy and says so. A fork of a fork gets its copy next to its parent's instead of inside it.
+- **A fork to another agent uses the model you picked.** For OpenCode and other ACP agents, the fork sheet listed no models and the fork started on the agent's default.
+- **Sub-agent results read as the sub-agent's report.** Claude Code's hand-back frame and OpenCode's `<task_result>` wrapper are no longer shown around the report.
+- **Tool cards show what the tool printed.** Pi's shell output showed as raw JSON with no exit code, and its card lost the command once output streamed.
+- **No agent log dumps in the transcript.** An ACP agent's stderr (for example OpenCode's request errors) appeared as an "Agent output" card. It now shows only when the agent crashes.
+- **Reopened Codex sessions don't show Codex's own context as your message.**
 
 ## [0.20.5] - 2026-10-01
 

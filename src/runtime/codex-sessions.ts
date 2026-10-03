@@ -111,6 +111,19 @@ function textOf(content: unknown): string {
     .trim();
 }
 
+/** Context Codex injects as "user" turns: its environment block, plugin hints,
+ * and AGENTS.md instructions. They are not something the user said, so a
+ * reopened transcript must not show them as user messages. */
+const INJECTED_USER_TURNS: RegExp[] = [
+  /^<(environment_context|recommended_plugins|user_instructions|permissions instructions)\b/,
+  /^# AGENTS\.md instructions for /,
+];
+
+function isInjectedUserTurn(text: string): boolean {
+  const start = text.trimStart();
+  return INJECTED_USER_TURNS.some((pattern) => pattern.test(start));
+}
+
 /**
  * Reconstruct a session's conversation from its rollout file as normalized
  * RuntimeMessages (role + content + timestamp) — the same shape loadClaudeTranscript
@@ -139,7 +152,7 @@ export function loadCodexTranscriptFile(file: string): RuntimeMessage[] {
     if (role !== "user" && role !== "assistant") continue;
     const content = p.content ?? p.text;
     const text = textOf(content);
-    if (!text) continue;
+    if (!text || (role === "user" && isInjectedUserTurn(text))) continue;
     messages.push({ role, content: text, timestamp: toEpoch(p.timestamp ?? rec.timestamp) ?? Date.now() });
   }
   return messages;

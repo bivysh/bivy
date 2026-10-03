@@ -288,7 +288,7 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
           };
         }
         if (applied.warning) dirtyWarning = applied.warning;
-        workspace = forkRepoRoot;
+        workspace = wt.repoRoot;
         cwd = wt.path;
         worktree = wt;
       }

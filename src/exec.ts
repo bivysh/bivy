@@ -171,7 +171,10 @@ async function main() {
       const model = created.model;
       if (args.model && model?.id) {
         const qualified = !model.provider || model.id.startsWith(`${model.provider}/`) ? model.id : `${model.provider}/${model.id}`;
-        if (![model.id, qualified].some((id) => id === args.model || id.endsWith(`/${args.model}`))) {
+        // Compare model names: the same model can sit under another provider
+        // spelling in this agent (openai-codex/gpt-5.6-sol is OpenCode's openai/gpt-5.6-sol).
+        const name = (id: string) => id.slice(id.lastIndexOf("/") + 1);
+        if (![model.id, qualified].some((id) => id === args.model || name(id) === name(args.model!))) {
           err(`Model "${args.model}" is not available for this agent; using ${qualified}.\n`);
         }
       }
