@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.6] - 2026-10-03
+
 ### Added
 
 - **Side pane on wide screens.** On a desktop-width window (1200px and up), a session's Changes, Apps and Artifacts open in a pane beside the chat instead of a sheet over it, so you can read a diff or use a running app while you keep talking to the agent. App previews open inside the pane, with Draw and reviewer notes working as before. Toggle it from the new button in the session header or close it from the pane; the open tab is remembered. Narrower screens and phones keep the sheets.
