@@ -165,6 +165,58 @@ chat attachment the device fetches over the session channel. It waits up to
 encrypted in transit, in the node's attachment store). Each view keeps only
 its latest card's pictures: an older card shows "Screenshot no longer stored".
 
+### Scenarios
+
+A scenario is a named starting point for the live app: a page, steps a person
+would take there, and API responses Bivy simulates. In the preview you open
+one, use the app normally, and tap **↺** to start it over. Scenarios live in
+the project, one file each, so agents and people share them:
+
+```jsonc
+// .bivy/scenarios/payment-api-down.json
+{
+  "name": "Payment API down",
+  "description": "Checkout while payments fail",
+  "open": "/checkout",
+  "steps": [{ "fill": "#email", "with": "ada@example.com" }, { "click": "text=Pay" }],
+  "network": [{ "match": "POST /api/payments*", "status": 503, "json": { "error": "down" } }]
+}
+```
+
+Only `name` is required. The file name, without `.json`, is the scenario's ID
+(lowercase letters, digits and dashes).
+
+| Field | What it does |
+| --- | --- |
+| `open` | The page it starts on (default `/`). |
+| `steps` | Taken in order on the page, like a person would. `{"click": sel}`, `{"fill": sel, "with": "text"}`, `{"press": "Enter"}`, `{"wait": sel}` or `{"wait": ms}`. `sel` is a CSS selector, or `text=Visible text` for a button, link or label. Each waits up to 5 seconds for its element. A step that loads a new page is followed by the rest on that page. |
+| `network` | Rules for this viewer's requests, first match wins. `match` is an optional method and a path, where `*` matches anything. Answer with `status` and `json` or `body`; add `delayMs` (up to 30 s) to answer late, or use it alone to let the request through late; `"offline": true` drops the connection. |
+| `from` | Another scenario's ID to start from: its page and steps run first, and this one's rules win over its rules. |
+| `fresh` | `true` starts as a new visitor: the app's cookies and storage in this browser are cleared first. |
+| `view` | The app or view name it's for. Without it, it applies to every web view of the app. |
+| `description` | One line, shown under its name. |
+
+**In the preview.** Once a view has scenarios, its title in the pill becomes
+the switcher: it names the scenario you're in, and when Bivy is simulating a
+response, the line under it says what ("Simulated: POST /api/payments* →
+503"). **↺** opens the scenario again from its first page. **Your data** leaves
+it. Scenarios changed since the app was published are listed first as *New in
+this session*. A file that can't be read, or a scenario whose step can't find
+its element, says what's wrong and offers **Ask agent to fix**, which drafts a
+message naming the file and the step. You stay where it got to.
+
+**Per viewer.** Network rules apply only to requests from the browser that
+opened the scenario, through Bivy's preview gateway. Other viewers, and the
+app's server, see nothing. Simulated responses carry `x-bivy-simulated: 1`.
+WebSocket traffic isn't simulated. The scenario lasts for that browser's
+preview session; opening a fresh preview starts outside any scenario.
+
+**For agents.** `bivy app scenarios [view]` lists a view's scenarios as JSON,
+including files that can't be opened and why. `bivy app present --try
+payment-api-down,empty-cart` puts **Try it** buttons on the review card; each
+opens the live preview in that scenario. Desktop app views don't have
+scenarios.
+
 ### Pins
 
 Marks sent from a preview become a **pin**: a card in the chat holding the crop

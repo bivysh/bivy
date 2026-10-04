@@ -159,6 +159,23 @@ test("tapping a finished notification opens the live preview, and closing it lea
   await expect(page.getByRole("region", { name: "Storefront: changed in this run" })).toBeVisible();
 });
 
+// "Try it": a scenario the agent offered opens the live preview in that state,
+// on the scenario's own page rather than the card's.
+test("a review card's Try it opens the preview in that scenario", async ({ page }, testInfo) => {
+  await page.route("https://preview.example.net/**", (route) => route.fulfill({ contentType: "text/html", body: "<h1>Storefront preview</h1>" }));
+  await page.evaluate((r) => (window as any).c.store.apply({ type: "session.event", sessionId: "s", event: { type: "app_review", id: r.id, review: r } }),
+    review({ trigger: "present", shot: shot("a"), note: "Payment errors now show inline and keep the cart.", try: [{ id: "payment-api-down", name: "Payment API down" }, { id: "empty-cart", name: "Empty cart" }] }));
+  const card = page.getByRole("region", { name: "Storefront: ready to review" });
+  const tries = card.getByRole("group", { name: "Try Storefront in a scenario" });
+  await expect(tries.getByRole("button")).toHaveText(["Payment API down", "Empty cart"]);
+  await card.screenshot({ path: testInfo.outputPath("review-card-try.png") });
+  await tries.getByRole("button", { name: "Payment API down" }).click();
+  await expect(page.getByRole("dialog", { name: "Preview: Storefront" }).frameLocator("iframe").getByRole("heading")).toHaveText("Storefront preview");
+  const open = await page.evaluate(() => (window as any).commands.find((c: any) => c.kind === "apps.open"));
+  expect(open).toMatchObject({ viewId: "v".repeat(32), scenario: "payment-api-down" });
+  expect(open.path).toBeUndefined();
+});
+
 test("opening a published preview skips discovery and sharing can close during a request", async ({ page }) => {
   await page.evaluate((r) => {
     const w = window as any;

@@ -41,10 +41,10 @@ export function notesDraft(viewName: string, notes: readonly ReviewerNote[]): st
     `- "${n.note}" on ${n.selector}${n.text ? ` ("${n.text}")` : ""}, page ${n.path}, viewport ${n.viewport.width}×${n.viewport.height}${n.context ? `\n${n.context}` : ""}${n.shot ? "\nAttached picture is approximate: retaken on the machine, not the reviewer’s browser." : ""}`).join("\n");
 }
 
-/** `openView`: open this view straight away (a review card's Open preview), on `path` if given. */
+/** `openView`: open this view straight away (a review card's Open preview), on `path` or in `scenario` if given. */
 /** `docked`: in the side pane beside the chat. Previews then open in the pane
  *  too, and handing something to the composer leaves the pane as it is. */
-export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, onClose, docked }: { sessionId: string; appId?: string; nodeId?: string | null; openView?: { viewId: string; path?: string }; onOpenInChat?: () => void; onClose: () => void; docked?: boolean }) {
+export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, onClose, docked }: { sessionId: string; appId?: string; nodeId?: string | null; openView?: { viewId: string; path?: string; scenario?: string }; onOpenInChat?: () => void; onClose: () => void; docked?: boolean }) {
   // Done with the list: a sheet gets out of the way; the pane stays.
   const done = docked ? stayPut : onClose;
   const { connection, activeSession } = useAppState();
@@ -115,7 +115,7 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
   /** Opens a published view, or publishes a detected server first (`offer`).
    *  Web views peek in a drawer over the chat unless a tab is asked for or this
    *  browser refuses framed preview cookies. */
-  const open = async (target: { app: SessionApp; view: AppView } | { offer: AppOffer }, mode: "peek" | "tab" = "peek", path?: string) => {
+  const open = async (target: { app: SessionApp; view: AppView } | { offer: AppOffer }, mode: "peek" | "tab" = "peek", path?: string, scenario?: string) => {
     const current = generation.current;
     setBusy(true); setError(""); setLink(null); setConfirm(null);
     const web = "offer" in target || target.view.kind === "web";
@@ -143,7 +143,7 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
           setOffers((prev) => prev.filter((item) => item.port !== target.offer.port));
         }
       } else ({ app, view } = target);
-      const response = await controller.appCommand("apps.open", sessionId, { appId: app.id, viewId: view.id, returnTo: `${accountOrigin()}/sessions/${encodeURIComponent(sessionId)}`, ...(path ? { path } : {}) }, nodeId) as unknown as OpenAppViewResult;
+      const response = await controller.appCommand("apps.open", sessionId, { appId: app.id, viewId: view.id, returnTo: `${accountOrigin()}/sessions/${encodeURIComponent(sessionId)}`, ...(path ? { path } : {}), ...(scenario ? { scenario } : {}) }, nodeId) as unknown as OpenAppViewResult;
       if (generation.current !== current) { popup?.close(); return; }
       if (response.kind === "terminal") setTerminal(response.termId);
       else if (response.kind === "web") {
@@ -168,7 +168,7 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
     const view = app?.views.find((item) => item.id === openView.viewId);
     if (!app || !view) return;
     opened.current = true;
-    void open({ app, view }, "peek", openView.path);
+    void open({ app, view }, "peek", openView.path, openView.scenario);
   }, [openView, result]); // eslint-disable-line react-hooks/exhaustive-deps
   const setReviewMode = async (app: SessionApp, mode: ReviewCardMode) => {
     setError("");

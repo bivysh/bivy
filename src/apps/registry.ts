@@ -31,6 +31,8 @@ const isNote = (value: unknown): value is ReviewerNote => {
 };
 export interface RegisteredView {
   app: SessionApp; view: AppView; target: AppTarget;
+  /** The session workspace it was published from (where its scenarios live). */
+  workspace: string;
   /** Bumped when an agent turn changes files, so open previews reload. */
   revision: number;
   /** Last page the preview shell framed; a reload returns there, not to `/`. */
@@ -189,7 +191,7 @@ export class AppRegistry extends EventEmitter {
       app.views.push(view);
       const stored = restore?.notes?.[view.id];
       const notes = view.kind === "web" && Array.isArray(stored) ? stored.filter(isNote).slice(-MAX_NOTES) : [];
-      entries.push({ app, view, target, revision: 0, source, ...(notes.length ? { notes } : {}) });
+      entries.push({ app, view, target, workspace, revision: 0, source, ...(notes.length ? { notes } : {}) });
     }
     // Commit all views together: a bad later view cannot leave a partial app.
     this.apps.set(app.id, app);

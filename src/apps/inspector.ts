@@ -129,10 +129,65 @@ const marked=r=>{
     text:(el.innerText||el.getAttribute('aria-label')||el.getAttribute('alt')||'').trim().replace(/\\s+/g,' ').slice(0,120),
     rect:{x:Math.round(b.left+scrollX),y:Math.round(b.top+scrollY),width:Math.round(b.width),height:Math.round(b.height)}};});
 };
+// Scenarios: the shell walks a scenario's steps here, one at a time, the way a
+// person would (find it, scroll to it, use it), and hears back after each one.
+// A step that leaves the page ends this run; the shell picks up after it on the
+// next page. "load" ties each answer to the page load it came from.
+let leaving=false;
+addEventListener('pagehide',()=>{leaving=true;});addEventListener('beforeunload',()=>{leaving=true;});
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const shown=el=>Boolean(el&&el.getClientRects().length);
+const words=el=>(el.innerText||el.value||el.getAttribute('aria-label')||'').trim().replace(/\\s+/g,' ').toLowerCase();
+const find=q=>{
+  if(typeof q!=='string')return null;
+  if(q.startsWith('text=')){
+    const want=q.slice(5).trim().toLowerCase();
+    const all=[...document.querySelectorAll('a,button,[role=button],[role=link],[role=tab],[role=menuitem],[role=option],label,summary,input[type=submit],input[type=button]')].filter(shown);
+    return all.find(el=>words(el)===want)||all.find(el=>words(el).includes(want))||null;
+  }
+  try{const el=document.querySelector(q);return shown(el)?el:null;}catch{throw Error('“'+q+'” isn’t a valid selector');}
+};
+const waitFor=async q=>{for(let t=0;t<50&&!leaving;t++){const el=find(q);if(el)return el;await sleep(100);}return null;};
+const missing=q=>Error('Couldn’t find “'+q+'” within 5 seconds');
+const STEPS={
+  click:async s=>{const el=await waitFor(s.click);if(!el)throw missing(s.click);el.scrollIntoView({block:'center'});el.click();},
+  fill:async s=>{
+    const el=await waitFor(s.fill);if(!el)throw missing(s.fill);
+    const proto=el.localName==='textarea'?HTMLTextAreaElement.prototype:el.localName==='select'?HTMLSelectElement.prototype:HTMLInputElement.prototype;
+    const set=Object.getOwnPropertyDescriptor(proto,'value')?.set;if(!set)throw Error('“'+s.fill+'” isn’t a field');
+    el.scrollIntoView({block:'center'});el.focus();set.call(el,String(s.with));
+    el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));
+  },
+  press:async s=>{
+    const el=document.activeElement||document.body,key=String(s.press),o={key,bubbles:true,cancelable:true};
+    const go=el.dispatchEvent(new KeyboardEvent('keydown',o));el.dispatchEvent(new KeyboardEvent('keyup',o));
+    if(go&&key==='Enter'&&el.form)el.form.requestSubmit();
+  },
+  wait:async s=>{if(typeof s.wait==='number')await sleep(Math.min(10000,Math.max(0,s.wait)));else if(!await waitFor(s.wait))throw missing(s.wait);},
+};
+async function runSteps(d){
+  const steps=Array.isArray(d.steps)?d.steps.slice(0,50):[],run=d.run,load=d.load;
+  for(let i=Math.max(0,Number(d.from)||0);i<steps.length;i++){
+    const step=steps[i]||{},kind=Object.keys(STEPS).find(k=>k in step);
+    try{if(!kind)throw Error('Unknown step');await STEPS[kind](step);}
+    catch(error){if(!leaving)post({type:'step',run,load,i,error:String(error?.message||error).slice(0,300)});return;}
+    post({type:'step',run,load,i,ok:true});
+    await sleep(250);if(leaving)return;
+  }
+  post({type:'steps-done',run,load});
+}
+// A fresh start: what this page keeps in the browser goes (the gateway expires
+// the cookies the server can see).
+const forget=()=>{
+  try{localStorage.clear();sessionStorage.clear();}catch{}
+  for(const c of document.cookie.split(';')){const name=c.split('=')[0].trim();if(name)document.cookie=name+'=; Max-Age=0; Path=/';}
+};
 addEventListener('message',e=>{
   if(!framed||e.origin!==SHELL||e.source!==parent)return;
   const d=e.data||{},n=v=>Number.isFinite(+v)?+v:0;
-  if(d.type==='bivy:note'&&REVIEWER){
+  if(d.type==='bivy:steps')void runSteps(d);
+  else if(d.type==='bivy:forget'){forget();post({type:'forgot'});}
+  else if(d.type==='bivy:note'&&REVIEWER){
     void fetch('/__bivy/notes',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(d.note)})
       .then(async r=>{if(!r.ok)throw Error(r.status===429?'Please wait a moment before sending another picture.':r.status===400||r.status===502?(await r.text()).slice(0,200):'Could not send. Check that the link is still valid and try again.');return r.json();})
       .then(result=>post({type:'note-sent',id:d.id,screenshot:result.screenshot===true}),error=>post({type:'note-sent',id:d.id,error:error.message}));

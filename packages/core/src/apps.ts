@@ -64,6 +64,8 @@ export interface AppReview {
   /** Reviewer notes waiting on this view when the run ended. A count only:
    * the notes stay on the machine until the owner drafts them into a message. */
   notes?: number;
+  /** Scenarios the agent offered to try this in (`bivy app present --try`): each opens the preview in that state. */
+  try?: { id: string; name: string }[];
 }
 export const APP_REVIEW_BLOCK = "bivy_app_review";
 const isShot = (value: unknown): value is ReviewShot => {
@@ -78,7 +80,8 @@ export function isAppReview(value: unknown): value is AppReview {
     && (review.trigger === "present" || review.trigger === "run" || review.trigger === "asked" || review.trigger === "notes") && typeof review.at === "number"
     && (review.shot === undefined || isShot(review.shot)) && (review.before === undefined || isShot(review.before))
     && (review.note === undefined || typeof review.note === "string")
-    && (review.notes === undefined || (Number.isInteger(review.notes) && review.notes >= 0));
+    && (review.notes === undefined || (Number.isInteger(review.notes) && review.notes >= 0))
+    && (review.try === undefined || (Array.isArray(review.try) && review.try.length <= 6 && review.try.every((item) => !!item && typeof item.id === "string" && /^[a-z0-9][a-z0-9-]{0,63}$/.test(item.id) && typeof item.name === "string" && item.name.length <= 80)));
 }
 /** A mark the user sent to the agent: their words, a picture of what they
  * marked, and where it was. Unlike the message that carried it, a pin has a

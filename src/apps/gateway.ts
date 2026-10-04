@@ -18,6 +18,7 @@ import type { AppService } from "./service.js";
 import type { ReviewShot } from "./types.js";
 import { readStrokes, readElementScrolls } from "./annotate.js";
 import { contentType } from "./mime.js";
+import { loadScenarios, matchRule, planScenario, scenariosFor, summarize, type NetworkRule, type ScenarioPlan } from "./scenarios.js";
 
 export type NoteCapture = (entry: RegisteredView, mark: Parameters<AppService["annotate"]>[1]) => Promise<ReviewShot | undefined>;
 
@@ -29,6 +30,10 @@ const REVISION_PATH = "/__bivy/revision";
 const INSPECTOR_PATH = "/__bivy/inspector.js";
 const COMPARE_PATH = "/__bivy/compare";
 const NOTES_PATH = "/__bivy/notes";
+const SCENARIOS_PATH = "/__bivy/scenarios";
+const SCENARIO_PATH = "/__bivy/scenario";
+/** Marks a response the gateway made up for a scenario, not the app. */
+const SIMULATED = "x-bivy-simulated";
 /** Larger HTML documents pass through without the inspector. */
 const MAX_INJECT_BYTES = 5 * 1024 * 1024;
 
@@ -122,6 +127,12 @@ const poll=async()=>{try{const r=await fetch(location.href,{method:'HEAD',cache:
 export const SHARE_TTL = 24 * HOUR;
 /** The longest a copied link may be asked to last. */
 export const SHARE_TTL_MAX = 7 * 24 * HOUR;
+/** One browser's access to one view. `reviewer`: it came from a copied
+ *  (shared) link; `viewOnly`: that link came without the reviewer tools;
+ *  `embedded`: it runs framed inside a Bivy client (a third-party frame);
+ *  `scenario`: the scenario this browser is in, whose network rules apply to
+ *  its requests only. */
+type PreviewSession = { appId: string; expires: number; reviewer?: boolean; viewOnly?: boolean; embedded?: boolean; scenario?: ScenarioPlan };
 /** `viewOnly`: a copied link without the reviewer tools. */
 type Grant = { appId: string; expires: number; returnTo?: string; reusable?: boolean; viewOnly?: boolean };
 /** Bivy's packaged apps load the client from their own scheme, so a preview
@@ -193,10 +204,7 @@ export class AppGateway {
     ["/__bivy/tokens.css", readFileSync(new URL("./tokens.css", import.meta.url))],
     ["/__bivy/styles.css", readFileSync(new URL("./styles.css", import.meta.url))],
   ]);
-  /** `reviewer`: the browser session came from a copied (shared) link.
-   *  `viewOnly`: that link came without the reviewer tools.
-   *  `embedded`: it runs framed inside a Bivy client (a third-party frame). */
-  private readonly sessions = new Map<string, { appId: string; expires: number; reviewer?: boolean; viewOnly?: boolean; embedded?: boolean }>();
+  private readonly sessions = new Map<string, PreviewSession>();
   private readonly sockets = new Map<string, Set<Duplex>>();
   /** Connections opened by people with a copied link, so Stop sharing can end
    * theirs and leave the owner's. */
@@ -298,7 +306,7 @@ export class AppGateway {
     const entry = this.registry.getView(id);
     return entry?.view.kind === "web" ? entry : undefined;
   }
-  private session(req: IncomingMessage, id: string): { expires: number; reviewer?: boolean; viewOnly?: boolean; embedded?: boolean } | undefined {
+  private session(req: IncomingMessage, id: string): PreviewSession | undefined {
     this.sweep();
     const token = (req.headers.cookie ?? "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
     const session = token ? this.sessions.get(token) : undefined;
@@ -391,6 +399,8 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     const signIn = !session && req.method === "GET" && req.headers["sec-fetch-dest"] === "document" && req.url?.startsWith("/") ? this.signIn?.(entry, req.url) : undefined;
     if (signIn) { res.writeHead(303, { location: signIn }); res.end(); return; }
     if (!session) { res.writeHead(401); res.end("Preview access expired. Open a new preview link from Bivy."); return; }
+    // The shell (its own origin) chooses this browser's scenario; nothing else may.
+    if (req.url === SCENARIO_PATH && req.method === "POST") { await this.enterScenario(req, res, entry, session); return; }
     // Block cross-site mutations even if a client sends the preview cookie.
     if (!["GET", "HEAD"].includes(req.method ?? "") && req.headers.origin !== this.origin(id)) { res.writeHead(403); res.end("Forbidden origin."); return; }
     if (req.headers["sec-fetch-dest"] === "serviceworker") { res.writeHead(403); res.end(); return; }
@@ -398,6 +408,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     this.track(id, req.socket, session);
     if (req.url.startsWith(`${REVISION_PATH}?`) && req.method === "GET") { this.revision(req, res, entry); return; }
     if ((req.url === COMPARE_PATH || req.url.startsWith(`${COMPARE_PATH}/`)) && req.method === "GET") { this.compare(req, res, entry); return; }
+    if (req.url === SCENARIOS_PATH && req.method === "GET") { this.scenarios(res, entry, session); return; }
     if (req.url === INSPECTOR_PATH && req.method === "GET") {
       res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
       res.end(inspectorScript(this.shellOrigin(id), session.reviewer === true && !session.viewOnly, session.embedded === true)); return;
@@ -408,6 +419,8 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
       await this.note(req, res, entry); return;
     }
     if (entry.target.kind === "display") { await this.display(req, res, entry); return; }
+    const rule = session.scenario && matchRule(session.scenario.network, req.method, req.url);
+    if (rule && await this.simulate(req, res, rule, id)) return;
     const inspect = isPageLoad(req);
     // Remember the framed page so a turn reload lands where the user was.
     if (req.method === "GET" && req.headers["sec-fetch-dest"] === "iframe" && req.url.length <= 2048) entry.lastPath = req.url;
@@ -580,6 +593,66 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
       path: path.startsWith("/") ? path : "/", viewport: { width: Number(viewport?.width) || 0, height: Number(viewport?.height) || 0 },
     });
     res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ screenshot: Boolean(shot) }));
+  }
+  /** The view's scenarios for the shell's switcher, and the one this browser is in. */
+  private scenarios(res: ServerResponse, entry: RegisteredView, session: PreviewSession): void {
+    const { scenarios, problems } = loadScenarios(entry.workspace);
+    const own = scenariosFor(scenarios, entry.app.name, entry.view.name);
+    res.writeHead(200, { "access-control-allow-origin": this.shellOrigin(entry.view.id), "access-control-allow-credentials": "true", vary: "Origin", "content-type": "application/json" });
+    res.end(JSON.stringify({ scenarios: summarize(own, problems, entry.app.createdAt), active: session.scenario ? { id: session.scenario.id, name: session.scenario.name, ...(session.scenario.simulated ? { simulated: session.scenario.simulated } : {}) } : null }));
+  }
+  /** Puts this browser in a scenario (or back in none, for an empty body) and
+   *  returns the plan the shell walks through: pages to open and steps to take.
+   *  A "fresh" scenario also expires the app's cookies this browser sent, so it
+   *  starts as a new visitor. Only the shell's origin may ask. */
+  private async enterScenario(req: IncomingMessage, res: ServerResponse, entry: RegisteredView, session: PreviewSession): Promise<void> {
+    const shell = this.shellOrigin(entry.view.id);
+    const cors = { "access-control-allow-origin": shell, "access-control-allow-credentials": "true", vary: "Origin" };
+    if (req.headers.origin !== shell) { res.writeHead(403); res.end(); return; }
+    let body = "";
+    for await (const chunk of req) { body += chunk.toString(); if (body.length > 64) { res.writeHead(413, cors); res.end(); return; } }
+    const id = body.trim();
+    if (!id) {
+      session.scenario = undefined;
+      res.writeHead(200, { ...cors, "content-type": "application/json" }); res.end(JSON.stringify({ plan: null })); return;
+    }
+    let plan: ScenarioPlan;
+    try {
+      const own = scenariosFor(loadScenarios(entry.workspace).scenarios, entry.app.name, entry.view.name);
+      plan = planScenario(own, id);
+    } catch (error) {
+      res.writeHead(400, { ...cors, "content-type": "application/json" }); res.end(JSON.stringify({ error: (error as Error).message })); return;
+    }
+    session.scenario = plan;
+    const headers: OutgoingHttpHeaders = { ...cors, "content-type": "application/json" };
+    if (plan.fresh) {
+      const names = (req.headers.cookie ?? "").split(";").map((part) => part.split("=", 1)[0]!.trim()).filter((name) => name && name !== COOKIE && /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name));
+      const expire = (name: string) => `${name}=; Path=/; Max-Age=0`;
+      headers["set-cookie"] = names.map((name) => session.embedded ? partitionCookie(expire(name)) : expire(name));
+    }
+    res.writeHead(200, headers);
+    res.end(JSON.stringify({ plan }));
+  }
+  /** A scenario's network rule met a request: wait if it says so, then answer
+   *  for the app, drop the connection ("offline"), or let the request through
+   *  late (delay only). Returns whether the request was answered here. */
+  private async simulate(req: IncomingMessage, res: ServerResponse, rule: NetworkRule, id: string): Promise<boolean> {
+    if (rule.delayMs) {
+      const gone = await new Promise<boolean>((resolve) => {
+        const timer = setTimeout(() => { res.off("close", closed); resolve(false); }, rule.delayMs);
+        const closed = () => { clearTimeout(timer); resolve(true); };
+        res.once("close", closed);
+      });
+      if (gone) return true;
+    }
+    if (rule.offline) { req.socket.destroy(); return true; }
+    if (rule.status === undefined && rule.json === undefined && rule.body === undefined) return false;
+    const json = rule.json !== undefined;
+    const body = Buffer.from(json ? JSON.stringify(rule.json) : rule.body ?? "");
+    const headers = responseHeaders({}, this.ancestors(id));
+    res.writeHead(rule.status ?? 200, { ...headers, "content-type": json ? "application/json" : "text/plain; charset=utf-8", "content-length": body.length, [SIMULATED]: "1" });
+    res.end(req.method === "HEAD" ? undefined : body);
+    return true;
   }
   /** Compare shots for the shell: the list, or one PNG by index. */
   private compare(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): void {

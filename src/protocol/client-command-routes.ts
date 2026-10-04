@@ -10,7 +10,7 @@ export interface ClientCommandRoute {
 /** Direct-mode adapters for operations whose canonical implementation is the
  * client command registry. Relay and HTTP now differ only in framing. */
 export const CLIENT_COMMAND_ROUTES: readonly ClientCommandRoute[] = [
-  ...["list", "publish", "offers", "adopt", "open", "logs", "shot", "input", "menu", "present", "showMe", "mute", "reviewMode", "annotate", "clearNotes", "agentNotes", "notes", "share", "unshare", "revoke", "remove"].map((action) => ({ method: "post" as const, path: `/api/apps/${action}`, kind: `apps.${action}` })),
+  ...["list", "publish", "offers", "adopt", "open", "logs", "shot", "input", "menu", "present", "scenarios", "showMe", "mute", "reviewMode", "annotate", "clearNotes", "agentNotes", "notes", "share", "unshare", "revoke", "remove"].map((action) => ({ method: "post" as const, path: `/api/apps/${action}`, kind: `apps.${action}` })),
   { method: "post", path: "/api/artifacts/list", kind: "artifacts.list" },
   { method: "post", path: "/api/access/get", kind: "access.get" },
   { method: "post", path: "/api/tailnet/machines", kind: "tailnet.machines" },

@@ -14,6 +14,7 @@ import { captureFrame, encodePng, sendInput } from "./rfb.js";
 import { inputEvents, readAction } from "./input.js";
 import { pressMenu, readMenuPath, readMenus, type AppMenu } from "./menu.js";
 import { pngSize } from "./review.js";
+import { SCENARIO_DIR, loadScenarios, scenariosFor, summarize, type ScenarioSummary } from "./scenarios.js";
 
 export interface AppPreviewProvider {
   readonly available?: boolean;
@@ -258,7 +259,7 @@ export class AppService {
       const current = this.latest.get(entry.view.id);
       const presented = current && run.reviews.get(entry.app.id) === current.id;
       if (!shouldReview({ trigger: "run", mode, muted: run.muted, revisionChanged: true, change }) && !(presented && after)) continue;
-      latest = this.review(entry, run, { trigger: presented ? current.trigger : "run", note: presented ? current.note : undefined, path: entry.lastPath ?? "/", shot: after, before });
+      latest = this.review(entry, run, { trigger: presented ? current.trigger : "run", note: presented ? current.note : undefined, try: presented ? current.try : undefined, path: entry.lastPath ?? "/", shot: after, before });
     }
     // Reviewer notes that arrived since the last hand-over ride on the view's
     // card for this run, or get a card of their own. A count only: the notes
@@ -287,12 +288,13 @@ export class AppService {
     return latest;
   }
   /** `bivy app present`, or Show me ("asked"): a card for one view now. */
-  async present(sessionId: string, input: { target?: string; path?: string; note?: string; trigger?: "present" | "asked" }): Promise<{ review?: AppReview; message: string }> {
+  async present(sessionId: string, input: { target?: string; path?: string; note?: string; trigger?: "present" | "asked"; try?: string[] }): Promise<{ review?: AppReview; message: string }> {
     const trigger = input.trigger ?? "present";
     const page = input.path;
     if (page !== undefined && (typeof page !== "string" || !page.startsWith("/") || page.startsWith("//") || page.length > 2048)) throw new Error("Path must start with /.");
     const note = typeof input.note === "string" ? input.note.trim().slice(0, 500) : undefined;
     const entry = this.pickView(sessionId, input.target);
+    const tries = input.try?.length ? this.tryScenarios(entry, input.try) : undefined;
     const mode = this.registry.reviewMode(entry.app.id);
     const active = this.runs.get(sessionId);
     const run = active && !active.ended ? active : undefined;
@@ -307,8 +309,27 @@ export class AppService {
     const shot = enabled ? await this.shotOf(entry, path) : undefined;
     const baseline = run?.baseline.get(entry.view.id);
     const before = baseline && shot && !baseline.equals(shot) && path === (entry.lastPath ?? "/") ? baseline : undefined;
-    const review = this.review(entry, run, { trigger, note, path, shot, before, screenshotsOff: !enabled });
+    const review = this.review(entry, run, { trigger, note, path, shot, before, screenshotsOff: !enabled, ...(tries ? { try: tries } : {}) });
     return { review, message: enabled ? (shot ? "The user sees it in the chat." : "The user sees a card in the chat, but the screenshot failed.") : "The user sees a card in the chat. Screenshots are off on this machine, so it has no picture." };
+  }
+  /** `bivy app scenarios`: a view's scenarios as the preview shows them, and
+   *  files that can't be opened, with what's wrong (picked like `present`). */
+  scenarios(sessionId: string, target?: string): { app: string; view: string; dir: string; scenarios: ScenarioSummary[] } {
+    const entry = this.pickView(sessionId, target);
+    const { scenarios, problems } = loadScenarios(entry.workspace);
+    return { app: entry.app.name, view: entry.view.name, dir: SCENARIO_DIR, scenarios: summarize(scenariosFor(scenarios, entry.app.name, entry.view.name), problems, entry.app.createdAt) };
+  }
+  /** Scenarios a review card offers to try, by ID, each one that can be opened. */
+  private tryScenarios(entry: RegisteredView, ids: string[]): NonNullable<AppReview["try"]> {
+    const { scenarios, problems } = loadScenarios(entry.workspace);
+    const known = summarize(scenariosFor(scenarios, entry.app.name, entry.view.name), problems, entry.app.createdAt);
+    const wanted = [...new Set(ids.map((id) => id.trim().toLowerCase().replace(/\.json$/, "")).filter(Boolean))].slice(0, 6);
+    return wanted.map((id) => {
+      const found = known.find((item) => item.id === id);
+      if (!found) throw new Error(`No scenario "${id}" for ${entry.view.name}. ${known.length ? `Its scenarios: ${known.map((item) => item.id).join(", ")}.` : `Write one in ${SCENARIO_DIR}/${id}.json.`}`);
+      if (found.error) throw new Error(`Scenario "${id}" can't be opened: ${found.error}`);
+      return { id: found.id, name: found.name };
+    });
   }
   /** No more cards for the rest of the session's current run. */
   mute(sessionId: string): { ok: true } {
@@ -338,7 +359,7 @@ export class AppService {
     return views.reduce((best, entry) => (entry.openedAt ?? 0) > (best.openedAt ?? 0) || ((entry.openedAt ?? 0) === (best.openedAt ?? 0) && entry.app.createdAt > best.app.createdAt) ? entry : best);
   }
   /** Makes or updates a card, keeping each view's images to the latest card. */
-  private review(entry: RegisteredView, run: Run | undefined, fields: Pick<AppReview, "trigger" | "path" | "note" | "screenshotsOff" | "notes"> & { shot?: Buffer; before?: Buffer }): AppReview {
+  private review(entry: RegisteredView, run: Run | undefined, fields: Pick<AppReview, "trigger" | "path" | "note" | "screenshotsOff" | "notes" | "try"> & { shot?: Buffer; before?: Buffer }): AppReview {
     const id = (run && run.reviews.get(entry.app.id)) ?? `review-${randomBytes(8).toString("hex")}`;
     const { shot, before, ...rest } = fields;
     const review = this.reviews.publish({
@@ -371,14 +392,18 @@ export class AppService {
    * returning to a view's stable address. */
   /** `scale`: the opening device's pixel density, used if this starts a display. */
   /** `page`: start on this page instead of the app's root (a review card's page). */
-  async open(sessionId: string, appId: string, viewId: string, returnTo?: string, direct = false, scale?: number, page?: string): Promise<OpenAppViewResult> {
+  /** `scenario`: open it in that scenario (the shell enters it once the app has loaded). */
+  async open(sessionId: string, appId: string, viewId: string, returnTo?: string, direct = false, scale?: number, page?: string, scenario?: string): Promise<OpenAppViewResult> {
     const entry = this.registry.requireView(sessionId, appId, viewId);
     if (entry.target.kind === "display" && !entry.display) entry.displayScale = scale === 2 ? 2 : 1;
     if (entry.view.kind === "web") {
       if (!this.gateway) throw new Error("Bivy's preview service is unavailable on this connection.");
       if (direct && !this.gateway.openDirect) throw new Error("This machine can't open previews directly.");
       let url = direct ? this.gateway.openDirect!(viewId) : this.gateway.open(viewId, returnTo);
-      if (page && page.startsWith("/") && !page.startsWith("//") && page.length <= 2048) url += `~${encodeURIComponent(page).replace(/~/g, "%7E")}`;
+      const start = page && page.startsWith("/") && !page.startsWith("//") && page.length <= 2048 ? page : undefined;
+      const inScenario = !direct && scenario && /^[a-z0-9][a-z0-9-]{0,63}$/.test(scenario) ? scenario : undefined;
+      if (start || inScenario) url += `~${start ? encodeURIComponent(start).replace(/~/g, "%7E") : ""}`;
+      if (inScenario) url += `~${inScenario}`;
       // Don't wait for a managed server to boot: the preview shows it starting
       // and reloads itself once it answers.
       if (this.servers.get(viewId)) this.servers.get(viewId)!.restarts = [];

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Scenarios: open the live app in the state that matters.** A JSON file in `.bivy/scenarios/` names a starting point — a page, steps to take there, and API responses to simulate ("payments return 503", "orders are slow"). In the preview, the title becomes a scenario switcher, ↺ runs one again from the start, and the pill says when a response is simulated. Simulated responses reach only the browser that opened the scenario. A step that no longer works names itself and drafts a fix request. Agents list scenarios with `bivy app scenarios` and offer them on a review card with `bivy app present --try`, where **Try it** opens the preview in that state.
 - **OpenCode can run on a ChatGPT plan connected in Bivy.** A ChatGPT subscription signed in through Bivy now serves OpenCode too (`openai/gpt-5.6-sol` and the rest of the plan's models), with no separate `opencode auth login`. Your own OpenCode logins win and are never rewritten. `--model openai-codex/gpt-5.6-sol` picks the same model in OpenCode as in Pi and Codex.
 
 ### Fixed
