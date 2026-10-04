@@ -8,7 +8,7 @@
 // holds one action bar for whatever is selected. What was started is remembered
 // per device, so a reload doesn't offer it again.
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { SuggestionRun, TaskSuggestion, TranscriptEntry } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
 
@@ -70,6 +70,36 @@ const ORDER = Object.keys(ACTIONS) as SuggestionRun[];
 
 /** What the agent recommends for `s`; without a choice, a lone card continues here and a set fans out. */
 const recommended = (s: TaskSuggestion, inSet: boolean): SuggestionRun => s.run ?? (inSet ? "new" : "here");
+
+function SuggestionDescription({ text }: { text: string }) {
+  const id = useId();
+  const body = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [truncated, setTruncated] = useState(false);
+
+  useEffect(() => {
+    const element = body.current;
+    if (!element || expanded) return;
+    const measure = () => setTruncated(element.scrollHeight > element.clientHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [text, expanded]);
+
+  return (
+    <>
+      <p ref={body} id={id} className="suggestion-text" data-expanded={expanded}>{text}</p>
+      {truncated && (
+        <div>
+          <button type="button" className="btn sm ghost-link" aria-expanded={expanded} aria-controls={id} onClick={() => setExpanded((value) => !value)}>
+            {expanded ? "Show less" : "Show more"}
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
 
 /** Rendered inside the active session's transcript; that session is the one it runs beside. */
 export function SuggestionCard({ suggestion }: { suggestion: TaskSuggestion }) {
@@ -133,7 +163,7 @@ export function SuggestionCard({ suggestion }: { suggestion: TaskSuggestion }) {
           <span className="suggestion-title">{label}</span>
         </label>
       ) : <p className="suggestion-title">{label}</p>}
-      {suggestion.title && <p className="suggestion-text">{suggestion.text}</p>}
+      {suggestion.title && <SuggestionDescription text={suggestion.text} />}
       {error && <div className="banner inline" data-tone="danger" role="alert">{error}</div>}
       {started && (
         <p className="suggestion-status" role="status">
