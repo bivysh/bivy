@@ -4,6 +4,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import type { AppOffer, AppView, OpenAppViewResult, ReviewCardMode, ReviewerNote, SessionApp, SessionAppOffersResult, SessionAppsResult } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
 import { Sheet } from "./Sheet.js";
+import { Panel } from "./Panel.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { accountOrigin } from "../packaged-client.js";
 import { AppAccess } from "./AppAccess.js";
@@ -18,6 +19,7 @@ import { Spinner } from "./Spinner.js";
 import { AppRow, appInitial } from "./AppRow.js";
 import { DisplayIcon, GlobeIcon, LogsIcon, RefreshIcon, TerminalIcon } from "./UiIcons.js";
 const TerminalOverlay = lazy(() => import("./Terminal.js").then((module) => ({ default: module.TerminalOverlay })));
+const stayPut = () => {};
 /** What each kind of view is, in the list. */
 const VIEW_LABELS = {
   terminal: "Terminal · starts when opened",
@@ -40,7 +42,11 @@ export function notesDraft(viewName: string, notes: readonly ReviewerNote[]): st
 }
 
 /** `openView`: open this view straight away (a review card's Open preview), on `path` if given. */
-export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, onClose }: { sessionId: string; appId?: string; nodeId?: string | null; openView?: { viewId: string; path?: string }; onOpenInChat?: () => void; onClose: () => void }) {
+/** `docked`: in the side pane beside the chat. Previews then open in the pane
+ *  too, and handing something to the composer leaves the pane as it is. */
+export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, onClose, docked }: { sessionId: string; appId?: string; nodeId?: string | null; openView?: { viewId: string; path?: string }; onOpenInChat?: () => void; onClose: () => void; docked?: boolean }) {
+  // Done with the list: a sheet gets out of the way; the pane stays.
+  const done = docked ? stayPut : onClose;
   const { connection, activeSession } = useAppState();
   const [picture, setPicture] = useState<ReviewerNote | null>(null);
   const remote = Boolean(nodeId) && !controller.direct && nodeId !== connection.currentNodeId;
@@ -143,7 +149,7 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
       else if (response.kind === "web") {
         const url = previewUrl(response.url);
         if (!inTab) { setPreviewRevoked(false); setPeek({ url, app, view }); }
-        else if (popup && !popup.closed) { popup.location.replace(url); onClose(); }
+        else if (popup && !popup.closed) { popup.location.replace(url); done(); }
         else setLink({ viewId: view.id, url });
       } else throw new Error("This app view is not supported by this client.");
     } catch (e) { popup?.close(); if (generation.current === current) setError(e instanceof Error ? e.message : "Could not open view."); }
@@ -191,7 +197,7 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
         if (attachments.length) throw new Error("Open this session’s chat before adding reviewer pictures.");
         seedSessionDraft(localStorage, sessionId, text);
       }
-      onClose();
+      done();
     } catch (e) { setError(e instanceof Error ? e.message : "Could not add notes."); }
     finally { setBusy(false); }
   };
@@ -220,7 +226,7 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
     finally { if (generation.current === current) setBusy(false); }
   };
 
-  if (peek) return <PreviewPeek url={peek.url} name={peek.app.name} sessionId={sessionId} appId={peek.app.id} viewId={peek.view.id} onClose={onClose}
+  if (peek) return <PreviewPeek docked={docked} url={peek.url} name={peek.app.name} sessionId={sessionId} appId={peek.app.id} viewId={peek.view.id} onClose={done}
     access={<AppAccess sessionId={sessionId} appId={peek.app.id} viewId={peek.view.id} name={peek.view.name} nodeId={nodeId} disabled={!online || !result?.previewAvailable} onRevoked={() => setPreviewRevoked(true)} />}
     revoked={previewRevoked}
     onManage={() => setPeek(null)}
@@ -230,7 +236,7 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
   </Suspense>;
   const previewOk = Boolean(result?.previewAvailable);
   const shown = result?.apps.filter((app) => !appId || app.id === appId) ?? [];
-  return <Sheet title="Apps" ariaLabel="Session apps" onClose={onClose} autoFocusSearch={false} size="large"
+  return <Panel docked={docked} title="Apps" ariaLabel="Session apps" onClose={onClose} autoFocusSearch={false} size="large"
     headExtra={<button className="btn ghost icon" onClick={() => setRefresh((n) => n + 1)} disabled={busy || !online} aria-label="Refresh" title="Refresh">
       {busy && result ? <Spinner size="xs" /> : <RefreshIcon size={18} />}
     </button>}>
@@ -269,9 +275,9 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
           const Icon = view.kind === "terminal" ? TerminalIcon : view.source === "display" ? DisplayIcon : GlobeIcon;
           return <article className="apps-view" key={view.id} aria-label={view.name}>
             <AppRow small tile={<Icon size={18} />} name={view.name} meta={VIEW_LABELS[kind]} action={link?.viewId === view.id
-                ? <a className="btn sm primary" href={link.url} target="_blank" rel="noopener noreferrer" onClick={() => setTimeout(onClose, 0)}>Open preview ↗</a>
+                ? <a className="btn sm primary" href={link.url} target="_blank" rel="noopener noreferrer" onClick={() => setTimeout(done, 0)}>Open preview ↗</a>
                 : view.kind === "terminal" && remote
-                  ? <button className="btn sm" onClick={() => { onClose(); onOpenInChat?.(); }}>Open in chat</button>
+                  ? <button className="btn sm" onClick={() => { done(); onOpenInChat?.(); }}>Open in chat</button>
                   : <button className={`btn sm${view.kind === "web" ? " primary" : ""}`} disabled={busy || !online || (view.kind === "web" && !previewOk)} onClick={() => view.kind === "terminal" ? setConfirm({ app, view }) : void open({ app, view })}>
                     {view.kind === "terminal" ? "Open terminal" : "Open preview"}
                   </button>} />
@@ -309,7 +315,7 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
       confirmLabel={confirm.view ? "Open terminal" : "Remove app"} danger={!confirm.view}
       onCancel={() => setConfirm(null)} onConfirm={() => { if (confirm.view) void open({ app: confirm.app, view: confirm.view }); else void remove(confirm.app); }}
     />}
-  </Sheet>;
+  </Panel>;
 }
 
 /** Commands read like a shell line: plain words as-is, anything else quoted. */

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Badge } from "./Badge.js";
 import type { ArtifactEntry, PromptAttachment } from "@bivy/core";
-import { Sheet } from "./Sheet.js";
+import { Panel } from "./Panel.js";
 import { relTime } from "./ChangesCard.js";
 import { controller } from "../store/useStore.js";
 import { ImageGallery } from "./ImageGallery.js";
@@ -142,7 +142,7 @@ function ArtifactRow({ artifact, onJump, onOpenImage }: { artifact: ArtifactEntr
   );
 }
 
-export function ArtifactsSheet({ artifacts, onClose }: { artifacts: ArtifactEntry[]; onClose: () => void }) {
+export function ArtifactsSheet({ artifacts, onClose, docked }: { artifacts: ArtifactEntry[]; onClose: () => void; docked?: boolean }) {
   const images = useMemo(() => artifacts.filter((a) => a.kind === "image"), [artifacts]);
   const imageAttachments = useMemo(() => images.map(toAttachment), [images]);
   const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
@@ -152,7 +152,7 @@ export function ArtifactsSheet({ artifacts, onClose }: { artifacts: ArtifactEntr
   // earlier" hasn't been clicked yet simply doesn't jump. Still closes the
   // sheet either way, so the action never looks like it silently failed.
   const jumpToTurn = (entryId: string) => {
-    onClose();
+    if (!docked) onClose();
     requestAnimationFrame(() => {
       document.getElementById(`msg-${entryId}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
@@ -162,7 +162,7 @@ export function ArtifactsSheet({ artifacts, onClose }: { artifacts: ArtifactEntr
   const title = artifacts.length > 0 ? `${artifacts.length} artifact${artifacts.length === 1 ? "" : "s"}` : "Artifacts";
 
   return (
-    <Sheet title={title} onClose={onClose} autoFocusSearch={false}>
+    <Panel docked={docked} title={title} onClose={onClose} autoFocusSearch={false}>
       {artifacts.length === 0 && <div className="changes-binary">No artifacts yet this session.</div>}
       {images.length > 0 && (
         <div className="artifacts-group">
@@ -179,6 +179,6 @@ export function ArtifactsSheet({ artifacts, onClose }: { artifacts: ArtifactEntr
       {galleryIndex != null && (
         <ImageGallery images={imageAttachments} index={galleryIndex} onClose={() => setGalleryIndex(null)} />
       )}
-    </Sheet>
+    </Panel>
   );
 }

@@ -28,6 +28,7 @@ import { writeClipboard } from "../clipboard.js";
 import { CredentialVault } from "./CredentialVault.js";
 import { AgentInstructionsPanel } from "./AgentInstructionsPanel.js";
 import { Toggle } from "./Toggle.js";
+import { useMediaQuery } from "../useMediaQuery.js";
 
 const VoiceSettings = lazy(() => import("./VoiceSettings.js").then((module) => ({ default: module.VoiceSettings })));
 
@@ -108,23 +109,6 @@ function formatBuildTime(iso: string | undefined): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return "";
   return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-}
-
-/** Reactive matchMedia — drives the responsive split (mobile drill-in vs.
- *  desktop two-pane) from CSS's own breakpoint so the two never disagree. */
-function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(() =>
-    typeof matchMedia === "function" ? matchMedia(query).matches : false,
-  );
-  useEffect(() => {
-    if (typeof matchMedia !== "function") return;
-    const mq = matchMedia(query);
-    const onChange = () => setMatches(mq.matches);
-    onChange();
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, [query]);
-  return matches;
 }
 
 type NavItem = { id: View; label: string; icon: ReactNode };
