@@ -22,6 +22,7 @@ import type { AttachmentStore } from "./attachment-store.js";
 import { thinkingTextFromContent } from "./transcript-merge.js";
 import { extractInlineImageUrls, fetchInlineImage, isFetchImageError, inlineImageDisplayName, assistantTextForImageScan } from "./inline-image-fetch.js";
 import { historyDelta, type HistoryCursor } from "../history-sync.js";
+import { withToolDetails } from "../runtime/tool-call-map.js";
 import type { RuntimeMessage, RuntimeEvent } from "../runtime/index.js";
 import type { PrRef } from "../metadata.js";
 
@@ -143,6 +144,11 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
   const { eventLog, attachmentStore } = deps;
   const project = createClientProjection(attachmentStore, eventLog);
   const liveIntermediateBySession = new Map<string, IntermediateMessage>();
+  // `${sessionId}\0${callId}` -> what the call's first event recorded. Runtimes
+  // stream progress as updates that carry only partial output (Pi's bash), so
+  // an update without its own detail/parent keeps the call's, rather than
+  // overwriting the persisted card with a generic one.
+  const toolCallOverlay = new Map<string, { detail?: unknown; parentToolUseId?: string }>();
   const lastPersistedIntermediateText = new Map<string, string>();
   // In-flight dedupe + failure cooldown so a repeated remote image URL only ever
   // triggers one fetch and a broken URL isn't retried every message_end.
@@ -197,12 +203,18 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
     const type = String(event.type || "");
     if (!["tool_call", "tool_execution_start", "tool_execution_update", "tool_execution_end", "tool_result", "function_call", "function_result"].includes(type)) return;
     const callId = toolEventId(event);
+    // A turn-level failure some runtimes report on the tool channel (Claude's
+    // non-success `result`) names no tool and no call: it is not tool activity,
+    // and persisting it left a blank error card keyed "tool:".
+    if (callId === "tool:" && !event.toolName && !event.name) return;
     const toolCall = event.toolCall as Record<string, unknown> | undefined;
     const input = (event.input || event.toolInput || event.args || toolCall?.input || {}) as Record<string, unknown>;
     const name = String(event.toolName || event.name || toolCall?.name || "tool");
     const now = Date.now();
     const base = { role: "assistant" as const, bivyKind: "tool" as const, afterMessageCount: record.session.getMessages().length, createdAt: now };
+    const overlayKey = `${record.id}\0${callId}`;
     if (type === "tool_result" || type === "tool_execution_end" || type === "function_result") {
+      toolCallOverlay.delete(overlayKey);
       eventLog.append(record.id, { ...base, id: `bivy-tool-result-${callId}`, content: [{ type: "tool_result", toolUseId: callId, tool_use_id: callId, content: event.message ?? event.result ?? event.output ?? input.output ?? "", isError: Boolean(event.error || event.errorMessage), ...(event.detail ? { detail: event.detail } : {}) }] } as ToolActivityMessage);
     } else if (isProgressOnlyPing(type, event.detail, input)) {
       // A progress-only keep-alive (e.g. Claude's `tool_execution_update`
@@ -223,8 +235,11 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
       // `parentToolUseId` (Claude, protocol agents) or `parentToolCallId` (Pi's
       // nested calls from codemode / ctx.executeTool).
       const rawParent = event.parentToolUseId ?? event.parentToolCallId;
-      const parentToolUseId = typeof rawParent === "string" && rawParent ? rawParent : undefined;
-      eventLog.append(record.id, { ...base, id: `bivy-tool-call-${callId}`, content: [{ type: "tool_use", id: callId, name, input, ...(parentToolUseId ? { parentToolUseId } : {}), ...(event.detail ? { detail: event.detail } : {}) }] } as ToolActivityMessage);
+      const prior = toolCallOverlay.get(overlayKey);
+      const parentToolUseId = typeof rawParent === "string" && rawParent ? rawParent : prior?.parentToolUseId;
+      const detail = event.detail ?? prior?.detail;
+      toolCallOverlay.set(overlayKey, { detail, parentToolUseId });
+      eventLog.append(record.id, { ...base, id: `bivy-tool-call-${callId}`, content: [{ type: "tool_use", id: callId, name, input, ...(parentToolUseId ? { parentToolUseId } : {}), ...(detail ? { detail } : {}) }] } as ToolActivityMessage);
     }
   }
 
@@ -275,7 +290,8 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
   }
 
   function buildHistoryEvent(opts: BuildHistoryEventOptions): Record<string, unknown> {
-    const messages = opts.sessionId ? project(opts.sessionId, opts.messages) as unknown[] : opts.messages;
+    const described = withToolDetails(opts.messages, opts.runtimeId);
+    const messages = opts.sessionId ? project(opts.sessionId, described) as unknown[] : described;
     const delta = historyDelta(messages, opts.cursor);
     const record = opts.sessionId ? deps.getOpenSession(opts.sessionId) : undefined;
     const bSess = record ? deps.bivySessionEnvelope(record) : undefined;

@@ -55,6 +55,15 @@ assert.throws(
   /outside the sessions directory/,
 );
 
+// A second allowed root (the agent's native store) accepts its own files and
+// still rejects everything else.
+const nativeDir = "/home/user/.pi/agent/sessions";
+assert.equal(resolveResumeRef({ ref: `${nativeDir}/--w--/s.jsonl`, resumesByPath: true, sessionsDir: [sessionsDir, nativeDir] }), `${nativeDir}/--w--/s.jsonl`);
+assert.throws(
+  () => resolveResumeRef({ ref: `${nativeDir}-evil/s.jsonl`, resumesByPath: true, sessionsDir: [sessionsDir, nativeDir] }),
+  /outside the sessions directory/,
+);
+
 // --- storedResumeRef: direct create/open callers also honor metadata --------
 
 assert.equal(

@@ -126,6 +126,9 @@ rl.on('line', (line) => {
   }
   if (msg.type === 'chat.send') {
     send({ replyTo: msg.id, ok: true });
+    // Diagnostics on stderr, the way ACP agents log request errors. In-band
+    // events carry the turn; this must stay out of the transcript.
+    process.stderr.write('[acp-agent] Error handling request { method: "session/set_model" }\n');
     // Echo what multimodal/steering input actually arrived, so a test can prove
     // the host forwarded image attachments and the streaming hint (verbatim
     // passthrough event — the host re-emits unknown types unchanged).

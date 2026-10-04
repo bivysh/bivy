@@ -3298,8 +3298,12 @@ export class AppController {
   private settleRuntimeModels(runtimeId: string): void {
     const waiters = this.runtimeModelWaiters.get(runtimeId);
     if (!waiters?.length) return;
-    this.runtimeModelWaiters.delete(runtimeId);
     const models = this.store.cachedModelsFor(runtimeId) ?? [];
+    // An agent that only learns its models once running (ACP) first answers
+    // from an empty placeholder, then pushes the real list when it warms. Wait
+    // for that one; the waiter's timeout still settles a list that stays empty.
+    if (!models.length) return;
+    this.runtimeModelWaiters.delete(runtimeId);
     for (const resolve of waiters) resolve(models);
   }
 

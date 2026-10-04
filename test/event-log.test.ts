@@ -119,6 +119,22 @@ test("mergeBases repairs streaming revisions already duplicated in the log", () 
   assert.deepEqual(mergeBases([baseMsg("user", "count", 100), partial, final], [final]), [baseMsg("user", "count", 100), final]);
 });
 
+test("mergeBases puts detail only the reload has where it happened, not after later turns", () => {
+  const logged = [baseMsg("user", "q1", 100), baseMsg("assistant", "a1", 400), baseMsg("user", "q2", 500), baseMsg("assistant", "a2", 600)];
+  const call = { role: "assistant", content: [{ type: "tool_use", id: "call_1", name: "exec", input: {} }], timestamp: 200 };
+  const result = { role: "user", content: [{ type: "tool_result", tool_use_id: "call_1", content: "ok" }], timestamp: 300 };
+  assert.deepEqual(mergeBases(logged, [logged[0]!, call, result, logged[1]!]), [logged[0], call, result, ...logged.slice(1)]);
+});
+
+test("mergeBases puts earlier turns from a native store before the chat that continued them, without timestamps", () => {
+  // A native run taken over as a chat: the log holds only the chat's turn, the
+  // agent's own store (no timestamps) holds the native turns and the same turn.
+  const logged = [baseMsg("user", "summarize", 500), baseMsg("assistant", "done earlier", 600)];
+  const native = [{ role: "user", content: "fix it" }, { role: "assistant", content: "fixed" }, { role: "user", content: "summarize" }, { role: "assistant", content: "done earlier" }];
+  const textOf = (m: unknown) => { const c = (m as { content: unknown }).content; return typeof c === "string" ? c : (c as Array<{ text: string }>)[0]!.text; };
+  assert.deepEqual(mergeBases(logged, native).map(textOf), ["fix it", "fixed", "summarize", "done earlier"]);
+});
+
 test("mergeBases still appends a disjoint resumed turn", () => {
   const logged = [baseMsg("user", "old", 100), baseMsg("assistant", "answer", 200)];
   const resumed = [baseMsg("user", "new", 300), baseMsg("assistant", "reply", 400)];

@@ -15,7 +15,7 @@ export type AgentProfilePromptMode = "stdin" | "argv";
  * runtime behavior registry rather than in per-agent branches. */
 export type AgentProfileBehaviors = {
   preflight?: "codex" | "opencode" | "grok";
-  prepare?: "grok-auth";
+  prepare?: "grok-auth" | "opencode-auth";
   slashCommands?: "codex" | "opencode";
   sessionStore?: "codex" | "opencode";
   nativeSessions?: "grok" | "gemini" | "qwen";
@@ -213,7 +213,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
   },
   opencode: {
     displayName: "OpenCode",
-    behaviors: { preflight: "opencode", slashCommands: "opencode", sessionStore: "opencode" },
+    behaviors: { preflight: "opencode", prepare: "opencode-auth", slashCommands: "opencode", sessionStore: "opencode" },
     command: "opencode",
     packageName: "opencode-ai",
     // `opencode run "<prompt>"` runs one non-interactive turn and streams the
@@ -225,6 +225,9 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // Claude Code, and Codex clear. See `acp` below for the version fallback.
     supportTier: "supported",
     testedVersion: "1.18.33",
+    // Mixed: OpenCode keeps its own logins, and Bivy adds what it holds — API
+    // keys as env vars, a connected ChatGPT plan via the opencode-auth prepare.
+    authOwner: "mixed",
     blurb: "The most widely used open-source coding harness (OpenCode CLI).",
     // `opencode run -s <id> "<prompt>"` continues a prior session by its own id
     // (`-s, --session  session id to continue`, per `opencode run --help`).
@@ -585,12 +588,12 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     model: {
       flag: "-m",
       models: [
-        // Official Grok CLI (1.x) advertises grok-4.6 as the default subscription
-        // model (verified against the authenticated `~/.grok/models_cache.json`,
-        // origin cli-chat-proxy.grok.com/v1/models); the older grok-4.5 /
-        // grok-4-latest / grok-code-fast-1 ids now return "unknown model id".
+        // Official Grok CLI (1.0.46) lists grok-4.7 as the default subscription
+        // model (`grok models`), with its faster build variant and grok-4.6.
         // Keep the list honest; operators can override with BIVY_GROK_MODELS if
-        // their install exposes more.
+        // their install exposes more. The governed ACP path reads the live list.
+        { id: "grok-4.7", name: "Grok 4.7", provider: "xai" },
+        { id: "grok-4.7-build-fast", name: "Grok 4.7 Build Fast", provider: "xai" },
         { id: "grok-4.6", name: "Grok 4.6", provider: "xai" },
       ],
     },

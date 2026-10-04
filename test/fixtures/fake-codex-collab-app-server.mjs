@@ -42,6 +42,19 @@ rl.on("line", (line) => {
     };
     send({ jsonrpc: "2.0", method: "item/started", params: { item: activity } });
     send({ jsonrpc: "2.0", method: "item/completed", params: { item: { ...activity, id: "activity-completed" } } });
+    // The child runs its own tool and finishes its own turn on this connection,
+    // well before the parent is done. Neither belongs to the parent's turn.
+    const childShell = { type: "commandExecution", id: "child-shell", command: "wc -l README.md", commandActions: [], cwd: "/tmp", status: "completed", aggregatedOutput: "1 README.md", exitCode: 0 };
+    send({ jsonrpc: "2.0", method: "item/started", params: { threadId: "child-thread", item: childShell } });
+    send({ jsonrpc: "2.0", method: "item/completed", params: { threadId: "child-thread", item: childShell } });
+    send({ jsonrpc: "2.0", method: "turn/completed", params: { threadId: "child-thread", turn: { status: "completed" } } });
+    // Past the shim's completion debounce, so an early seal would have fired.
+    setTimeout(() => finishParent(collab), 700);
+  }
+});
+
+function finishParent(collab) {
+  {
     const shell = {
       type: "commandExecution", id: "shell-1", command: "false", commandActions: [], cwd: "/tmp",
       status: "failed", aggregatedOutput: "command failed", exitCode: 7,
@@ -58,4 +71,4 @@ rl.on("line", (line) => {
     setTimeout(() => send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { threadId: "thread-fixture", turnId: "turn-fixture", itemId: "late-parent-message", delta: " Late answer." } }), 100);
     setTimeout(() => send({ jsonrpc: "2.0", method: "item/completed", params: { threadId: "thread-fixture", item: { type: "agentMessage", id: "late-parent-message", text: " Late answer." } } }), 120);
   }
-});
+}

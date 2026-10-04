@@ -5,7 +5,7 @@
 import type { PromptAttachment, ServerEvent } from "./protocol.js";
 import { toHtml } from "./markdown.js";
 import { eventKind, toolCallId, toolDetail, toolInput, toolName, toolParentId } from "./tool-activity.js";
-import { contentThinking, contentToText, toolEntriesFromContent, embeddedAttachments } from "./store-render.js";
+import { contentThinking, contentToText, toolEntriesFromContent, toolResultText, embeddedAttachments } from "./store-render.js";
 import { humanizeError, looksLikeAgentError } from "./store-errors.js";
 import { isAppPin, isAppReference, isAppReview, type AppPin, type AppReference, type AppReview } from "./apps.js";
 import { isTaskSuggestion, type TaskSuggestion } from "./suggestions.js";
@@ -268,7 +268,7 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
     }
     case "start": commitThinking(value); commitProse(value); finishDrafts(value); applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: toolInput(event as any), status: "running", detail: toolDetail(event as any), ...(toolParentId(event as any) ? { parentToolUseId: toolParentId(event as any) } : {}) }); setWorking(value, toolLabel(event, value.transcript)); break;
     case "update": applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: toolInput(event as any), status: "running", detail: toolDetail(event as any), ...(toolParentId(event as any) ? { parentToolUseId: toolParentId(event as any) } : {}) }); setWorking(value, toolLabel(event, value.transcript)); break;
-    case "result": applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: {}, status: "done", result: typeof (event as any).result === "string" ? (event as any).result : contentToText((event as any).result), detail: toolDetail(event as any) }); break;
+    case "result": applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: {}, status: "done", result: toolResultText((event as any).result), detail: toolDetail(event as any) }); break;
     case "turn_end": setWorking(value, "Planning next step…"); break;
     case "agent_end": finishDrafts(value); closeTools(value); Object.assign(value.draft, { pendingText: "", committedText: "", committedThinking: "" }); value.working = false; value.workingLabel = ""; commands.push({ kind: "turn-settled" }); break;
     default: return { handled: false, value: input, commands: [] };
