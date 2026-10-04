@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Zoom the image, not the app.** Image previews support pinch zoom, drag and wheel panning, plus zoom and fit controls, without moving the chat behind them.
 - **Codex turns with a sub-agent keep their answer.** When a Codex sub-agent finished before its parent, the parent's turn ended early and its answer, plan text and sub-agent card were lost from the saved transcript. The sub-agent's own commands now also show under its card instead of as the parent's work.
 - **A fork knows where its work is.** A fork works in its own copy of the repo, but its history still pointed at the original checkout, so the next agent could edit the wrong files. The history now points at the fork's copy and says so. A fork of a fork gets its copy next to its parent's instead of inside it.
 - **A fork to another agent uses the model you picked.** For OpenCode and other ACP agents, the fork sheet listed no models and the fork started on the agent's default.

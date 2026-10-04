@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { ImageViewer } from "./ImageViewer.js";
 import type { AppState, PromptAttachment, SlashCommand } from "@bivy/core";
 import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
@@ -938,15 +938,7 @@ export function Composer({
           keeps swallowing taps on the composer after it closes, so the
           attachment thumbnails become unclickable ("can't reopen"). At <body>
           it is truly viewport-fixed and tears down cleanly. */}
-      {viewing && createPortal(
-        <div className="image-viewer" role="dialog" aria-modal="true" onClick={() => setViewing(null)}>
-          <img className="image-viewer-img" src={viewing} alt="Attachment preview" onClick={(e) => e.stopPropagation()} />
-          <button type="button" className="image-viewer-close" onClick={() => setViewing(null)} aria-label="Close preview">
-            ×
-          </button>
-        </div>,
-        document.body,
-      )}
+      {viewing && <ImageViewer key={viewing} src={viewing} name="Attachment preview" onClose={() => setViewing(null)} />}
     </>
   );
 }
