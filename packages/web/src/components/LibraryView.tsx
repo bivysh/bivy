@@ -237,11 +237,12 @@ function TileImage({ artifact }: { artifact: Artifact }) {
   return <span className="library-tile-ext" aria-hidden>{state.status === "unavailable" ? "Unavailable" : ""}</span>;
 }
 
+const BACKEND_LABELS = { requests: "Requests", data: "Data", logs: "Logs" } as const;
 /** How an app shows, from its views: one view names its kind; more count. */
 function appSummary(app: SessionApp): string {
   if (app.views.length !== 1) return `${app.views.length} views`;
   const view = app.views[0]!;
-  return view.kind === "terminal" ? "Terminal" : view.source === "display" ? "Desktop app" : "Web app";
+  return view.kind === "terminal" ? "Terminal" : view.kind === "backend" ? BACKEND_LABELS[view.backend] : view.source === "display" ? "Desktop app" : "Web app";
 }
 
 function AppsPage({ where, onShowInChat }: { where: Where; onShowInChat: ShowInChat }) {

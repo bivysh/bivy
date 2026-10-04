@@ -18,6 +18,7 @@ import { relTime } from "./SessionList.js";
 import { Spinner } from "./Spinner.js";
 import { AppRow, appInitial } from "./AppRow.js";
 import { DisplayIcon, GlobeIcon, LogsIcon, RefreshIcon, TerminalIcon } from "./UiIcons.js";
+import { BackendView } from "./BackendView.js";
 const TerminalOverlay = lazy(() => import("./Terminal.js").then((module) => ({ default: module.TerminalOverlay })));
 const stayPut = () => {};
 /** What each kind of view is, in the list. */
@@ -28,6 +29,9 @@ const VIEW_LABELS = {
   managed: "Live server · run by Bivy",
   display: "Desktop app · own display",
 } as const;
+/** Backend views, in the list: what each shows. */
+const BACKEND_LABELS = { requests: "Requests · the API as buttons", data: "Data · rows from saved queries", logs: "Logs · the server's output" } as const;
+const BACKEND_OPEN = { requests: "Open requests", data: "Open data", logs: "Open logs" } as const;
 
 /** `nodeId` opens a session's apps on another machine without switching to it.
  *  Terminal views stream over the connected machine's link, so for another
@@ -44,7 +48,7 @@ export function notesDraft(viewName: string, notes: readonly ReviewerNote[]): st
 /** `openView`: open this view straight away (a review card's Open preview), on `path` or in `scenario` if given. */
 /** `docked`: in the side pane beside the chat. Previews then open in the pane
  *  too, and handing something to the composer leaves the pane as it is. */
-export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, onClose, docked }: { sessionId: string; appId?: string; nodeId?: string | null; openView?: { viewId: string; path?: string; scenario?: string }; onOpenInChat?: () => void; onClose: () => void; docked?: boolean }) {
+export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, onClose, docked }: { sessionId: string; appId?: string; nodeId?: string | null; openView?: { viewId: string; path?: string; scenario?: string; item?: string }; onOpenInChat?: () => void; onClose: () => void; docked?: boolean }) {
   // Done with the list: a sheet gets out of the way; the pane stays.
   const done = docked ? stayPut : onClose;
   const { connection, activeSession } = useAppState();
@@ -59,6 +63,7 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
   const [busy, setBusy] = useState(false);
   const [refresh, setRefresh] = useState(0);
   const [terminal, setTerminal] = useState<string | null>(null);
+  const [backend, setBackend] = useState<{ app: SessionApp; view: AppView & { kind: "backend" }; item?: string } | null>(null);
   const [peek, setPeek] = useState<{ url: string; app: SessionApp; view: AppView } | null>(null);
   const [previewRevoked, setPreviewRevoked] = useState(false);
   const [link, setLink] = useState<{ viewId: string; url: string } | null>(null);
@@ -168,7 +173,8 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
     const view = app?.views.find((item) => item.id === openView.viewId);
     if (!app || !view) return;
     opened.current = true;
-    void open({ app, view }, "peek", openView.path, openView.scenario);
+    if (view.kind === "backend") setBackend({ app, view, item: openView.item });
+    else void open({ app, view }, "peek", openView.path, openView.scenario);
   }, [openView, result]); // eslint-disable-line react-hooks/exhaustive-deps
   const setReviewMode = async (app: SessionApp, mode: ReviewCardMode) => {
     setError("");
@@ -231,6 +237,13 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
     revoked={previewRevoked}
     onManage={() => setPeek(null)}
     onOpenInTab={() => { const { app, view } = peek; setPeek(null); void open({ app, view }, "tab"); }} />;
+  // A backend view's draft goes to the composer, like reviewer notes do.
+  const toMessage = (text: string) => {
+    if (remote || activeSession.activeSessionId !== sessionId || !controller.prefillComposer(text)) seedSessionDraft(localStorage, sessionId, text);
+    done();
+  };
+  if (backend) return <BackendView sessionId={sessionId} nodeId={nodeId} app={backend.app} view={backend.view} item={backend.item} docked={docked} online={online}
+    onBack={() => setBackend(null)} onClose={onClose} onDraft={toMessage} />;
   if (terminal) return <Suspense fallback={<Sheet title="App terminal" onClose={() => setTerminal(null)}><p role="status">Loading terminal…</p></Sheet>}>
     <TerminalOverlay sessionId={sessionId} attachTermId={terminal} attachOnly onClose={() => setTerminal(null)} />
   </Suspense>;
@@ -271,6 +284,11 @@ export function AppsSheet({ sessionId, appId, nodeId, openView, onOpenInChat, on
             { label: "Remove app…", danger: true, disabled: busy || !online, onSelect: () => setConfirm({ app }), separated: true },
           ]} />} />
         {app.views.map((view) => {
+          if (view.kind === "backend") return <article className="apps-view" key={view.id} aria-label={view.name}>
+            <AppRow small tile={<LogsIcon size={18} />} name={view.name} meta={BACKEND_LABELS[view.backend]}
+              action={<button className="btn sm" disabled={busy || !online} onClick={() => setBackend({ app, view })}>{BACKEND_OPEN[view.backend]}</button>} />
+            <code className="apps-cmd">{view.detail}</code>
+          </article>;
           const kind = view.kind === "terminal" ? "terminal" : view.source === "service" && view.managed ? "managed" : view.source;
           const Icon = view.kind === "terminal" ? TerminalIcon : view.source === "display" ? DisplayIcon : GlobeIcon;
           return <article className="apps-view" key={view.id} aria-label={view.name}>

@@ -1646,7 +1646,7 @@ export class AppController {
 
   /** Apps use the same authenticated command path over direct HTTP or relay.
    *  `nodeId` targets another machine without switching to it. */
-  async appCommand(command: "apps.list" | "apps.offers" | "apps.adopt" | "apps.open" | "apps.logs" | "apps.clearNotes" | "apps.agentNotes" | "apps.share" | "apps.unshare" | "apps.revoke" | "apps.remove" | "apps.showMe" | "apps.mute" | "apps.reviewMode" | "apps.annotate" | "apps.pin" | "apps.pinState", sessionId: string | undefined, fields: { appId?: string; viewId?: string; returnTo?: string; port?: number; direct?: boolean; path?: string; mode?: ReviewCardMode; [key: string]: unknown } = {}, nodeId?: string | null): Promise<ServerEvent> {
+  async appCommand(command: "apps.list" | "apps.offers" | "apps.adopt" | "apps.open" | "apps.logs" | "apps.clearNotes" | "apps.agentNotes" | "apps.share" | "apps.unshare" | "apps.revoke" | "apps.remove" | "apps.showMe" | "apps.mute" | "apps.reviewMode" | "apps.annotate" | "apps.pin" | "apps.pinState" | "apps.requests" | "apps.request" | "apps.runRequest" | "apps.data" | "apps.serverLog", sessionId: string | undefined, fields: { appId?: string; viewId?: string; returnTo?: string; port?: number; direct?: boolean; path?: string; mode?: ReviewCardMode; [key: string]: unknown } = {}, nodeId?: string | null): Promise<ServerEvent> {
     const { connection } = this.store.getState();
     // A desktop app's display starts at this device's pixel density (1× or 2×).
     if (command === "apps.open") Object.assign(fields, { scale: typeof devicePixelRatio === "number" && devicePixelRatio >= 1.5 ? 2 : 1 });

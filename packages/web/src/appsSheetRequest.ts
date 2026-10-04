@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 
 /** What the Apps sheet opens at: a session's apps, one app, or straight into a
- *  view (on a page, or in one of its scenarios). */
-export type AppsSheetRequest = { sessionId: string; appId?: string; openView?: { viewId: string; path?: string; scenario?: string } };
+ *  view (a web view on `path` or in a `scenario`; a backend view at `item`, a request or query). */
+export type AppsSheetRequest = { sessionId: string; appId?: string; openView?: { viewId: string; path?: string; scenario?: string; item?: string } };
 
 type Listener = (request: AppsSheetRequest) => void;
 const listeners = new Set<Listener>();

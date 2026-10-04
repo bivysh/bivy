@@ -133,7 +133,7 @@ body.badged #dock:not([data-edge="top"]) { bottom:calc(var(--space-2) + var(--sp
 <div id="dock">
   <section class="panel" id="console" hidden aria-labelledby="console-title">
     <h2><span id="console-title">Console</span><button class="btn sm ghost" id="clear">Clear</button></h2>
-    <p class="muted" id="console-empty">No errors or warnings since this page loaded.</p>
+    <p class="muted" id="console-empty">No errors or warnings since this page loaded, from the page or its server.</p>
     <ul id="entries"></ul>
     <div class="panel-actions"><button class="btn sm" id="send-errors" disabled>Send to agent…</button></div>
   </section>
@@ -249,6 +249,7 @@ function show(data,launch){
     // Put them back where they were before an update they asked for.
     if(restore){const at=restore;restore=null;frame.contentWindow?.postMessage(Object.assign({type:'bivy:restore'},at),metadata.origin);}
     if(!watching){watching=true;latest=-1;shown=null;watch();firstHint();}else if(wake)wake();
+    if(!serverPolling)void pollServer();
   };
   // A Bivy client framing the shell says whether it can take dictation.
   if(embedded&&data.returnTo)toBivy({type:'hello'});
@@ -598,18 +599,37 @@ function failScenario(s,message){
 $('scn-stay').onclick=()=>{$('scn-fail').hidden=true;scnBtn.hidden?more.focus():scnBtn.focus();};
 // Console
 let entries=[];
-function resetConsole(){entries=[];renderConsole();}
+function resetConsole(){entries=[];serverSince='page';renderConsole();}
+// The server's errors join the page's: what the app's server logged since this
+// page loaded (Bivy follows the output of servers it runs). The owner's only.
+let serverSince='page',serverPolling=false;
+async function pollServer(){
+  serverPolling=true;
+  if(metadata&&!metadata.reviewer&&metadata.inspect!==false){
+    try{
+      const r=await fetch(metadata.origin+'/__bivy/server-errors?since='+serverSince,{credentials:'include',cache:'no-store'});
+      if(r.ok){
+        const d=await r.json();
+        for(const line of (Array.isArray(d.lines)?d.lines:[]).slice(-20))entries.push({level:'error',source:'server',text:String(line.text).slice(0,500)});
+        if(entries.length>50)entries.splice(0,entries.length-50);
+        if(d.lines?.length)renderConsole();
+        if(Number.isFinite(d.now))serverSince=String(d.now);
+      }
+    }catch{}
+  }
+  setTimeout(()=>void pollServer(),document.hidden?10000:3000);
+}
 function renderConsole(){
   const errors=entries.filter(e=>e.level==='error').length,count=$('error-count');
   count.hidden=!errors;count.textContent=String(errors);
   // The number is shown once, on the pill, so it is visible without opening it.
   $('more').setAttribute('aria-label',errors?'Preview options, '+errors+' error'+(errors===1?'':'s'):'Preview options');
   $('console-empty').hidden=entries.length>0;$('send-errors').disabled=!entries.length;
-  $('entries').replaceChildren(...entries.map(e=>{const li=document.createElement('li');const tag=document.createElement('span');tag.className='badge';tag.dataset.tone=e.level==='error'?'danger':'warn';tag.textContent=e.level;const text=document.createElement('span');text.textContent=e.text;li.append(tag,text);return li;}));
+  $('entries').replaceChildren(...entries.map(e=>{const li=document.createElement('li');const tag=document.createElement('span');tag.className='badge';tag.dataset.tone=e.level==='error'?'danger':'warn';tag.textContent=e.source==='server'?'server':e.level;const text=document.createElement('span');text.textContent=e.text;li.append(tag,text);return li;}));
 }
 $('errors').onclick=()=>panels($('console').hidden?'console':null);
 $('clear').onclick=resetConsole;
-$('send-errors').onclick=()=>draft('Console output in the app preview "'+metadata.name+'" (page '+currentPath+'):\\n'+entries.slice(-20).map(e=>'- '+e.level+': '+e.text).join('\\n'));
+$('send-errors').onclick=()=>draft('Console output in the app preview "'+metadata.name+'" (page '+currentPath+'):\\n'+entries.slice(-20).map(e=>'- '+(e.source==='server'?'server error':e.level)+': '+e.text).join('\\n'));
 // Marking: one gesture, two results. Pointing at an element and circling an
 // area were two modes with a button each; they are one mode now, because they
 // are one intention — "this, here".

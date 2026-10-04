@@ -176,6 +176,8 @@ interface TerminalEntry {
   closed: boolean;
   /** Deliver a coalesced batch of output to the client. */
   onData: (data: string) => void;
+  /** Others following the raw output as it arrives (see tap()). */
+  taps: Set<(data: string) => void>;
   /** Settles when node-pty reports the child has exited. Used by tests and shutdown paths that need to prove no PTY handle is left live. */
   exitPromise: Promise<void>;
   resolveExit: () => void;
@@ -300,6 +302,7 @@ export class TerminalManager {
       flushTimer: null,
       closed: false,
       onData: options.onData,
+      taps: new Set(),
       exitPromise,
       resolveExit,
     };
@@ -332,6 +335,9 @@ export class TerminalManager {
         entry.buffer = entry.buffer.slice(entry.buffer.length - SCROLLBACK_LIMIT);
       }
       entry.lastActivityAt = Date.now();
+      for (const tap of entry.taps) {
+        try { tap(data); } catch { /* a follower must never break output delivery */ }
+      }
       // A BEL in the raw stream means a program rang the terminal bell. Notify the
       // caller once per chunk (a bell-storm within one node-pty chunk collapses to
       // one signal); finer gating is the caller's responsibility.
@@ -478,6 +484,16 @@ export class TerminalManager {
         try { process.kill(signal === "SIGKILL" ? -entry.proc.pid : entry.proc.pid, signal); } catch { /* already gone */ }
       }, delay).unref();
     }
+  }
+
+  /** Follows a live terminal's raw output from now on (an app's server log,
+   *  for instance), alongside its client. Returns how to stop, or null if the
+   *  terminal is gone. */
+  tap(id: string, onData: (data: string) => void): (() => void) | null {
+    const entry = this.terminals.get(id);
+    if (!entry || entry.closed) return null;
+    entry.taps.add(onData);
+    return () => { entry.taps.delete(onData); };
   }
 
   has(id: string): boolean {

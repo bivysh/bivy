@@ -31,6 +31,7 @@ const REVISION_PATH = "/__bivy/revision";
 const INSPECTOR_PATH = "/__bivy/inspector.js";
 const COMPARE_PATH = "/__bivy/compare";
 const NOTES_PATH = "/__bivy/notes";
+const SERVER_ERRORS_PATH = "/__bivy/server-errors";
 const SCENARIOS_PATH = "/__bivy/scenarios";
 const SCENARIO_PATH = "/__bivy/scenario";
 const scenarioKind = (entry: RegisteredView): ScenarioKind => entry.target.kind === "display" ? "desktop" : "web";
@@ -408,6 +409,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     this.track(id, req.socket, session);
     if (req.url.startsWith(`${REVISION_PATH}?`) && req.method === "GET") { this.revision(req, res, entry); return; }
     if ((req.url === COMPARE_PATH || req.url.startsWith(`${COMPARE_PATH}/`)) && req.method === "GET") { this.compare(req, res, entry); return; }
+    if (req.url.startsWith(SERVER_ERRORS_PATH) && req.method === "GET") { this.serverErrors(req, res, entry, session); return; }
     if (req.url === SCENARIOS_PATH && req.method === "GET") { this.scenarios(res, entry, session); return; }
     if (req.url === INSPECTOR_PATH && req.method === "GET") {
       res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
@@ -422,6 +424,11 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     const rule = session.scenario && matchRule(session.scenario.network, req.method, req.url);
     if (rule && await simulate(req, res, rule, responseHeaders({}, this.ancestors(id)))) return;
     const inspect = isPageLoad(req);
+    // What the person does in the preview marks the app's logs ("your last
+    // action"): opening a page, or sending something. Assets don't count.
+    const pathOnly = req.url.split("?")[0]!.slice(0, 200);
+    if (inspect) { entry.loadedAt = Date.now(); this.registry.emit("action", id, `Opened ${pathOnly}`); }
+    else if (!["GET", "HEAD", "OPTIONS"].includes(req.method ?? "")) this.registry.emit("action", id, `${req.method} ${pathOnly} from the preview`);
     // Remember the framed page so a turn reload lands where the user was.
     if (req.method === "GET" && req.headers["sec-fetch-dest"] === "iframe" && req.url.length <= 2048) entry.lastPath = req.url;
     if (entry.target.kind === "static") {
@@ -593,6 +600,18 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
       path: path.startsWith("/") ? path : "/", viewport: { width: Number(viewport?.width) || 0, height: Number(viewport?.height) || 0 },
     });
     res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ screenshot: Boolean(shot) }));
+  }
+  /** Server errors for the shell's Console: since the page loaded ("page"),
+   *  or since the last answer's `now`. The owner's only: a server's log is not
+   *  for people with a shared link. */
+  private serverErrors(req: IncomingMessage, res: ServerResponse, entry: RegisteredView, session: { reviewer?: boolean }): void {
+    const cors = { "access-control-allow-origin": this.shellOrigin(entry.view.id), "access-control-allow-credentials": "true", vary: "Origin" };
+    if (session.reviewer) { res.writeHead(403, cors); res.end(); return; }
+    const raw = new URL(req.url!, "http://gateway").searchParams.get("since");
+    const since = raw === "page" || raw === null ? (entry.loadedAt ?? Date.now()) - 1 : Number(raw);
+    const found = Number.isFinite(since) ? this.registry.serverErrors?.(entry.view.id, since) : undefined;
+    res.writeHead(200, { ...cors, "content-type": "application/json", "cache-control": "no-store" });
+    res.end(JSON.stringify(found ?? { now: Date.now(), lines: [] }));
   }
   /** The view's scenarios for the shell's switcher, and the one it's in: this
    *  browser's for a web page, the app's for a desktop app. */

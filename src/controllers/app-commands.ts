@@ -13,6 +13,7 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
     if (!workspace) throw new Error("Open the session on this machine before publishing an app.");
     return workspace;
   };
+  const pick = (msg: AppCommand) => ({ appId: typeof msg.appId === "string" ? msg.appId : undefined, viewId: typeof msg.viewId === "string" ? msg.viewId : undefined, target: typeof msg.target === "string" ? msg.target : undefined });
   const operations: Record<string, (msg: AppCommand) => unknown | Promise<unknown>> = {
     "apps.list": (msg) => service.list(typeof msg.sessionId === "string" ? msg.sessionId : undefined),
     "apps.publish": (msg) => {
@@ -47,6 +48,15 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
     "apps.agentNotes": (msg) => service.setAgentNotes(String(msg.sessionId), String(msg.appId), msg.enabled === true),
     "apps.notes": (msg) => service.notes(String(msg.sessionId), { app: typeof msg.appId === "string" ? msg.appId : undefined, view: typeof msg.view === "string" ? msg.view : undefined, since: typeof msg.since === "number" ? msg.since : undefined }),
     "apps.logs": (msg) => service.logs(String(msg.sessionId), String(msg.appId), String(msg.viewId)),
+    // Backend views. The app passes exact IDs; `bivy app requests|data|logs` a name, or nothing.
+    "apps.requests": (msg) => service.backend.requests(service.backendView(String(msg.sessionId), "requests", pick(msg))),
+    "apps.request": (msg) => service.backend.detail(service.backendView(String(msg.sessionId), "requests", pick(msg)), String(msg.id)),
+    "apps.runRequest": (msg) => {
+      const entry = service.backendView(String(msg.sessionId), "requests", pick(msg));
+      return typeof msg.id === "string" ? service.backend.run(entry, msg.id) : service.backend.runAuto(entry, "last", "Ran all requests");
+    },
+    "apps.data": (msg) => service.backend.data(service.backendView(String(msg.sessionId), "data", pick(msg)), msg.run === true),
+    "apps.serverLog": (msg) => service.backend.log(service.backendView(String(msg.sessionId), "logs", pick(msg)), typeof msg.since === "number" ? msg.since : 0),
     // The app UI passes exact IDs; `bivy app share` passes an app and/or view by ID or name.
     "apps.share": (msg) => {
       const options = { duration: msg.duration as ShareDuration | undefined, controls: msg.controls !== false };

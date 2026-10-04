@@ -514,6 +514,131 @@ serve client-side routes: an extensionless page load that matches no file gets
 `404.html` (with status 404) if the snapshot has one, otherwise `index.html`.
 The static server does not provide range requests or directory listings.
 
+## Backend views
+
+A backend change is reviewed by seeing what it did, the way a UI change is
+reviewed in its preview. Three view kinds show it, each built from files the
+agent keeps in the project:
+
+```jsonc
+{ "kind": "requests", "name": "API" }            // .http files in .bivy/requests
+{ "kind": "data", "name": "Database",            // .sql files in .bivy/queries
+  "command": "sqlite3", "args": ["-readonly", "-json", "db/dev.sqlite3"] }
+{ "kind": "logs", "name": "Server log" }         // the app's server output
+```
+
+They sit in the same manifest as the app's web views and open from the Apps
+sheet. Everything they show is the app's own output, shown as text.
+
+**Before and after each agent run.** When a run starts, Bivy runs the requests
+that are safe to run on their own and every saved query. When it ends, it runs
+them again. What changed goes on the run's review card, one line each: a request
+whose answer changed (`POST Create order 201 → 422`), a query whose rows changed
+(`coupons +1 ~1`), and errors the server logged during the run. A run that
+changed only the backend gets a card too; without a change there is none. Each
+line opens its view at that request or query, where **Changes** compares the
+answer or the rows with how they were before the run. *Preview cards: Off* and
+*Mute for this run* apply to these cards as well.
+
+### Requests
+
+`.http` files in `dir` (default `.bivy/requests`), in the format VS Code's REST
+Client and JetBrains already run:
+
+```http
+@token = dev-token
+
+### Create order, expired coupon
+POST {{base}}/orders
+Authorization: Bearer {{token}}
+Content-Type: application/json
+
+{ "items": [42], "coupon": "SPRING" }
+
+### List open orders
+# @auto
+GET {{base}}/orders?status=open
+```
+
+`###` separates requests and names them (`# @name` also works). `{{base}}` is the
+app's web server (its first `service` view, as `http://127.0.0.1:<port>`); set
+`"base": {"view": "<name>"}` or `"base": {"url": "…"}` to point elsewhere.
+`@name = value` lines are variables. Scripts and response handlers are ignored.
+
+- **What runs on its own:** GET and HEAD requests to the app's own server, and
+  any request marked `# @auto`. Anything else runs only when you tap it, after
+  a confirmation that says what it sends and where. Requests to another host are
+  labelled with it.
+- Each answer shows its status, time and body (JSON pretty-printed), with
+  **Before · Now · Changes**. Changes lists the status and each changed JSON
+  path. Redirects are shown, not followed. Requests time out after 10 seconds;
+  bodies are cut at 1 MB.
+- **Send to agent…** drafts a message with the request and what it answered.
+
+### Data
+
+Saved queries in `dir` (default `.bivy/queries`), one `.sql` file each, run
+through the project's own database client. The command gets the query on stdin
+and prints rows as JSON (`sqlite3 -json`, `duckdb -json`), CSV (`psql --csv`)
+or TSV (`mysql --batch`):
+
+```sql
+-- title: Coupons
+-- key: code
+select code, percent, expires_at from coupons order by code;
+```
+
+`-- key:` names the column rows are matched by (default `id`, else the first
+column), so **Changes** shows rows added, changed (with the old value struck
+through) and removed, not two dumps. **Now** shows the rows (up to 200 of up to
+1,000). Queries time out after 15 seconds.
+
+The command runs in the workspace as the machine user. Bivy can't make it
+read-only, so open the database that way (`sqlite3 -readonly`, or a Postgres
+role with `default_transaction_read_only`). Only saved queries run; there is no
+SQL console.
+
+### Logs
+
+A server's output, with each line stamped when it arrived and errors marked
+(an "error" or exception, a 5xx it answered; stack frames stay with their
+error). By default it's the app's server that Bivy runs (a `service` with
+`start`, or a desktop app); `"source"` picks another:
+
+```jsonc
+{ "kind": "logs", "name": "API log", "source": { "view": "API" } }
+{ "kind": "logs", "name": "Dev log", "source": { "file": "log/development.log" } }
+{ "kind": "logs", "name": "Compose", "source": { "command": "docker", "args": ["compose", "logs", "-f", "api"] } }
+```
+
+A server's output is followed from when Bivy starts it, so it reaches back
+before anyone opened the view. A file or command source starts when the view
+is first opened and keeps running. Each action leaves a marker in the log: an
+agent run starting, a request you ran, a page you opened or something you sent
+from the web preview. The view opens at the last one (*Your last action ·
+Ran "Create order"*). **Errors** filters; **Send errors to agent…** drafts the
+lines since the last action. Secrets are redacted before anything is shown.
+
+**In the web preview's Console.** Errors that the app's server logged since the
+page loaded (from a server Bivy runs, or a logs view of the same app) show in
+the preview's **Console** next to the page's own, tagged *server*, and count on
+the pill. That includes errors logged while rendering the page, before its
+scripts ran. People who open a share link don't see them.
+
+### For agents
+
+```sh
+bivy app requests                       # the requests and their last answers (JSON)
+bivy app requests --run "Create order"  # run one now; prints its answer and what changed
+bivy app requests --all                 # run the ones that run on their own
+bivy app data [--run]                   # each query's rows, and changes since the run began
+bivy app logs [--since 2m] [--errors]   # the log, with action markers
+```
+
+The agent sees what the person sees. When it changes backend behaviour, it adds
+a request and a query that show the change and checks them before it says it's
+done.
+
 ## Automatic web preview delivery
 
 On a linked machine, `bivy app publish` is sufficient: open the published app

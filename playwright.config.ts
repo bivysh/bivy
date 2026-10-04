@@ -21,6 +21,7 @@ const mobileSpecs = [
   "**/browser-first-setup.spec.ts",
   "**/preview-drawing.spec.ts",
   "**/preview-reviewer.spec.ts",
+  "**/backend-views.spec.ts",
   "**/preview-scenarios.spec.ts",
   "**/preview-peek.spec.ts",
   "**/screenshots.spec.ts",

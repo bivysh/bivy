@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { AppManifest, AppView, DisplayStats, ReviewCardMode, ReviewerNote, SessionApp } from "./types.js";
+import type { AppManifest, AppView, DisplayStats, LogLine, ReviewCardMode, ReviewerNote, SessionApp } from "./types.js";
 import { REVIEW_CARD_MODES } from "./types.js";
 import type { ScenarioPlan } from "./scenarios.js";
 
@@ -15,7 +15,12 @@ const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 const MAX_FILES = 2000;
 type StaticTarget = { kind: "static"; files: Map<string, Buffer>; bytes: number };
 type Command = { command: string; args: string[]; workspace: string };
-export type AppTarget = StaticTarget | { kind: "service"; port: number; start?: Command } | ({ kind: "terminal" } & Command) | ({ kind: "display"; restartOnChange: boolean } & Command);
+/** Backend views read files in `dir` (inside the workspace) or a source of output. */
+export type BackendTarget =
+  | { kind: "requests"; dir: string; base?: { url: string } | { view: string } }
+  | ({ kind: "data"; dir: string } & Command)
+  | { kind: "logs"; source: { view?: string } | Command };
+export type AppTarget = StaticTarget | { kind: "service"; port: number; start?: Command } | ({ kind: "terminal" } & Command) | ({ kind: "display"; restartOnChange: boolean } & Command) | BackendTarget;
 /** What survives a node restart: the manifest and the IDs chat links point at. */
 interface Persisted { sessionId: string; workspace: string; manifest: AppManifest; id: string; viewIds: string[]; createdAt: number; reviewMode?: ReviewCardMode; agentNotes?: boolean;
   /** Reviewer notes per view ID, so a restart doesn't lose unread feedback. */
@@ -32,7 +37,7 @@ const isNote = (value: unknown): value is ReviewerNote => {
 };
 export interface RegisteredView {
   app: SessionApp; view: AppView; target: AppTarget;
-  /** The session workspace it was published from (where its scenarios live). */
+  /** The session workspace it was published from (where its scenarios and backend files live). */
   workspace: string;
   /** Bumped when an agent turn changes files, so open previews reload. */
   revision: number;
@@ -54,6 +59,8 @@ export interface RegisteredView {
   displayScale?: number;
   /** The last viewer's stream measurements. */
   stats?: DisplayStats;
+  /** When the preview last loaded a page: the start of "since this page loaded". */
+  loadedAt?: number;
   /** A desktop app's scenario: it runs with this plan's arguments and environment. */
   scenario?: ScenarioPlan;
 }
@@ -121,7 +128,49 @@ function command(spec: unknown, workspace: string, label: string): Command {
  * preview addresses survive restarts. Views whose server Bivy doesn't own —
  * a service without `start` — are not restored: a reused local port could
  * belong to anything by then. Detection offers them again. */
+/** A folder for a backend view's files: inside the workspace, never above it. */
+function inside(workspace: string, dir: unknown, fallback: string): string {
+  const relative = dir === undefined ? fallback : dir;
+  if (typeof relative !== "string" || !relative || relative.length > 300 || path.isAbsolute(relative)) throw new Error("A backend view's dir is a folder inside the workspace, like .bivy/requests.");
+  const resolved = path.resolve(workspace, relative);
+  const from = path.relative(path.resolve(workspace), resolved);
+  if (from === ".." || from.startsWith(`..${path.sep}`)) throw new Error("A backend view's dir must be inside the workspace.");
+  return resolved;
+}
+function backendTarget(spec: Extract<AppManifest["views"][number], { kind: "requests" | "data" | "logs" }>, workspace: string): BackendTarget {
+  if (spec.kind === "requests") {
+    const base = spec.base as { url?: unknown; view?: unknown } | undefined;
+    if (base !== undefined) {
+      if (typeof base.url === "string") {
+        const url = new URL(base.url);
+        if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error("A requests view's base.url is an http(s) address without credentials.");
+        return { kind: "requests", dir: inside(workspace, spec.dir, ".bivy/requests"), base: { url: url.href.replace(/\/$/, "") } };
+      }
+      if (typeof base.view !== "string" || !base.view) throw new Error("A requests view's base is {\"url\": …} or {\"view\": \"<web view name>\"}.");
+      return { kind: "requests", dir: inside(workspace, spec.dir, ".bivy/requests"), base: { view: base.view } };
+    }
+    return { kind: "requests", dir: inside(workspace, spec.dir, ".bivy/requests") };
+  }
+  if (spec.kind === "data") return { kind: "data", dir: inside(workspace, spec.dir, ".bivy/queries"), ...command(spec, workspace, "Data view") };
+  const source = spec.source as { view?: unknown; file?: unknown; command?: unknown } | undefined;
+  if (!source) return { kind: "logs", source: {} };
+  if (typeof source.view === "string") return { kind: "logs", source: { view: source.view } };
+  // A file is followed the way a person would: tail -F, from the last lines.
+  if (typeof source.file === "string") return { kind: "logs", source: { command: "tail", args: ["-n", "200", "-F", path.relative(workspace, inside(workspace, source.file, ""))], workspace: fs.realpathSync(workspace) } };
+  return { kind: "logs", source: command(source, workspace, "Logs view") };
+}
+/** Where a backend view reads from, in words, for its row in the Apps sheet. */
+function backendDetail(target: BackendTarget): string {
+  const line = (spec: Command) => [spec.command, ...spec.args].join(" ").slice(0, 120);
+  if (target.kind === "requests") return `${path.basename(target.dir)} · ${target.base && "url" in target.base ? target.base.url : target.base ? target.base.view : "the app's server"}`;
+  if (target.kind === "data") return line(target);
+  return "command" in target.source ? line(target.source) : target.source.view ? `${target.source.view} output` : "the app's server output";
+}
+
 export class AppRegistry extends EventEmitter {
+  /** Errors a web view's server logged since `since` (set by the backend
+   *  views, which follow server output; asked by the gateway for the Console). */
+  serverErrors?: (viewId: string, since: number) => { now: number; lines: LogLine[] };
   private apps = new Map<string, SessionApp>();
   private views = new Map<string, RegisteredView>();
   private persisted = new Map<string, Persisted>();
@@ -193,7 +242,10 @@ export class AppRegistry extends EventEmitter {
         // Shown through the web preview: Bivy's viewer streams the display.
         target = { kind: "display", ...command(spec, workspace, "Display view"), restartOnChange: spec.restartOnChange === true };
         view = { ...base, kind: "web", source: "display", managed: true };
-      } else throw new Error("Unsupported app view. Supported views: web, terminal and display.");
+      } else if (spec.kind === "requests" || spec.kind === "data" || spec.kind === "logs") {
+        target = backendTarget(spec, workspace);
+        view = { ...base, kind: "backend", backend: spec.kind, detail: backendDetail(target) };
+      } else throw new Error("Unsupported app view. Supported views: web, terminal, display, requests, data and logs.");
       app.views.push(view);
       const stored = restore?.notes?.[view.id];
       const notes = view.kind === "web" && Array.isArray(stored) ? stored.filter(isNote).slice(-MAX_NOTES) : [];

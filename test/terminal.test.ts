@@ -9,6 +9,7 @@ import { TerminalManager, resolveExecutable } from "../src/terminal.js";
 async function main() {
   const mgr = new TerminalManager();
   let output = "";
+  let tapped = "";
   let exited = false;
 
   let settled = false;
@@ -24,6 +25,7 @@ async function main() {
           settled = true;
           clearTimeout(timeout);
           assert.equal(mgr.size, 1, "one terminal should be live");
+          assert.ok(tapped.includes("bivy-terminal-ok"), "a tap follows the same output (an app's server log)");
           assert.equal(mgr.setClientSize(id, "client-a", 100, 40), true, "resize should succeed");
           void mgr.closeAndWait(id).then(() => {
             assert.equal(mgr.has(id), false, "terminal should be gone after close");
@@ -37,6 +39,7 @@ async function main() {
     });
 
     assert.ok(id.startsWith("term-"), "open returns a term id");
+    assert.ok(mgr.tap(id, (data) => { tapped += data; }), "a live terminal can be followed");
     // Echo a unique marker; works in sh/bash/zsh and powershell.
     mgr.write(id, "echo bivy-terminal-ok\n");
   });

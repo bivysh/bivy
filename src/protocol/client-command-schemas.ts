@@ -5,6 +5,8 @@ import { SHARE_DURATIONS } from "../apps/types.js";
 
 const request = { requestId: Type.Optional(Type.String()) };
 const session = { sessionId: Type.String() };
+/** A backend view by exact IDs (the app), or by app or view name (`bivy app requests`). */
+const backendView = { appId: Type.Optional(Type.String({ maxLength: 200 })), viewId: Type.Optional(Type.String({ maxLength: 200 })), target: Type.Optional(Type.String({ maxLength: 200 })) };
 const optionalSession = { sessionId: Type.Optional(Type.String()) };
 
 /** Declarative validation at the client-command boundary. A command absent from
@@ -38,6 +40,11 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
   "apps.agentNotes": Type.Object({ ...request, ...session, appId: Type.String(), enabled: Type.Boolean() }),
   "apps.notes": Type.Object({ ...request, ...session, appId: Type.Optional(Type.String({ maxLength: 200 })), view: Type.Optional(Type.String({ maxLength: 200 })), since: Type.Optional(Type.Number()) }),
   "apps.logs": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),
+  "apps.requests": Type.Object({ ...request, ...session, ...backendView }),
+  "apps.request": Type.Object({ ...request, ...session, ...backendView, id: Type.String({ maxLength: 200 }) }),
+  "apps.runRequest": Type.Object({ ...request, ...session, ...backendView, id: Type.Optional(Type.String({ maxLength: 200 })) }),
+  "apps.data": Type.Object({ ...request, ...session, ...backendView, run: Type.Optional(Type.Boolean()) }),
+  "apps.serverLog": Type.Object({ ...request, ...session, ...backendView, since: Type.Optional(Type.Number()) }),
   "apps.share": Type.Object({ ...request, ...session, appId: Type.Optional(Type.String({ maxLength: 200 })), viewId: Type.Optional(Type.String()), view: Type.Optional(Type.String({ maxLength: 200 })),
     duration: Type.Optional(Type.Union(SHARE_DURATIONS.map((row) => Type.Literal(row.id)))), controls: Type.Optional(Type.Boolean()) }),
   "apps.unshare": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),
