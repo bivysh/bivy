@@ -30,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **A message sent while an agent is still answering doesn't merge two replies.** For OpenCode, Grok and other ACP agents, what the agent had already said was dropped and the rest ran into the next answer.
 - **A forked agent can read its full earlier conversation.** The transcript file a fork points to now sits in the fork's own `.bivy/` folder, inside its workspace, instead of a folder a sandboxed agent can't open.
 - **Grok 4.7 is in the model list.**
+- Agent suggestions appear below the response instead of above the final answer.
+- Long suggestion descriptions can be expanded with Show more and collapsed with Show less.
 
 ## [0.20.6] - 2026-10-03
 

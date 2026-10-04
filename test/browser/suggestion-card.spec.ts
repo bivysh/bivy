@@ -5,7 +5,7 @@ let url: string;
 test.beforeAll(async ({ webApp }: { webApp: WebApp }) => { url = webApp.origin; });
 
 const suggestions = [
-  { id: "suggestion-a", title: "Live status page", text: "Build a small status page for the relay's /metrics and publish it as a live preview I can open on my phone." },
+  { id: "suggestion-a", title: "Live status page", text: "Build a small status page for the relay's /metrics and publish it as a live preview I can open on my phone.\n\nShow connection counts, uptime and recent errors.\n\nKeep the page readable on narrow screens and support both light and dark themes.\n\nInclude a refresh button and explain when the relay is unavailable.\n\nPublish the finished page so I can review it." },
   { id: "suggestion-b", title: "Add /version", text: "Add a /version endpoint that returns the package version, git commit and uptime.", run: "subagents" },
   { id: "suggestion-c", text: "Document the metrics in the README." },
 ];
@@ -37,17 +37,51 @@ for (const theme of themes) test(`suggested tasks are picked, then started in ne
       { role: "assistant", content: "This is bivy-relay, a small TypeScript service that relays encrypted frames between clients and nodes. Three first tasks:" },
     ] });
     for (const suggestion of items) c.store.apply({ type: "session.event", sessionId: "s", event: { type: "suggestion", id: suggestion.id, suggestion } });
+    c.store.apply({ type: "session.event", sessionId: "s", event: { type: "message_end", message: { role: "assistant", content: "Choose a task below to get started." } } });
+    c.store.apply({ type: "session.event", sessionId: "s", event: { type: "agent_end" } });
   }, suggestions);
 
   const card = (name: string) => page.getByRole("region", { name: `Suggested task: ${name}` });
   const last = card("Document the metrics in the README.");
   await expect(card("Live status page")).toContainText("publish it as a live preview");
+  const answer = page.getByText("Choose a task below to get started.", { exact: true });
+  for (const focus of [false, true]) {
+    if (focus) await page.getByRole("button", { name: "Show only prompts and final answers" }).click();
+    await expect(answer).toBeVisible();
+    expect(await answer.evaluate((el) => !!(el.compareDocumentPosition(document.querySelector(".suggestion-card")!) & Node.DOCUMENT_POSITION_FOLLOWING))).toBe(true);
+  }
+  await page.getByRole("button", { name: "Show full transcript" }).click();
+  const statusCard = card("Live status page");
+  const description = statusCard.locator(".suggestion-text");
+  const more = statusCard.getByRole("button", { name: "Show more", exact: true });
+  await expect(more).toHaveAttribute("aria-expanded", "false");
+  await expect(more).toHaveAttribute("aria-controls", await description.getAttribute("id") as string);
+  expect(await description.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+  await expect(card("Add /version").getByRole("button", { name: "Show more" })).toHaveCount(0);
+  await more.focus();
+  await more.press("Enter");
+  const less = statusCard.getByRole("button", { name: "Show less", exact: true });
+  await expect(less).toHaveAttribute("aria-expanded", "true");
+  await expect(less).toBeFocused();
+  expect(await description.evaluate((el) => el.scrollHeight <= el.clientHeight)).toBe(true);
+  await expect(description).toHaveText(suggestions[0].text);
+  await less.evaluate((el) => el.blur());
+  await statusCard.screenshot({ path: testInfo.outputPath(`suggestion-expanded-${theme}.png`) });
+  await less.focus();
+  await less.press("Space");
+  await expect(more).toHaveAttribute("aria-expanded", "false");
+  expect(await description.evaluate((el) => el.scrollHeight > el.clientHeight)).toBe(true);
+  await more.evaluate((el) => el.blur());
+  await statusCard.screenshot({ path: testInfo.outputPath(`suggestion-collapsed-${theme}.png`) });
+  await page.getByRole("checkbox", { name: "Live status page" }).focus();
+  await expect(page.getByRole("checkbox", { name: "Live status page" })).toBeFocused();
   // In a run, each card is a checkbox (all selected) and the run's last card holds the one action bar.
   // Mixed recommendations fall back to new sessions; sub-agents show because one card offered them.
   await expect(page.getByRole("checkbox", { checked: true })).toHaveCount(3);
   await expect(page.getByRole("button", { name: /new session/ })).toHaveCount(1);
   await expect(last.locator(".btn.primary")).toHaveText("Start 3 new sessions");
   await expect(last.getByRole("button", { name: "Run 3 as sub-agents" })).toBeVisible();
+  await answer.scrollIntoViewIfNeeded();
   await page.screenshot({ path: testInfo.outputPath(`suggestions-${theme}.png`), fullPage: true });
 
   await page.getByRole("checkbox", { name: "Add /version" }).uncheck();
