@@ -49,10 +49,11 @@ export class LogBuffer {
  *  log can say what came of it. */
 export class LogMarks {
   private marks = new Map<string, LogMark[]>();
-  add(appId: string, label: string, at = Date.now()): void {
+  /** `merge`: traffic from the preview, where a page and the requests it makes
+   *  in the same moment are one action. Something run on purpose always counts. */
+  add(appId: string, label: string, { at = Date.now(), merge = false }: { at?: number; merge?: boolean } = {}): void {
     const list = this.marks.get(appId) ?? [];
-    // A page and the requests it makes in the same moment are one action.
-    if (list.at(-1) && at - list.at(-1)!.at < 1000) return;
+    if (merge && list.at(-1) && at - list.at(-1)!.at < 1000) return;
     list.push({ at, label: label.slice(0, 200) });
     this.marks.set(appId, list.slice(-MAX_MARKS));
   }

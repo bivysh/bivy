@@ -65,7 +65,7 @@ export class Backend {
     // What happens in the preview (a page, a form) marks the logs: the gateway says.
     registry.on("action", (viewId: string, label: string) => {
       const entry = this.registry.getView(viewId);
-      if (entry) this.marks.add(entry.app.id, label);
+      if (entry) this.marks.add(entry.app.id, label, { merge: true });
     });
     registry.serverErrors = (viewId, since) => this.serverErrors(viewId, since);
   }
@@ -201,20 +201,23 @@ export class Backend {
     return { item, request: resolveRequest(request.spec, request.variables, { base }), ...(item.before && item.last ? { changes: answerChanges(item.before, item.last) } : {}) };
   }
   /** Runs one request now, from this machine. `as`: keep it as the run's "before". */
-  async run(entry: Entry, id: string, as: "last" | "before" = "last"): Promise<RequestDetail> {
+  /** `quiet`: Bivy's own before/after runs leave no marker; someone's run does. */
+  async run(entry: Entry, id: string, as: "last" | "before" = "last", quiet = false): Promise<RequestDetail> {
     const base = this.base(entry as Entry & { target: { kind: "requests" } });
     const request = this.findRequest(entry, id);
     const resolved = resolveRequest(request.spec, request.variables, { base });
-    if (as === "last") this.marks.add(entry.app.id, `Ran “${request.spec.name}”`);
+    if (!quiet) this.marks.add(entry.app.id, `Ran “${request.spec.name}”`);
     const answer = await send(resolved);
     let kept = this.answers.get(entry.view.id);
     if (!kept) { kept = new Map(); this.answers.set(entry.view.id, kept); }
     kept.set(request.id, as === "before" ? { before: answer, last: answer } : { ...kept.get(request.id), last: answer });
     return this.detail(entry, request.id);
   }
-  /** Every request that runs on its own (GET/HEAD to the app's server, or @auto). */
-  async runAuto(entry: Entry, as: "last" | "before" = "last"): Promise<RequestsViewResult> {
-    for (const item of this.requests(entry).requests.filter((request) => request.auto)) await this.run(entry, item.id, as).catch(() => {});
+  /** Every request that runs on its own (GET/HEAD to the app's server, or @auto).
+   *  `mark`: someone asked ("Run all"), so the log gets one marker for it. */
+  async runAuto(entry: Entry, as: "last" | "before" = "last", mark?: string): Promise<RequestsViewResult> {
+    if (mark) this.marks.add(entry.app.id, mark);
+    for (const item of this.requests(entry).requests.filter((request) => request.auto)) await this.run(entry, item.id, as, true).catch(() => {});
     return this.requests(entry);
   }
 
