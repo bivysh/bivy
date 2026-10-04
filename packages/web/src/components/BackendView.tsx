@@ -70,6 +70,8 @@ function RequestsPane({ ask, item: initial, online, onDraft, setBack }: PaneProp
   const [open, setOpen] = useState<string | undefined>(initial);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState("");
+  // Run in a scenario: answers its network rules give, the server for the rest.
+  const [scenario, setScenario] = useState("");
   const load = () => ask<RequestsViewResult>("apps.requests").then(setResult, (e: unknown) => setError(errorText(e, "Could not read the requests.")));
   useEffect(() => { void load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -82,7 +84,16 @@ function RequestsPane({ ask, item: initial, online, onDraft, setBack }: PaneProp
     catch (e) { setError(errorText(e, "Could not run the requests.")); }
     finally { setBusy(null); }
   };
-  if (open) return <RequestDetailPane ask={ask} id={open} online={online} onDraft={onDraft} />;
+  const scenarios = result?.scenarios ?? [];
+  const picker = scenarios.length > 0 && <label className="backend-scenario">
+    <span>Run in</span>
+    <select className="field" value={scenario} onChange={(event) => setScenario(event.target.value)}>
+      <option value="">Your data (the real server)</option>
+      {scenarios.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+    </select>
+  </label>;
+  const inside = scenarios.find((item) => item.id === scenario);
+  if (open) return <>{picker}{inside && <p className="backend-meta">Simulates {inside.simulated}; other requests reach the server.</p>}<RequestDetailPane ask={ask} id={open} online={online} onDraft={onDraft} scenario={scenario} /></>;
   if (!result) return error ? <div className="banner inline" data-tone="danger" role="alert">{error}</div> : <div className="apps-state" role="status"><Spinner size="sm" /><span>Reading requests…</span></div>;
   const files = [...new Set(result.requests.map((request) => request.file))];
   return <>
@@ -90,6 +101,7 @@ function RequestsPane({ ask, item: initial, online, onDraft, setBack }: PaneProp
       <span className="backend-meta">{result.base ? <>Against <code>{result.base}</code></> : "No server for {{base}}: give the view a base"}</span>
       <button className="btn sm" disabled={!online || busy !== null || !result.requests.some((request) => request.auto)} onClick={() => void runAll()}>{busy === "all" ? <Spinner size="xs" /> : null}Run all</button>
     </div>
+    {picker}
     {error && <div className="banner inline" data-tone="danger" role="alert">{error}</div>}
     {result.problems.map((problem) => <div key={problem.file} className="banner inline" data-tone="warn" role="status"><span className="banner-text"><code>{problem.file}</code> {problem.error}</span></div>)}
     {!result.requests.length && !result.problems.length && <div className="apps-empty">
@@ -112,11 +124,13 @@ function RequestsPane({ ask, item: initial, online, onDraft, setBack }: PaneProp
 }
 function RequestBadge({ request }: { request: RequestItem }) {
   if (!request.last) return <span className="badge">{request.auto ? "not run yet" : "runs on tap"}</span>;
+  // A scenario's made-up answer isn't a change in the app: it says what it is.
+  if (request.last.simulated) return <span className="badge" data-tone="accent">{statusText(request.last)} · simulated</span>;
   const changed = request.before && (request.before.status !== request.last.status || Boolean(request.before.error) !== Boolean(request.last.error));
   return <span className="badge" data-tone={changed ? "warn" : statusTone(request.last)}>{changed ? `${statusText(request.before!)} → ${statusText(request.last)}` : statusText(request.last)}</span>;
 }
 
-function RequestDetailPane({ ask, id, online, onDraft }: { ask: Ask; id: string; online: boolean; onDraft: (text: string) => void }) {
+function RequestDetailPane({ ask, id, online, onDraft, scenario }: { ask: Ask; id: string; online: boolean; onDraft: (text: string) => void; scenario: string }) {
   const [detail, setDetail] = useState<RequestDetail | null>(null);
   const [side, setSide] = useState<"before" | "now" | "changes">("now");
   const [busy, setBusy] = useState(false);
@@ -127,14 +141,14 @@ function RequestDetailPane({ ask, id, online, onDraft }: { ask: Ask; id: string;
   }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
   const run = async () => {
     setConfirm(false); setBusy(true); setError("");
-    try { const found = await ask<RequestDetail>("apps.runRequest", { id }); setDetail(found); setSide(found.changes?.length ? "changes" : "now"); }
+    try { const found = await ask<RequestDetail>("apps.runRequest", { id, ...(scenario ? { scenario } : {}) }); setDetail(found); setSide(found.changes?.length ? "changes" : "now"); }
     catch (e) { setError(errorText(e, "Could not run the request.")); }
     finally { setBusy(false); }
   };
   if (!detail) return <>{error ? <div className="banner inline" data-tone="danger" role="alert">{error}</div> : <div className="apps-state" role="status"><Spinner size="sm" /><span>Reading…</span></div>}</>;
   const { item, request } = detail;
   const shown = side === "before" ? item.before : item.last;
-  const draft = () => onDraft(`The request “${item.name}” (${item.method} ${item.url}, .bivy/requests/${item.file}) ${item.last ? `answered ${statusText(item.last)}${item.before ? ` (it answered ${statusText(item.before)} before your last run)` : ""}` : "hasn't run yet"}:\n\n${item.last ? body(item.last).slice(0, 3000) : ""}\n\nWhat should it answer?`);
+  const draft = () => onDraft(`The request “${item.name}” (${item.method} ${item.url}, .bivy/requests/${item.file})${item.last?.scenario ? ` in the scenario “${item.last.scenario}”` : ""} ${item.last ? `answered ${statusText(item.last)}${item.before ? ` (it answered ${statusText(item.before)} before your last run)` : ""}` : "hasn't run yet"}:\n\n${item.last ? body(item.last).slice(0, 3000) : ""}\n\nWhat should it answer?`);
   return <>
     <div className="backend-detail-head">
       <span className="backend-method" data-method={item.method}>{item.method}</span>
@@ -144,11 +158,12 @@ function RequestDetailPane({ ask, id, online, onDraft }: { ask: Ask; id: string;
     {item.last ? <>
       <div className="backend-status">
         <span className="badge" data-tone={statusTone(item.last)}>{item.last.error ? "No answer" : `${item.last.status} ${item.last.statusText}`.trim()}</span>
-        {item.before && item.before.status !== item.last.status && <span className="backend-meta">was {statusText(item.before)}</span>}
+        {item.before && !item.last.simulated && item.before.status !== item.last.status && <span className="backend-meta">was {statusText(item.before)}</span>}
         <span className="backend-meta">{item.last.ms} ms · {ago(item.last.at)}</span>
+        {item.last.scenario && <span className="badge" data-tone="accent">{item.last.simulated ? `Simulated by “${item.last.scenario}”` : `In “${item.last.scenario}”`}</span>}
       </div>
       <Switch label="Show the answer" value={side} onChange={setSide} options={[
-        { id: "before", label: "Before", disabled: !item.before }, { id: "now", label: "Now" }, { id: "changes", label: "Changes", disabled: !item.before },
+        { id: "before", label: "Before", disabled: !item.before }, { id: "now", label: "Now" }, { id: "changes", label: "Changes", disabled: !detail.changes },
       ]} />
       {side === "changes" ? <Changes changes={detail.changes ?? []} empty="The same answer as before the agent's last run." />
         : shown ? <pre className="backend-body">{body(shown)}{shown.truncated ? "\n… (cut at 1 MB)" : ""}</pre> : null}

@@ -53,7 +53,7 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
     "apps.request": (msg) => service.backend.detail(service.backendView(String(msg.sessionId), "requests", pick(msg)), String(msg.id)),
     "apps.runRequest": (msg) => {
       const entry = service.backendView(String(msg.sessionId), "requests", pick(msg));
-      return typeof msg.id === "string" ? service.backend.run(entry, msg.id) : service.backend.runAuto(entry, "last", "Ran all requests");
+      return typeof msg.id === "string" ? service.backend.run(entry, msg.id, "last", typeof msg.scenario === "string" && msg.scenario ? msg.scenario : undefined) : service.backend.runAuto(entry, "last", "Ran all requests");
     },
     "apps.data": (msg) => service.backend.data(service.backendView(String(msg.sessionId), "data", pick(msg)), msg.run === true),
     "apps.serverLog": (msg) => service.backend.log(service.backendView(String(msg.sessionId), "logs", pick(msg)), typeof msg.since === "number" ? msg.since : 0),

@@ -3128,7 +3128,7 @@ async function cmdApp(args = []) {
        bivy app scenarios [view] [--session <id>]
        bivy app share [app-id] [--view <view>] [--for 1h|1d|7d] [--view-only] [--session <id>]
        bivy app notes [app-id] [--view <view>] [--since <time>] [--session <id>]
-       bivy app requests [view] [--run <name>|--all] [--session <id>]
+       bivy app requests [view] [--run <name> [--scenario <id>]|--all] [--session <id>]
        bivy app data [view] [--run] [--session <id>]
        bivy app logs [view] [--since 2m] [--errors] [--session <id>]
        bivy app run [--name <name>] [--restart-on-change] [--session <id>] -- <command> [args…]
@@ -3216,7 +3216,9 @@ Backend views show what a backend change did, the way a preview shows a UI:
 Bivy runs GET requests (and those marked "# @auto") and every query before and
 after each of your runs; what changed goes on the review card. When you change
 backend behaviour, add a request and a query that show it, and check them with
-"requests", "data" and "logs" before saying you're done.
+"requests", "data" and "logs" before saying you're done. "requests --run <name>
+--scenario <id>" runs one inside a scenario: its network rules answer what
+they match, the server the rest.
 Web previews require operator setup; see docs/apps.md.`);
     return;
   }
@@ -3314,7 +3316,7 @@ async function appBackend(action, rest, { json = false } = {}) {
   const positional = [];
   for (let i = 0; i < rest.length; i++) {
     const arg = rest[i];
-    if (["--session", "--since"].includes(arg) || (arg === "--run" && action === "requests")) {
+    if (["--session", "--since"].includes(arg) || (["--run", "--scenario"].includes(arg) && action === "requests")) {
       const value = rest[++i];
       if (value === undefined || value.startsWith("--")) throw new Error(`${arg} requires a value.`);
       flags[arg] = value;
@@ -3328,7 +3330,8 @@ async function appBackend(action, rest, { json = false } = {}) {
   const body = { sessionId, ...(positional[0] ? { target: positional[0] } : {}) };
   if (action === "requests") {
     const kind = flags["--run"] ? "runRequest" : flags["--all"] ? "runRequest" : "requests";
-    const result = await appRequest(kind, { ...body, ...(flags["--run"] ? { id: flags["--run"] } : {}) }, { print: false });
+    if (flags["--scenario"] && !flags["--run"]) throw new Error("--scenario goes with --run <name>: one request, inside the scenario.");
+    const result = await appRequest(kind, { ...body, ...(flags["--run"] ? { id: flags["--run"] } : {}), ...(flags["--scenario"] ? { scenario: flags["--scenario"] } : {}) }, { print: false });
     const { type: _type, requestId: _requestId, ...shown } = result;
     console.log(JSON.stringify(shown, null, 2));
     return;

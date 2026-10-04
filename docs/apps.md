@@ -574,6 +574,14 @@ app's web server (its first `service` view, as `http://127.0.0.1:<port>`); set
   path. Redirects are shown, not followed. Requests time out after 10 seconds;
   bodies are cut at 1 MB.
 - **Send to agent…** drafts a message with the request and what it answered.
+- **Run in a scenario.** When the app has scenarios that simulate responses,
+  **Run in** picks one. A request then gets what the app gets in that
+  scenario: the first network rule that matches its method and path answers
+  it (after any delay), or drops it for `"offline": true`; otherwise it reaches
+  the real server. A made-up answer is labelled *Simulated by "…"* and isn't
+  compared with the real one; a real answer is labelled *In "…"*. Agents use
+  `bivy app requests --run <name> --scenario <id>`. Before-and-after runs for
+  the review card always use the real server.
 
 ### Data
 

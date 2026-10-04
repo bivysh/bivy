@@ -42,7 +42,7 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
   "apps.logs": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),
   "apps.requests": Type.Object({ ...request, ...session, ...backendView }),
   "apps.request": Type.Object({ ...request, ...session, ...backendView, id: Type.String({ maxLength: 200 }) }),
-  "apps.runRequest": Type.Object({ ...request, ...session, ...backendView, id: Type.Optional(Type.String({ maxLength: 200 })) }),
+  "apps.runRequest": Type.Object({ ...request, ...session, ...backendView, id: Type.Optional(Type.String({ maxLength: 200 })), scenario: Type.Optional(Type.String({ maxLength: 64 })) }),
   "apps.data": Type.Object({ ...request, ...session, ...backendView, run: Type.Optional(Type.Boolean()) }),
   "apps.serverLog": Type.Object({ ...request, ...session, ...backendView, since: Type.Optional(Type.Number()) }),
   "apps.share": Type.Object({ ...request, ...session, appId: Type.Optional(Type.String({ maxLength: 200 })), viewId: Type.Optional(Type.String()), view: Type.Optional(Type.String({ maxLength: 200 })),

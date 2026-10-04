@@ -167,3 +167,21 @@ test("the preview's Console hears the server's errors since the page loaded, and
     assert.equal((await get("/__bivy/server-errors?since=page", reviewer)).status, 403);
   } finally { gateway.close(); t.close(); }
 });
+
+test("a request runs inside a scenario: its rules answer what they match, the server the rest", async () => {
+  const t = await backendApp();
+  fs.mkdirSync(path.join(t.dir, ".bivy/scenarios"), { recursive: true });
+  fs.writeFileSync(path.join(t.dir, ".bivy/scenarios/orders-down.json"), JSON.stringify({ name: "Orders down", network: [{ match: "POST /orders", status: 503, json: { error: "down" } }] }));
+  fs.writeFileSync(path.join(t.dir, ".bivy/scenarios/empty-cart.json"), JSON.stringify({ name: "Empty cart", open: "/cart" }));
+  try {
+    const view = t.service.backendView("s", "requests", {});
+    assert.deepEqual(t.service.backend.requests(view).scenarios, [{ id: "orders-down", name: "Orders down", simulated: "POST /orders → 503" }], "only scenarios that simulate responses");
+    const create = await t.service.backend.run(view, "Create order", "last", "orders-down");
+    assert.deepEqual([create.item.last?.status, create.item.last?.body, create.item.last?.simulated, create.item.last?.scenario], [503, '{"error":"down"}', true, "Orders down"]);
+    const list = await t.service.backend.run(view, "List orders", "last", "orders-down");
+    assert.deepEqual([list.item.last?.status, list.item.last?.simulated, list.item.last?.scenario], [200, undefined, "Orders down"], "no rule for it: the real server answers");
+    await assert.rejects(t.service.backend.run(view, "List orders", "last", "empty-cart"), /No scenario "empty-cart" that simulates responses/);
+    const log = await t.service.backend.log(t.service.backendView("s", "logs", {}));
+    assert.equal(log.marks.at(-1)?.label, "Ran “List orders” in “Orders down”");
+  } finally { t.close(); }
+});
