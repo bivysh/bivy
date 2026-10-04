@@ -207,6 +207,36 @@ test("a silent service shows a recoverable state and drafts a fix request", asyn
 // The pill's tools work through the inspector the gateway injects, even when
 // the app ships a strict CSP: console errors are counted, pointing at an
 // element drafts context for the agent, and the lens constrains the width.
+// A server error is as much the page's problem as a script error: what the
+// app's server logs while serving the page shows in the same Console.
+test("the Console shows what the app's server logged while serving the page", async ({ page }, testInfo) => {
+  const registry = new AppRegistry();
+  let feed: ((data: string) => void) | undefined;
+  const service = new AppService(registry, undefined, { start: async () => "server", has: () => true, close: () => {}, tap: (_id, onData) => { feed = onData; return () => {}; } }, { serverWatchMs: 60_000 });
+  const fixture = await delivery(registry, false);
+  const { gateway, port } = fixture;
+  const app = http.createServer((_req, res) => { feed?.("GET / 500\nTypeError: Cannot read properties of undefined (reading 'total')\n"); res.setHeader("content-type", "text/html"); res.end('<!doctype html><html lang="en"><title>Ledger</title><h1>Ledger</h1></html>'); });
+  app.listen(0, "127.0.0.1"); await once(app, "listening");
+  try {
+    const published = service.publish("s", os.tmpdir(), { version: 1, name: "Ledger", views: [{ kind: "web", name: "Ledger", source: { kind: "service", port: (app.address() as { port: number }).port, start: { command: "true" } } }] });
+    const id = published.views[0].id;
+    await service.logs("s", published.id, id);
+    await page.route("https://*.preview.example.net/**", async (route) => {
+      const request = route.request(); const url = new URL(request.url());
+      const response = await route.fetch({ url: `http://127.0.0.1:${port}${url.pathname}${url.search}`, headers: { ...await request.allHeaders(), host: url.host, "sec-fetch-dest": request.resourceType() === "document" ? (request.frame().parentFrame() ? "iframe" : "document") : "empty" }, maxRedirects: 0 }).catch(() => undefined);
+      await (response ? route.fulfill({ response }) : route.abort()).catch(() => {});
+    });
+    await page.route("https://bivy.example/**", (route) => route.fulfill({ contentType: "text/html", body: "<h1>Bivy chat</h1>" }));
+    await page.goto(gateway.open(id, "https://bivy.example/sessions/s"));
+    await expect(page.frameLocator('iframe[title="Ledger"]').getByRole("heading", { name: "Ledger" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Preview options, 1 error" })).toBeVisible({ timeout: 10_000 });
+    await fromMenu(page, "Console");
+    const console = page.getByRole("region", { name: "Console" });
+    await expect(console.locator("li")).toHaveText([/^server\s*TypeError: Cannot read properties of undefined \(reading 'total'\)$/]);
+    await page.screenshot({ path: testInfo.outputPath("console-server-error.png"), animations: "disabled" });
+  } finally { fixture.close(); app.close(); }
+});
+
 test("inspector reports console errors and pointed elements to the pill", async ({ page }, testInfo) => {
   const registry = new AppRegistry();
   const fixture = await delivery(registry, false);

@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
-import type { AppManifest, AppView, DisplayStats, ReviewCardMode, ReviewerNote, SessionApp } from "./types.js";
+import type { AppManifest, AppView, DisplayStats, LogLine, ReviewCardMode, ReviewerNote, SessionApp } from "./types.js";
 import { REVIEW_CARD_MODES } from "./types.js";
 
 const MAX_BYTES = 25 * 1024 * 1024;
@@ -58,6 +58,8 @@ export interface RegisteredView {
   displayScale?: number;
   /** The last viewer's stream measurements. */
   stats?: DisplayStats;
+  /** When the preview last loaded a page: the start of "since this page loaded". */
+  loadedAt?: number;
 }
 
 const sameFiles = (a: Map<string, Buffer>, b: Map<string, Buffer>) => a.size === b.size && [...a].every(([key, data]) => b.get(key)?.equals(data));
@@ -163,6 +165,9 @@ function backendDetail(target: BackendTarget): string {
 }
 
 export class AppRegistry extends EventEmitter {
+  /** Errors a web view's server logged since `since` (set by the backend
+   *  views, which follow server output; asked by the gateway for the Console). */
+  serverErrors?: (viewId: string, since: number) => { now: number; lines: LogLine[] };
   private apps = new Map<string, SessionApp>();
   private views = new Map<string, RegisteredView>();
   private persisted = new Map<string, Persisted>();

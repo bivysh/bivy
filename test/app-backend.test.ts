@@ -9,6 +9,7 @@ import http from "node:http";
 import { once } from "node:events";
 import { AppRegistry } from "../src/apps/registry.js";
 import { AppService } from "../src/apps/service.js";
+import { AppGateway } from "../src/apps/gateway.js";
 import { parseHttpFile, resolveRequest } from "../src/apps/backend/http-file.js";
 import { parseRows } from "../src/apps/backend/rows.js";
 import { LogBuffer } from "../src/apps/backend/logs.js";
@@ -93,7 +94,7 @@ async function backendApp() {
   ] });
   // The server Bivy runs starts, and its output is followed from then on.
   await service.logs("s", app.id, app.views[0]!.id);
-  return { dir, state, db, service, reviews, app, log: (text: string) => feed?.(text), close: () => { api.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
+  return { dir, state, db, service, reviews, app, registry, log: (text: string) => feed?.(text), close: () => { api.close(); fs.rmSync(dir, { recursive: true, force: true }); } };
 }
 
 test("a backend-only run gets a card: answers that changed, rows that changed, errors that appeared", async () => {
@@ -137,4 +138,32 @@ test("a run that changes nothing in the backend makes no card", async () => {
     assert.equal(await t.service.runEnded("s"), undefined);
     assert.deepEqual(t.reviews, []);
   } finally { t.close(); }
+});
+
+test("the preview's Console hears the server's errors since the page loaded, and only the owner does", async () => {
+  const t = await backendApp();
+  const gateway = new AppGateway(t.registry, "https://{app}.preview.example.net");
+  gateway.server.listen(0, "127.0.0.1"); await once(gateway.server, "listening");
+  const port = (gateway.server.address() as { port: number }).port;
+  const id = t.app.views[0]!.id, host = new URL(gateway.origin(id)).host;
+  const get = (url: string, cookie: string) => new Promise<{ status: number; body: string }>((resolve, reject) => {
+    http.get({ hostname: "127.0.0.1", port, path: url, headers: { host, cookie, "sec-fetch-dest": url === "/" ? "iframe" : "empty" } }, (res) => {
+      let body = ""; res.on("data", (chunk) => { body += chunk; }); res.on("end", () => resolve({ status: res.statusCode!, body }));
+    }).on("error", reject);
+  });
+  const redeem = (link: string) => new Promise<string>((resolve, reject) => {
+    const req = http.request({ hostname: "127.0.0.1", port, path: "/__bivy/redeem", method: "POST", headers: { host, origin: gateway.origin(id) } }, (res) => { res.resume(); resolve(res.headers["set-cookie"]![0]!.split(";")[0]!); });
+    req.on("error", reject); req.end(new URL(link).hash.slice(1));
+  });
+  try {
+    const owner = await redeem(gateway.open(id)), reviewer = await redeem(gateway.share(id).url);
+    t.log("TypeError: an error before this page\n");
+    await new Promise((r) => setTimeout(r, 5));
+    await get("/", owner);
+    t.log("GET / 200\nTypeError: cannot read properties of undefined (reading 'total')\n    at render (app/page.tsx:12)\n");
+    const first = JSON.parse((await get("/__bivy/server-errors?since=page", owner)).body);
+    assert.deepEqual(first.lines.map((line: { text: string }) => line.text), ["TypeError: cannot read properties of undefined (reading 'total')", "    at render (app/page.tsx:12)"]);
+    assert.deepEqual(JSON.parse((await get(`/__bivy/server-errors?since=${first.now}`, owner)).body).lines, [], "each error once");
+    assert.equal((await get("/__bivy/server-errors?since=page", reviewer)).status, 403);
+  } finally { gateway.close(); t.close(); }
 });

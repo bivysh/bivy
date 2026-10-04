@@ -550,6 +550,12 @@ from the web preview. The view opens at the last one (*Your last action ·
 Ran "Create order"*). **Errors** filters; **Send errors to agent…** drafts the
 lines since the last action. Secrets are redacted before anything is shown.
 
+**In the web preview's Console.** Errors that the app's server logged since the
+page loaded (from a server Bivy runs, or a logs view of the same app) show in
+the preview's **Console** next to the page's own, tagged *server*, and count on
+the pill. That includes errors logged while rendering the page, before its
+scripts ran. People who open a share link don't see them.
+
 ### For agents
 
 ```sh

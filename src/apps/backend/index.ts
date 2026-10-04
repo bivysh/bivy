@@ -4,7 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { AppRegistry, BackendTarget, RegisteredView } from "../registry.js";
-import type { DataQuery, DataViewResult, EvidenceRow, LogsViewResult, RequestAnswer, RequestDetail, RequestItem, RequestsViewResult } from "../types.js";
+import type { DataQuery, DataViewResult, EvidenceRow, LogLine, LogsViewResult, RequestAnswer, RequestDetail, RequestItem, RequestsViewResult } from "../types.js";
 import { parseHttpFile, resolveRequest, type HttpRequestSpec } from "./http-file.js";
 import { answerChanged, answerChanges, rowChanges } from "./compare.js";
 import { parseRows, readQueryFile, type Rows } from "./rows.js";
@@ -67,6 +67,7 @@ export class Backend {
       const entry = this.registry.getView(viewId);
       if (entry) this.marks.add(entry.app.id, label);
     });
+    registry.serverErrors = (viewId, since) => this.serverErrors(viewId, since);
   }
 
   views(sessionId: string): Entry[] {
@@ -106,6 +107,22 @@ export class Backend {
     const server = source.view ? servers.find((view) => view.view.name.toLowerCase() === source.view!.toLowerCase()) : servers[0];
     if (!server) throw new Error(source.view ? `${entry.app.name} has no view called "${source.view}" that Bivy runs.` : `${entry.app.name} has no server that Bivy runs. Give the logs view a "source": a file or a command.`);
     return { key: server.view.id, detail: `${server.view.name} output` };
+  }
+  /** Errors from the servers behind a web view since `since`: its own, if Bivy
+   *  runs it, and what its app's logs views follow. For the preview's Console,
+   *  so a server error shows up next to the page's own. Never starts a source. */
+  serverErrors(viewId: string, since: number): { now: number; lines: LogLine[] } {
+    const now = Date.now();
+    const entry = this.registry.getView(viewId);
+    if (!entry) return { now, lines: [] };
+    const keys = new Set([viewId]);
+    for (const view of entry.app.views) {
+      const logs = this.registry.getView(view.id);
+      if (logs?.target.kind !== "logs") continue;
+      try { keys.add(this.logSource(logs as Entry & { target: { kind: "logs" } }).key); } catch { /* no server to follow */ }
+    }
+    const lines = [...keys].flatMap((key) => this.logs.get(key)?.errorsBetween(since, now) ?? []).sort((a, b) => a.at - b.at);
+    return { now, lines: lines.slice(-20) };
   }
   async log(entry: Entry, since = 0): Promise<LogsViewResult> {
     if (entry.target.kind !== "logs") throw new Error("Not a logs view.");
