@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tool cards show what the tool printed.** Pi's shell output showed as raw JSON with no exit code, and its card lost the command once output streamed.
 - **No agent log dumps in the transcript.** An ACP agent's stderr (for example OpenCode's request errors) appeared as an "Agent output" card. It now shows only when the agent crashes.
 - **Reopened Codex sessions don't show Codex's own context as your message.**
+- Agent suggestions appear below the response instead of above the final answer.
+- Long suggestion descriptions can be expanded with Show more and collapsed with Show less.
 
 ## [0.20.6] - 2026-10-03
 

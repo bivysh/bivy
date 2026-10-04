@@ -511,7 +511,6 @@ const EntryView = memo(function EntryView({
       {entry.app && <AppMessage app={entry.app} />}
       {entry.review && <ReviewCard review={entry.review} />}
       {entry.pin && <PinCard pin={entry.pin} />}
-      {entry.suggestion && <SuggestionCard suggestion={entry.suggestion} />}
       {entry.notice && <NoticeCard notice={entry.notice} />}
       {entry.delegation && <DelegationCard delegation={entry.delegation} />}
       {hasAttachments && <MessageAttachments attachments={entry.attachments!} />}
@@ -524,6 +523,7 @@ const EntryView = memo(function EntryView({
           {readAloudSupported() && <SpeakButton text={entry.text} />}
         </div>
       )}
+      {entry.suggestion && <SuggestionCard suggestion={entry.suggestion} />}
     </div>
   );
 });
@@ -569,7 +569,12 @@ function groupTurns(items: RenderItem[]): RenderBlock[] {
     current.response.push(item);
   }
   for (const block of blocks) {
-    if (block.kind === "turn") block.response = latestPlanOnly(block.response, block.key);
+    if (block.kind !== "turn") continue;
+    const response = latestPlanOnly(block.response, block.key);
+    // Suggestions often arrive from a tool before the final prose. Keep these
+    // next actions below the answer, in their original order within this turn.
+    const isSuggestion = (item: RenderItem) => item.kind === "entry" && !!item.entry.suggestion;
+    block.response = [...response.filter((item) => !isSuggestion(item)), ...response.filter(isSuggestion)];
   }
   return blocks;
 }
