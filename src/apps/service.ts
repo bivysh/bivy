@@ -14,7 +14,12 @@ import { captureFrame, encodePng, sendInput } from "./rfb.js";
 import { inputEvents, readAction } from "./input.js";
 import { pressMenu, readMenuPath, readMenus, type AppMenu } from "./menu.js";
 import { pngSize } from "./review.js";
-import { SCENARIO_DIR, loadScenarios, scenariosFor, summarize, type ScenarioSummary } from "./scenarios.js";
+import { SCENARIO_DIR, loadScenarios, planScenario, scenariosFor, summarize, type ScenarioKind, type ScenarioPlan, type ScenarioStep, type ScenarioSummary } from "./scenarios.js";
+import { startScenarioProxy } from "./scenario-proxy.js";
+
+const scenarioKind = (entry: RegisteredView): ScenarioKind => entry.target.kind === "display" ? "desktop" : "web";
+/** A desktop step in words, for the message when one fails. */
+const stepWords = (step: ScenarioStep): string => "click" in step ? `click ${Array.isArray(step.click) ? step.click.join(",") : step.click}` : "type" in step ? `type "${step.type.slice(0, 40)}"` : "press" in step ? `press ${step.press}` : "menu" in step ? `menu ${step.menu}` : "wait" in step ? `wait ${step.wait}` : "step";
 
 export interface AppPreviewProvider {
   readonly available?: boolean;
@@ -115,6 +120,8 @@ export class AppService {
   private latest = new Map<string, AppReview>();
   /** Per view: the newest reviewer note a run-end card has already counted. */
   private handedOver = new Map<string, number>();
+  /** Per desktop app in a scenario with an API: the proxy in front of it and the variable pointing there. */
+  private proxies = new Map<string, { close(): void; env: Record<string, string> }>();
   /** Screenshots in progress, so a card, Compare and a baseline share one browser run. */
   private inflight = new Map<string, Promise<Buffer | undefined>>();
   constructor(readonly registry: AppRegistry, readonly gateway: AppPreviewProvider | undefined, private readonly terminals: AppTerminalProvider, options: {
@@ -135,6 +142,7 @@ export class AppService {
     this.reviews = options.reviews ?? NO_REVIEWS;
     this.pinSink = options.pins ?? NO_PINS;
     this.settleMs = options.settleMs ?? COMPARE_SETTLE_MS;
+    registry.desktopScenario = (viewId, scenario) => this.desktopScenario(viewId, scenario);
   }
 
   /** A session's apps, or every app on this machine when no session is given. */
@@ -168,6 +176,8 @@ export class AppService {
       const entry = this.registry.getView(id);
       const server = this.servers.get(id);
       if (entry?.target.kind !== "display" || !server?.termId) continue;
+      // In a scenario, the new code starts in it again, steps and all.
+      if (entry.scenario) { void this.desktopScenario(id, entry.scenario.id).catch(() => {}); continue; }
       this.terminals.close(server.termId);
       server.termId = undefined;
       void this.ensureServer(entry).catch(() => {});
@@ -317,12 +327,14 @@ export class AppService {
   scenarios(sessionId: string, target?: string): { app: string; view: string; dir: string; scenarios: ScenarioSummary[] } {
     const entry = this.pickView(sessionId, target);
     const { scenarios, problems } = loadScenarios(entry.workspace);
-    return { app: entry.app.name, view: entry.view.name, dir: SCENARIO_DIR, scenarios: summarize(scenariosFor(scenarios, entry.app.name, entry.view.name), problems, entry.app.createdAt) };
+    const kind = scenarioKind(entry);
+    return { app: entry.app.name, view: entry.view.name, dir: SCENARIO_DIR, scenarios: summarize(scenariosFor(scenarios, entry.app.name, entry.view.name, kind), problems, entry.app.createdAt, kind) };
   }
   /** Scenarios a review card offers to try, by ID, each one that can be opened. */
   private tryScenarios(entry: RegisteredView, ids: string[]): NonNullable<AppReview["try"]> {
     const { scenarios, problems } = loadScenarios(entry.workspace);
-    const known = summarize(scenariosFor(scenarios, entry.app.name, entry.view.name), problems, entry.app.createdAt);
+    const kind = scenarioKind(entry);
+    const known = summarize(scenariosFor(scenarios, entry.app.name, entry.view.name, kind), problems, entry.app.createdAt, kind);
     const wanted = [...new Set(ids.map((id) => id.trim().toLowerCase().replace(/\.json$/, "")).filter(Boolean))].slice(0, 6);
     return wanted.map((id) => {
       const found = known.find((item) => item.id === id);
@@ -330,6 +342,48 @@ export class AppService {
       if (found.error) throw new Error(`Scenario "${id}" can't be opened: ${found.error}`);
       return { id: found.id, name: found.name };
     });
+  }
+  /** Puts a desktop app in a scenario ("" for none). It is one program for
+   *  everyone watching, so the scenario is the app's: it restarts with the
+   *  scenario's arguments and environment, its API (if the scenario has one)
+   *  behind a proxy that applies the network rules, and then the steps run in
+   *  its window the way an agent's input does. A step that fails leaves the app
+   *  where it got to and says which step, rather than throwing. */
+  async desktopScenario(viewId: string, id: string): Promise<{ plan: ScenarioPlan | null; error?: string }> {
+    const entry = this.registry.getView(viewId);
+    if (entry?.target.kind !== "display") throw new Error("Desktop scenarios are for desktop apps.");
+    const plan = id ? planScenario(scenariosFor(loadScenarios(entry.workspace).scenarios, entry.app.name, entry.view.name, "desktop"), id, "desktop") : null;
+    this.proxies.get(viewId)?.close();
+    this.proxies.delete(viewId);
+    if (plan?.api) {
+      const proxy = await startScenarioProxy(plan.api.target, plan.network);
+      this.proxies.set(viewId, { close: proxy.close, env: { [plan.api.env]: proxy.url } });
+    }
+    entry.scenario = plan ?? undefined;
+    const server = this.servers.get(viewId);
+    if (server?.termId) { this.terminals.close(server.termId); server.termId = undefined; }
+    await this.windowShown(entry);
+    if (!plan) return { plan: null };
+    const steps = plan.stages.flatMap((stage) => stage.steps);
+    for (const [index, step] of steps.entries()) {
+      try { await this.desktopStep(entry, step); }
+      catch (error) { return { plan, error: `Step ${index + 1} (${stepWords(step)}): ${(error as Error).message}` }; }
+      await new Promise((r) => setTimeout(r, AFTER_INPUT_MS));
+    }
+    return { plan };
+  }
+  private async desktopStep(entry: RegisteredView, step: ScenarioStep): Promise<void> {
+    if ("wait" in step) { if (typeof step.wait === "number") await new Promise((r) => setTimeout(r, step.wait as number)); return; }
+    if ("menu" in step) {
+      if (!entry.displayControl) throw new Error("This machine's desktop apps don't expose their menus (macOS only). Use a key combo instead.");
+      await pressMenu(entry.displayControl, readMenuPath(step.menu));
+      return;
+    }
+    if (!entry.display) throw new Error("The app isn't running. Check its Logs in the Apps sheet.");
+    const action = "click" in step && Array.isArray(step.click) ? { kind: "click", x: step.click[0], y: step.click[1] }
+      : "type" in step ? { kind: "type", text: step.type } : "press" in step ? { kind: "key", keys: step.press } : undefined;
+    if (!action) throw new Error("That step is for web pages.");
+    await sendInput(entry.display, inputEvents(readAction(action)));
   }
   /** No more cards for the rest of the session's current run. */
   mute(sessionId: string): { ok: true } {
@@ -650,8 +704,10 @@ export class AppService {
     return this.displays.ensure(entry.view.id, entry.app.name, entry.displayScale).then((display) => {
       entry.display = display.socket;
       entry.displayControl = display.control;
-      const [command, ...args] = [...display.launch ?? [], target.command, ...target.args];
-      return { command: command!, args, workspace: target.workspace, env: display.env, name: `${entry.app.name} · ${entry.view.name}` };
+      // A scenario adds its arguments and environment; the display's own variables always win.
+      const [command, ...args] = [...display.launch ?? [], target.command, ...target.args, ...entry.scenario?.args ?? []];
+      const env = { ...entry.scenario?.env, ...this.proxies.get(entry.view.id)?.env, ...display.env };
+      return { command: command!, args, workspace: target.workspace, env, name: `${entry.app.name} · ${entry.view.name}` };
     });
   }
   /** Services start synchronously; a desktop app waits for its display. */
@@ -689,6 +745,8 @@ export class AppService {
   }
   private stopServer(id: string): void {
     this.displays.stop(id);
+    this.proxies.get(id)?.close();
+    this.proxies.delete(id);
     const entry = this.registry.getView(id);
     if (entry) { entry.display = undefined; entry.displayControl = undefined; entry.displayScale = undefined; }
     const server = this.servers.get(id);

@@ -3183,7 +3183,11 @@ Optional: "description", "view" (app or view name), "from" (another scenario
 to start from), "fresh": true (start as a new visitor). Steps: {"click":sel},
 {"fill":sel,"with":"text"}, {"press":"Enter"}, {"wait":sel or ms}; sel is a CSS
 selector or text=Visible text. Network rules answer matching requests for that
-viewer only: "status", "json" or "body", "delayMs", or "offline": true. When
+viewer only: "status", "json" or "body", "delayMs", or "offline": true.
+Desktop apps restart in a scenario: "args" and "env" are added to the app's
+command, "api": {"env":"API_URL","target":"http://127.0.0.1:4000"} points the
+app at a proxy that applies "network", and steps are {"click":[x,y]},
+{"type":"text"}, {"press":"cmd+s"}, {"menu":"File > Open"}, {"wait":ms}. When
 you finish a visible change, add scenarios for the states it affects (errors,
 empty, slow) and pass them to present --try.
 "share" mints a reusable link to one web view and prints its URL and expiry

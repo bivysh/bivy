@@ -18,7 +18,8 @@ import type { AppService } from "./service.js";
 import type { ReviewShot } from "./types.js";
 import { readStrokes, readElementScrolls } from "./annotate.js";
 import { contentType } from "./mime.js";
-import { loadScenarios, matchRule, planScenario, scenariosFor, summarize, type NetworkRule, type ScenarioPlan } from "./scenarios.js";
+import { loadScenarios, matchRule, planScenario, scenariosFor, summarize, type ScenarioKind, type ScenarioPlan } from "./scenarios.js";
+import { simulate } from "./scenario-proxy.js";
 
 export type NoteCapture = (entry: RegisteredView, mark: Parameters<AppService["annotate"]>[1]) => Promise<ReviewShot | undefined>;
 
@@ -32,8 +33,7 @@ const COMPARE_PATH = "/__bivy/compare";
 const NOTES_PATH = "/__bivy/notes";
 const SCENARIOS_PATH = "/__bivy/scenarios";
 const SCENARIO_PATH = "/__bivy/scenario";
-/** Marks a response the gateway made up for a scenario, not the app. */
-const SIMULATED = "x-bivy-simulated";
+const scenarioKind = (entry: RegisteredView): ScenarioKind => entry.target.kind === "display" ? "desktop" : "web";
 /** Larger HTML documents pass through without the inspector. */
 const MAX_INJECT_BYTES = 5 * 1024 * 1024;
 
@@ -420,7 +420,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     }
     if (entry.target.kind === "display") { await this.display(req, res, entry); return; }
     const rule = session.scenario && matchRule(session.scenario.network, req.method, req.url);
-    if (rule && await this.simulate(req, res, rule, id)) return;
+    if (rule && await simulate(req, res, rule, responseHeaders({}, this.ancestors(id)))) return;
     const inspect = isPageLoad(req);
     // Remember the framed page so a turn reload lands where the user was.
     if (req.method === "GET" && req.headers["sec-fetch-dest"] === "iframe" && req.url.length <= 2048) entry.lastPath = req.url;
@@ -594,12 +594,15 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     });
     res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ screenshot: Boolean(shot) }));
   }
-  /** The view's scenarios for the shell's switcher, and the one this browser is in. */
+  /** The view's scenarios for the shell's switcher, and the one it's in: this
+   *  browser's for a web page, the app's for a desktop app. */
   private scenarios(res: ServerResponse, entry: RegisteredView, session: PreviewSession): void {
     const { scenarios, problems } = loadScenarios(entry.workspace);
-    const own = scenariosFor(scenarios, entry.app.name, entry.view.name);
+    const kind = scenarioKind(entry);
+    const own = scenariosFor(scenarios, entry.app.name, entry.view.name, kind);
+    const active = kind === "desktop" ? entry.scenario : session.scenario;
     res.writeHead(200, { "access-control-allow-origin": this.shellOrigin(entry.view.id), "access-control-allow-credentials": "true", vary: "Origin", "content-type": "application/json" });
-    res.end(JSON.stringify({ scenarios: summarize(own, problems, entry.app.createdAt), active: session.scenario ? { id: session.scenario.id, name: session.scenario.name, ...(session.scenario.simulated ? { simulated: session.scenario.simulated } : {}) } : null }));
+    res.end(JSON.stringify({ kind, scenarios: summarize(own, problems, entry.app.createdAt, kind), active: active ? { id: active.id, name: active.name, ...(active.simulated ? { simulated: active.simulated } : {}) } : null }));
   }
   /** Puts this browser in a scenario (or back in none, for an empty body) and
    *  returns the plan the shell walks through: pages to open and steps to take.
@@ -612,14 +615,23 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     let body = "";
     for await (const chunk of req) { body += chunk.toString(); if (body.length > 64) { res.writeHead(413, cors); res.end(); return; } }
     const id = body.trim();
+    const json = (status: number, value: object) => { res.writeHead(status, { ...cors, "content-type": "application/json" }); res.end(JSON.stringify(value)); };
+    // A desktop app is one program for everyone watching it: its scenario
+    // restarts it, and the steps run in its window before this answers.
+    if (scenarioKind(entry) === "desktop") {
+      if (!this.registry.desktopScenario) { json(400, { error: "Desktop scenarios aren't available on this machine." }); return; }
+      try { json(200, await this.registry.desktopScenario(entry.view.id, id)); }
+      catch (error) { json(400, { error: (error as Error).message }); }
+      return;
+    }
     if (!id) {
       session.scenario = undefined;
       res.writeHead(200, { ...cors, "content-type": "application/json" }); res.end(JSON.stringify({ plan: null })); return;
     }
     let plan: ScenarioPlan;
     try {
-      const own = scenariosFor(loadScenarios(entry.workspace).scenarios, entry.app.name, entry.view.name);
-      plan = planScenario(own, id);
+      const own = scenariosFor(loadScenarios(entry.workspace).scenarios, entry.app.name, entry.view.name, "web");
+      plan = planScenario(own, id, "web");
     } catch (error) {
       res.writeHead(400, { ...cors, "content-type": "application/json" }); res.end(JSON.stringify({ error: (error as Error).message })); return;
     }
@@ -632,27 +644,6 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     }
     res.writeHead(200, headers);
     res.end(JSON.stringify({ plan }));
-  }
-  /** A scenario's network rule met a request: wait if it says so, then answer
-   *  for the app, drop the connection ("offline"), or let the request through
-   *  late (delay only). Returns whether the request was answered here. */
-  private async simulate(req: IncomingMessage, res: ServerResponse, rule: NetworkRule, id: string): Promise<boolean> {
-    if (rule.delayMs) {
-      const gone = await new Promise<boolean>((resolve) => {
-        const timer = setTimeout(() => { res.off("close", closed); resolve(false); }, rule.delayMs);
-        const closed = () => { clearTimeout(timer); resolve(true); };
-        res.once("close", closed);
-      });
-      if (gone) return true;
-    }
-    if (rule.offline) { req.socket.destroy(); return true; }
-    if (rule.status === undefined && rule.json === undefined && rule.body === undefined) return false;
-    const json = rule.json !== undefined;
-    const body = Buffer.from(json ? JSON.stringify(rule.json) : rule.body ?? "");
-    const headers = responseHeaders({}, this.ancestors(id));
-    res.writeHead(rule.status ?? 200, { ...headers, "content-type": json ? "application/json" : "text/plain; charset=utf-8", "content-length": body.length, [SIMULATED]: "1" });
-    res.end(req.method === "HEAD" ? undefined : body);
-    return true;
   }
   /** Compare shots for the shell: the list, or one PNG by index. */
   private compare(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): void {

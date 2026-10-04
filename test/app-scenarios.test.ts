@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
+import net from "node:net";
 import { once } from "node:events";
 import { AppRegistry } from "../src/apps/registry.js";
 import { AppGateway } from "../src/apps/gateway.js";
@@ -124,4 +125,71 @@ test("a review card offers only scenarios that open, and a chip opens the previe
     const opened = await service.open("s", app.id, app.views[0].id, undefined, false, undefined, undefined, "cart");
     assert.equal(opened.kind === "web" && opened.url, `https://view-${app.views[0].id}.preview.example.net/__bivy/open#t~~cart`);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+/** A VNC server that completes the handshake as an 800×600 display and records what the app is sent. */
+async function fakeDisplay(socketPath: string) {
+  const received: Buffer[] = [];
+  const server = net.createServer((socket) => {
+    let stage = 0;
+    socket.write("RFB 003.008\n");
+    socket.on("data", (data: Buffer) => {
+      if (stage === 0) { stage = 1; socket.write(Buffer.from([1, 1])); }
+      else if (stage === 1) { stage = 2; socket.write(Buffer.alloc(4)); }
+      else if (stage === 2) { stage = 3; const init = Buffer.alloc(24); init.writeUInt16BE(800, 0); init.writeUInt16BE(600, 2); socket.write(init); }
+      else received.push(data);
+    });
+  });
+  server.listen(socketPath); await once(server, "listening");
+  return { server, events: () => Buffer.concat(received) };
+}
+
+test("a desktop app opens in a scenario: restarted with its arguments and environment, its API behind the rules, then the steps in its window", async () => {
+  const api = http.createServer((req, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end(JSON.stringify({ real: req.url })); });
+  api.listen(0, "127.0.0.1"); await once(api, "listening");
+  const target = `http://127.0.0.1:${(api.address() as { port: number }).port}`;
+  const dir = project({
+    "offline.json": { name: "Payments down", args: ["--demo"], env: { THEME: "dark" }, api: { env: "API_URL", target }, steps: [{ click: [10, 20] }, { press: "ctrl+s" }], network: [{ match: "POST /payments", status: 503, json: { error: "down" } }] },
+    "lost.json": { name: "Lost", steps: [{ click: [900, 10] }] },
+    "web-only.json": { name: "Web", open: "/", steps: [{ click: "text=Pay" }] },
+    "mixed.json": { name: "Mixed", open: "/", args: ["--x"] },
+    "no-api.json": { name: "No API", args: [], network: [{ match: "/x", status: 500 }] },
+  });
+  const vnc = await fakeDisplay(path.join(dir, "vnc.sock"));
+  const live = new Set<string>(); const started: { args: string[]; env?: Record<string, string> }[] = [];
+  const terminals = { start: async (spec: { args: string[]; env?: Record<string, string> }) => { started.push(spec); live.add(`t${started.length}`); return `t${started.length}`; }, has: (id: string) => live.has(id), close: (id: string) => { live.delete(id); } };
+  const displays = { unavailable: () => undefined, ensure: async () => ({ socket: path.join(dir, "vnc.sock"), env: { DISPLAY: ":9" }, wm: { count: 1 } }), stop: () => {} };
+  const registry = new AppRegistry();
+  const service = new AppService(registry, { open: () => "", share: () => { throw new Error(); }, revoke: () => {} }, terminals, { displays });
+  try {
+    const app = service.publish("s", dir, { version: 1, name: "Till", views: [{ kind: "display", name: "Window", command: "till", args: ["--fast"] }] });
+    const viewId = app.views[0].id;
+    // Only the scenarios a desktop app can take are offered; the ones that can't say why.
+    const rows = Object.fromEntries(service.scenarios("s").scenarios.map((row) => [row.id, row.error ?? "ok"]));
+    assert.deepEqual(Object.keys(rows).sort(), ["lost", "mixed", "no-api", "offline"]);
+    assert.match(rows.mixed!, /"open" is for web pages and "args" for desktop apps/);
+    assert.match(rows["no-api"]!, /add "api"/);
+
+    const opened = await registry.desktopScenario!(viewId, "offline");
+    assert.equal(opened.error, undefined);
+    const run = started.at(-1)!;
+    assert.deepEqual(run.args, ["--fast", "--demo"]);
+    assert.equal(run.env?.THEME, "dark"); assert.equal(run.env?.DISPLAY, ":9");
+    const proxy = run.env!.API_URL!;
+    assert.match(proxy, /^http:\/\/127\.0\.0\.1:\d+$/);
+    const call = async (method: string, url: string) => { const res = await fetch(proxy + url, { method }); return { status: res.status, body: await res.json() }; };
+    assert.deepEqual(await call("POST", "/payments"), { status: 503, body: { error: "down" } });
+    assert.deepEqual(await call("GET", "/orders"), { status: 200, body: { real: "/orders" } });
+    const events = vnc.events();
+    assert.deepEqual([events[0], events.readUInt16BE(2), events.readUInt16BE(4)], [5, 10, 20], "the click lands in the window's pixels");
+
+    const lost = await registry.desktopScenario!(viewId, "lost");
+    assert.match(lost.error!, /^Step 1 \(click 900,10\): .*outside the app/);
+    assert.equal(registry.getView(viewId)!.scenario?.id, "lost", "it stays in the scenario, where it got to");
+    await assert.rejects(fetch(proxy + "/payments", { method: "POST" }), "the old scenario's proxy is gone");
+
+    assert.deepEqual(await registry.desktopScenario!(viewId, ""), { plan: null });
+    assert.deepEqual(started.at(-1)!.args, ["--fast"]);
+    assert.equal(started.at(-1)!.env?.API_URL, undefined);
+  } finally { vnc.server.close(); api.close(); service.remove("s", registry.list("s")[0]?.id ?? ""); fs.rmSync(dir, { recursive: true, force: true }); }
 });

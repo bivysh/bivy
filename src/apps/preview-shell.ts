@@ -242,7 +242,9 @@ function show(data,launch){
   status.textContent='Loading app…';
   frame.onload=()=>{
     loads++;
-    if(runner)sendSteps();else status.hidden=true;
+    if(runner&&!runner.desktop)sendSteps();else status.hidden=true;
+    // A desktop app's viewer has no inspector to say it has loaded.
+    if(metadata.inspect===false&&!scenariosLoaded)void loadScenarios();
     void loadCompare();
     // Put them back where they were before an update they asked for.
     if(restore){const at=restore;restore=null;frame.contentWindow?.postMessage(Object.assign({type:'bivy:restore'},at),metadata.origin);}
@@ -455,14 +457,16 @@ function finishNote(d){
 let scenarios=[],activeScenario=null,runner=null,runSeq=0,loads=0,scenariosLoaded=false;
 const scnBtn=$('scn'),scnReset=$('scn-reset');
 async function loadScenarios(){
-  if(!metadata||metadata.inspect===false||metadata.controls===false)return;
+  if(!metadata||metadata.controls===false)return;
   try{
     const r=await fetch(metadata.origin+'/__bivy/scenarios',{credentials:'include',cache:'no-store'});if(!r.ok)return;
     const d=await r.json();
     scenarios=(Array.isArray(d.scenarios)?d.scenarios:[]).slice(0,100);
     if(!runner)activeScenario=d.active&&typeof d.active.id==='string'?d.active:null;
+    scenariosLoaded=true;
     renderScenarioPill();
     if(!$('scenarios').hidden)renderScenarioList();
+    if(pendingScenario){const id=pendingScenario;pendingScenario='';void enterScenario(id);}
   }catch{}
 }
 function renderScenarioPill(){
@@ -516,6 +520,9 @@ async function enterScenario(id){
   const run=++runSeq;
   if(runner)clearTimeout(runner.timer);
   runner=null;
+  // A desktop app: the machine restarts it in the scenario and takes the
+  // steps in its window, then answers. Nothing to walk here.
+  if(metadata.inspect===false)return enterDesktopScenario(id,run);
   let d={};
   try{
     const r=await fetch(metadata.origin+'/__bivy/scenario',{method:'POST',credentials:'include',cache:'no-store',headers:{'content-type':'text/plain'},body:id});
@@ -531,6 +538,19 @@ async function enterScenario(id){
   if(plan.fresh)frame.contentWindow?.postMessage({type:'bivy:forget'},metadata.origin);
   renderScenarioPill();
   setTimeout(()=>{if(runner?.run===run)goStage();},plan.fresh?200:0);
+}
+async function enterDesktopScenario(id,run){
+  const name=id?scenarios.find(s=>s.id===id)?.name||id:'';
+  runner={run,desktop:true,timer:0,plan:{id,name}};renderScenarioPill();
+  let d={};
+  try{
+    const r=await fetch(metadata.origin+'/__bivy/scenario',{method:'POST',credentials:'include',cache:'no-store',headers:{'content-type':'text/plain'},body:id});
+    d=await r.json().catch(()=>({}));
+    if(!r.ok)throw Error(typeof d.error==='string'?d.error.slice(0,300):'The app didn’t answer.');
+  }catch(error){if(run===runSeq){runner=null;failScenario({id,name},error.message||'The app didn’t answer.');}return;}
+  if(run!==runSeq)return;
+  activeScenario=d.plan?{id:d.plan.id,name:d.plan.name,...(d.plan.simulated?{simulated:d.plan.simulated}:{})}:null;
+  if(typeof d.error==='string')failScenario(d.plan,d.error.slice(0,400));else finishScenario();
 }
 /** Opens the stage's page (its steps follow when it has loaded), or walks its steps where we are. */
 function goStage(){
@@ -569,7 +589,7 @@ function failScenario(s,message){
   runner=null;status.hidden=true;renderScenarioPill();
   panels(null);
   $('scn-fail-title').textContent='Couldn’t finish “'+s.name+'”';
-  $('scn-fail-text').textContent=message+' You’re on '+currentPath+' with what ran so far.';
+  $('scn-fail-text').textContent=message+(metadata.inspect===false?' The app is running with what ran so far.':' You’re on '+currentPath+' with what ran so far.');
   $('scn-fix').hidden=!metadata.returnTo||Boolean(metadata.reviewer);
   $('scn-fix').onclick=()=>{$('scn-fail').hidden=true;toChat(fixRequest(s.name,s.id,message));};
   $('scn-fail').hidden=false;
@@ -907,8 +927,7 @@ addEventListener('message',e=>{
     if(d.type==='note-sent'&&metadata.reviewer)finishNote(d);
     else if(d.type==='route'){
       currentPath=safePath(d.path);reviewerTools(true);
-      if(!scenariosLoaded){scenariosLoaded=true;void loadScenarios();}
-      if(pendingScenario){const id=pendingScenario;pendingScenario='';void enterScenario(id);}
+      if(!scenariosLoaded)void loadScenarios();
     }
     else if((d.type==='step'||d.type==='steps-done')&&runner&&d.run===runner.run&&d.load===loads)stepReport(d);
     else if(d.type==='console'&&(d.level==='error'||d.level==='warn')){entries.push({level:d.level,text:String(d.text).slice(0,500)});if(entries.length>50)entries.shift();renderConsole();}

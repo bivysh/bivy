@@ -196,6 +196,24 @@ Only `name` is required. The file name, without `.json`, is the scenario's ID
 | `view` | The app or view name it's for. Without it, it applies to every web view of the app. |
 | `description` | One line, shown under its name. |
 
+**Desktop apps.** A desktop app (a `display` view) is one program for everyone
+watching it, so its scenario is the app's, not one viewer's: opening one
+restarts the app in it, and the steps run in its window before the preview
+says it's ready. After a turn that restarts the app (`restartOnChange`), it
+comes back in the same scenario, steps and all.
+
+| Field | What it does |
+| --- | --- |
+| `args` | Added to the app's command, e.g. `["--open", "demo.ledger"]`. |
+| `env` | Added to its environment, e.g. `{"FEATURE_NEW_TILL": "1"}`. The display's own variables always win. |
+| `api` | `{"env": "API_URL", "target": "http://127.0.0.1:4000"}`: the app is started with `API_URL` pointing at a Bivy proxy on loopback, which answers by the `network` rules and passes everything else to `target`. Required for `network` rules, since a desktop app calls its API directly. |
+| `steps` | `{"click": [x, y]}` in the pixels of `bivy app shot`, `{"type": "text"}`, `{"press": "cmd+s"}`, `{"menu": "File > Open"}` (macOS), `{"wait": ms}`. |
+
+A scenario is for web pages or for desktop apps, never both: `open`, `fresh`,
+selector steps and `fill` are web-only; `args`, `env`, `api`, pixel clicks,
+`type` and `menu` are desktop-only. Each view lists only the scenarios it can
+take; one that mixes them says so.
+
 **In the preview.** Once a view has scenarios, its title in the pill becomes
 the switcher: it names the scenario you're in, and when Bivy is simulating a
 response, the line under it says what ("Simulated: POST /api/payments* →
@@ -205,7 +223,7 @@ this session*. A file that can't be read, or a scenario whose step can't find
 its element, says what's wrong and offers **Ask agent to fix**, which drafts a
 message naming the file and the step. You stay where it got to.
 
-**Per viewer.** Network rules apply only to requests from the browser that
+**Per viewer (web pages).** Network rules apply only to requests from the browser that
 opened the scenario, through Bivy's preview gateway. Other viewers, and the
 app's server, see nothing. Simulated responses carry `x-bivy-simulated: 1`.
 WebSocket traffic isn't simulated. The scenario lasts for that browser's
@@ -214,8 +232,7 @@ preview session; opening a fresh preview starts outside any scenario.
 **For agents.** `bivy app scenarios [view]` lists a view's scenarios as JSON,
 including files that can't be opened and why. `bivy app present --try
 payment-api-down,empty-cart` puts **Try it** buttons on the review card; each
-opens the live preview in that scenario. Desktop app views don't have
-scenarios.
+opens the live preview in that scenario.
 
 ### Pins
 
