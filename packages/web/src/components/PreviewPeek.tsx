@@ -3,7 +3,7 @@
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { controller, useAppState } from "../store/useStore.js";
 import { seedSessionDraft } from "../shareTarget.js";
-import { Sheet } from "./Sheet.js";
+import { Panel } from "./Panel.js";
 import { Dictation, dictationEngine, NO_DICTATION } from "./Dictation.js";
 import { Spinner } from "./Spinner.js";
 import { MoreIcon } from "./UiIcons.js";
@@ -42,11 +42,13 @@ function rememberBlocked(): void {
  *  origin: audio goes to the node over the encrypted session channel (or
  *  stays in the browser's own dictation), and only the transcript goes back
  *  to the shell's draft box, where it stays editable. */
-export function PreviewPeek({ url, name, sessionId, appId, viewId, onClose, onOpenInTab, access, onManage, revoked }: {
+export function PreviewPeek({ url, name, sessionId, appId, viewId, onClose, onOpenInTab, access, onManage, revoked, docked }: {
   url: string; name: string; sessionId: string; onClose: () => void; onOpenInTab: () => void;
   /** The view shown: Draw asks the machine for a picture of it. */
   appId?: string; viewId?: string;
   access?: ReactNode; onManage?: () => void; revoked?: boolean;
+  /** In the side pane beside the chat (see Panel) rather than over it. */
+  docked?: boolean;
 }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [blocked, setBlocked] = useState(false);
@@ -127,7 +129,7 @@ export function PreviewPeek({ url, name, sessionId, appId, viewId, onClose, onOp
   }, [origin, sessionId, onClose, engine, toShell, capabilities, addMarked]);
 
   const done = () => { setListening(null); toShell({ type: "listening", on: false }); };
-  return <Sheet title={name} ariaLabel={`Preview: ${name}`} onClose={onClose} size="full" autoFocusSearch={false}
+  return <Panel docked={docked} title={name} ariaLabel={`Preview: ${name}`} onClose={onClose} size="full" autoFocusSearch={false}
     headExtra={<div className="preview-head-actions">
       <button className="btn ghost icon" onClick={onOpenInTab} aria-label="Open in tab ↗" title="Open in tab · Only you"><span aria-hidden>↗</span></button>
       {access}
@@ -161,5 +163,5 @@ export function PreviewPeek({ url, name, sessionId, appId, viewId, onClose, onOp
                 </div>}
           </div>}
         </div>}
-  </Sheet>;
+  </Panel>;
 }

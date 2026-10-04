@@ -75,9 +75,11 @@ const LibraryView = lazy(() => import("./components/LibraryView.js").then((m) =>
 import { onAppVisible } from "./onAppVisible.js";
 import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { useModalEscape } from "./modalStack.js";
-import { SessionViewToggle } from "./components/SessionViewToggle.js";
+import { SessionViewToggle, type SessionPaneView } from "./components/SessionViewToggle.js";
 import { readSessionView, writeSessionView, type SessionView } from "./sessionView.js";
-import { CloseIcon } from "./components/UiIcons.js";
+import { CloseIcon, PanelRightIcon } from "./components/UiIcons.js";
+import { SidePane } from "./components/SidePane.js";
+import { useSidePane, type SidePaneTabId } from "./useSidePane.js";
 import { controller } from "./store/useStore.js";
 import { onAppsSheetRequest, type AppsSheetRequest } from "./appsSheetRequest.js";
 import { attentionRank, isUnseen, runStatusLabel, statusClass, type SessionStatusInput } from "./sessionStatus.js";
@@ -132,7 +134,10 @@ export function App() {
   const [ephemeralOpen, setEphemeralOpen] = useState(false);
   // Full-session file changes sheet — opened from the run pill / summary sheet
   // ("N files edited"), not a card stacked above the composer.
-  const [changesSheetOpen, setChangesSheetOpen] = useState(false);
+  // On a narrow screen (no side pane) the session's changes can take the main
+  // column: a third choice in the Chat | Terminal switch. Not remembered.
+  const [changesView, setChangesView] = useState(false);
+  useEffect(() => setChangesView(false), [state.activeSession.activeSessionId]);
   // Session/Run artifacts sheet — opened from the run pill ("N artifacts"),
   // mirroring the changes sheet above. The projection itself is a pure fold
   // over the transcript the store already holds (see deriveArtifacts) — no
@@ -144,6 +149,13 @@ export function App() {
   // where transcript cards and notifications open it, at an app or a view.
   const [appsSheet, setAppsSheet] = useState<AppsSheetRequest | null>(null);
   useEffect(() => onAppsSheetRequest(setAppsSheet), []);
+  // On a wide screen these surfaces dock beside the chat instead (see
+  // useSidePane); every way of opening one goes through `sidePane.show`.
+  const sidePane = useSidePane();
+  const showInSidePane = sidePane.show;
+  // An apps request (a transcript card, a notification, the first task's app)
+  // lands in the pane's Apps tab when the pane is how apps are shown.
+  useEffect(() => { if (appsSheet) showInSidePane("apps"); }, [appsSheet, showInSidePane]);
   // Leaving the session closes it; coming back must not reopen it.
   useEffect(() => setAppsSheet(null), [state.activeSession.activeSessionId]);
   // The first task's app: the agent publishes it from its own workspace (a
@@ -740,6 +752,9 @@ export function App() {
   const activeApprovals = state.activeSession.approvals.filter((a) => !a.sessionId || a.sessionId === state.activeSession.activeSessionId);
   const activeQuestions = state.activeSession.questions.filter((q) => !q.sessionId || q.sessionId === state.activeSession.activeSessionId);
   const activeTurnAttention = state.activeSession.turnAttentions.find((a) => a.sessionId === state.activeSession.activeSessionId);
+  // The agent asking for something lives in the chat: bring it back into view.
+  const needsAnswer = activeApprovals.length + activeQuestions.length + (activeTurnAttention ? 1 : 0);
+  useEffect(() => { if (needsAnswer > 0) setChangesView(false); }, [needsAnswer]);
   const attentionFooterRef = useRef<HTMLDivElement>(null);
   const attentionKey = [activeApprovals[0]?.id, activeQuestions[0]?.id, activeTurnAttention?.sessionId].filter(Boolean).join(":");
   useEffect(() => {
@@ -796,9 +811,25 @@ export function App() {
     ? `${activeSessionNode.name || activeSessionNode.id} (${activeSessionNode.id})`
     : activeSessionNodeId;
   const isRepoSession = Boolean(activeSession?.source && String(activeSession.source).startsWith("repo:"));
+  const paneTab: SidePaneTabId | null = sidePane.wide && activeSession && !needsNode ? sidePane.tab : null;
+  const changedFiles = countUniqueEditedFiles(state.activeSession.changesHistory);
+  // Offered once there is something to show. It covers whatever the column
+  // shows (chat, the agent's TUI, the lock notice), which stays mounted.
+  const canShowChangesView = !sidePane.wide && Boolean(activeSession) && !needsNode && changedFiles > 0 && !pendingRunTerm;
+  const showChangesView = canShowChangesView && changesView;
+  const openChanges = () => { if (!sidePane.show("changes")) setChangesView(true); };
+  const paneViews: SessionPaneView[] = [
+    ...(canToggleSessionView ? ["chat", "terminal"] as const : canShowChangesView ? ["chat"] as const : []),
+    ...(canShowChangesView ? ["changes"] as const : []),
+  ];
+  const pickPaneView = (view: SessionPaneView) => {
+    setChangesView(view === "changes");
+    if (view !== "changes") setSessionView(view);
+  };
+  const openArtifacts = () => { if (!sidePane.show("artifacts")) setArtifactsSheetOpen(true); };
 
   return (
-    <div className="app">
+    <div className={`app${paneTab ? " has-pane" : ""}`}>
       <div
         ref={drawerRef}
         className={`sidebar${drawerOpen ? " open" : ""}`}
@@ -905,7 +936,7 @@ export function App() {
 
       {drawerOpen && <div className="scrim" onClick={closeDrawer} />}
 
-      <main ref={mainRef} className={`main${needsNode ? " needs-node" : ""}`}>
+      <main ref={mainRef} className={`main${needsNode ? " needs-node" : ""}${showChangesView ? " changes-section" : ""}`}>
         <header className="topbar">
           <button
             ref={burgerRef}
@@ -929,15 +960,33 @@ export function App() {
                 on a brand-new/draft session exactly as it is on a live one.
                 The Chat | Terminal switch shares that line, so the title keeps
                 the full first line on a phone. */}
-            {(showNodeSwitcher || canToggleSessionView) && (
+            {(showNodeSwitcher || paneViews.length > 1) && (
               <div className="topbar-subline">
                 {showNodeSwitcher && (showTailnetSwitcher ? <TailnetSwitcher /> : <NodeSwitcher />)}
-                {canToggleSessionView && <SessionViewToggle value={sessionView} onChange={setSessionView} />}
+                {paneViews.length > 1 && (
+                  <SessionViewToggle
+                    views={paneViews}
+                    value={showChangesView ? "changes" : canToggleSessionView ? sessionView : "chat"}
+                    onChange={pickPaneView}
+                    changes={changedFiles}
+                  />
+                )}
               </div>
             )}
           </div>
           <div className="topbar-actions">
-            {state.activeSession.activeSessionId && !showSessionTerminal && (
+            {sidePane.wide && activeSession && !needsNode && (
+              <button
+                className="btn ghost icon side-pane-toggle"
+                onClick={() => sidePane.setTab(paneTab ? null : "changes")}
+                aria-pressed={Boolean(paneTab)}
+                aria-label={paneTab ? "Hide side pane" : "Show changes, apps, artifacts and terminal"}
+                title={paneTab ? "Hide side pane" : "Show changes, apps, artifacts and terminal"}
+              >
+                <PanelRightIcon size={18} />
+              </button>
+            )}
+            {state.activeSession.activeSessionId && !showSessionTerminal && !showChangesView && (
               <button
                 className="btn ghost focus-view-btn"
                 onClick={toggleFocusView}
@@ -1189,19 +1238,12 @@ export function App() {
               </section>
             )}
 
-            {changesSheetOpen && (
-              <SessionChangesSheet
-                history={state.activeSession.changesHistory}
-                checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
-                onClose={() => setChangesSheetOpen(false)}
-              />
-            )}
 
-            {artifactsSheetOpen && (
+            {artifactsSheetOpen && !sidePane.wide && (
               <ArtifactsSheet artifacts={artifacts} onClose={() => setArtifactsSheetOpen(false)} />
             )}
 
-            {appsSheet && appsSheet.sessionId === activeSession?.sessionId && (
+            {appsSheet && !sidePane.wide && appsSheet.sessionId === activeSession?.sessionId && (
               <AppsSheet key={`${appsSheet.sessionId}:${appsSheet.appId ?? ""}:${appsSheet.openView?.viewId ?? ""}`} {...appsSheet} onClose={() => setAppsSheet(null)} />
             )}
 
@@ -1228,9 +1270,9 @@ export function App() {
                   forkedFrom={activeForkedFrom}
                   delegatedFrom={activeSession?.delegatedFrom}
                   filesEdited={countUniqueEditedFiles(state.activeSession.changesHistory)}
-                  onOpenChanges={() => setChangesSheetOpen(true)}
+                  onOpenChanges={openChanges}
                   artifactsCount={artifacts.length}
-                  onOpenArtifacts={() => setArtifactsSheetOpen(true)}
+                  onOpenArtifacts={openArtifacts}
                   onOpenRun={(runId) => openRun(runId)}
                   onRecover={(kind) => {
                     // C2: recover a terminal run using existing capabilities. fix/retry
@@ -1259,7 +1301,7 @@ export function App() {
                   apps={liveApps.published ?? apps.length}
                   serverPorts={liveApps.offers.map((offer) => offer.port)}
                   newNotes={newNotes}
-                  onOpen={() => setAppsSheet({ sessionId: activeSession.sessionId })}
+                  onOpen={() => { if (!sidePane.show("apps")) setAppsSheet({ sessionId: activeSession.sessionId }); }}
                 />
               )}
             </div>
@@ -1292,7 +1334,67 @@ export function App() {
             />
           </>
         )}
+        {/* Changes in place of the column's view. That view (chat and
+            composer, or the agent's TUI) stays mounted underneath, hidden,
+            so scroll position, a draft or a live terminal survive. */}
+        {showChangesView && (
+          <div className="main-changes">
+            <SessionChangesSheet
+              docked
+              history={state.activeSession.changesHistory}
+              checks={activeSession ? runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status })) : undefined}
+              onClose={() => setChangesView(false)}
+              onComposerFilled={() => setChangesView(false)}
+            />
+          </div>
+        )}
       </main>
+
+      {paneTab && activeSession && (
+        <SidePane
+          tabs={[
+            { id: "changes", label: "Changes", count: changedFiles },
+            { id: "apps", label: "Apps", count: liveApps.published ?? apps.length },
+            { id: "artifacts", label: "Artifacts", count: artifacts.length },
+            { id: "terminal", label: "Terminal" },
+          ]}
+          active={paneTab}
+          // A request scoped the Apps tab to one app or view; picking a tab
+          // yourself goes back to everything.
+          onSelect={(tab) => { setAppsSheet(null); sidePane.setTab(tab); }}
+          onClose={() => sidePane.setTab(null)}
+        >
+          {paneTab === "changes" && (
+            <SessionChangesSheet
+              docked
+              history={state.activeSession.changesHistory}
+              checks={runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status }))}
+              onClose={() => sidePane.setTab(null)}
+            />
+          )}
+          {paneTab === "apps" && (() => {
+            const request = appsSheet?.sessionId === activeSession.sessionId ? appsSheet : { sessionId: activeSession.sessionId };
+            return <AppsSheet docked key={`${request.sessionId}:${request.appId ?? ""}:${request.openView?.viewId ?? ""}`} {...request} onClose={() => setAppsSheet(null)} />;
+          })()}
+          {paneTab === "artifacts" && (
+            <ArtifactsSheet docked artifacts={artifacts} onClose={() => sidePane.setTab(null)} />
+          )}
+          {/* A shell in the session's workspace, beside the chat. It keeps its
+              own scope, so it never collides with the agent's TUI (the
+              Chat | Terminal toggle); switching tabs detaches and coming back
+              reattaches. Ending the shell returns to Changes. */}
+          {paneTab === "terminal" && (
+            <Suspense fallback={null}>
+              <TerminalOverlay
+                key={activeSession.sessionId}
+                embedded
+                sessionId={activeSession.sessionId}
+                onClose={() => sidePane.setTab("changes")}
+              />
+            </Suspense>
+          )}
+        </SidePane>
+      )}
 
       {automationsOpen && (
         <Suspense fallback={null}>
