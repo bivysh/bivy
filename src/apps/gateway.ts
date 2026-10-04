@@ -409,6 +409,11 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     }
     if (entry.target.kind === "display") { await this.display(req, res, entry); return; }
     const inspect = isPageLoad(req);
+    // What the person does in the preview marks the app's logs ("your last
+    // action"): opening a page, or sending something. Assets don't count.
+    const pathOnly = req.url.split("?")[0]!.slice(0, 200);
+    if (inspect) this.registry.emit("action", id, `Opened ${pathOnly}`);
+    else if (!["GET", "HEAD", "OPTIONS"].includes(req.method ?? "")) this.registry.emit("action", id, `${req.method} ${pathOnly} from the preview`);
     // Remember the framed page so a turn reload lands where the user was.
     if (req.method === "GET" && req.headers["sec-fetch-dest"] === "iframe" && req.url.length <= 2048) entry.lastPath = req.url;
     if (entry.target.kind === "static") {

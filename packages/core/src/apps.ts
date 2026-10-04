@@ -8,7 +8,17 @@ export type AppViewSpec =
   | { kind: "terminal"; name: string; command: string; args?: string[] }
   /** A desktop GUI program, run on a private display streamed into the preview.
    * `restartOnChange`: restart it after an agent turn that changed files. */
-  | { kind: "display"; name: string; command: string; args?: string[]; restartOnChange?: boolean };
+  | { kind: "display"; name: string; command: string; args?: string[]; restartOnChange?: boolean }
+  /** Backend views (what a backend change did, seen like a UI change is).
+   *  The API as requests to run: `.http` files in `dir` (default .bivy/requests),
+   *  against `base` (default: the app's web server). */
+  | { kind: "requests"; name: string; base?: { url: string } | { view: string }; dir?: string }
+  /** Saved queries in `dir` (default .bivy/queries), run through the project's
+   *  own database client: the command gets each query on stdin and prints rows
+   *  as JSON, CSV or TSV. */
+  | { kind: "data"; name: string; command: string; args?: string[]; dir?: string }
+  /** A server's output: a view Bivy runs (default: the app's), a file, or a command. */
+  | { kind: "logs"; name: string; source?: { view: string } | { file: string } | { command: string; args?: string[] } };
 /** A managed server: Bivy runs it on first open and restarts it if it exits. */
 export interface AppCommandSpec { command: string; args?: string[] }
 export interface AppManifest { version: 1; name: string; views: AppViewSpec[] }
@@ -24,7 +34,10 @@ export type AppView =
       lastPath?: string;
       /** Public share links that still work. */
       sharing?: AppViewSharing }
-  | { id: string; kind: "terminal"; name: string; command: string; args: string[] };
+  | { id: string; kind: "terminal"; name: string; command: string; args: string[] }
+  /** `detail`: where it reads from, in words ("127.0.0.1:3000", "sqlite3 -json dev.db"). */
+  | { id: string; kind: "backend"; backend: BackendKind; name: string; detail: string };
+export type BackendKind = "requests" | "data" | "logs";
 export interface SessionApp {
   id: string;
   sessionId: string;
@@ -64,7 +77,18 @@ export interface AppReview {
   /** Reviewer notes waiting on this view when the run ended. A count only:
    * the notes stay on the machine until the owner drafts them into a message. */
   notes?: number;
+  /** What a run did to the app's backend views: one line each, the most
+   *  important change first. A backend-only run's card has these instead of a picture. */
+  evidence?: EvidenceRow[];
 }
+/** One line of backend evidence. `item` opens the view at that request or query. */
+export interface EvidenceRow { viewId: string; view: string; backend: BackendKind; summary: string; detail?: string; tone: "ok" | "warn" | "danger" | "neutral"; item?: string }
+const isEvidence = (row: unknown): row is EvidenceRow => {
+  const r = row as Partial<EvidenceRow> | undefined;
+  return !!r && typeof r.viewId === "string" && typeof r.view === "string" && ["requests", "data", "logs"].includes(r.backend as string)
+    && typeof r.summary === "string" && r.summary.length <= 300 && (r.detail === undefined || (typeof r.detail === "string" && r.detail.length <= 300))
+    && ["ok", "warn", "danger", "neutral"].includes(r.tone as string) && (r.item === undefined || typeof r.item === "string");
+};
 export const APP_REVIEW_BLOCK = "bivy_app_review";
 const isShot = (value: unknown): value is ReviewShot => {
   const shot = value as Partial<ReviewShot> | undefined;
@@ -78,7 +102,8 @@ export function isAppReview(value: unknown): value is AppReview {
     && (review.trigger === "present" || review.trigger === "run" || review.trigger === "asked" || review.trigger === "notes") && typeof review.at === "number"
     && (review.shot === undefined || isShot(review.shot)) && (review.before === undefined || isShot(review.before))
     && (review.note === undefined || typeof review.note === "string")
-    && (review.notes === undefined || (Number.isInteger(review.notes) && review.notes >= 0));
+    && (review.notes === undefined || (Number.isInteger(review.notes) && review.notes >= 0))
+    && (review.evidence === undefined || (Array.isArray(review.evidence) && review.evidence.length <= 12 && review.evidence.every(isEvidence)));
 }
 /** A mark the user sent to the agent: their words, a picture of what they
  * marked, and where it was. Unlike the message that carried it, a pin has a
@@ -145,6 +170,35 @@ export function isAppReference(value: unknown): value is AppReference {
 }
 export interface SessionAppsResult { apps: SessionApp[]; previewAvailable: boolean }
 export type OpenAppViewResult = { kind: "web"; url: string } | { kind: "terminal"; termId: string };
+
+/** Backend views, as the client shows them. Bodies, rows and log lines are the
+ *  app's own output: shown as text, never run. */
+export interface RequestAnswer { status: number; statusText: string; ms: number; at: number; headers: Record<string, string>; body: string; json?: boolean; truncated?: boolean; error?: string }
+/** One change between two JSON answers (or two rows), by path. Absent sides are undefined. */
+export interface ValueChange { path: string; before?: string; after?: string }
+export interface RequestItem {
+  id: string; file: string; name: string; method: string; url: string;
+  /** Run on its own before and after each agent run: GET/HEAD to the app's server, or marked @auto. */
+  auto: boolean;
+  /** The host, when it isn't the app's own server. */
+  external?: string;
+  last?: RequestAnswer; before?: RequestAnswer;
+}
+export interface RequestsViewResult { base: string; requests: RequestItem[]; problems: { file: string; error: string }[] }
+export interface RequestDetail { item: RequestItem; request: { method: string; url: string; headers: [string, string][]; body: string }; changes?: ValueChange[] }
+export interface DataRowChange { key: string; row: Record<string, string>; fields?: ValueChange[] }
+export interface DataQuery {
+  id: string; file: string; title: string; key: string; columns: string[];
+  /** The latest rows (up to 200 shown), and how many there are. */
+  rows: Record<string, string>[]; count: number; at?: number; error?: string;
+  /** Since the agent's run began, by key. Absent until there's a before. */
+  changes?: { added: DataRowChange[]; changed: DataRowChange[]; removed: DataRowChange[] };
+}
+export interface DataViewResult { detail: string; queries: DataQuery[]; problems: { file: string; error: string }[] }
+export interface LogLine { at: number; text: string; level: "error" | "warn" | "info" }
+/** "Your last action": an agent run, a request run, a page or form in the preview. */
+export interface LogMark { at: number; label: string }
+export interface LogsViewResult { detail: string; lines: LogLine[]; marks: LogMark[]; running: boolean }
 /** A loopback server running inside the session workspace, not yet published.
  * An offer grants nothing; adopting it publishes a service view. */
 /** `project`: the folder the server runs in (its git root when it has one).

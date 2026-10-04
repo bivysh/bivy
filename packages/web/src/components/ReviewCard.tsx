@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
-import type { AppReview, ReviewCardMode, ReviewShot, SessionAppsResult } from "@bivy/core";
+import type { AppReview, EvidenceRow, ReviewCardMode, ReviewShot, SessionAppsResult } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
 import { REVIEW_MODE_LABELS, notesDraft } from "./AppsSheet.js";
 import { requestAppsSheet } from "../appsSheetRequest.js";
@@ -19,6 +19,10 @@ const TRIGGER_LABELS: Record<AppReview["trigger"], string> = {
   asked: "As it looks now",
   notes: "Reviewer notes",
 };
+
+/** Backend evidence, one line each: which view, what it found. */
+const EVIDENCE_LABELS: Record<EvidenceRow["backend"], string> = { requests: "Requests", data: "Data", logs: "Logs" };
+const TONE_LABELS: Record<Exclude<EvidenceRow["tone"], "neutral">, string> = { ok: "ok", warn: "changed", danger: "problem" };
 
 /** A screenshot fetched by hash over the session's encrypted channel. */
 function useShot(shot: ReviewShot | undefined): { url: string | null; state: "none" | "loading" | "ready" | "missing" } {
@@ -111,8 +115,13 @@ export function ReviewCard({ review }: { review: AppReview }) {
   });
 
   const openSheet = (preview: boolean) => requestAppsSheet({ sessionId: review.sessionId, appId: review.appId, ...(preview ? { openView: { viewId: review.viewId, path: review.path } } : {}) });
-  const label = `${review.name}${review.view && review.view !== review.name ? ` · ${review.view}` : ""}`;
-  const meta = `${TRIGGER_LABELS[review.trigger]} · ${review.path}`;
+  // Backend evidence: each line opens its view at that request or query.
+  const evidence = review.evidence ?? [];
+  const openEvidence = (row: EvidenceRow) => requestAppsSheet({ sessionId: review.sessionId, appId: review.appId, openView: { viewId: row.viewId, ...(row.item ? { item: row.item } : {}) } });
+  const backendOnly = evidence.some((row) => row.viewId === review.viewId) && !review.shot;
+  const firstChange = evidence.find((row) => row.tone === "warn" || row.tone === "danger") ?? evidence[0];
+  const label = backendOnly ? review.name : `${review.name}${review.view && review.view !== review.name ? ` · ${review.view}` : ""}`;
+  const meta = backendOnly ? `${TRIGGER_LABELS[review.trigger]} · backend` : `${TRIGGER_LABELS[review.trigger]} · ${review.path}`;
   return <section ref={card} className="apps-card review-card" aria-label={`${review.name}: ${TRIGGER_LABELS[review.trigger].toLowerCase()}`}>
       <AppRow tile={appInitial(review.name)} name={label} meta={meta}
         action={<MoreMenu label={`Preview card options for ${review.name}`} onOpen={loadMode} items={[
@@ -123,7 +132,7 @@ export function ReviewCard({ review }: { review: AppReview }) {
           { label: "Show me now", disabled: busy || !online, separated: !working, onSelect: () => void showMe() },
         ]} />} />
 
-      {review.trigger === "notes" ? null : review.screenshotsOff && !review.shot ? <div className="banner inline review-banner" data-tone="neutral" role="status">
+      {review.trigger === "notes" || backendOnly ? null : review.screenshotsOff && !review.shot ? <div className="banner inline review-banner" data-tone="neutral" role="status">
         <span className="banner-text">Turn on agent screenshots to see the app here. Bivy takes them with Chrome on this machine.</span>
         <span className="banner-actions"><button className="btn" disabled={busy || !online} onClick={() => void enableShots()}>Turn on</button></span>
       </div> : <div className="review-stage">
@@ -139,6 +148,16 @@ export function ReviewCard({ review }: { review: AppReview }) {
         </div>}
       </div>}
 
+      {evidence.length > 0 && <ul className="review-evidence" aria-label="What changed in the backend">
+        {evidence.map((row, index) => <li key={`${row.viewId}:${row.item ?? index}`}>
+          <button type="button" className="review-evidence-row" onClick={() => openEvidence(row)} aria-label={`${EVIDENCE_LABELS[row.backend]}: ${row.summary}${row.detail ? `, ${row.detail}` : ""}. Open ${row.view}`}>
+            {/* A run of rows from one view names it once. */}
+            <span className="review-evidence-kind">{evidence[index - 1]?.viewId === row.viewId ? "" : EVIDENCE_LABELS[row.backend]}</span>
+            <span className="review-evidence-text"><span>{row.summary}</span>{row.detail && <code>{row.detail}</code>}</span>
+            {row.tone !== "neutral" && <span className="badge" data-tone={row.tone} aria-hidden="true">{TONE_LABELS[row.tone]}</span>}
+          </button>
+        </li>)}
+      </ul>}
       {review.note && <p className="review-note">{review.note}</p>}
       {review.notes ? <div className="banner inline review-banner" data-tone="neutral" role="group" aria-label={`Reviewer notes on ${label}`}>
         <span className="banner-text">{review.notes === 1 ? "1 note" : `${review.notes} notes`} from people with a shared link. They reach the agent only if you send them.</span>
@@ -149,8 +168,12 @@ export function ReviewCard({ review }: { review: AppReview }) {
       </div> : null}
       {status && <p className="review-status" role="status">{status}</p>}
       <div className="review-actions">
-        <button className={`btn${review.trigger === "notes" ? "" : " primary"}`} disabled={!online} onClick={() => openSheet(true)}>Open preview</button>
-        <AppAccess sessionId={review.sessionId} appId={review.appId} viewId={review.viewId} name={review.view || review.name} disabled={!online} />
+        {backendOnly && firstChange
+          ? <button className="btn primary" disabled={!online} onClick={() => openEvidence(firstChange)}>Review changes</button>
+          : <>
+            <button className={`btn${review.trigger === "notes" ? "" : " primary"}`} disabled={!online} onClick={() => openSheet(true)}>Open preview</button>
+            <AppAccess sessionId={review.sessionId} appId={review.appId} viewId={review.viewId} name={review.view || review.name} disabled={!online} />
+          </>}
       </div>
     </section>;
 }

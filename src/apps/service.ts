@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { SHARE_DURATIONS, type AppManifest, type AppOffer, type AppPin, type AppPinState, type AppReview, type OpenAppViewResult, type ReviewCardMode, type ReviewerNote, type SessionApp, type SessionAppOffersResult, type SessionAppsResult, type ShareAppViewResult, type ShareOptions } from "./types.js";
+import { SHARE_DURATIONS, type AppManifest, type AppOffer, type AppPin, type AppPinState, type AppReview, type OpenAppViewResult, type ReviewCardMode, type ReviewerNote, type SessionApp, type SessionAppOffersResult, type SessionAppsResult, type ShareAppViewResult, type ShareOptions, type EvidenceRow, type BackendKind } from "./types.js";
 import { randomBytes } from "node:crypto";
 import { PIN_CHANGE, REVIEW_MODES, regionChange, shouldReview, visualChange } from "./review.js";
 import { AppRegistry, type RegisteredView } from "./registry.js";
@@ -14,6 +14,7 @@ import { captureFrame, encodePng, sendInput } from "./rfb.js";
 import { inputEvents, readAction } from "./input.js";
 import { pressMenu, readMenuPath, readMenus, type AppMenu } from "./menu.js";
 import { pngSize } from "./review.js";
+import { Backend } from "./backend/index.js";
 
 export interface AppPreviewProvider {
   readonly available?: boolean;
@@ -30,6 +31,8 @@ export interface AppTerminalProvider {
   start(input: { command: string; args: string[]; workspace: string; name: string; env?: Record<string, string> }): Promise<string>;
   has(termId: string): boolean;
   close(termId: string): void;
+  /** Follows a terminal's output as it arrives (a server's logs). Optional: without it, logs views stay empty. */
+  tap?(termId: string, onData: (data: string) => void): (() => void) | undefined;
 }
 
 /** Private displays for desktop views (see display.ts). */
@@ -74,6 +77,8 @@ interface Run {
   reviews: Map<string, string>;
   muted: boolean;
   ended: boolean;
+  /** The backend views' "before", taken as the run starts. */
+  backend?: Promise<void>;
 }
 const NO_DISPLAYS: AppDisplayProvider = { unavailable: () => "Desktop app views aren't available on this machine.", ensure: () => Promise.reject(new Error("Desktop app views aren't available on this machine.")), stop: () => {} };
 /** How long a screenshot waits for a desktop app's first window. */
@@ -116,6 +121,8 @@ export class AppService {
   private handedOver = new Map<string, number>();
   /** Screenshots in progress, so a card, Compare and a baseline share one browser run. */
   private inflight = new Map<string, Promise<Buffer | undefined>>();
+  /** Requests, data and logs views: what a backend change did. */
+  readonly backend: Backend;
   constructor(readonly registry: AppRegistry, readonly gateway: AppPreviewProvider | undefined, private readonly terminals: AppTerminalProvider, options: {
     scan?: (workspace: string) => Promise<AppOffer[]>; scanMachine?: (root: string) => Promise<AppOffer[]>; serverWatchMs?: number;
     /** Agent screenshots are a node setting, off by default. */
@@ -134,6 +141,7 @@ export class AppService {
     this.reviews = options.reviews ?? NO_REVIEWS;
     this.pinSink = options.pins ?? NO_PINS;
     this.settleMs = options.settleMs ?? COMPARE_SETTLE_MS;
+    this.backend = new Backend(registry, terminals);
   }
 
   /** A session's apps, or every app on this machine when no session is given. */
@@ -224,12 +232,16 @@ export class AppService {
    * it is now, so the end of the run can tell whether anything visibly
    * changed. A baseline is only taken when no screenshot of this revision
    * exists yet — after the first run, the last run's screenshot serves. */
-  runStarted(sessionId: string): void {
+  runStarted(sessionId: string): Promise<void> {
     const views = this.reviewable(sessionId);
     const run: Run = { start: new Map(views.map((entry) => [entry.view.id, entry.revision])), baseline: new Map(), reviews: new Map(), muted: false, ended: false };
     this.runs.set(sessionId, run);
-    if (!this.screenshots.enabled()) return;
+    if (this.backend.views(sessionId).length) run.backend = this.backend.baseline(sessionId).catch(() => {});
+    // Settles when the backend's "before" is taken (tests wait on it; the server doesn't need to).
+    const ready = run.backend ?? Promise.resolve();
+    if (!this.screenshots.enabled()) return ready;
     for (const entry of views) void this.shotOf(entry).then((png) => { if (png && entry.revision === run.start.get(entry.view.id)) run.baseline.set(entry.view.id, png); });
+    return ready;
   }
   /** The run ended (done, or waiting for the user). Views whose revision
    * changed are screenshotted and compared with the page before the run; a
@@ -240,6 +252,9 @@ export class AppService {
     if (!run || run.ended) return undefined;
     run.ended = true;
     let latest: AppReview | undefined;
+    // Backend views run again; what changed is evidence, on the app's card.
+    let evidence = new Map<string, { rows: EvidenceRow[]; changed: boolean }>();
+    if (run.backend) { await run.backend; evidence = await this.backend.evidence(sessionId).catch(() => evidence); }
     const changed = [...run.start].map(([id, revision]) => ({ entry: this.registry.getView(id), revision })).filter(({ entry, revision }) => entry && entry.revision !== revision);
     if (changed.length && this.screenshots.enabled() && !run.muted) await new Promise((r) => setTimeout(r, this.settleMs));
     for (const { entry } of changed) {
@@ -258,7 +273,7 @@ export class AppService {
       const current = this.latest.get(entry.view.id);
       const presented = current && run.reviews.get(entry.app.id) === current.id;
       if (!shouldReview({ trigger: "run", mode, muted: run.muted, revisionChanged: true, change }) && !(presented && after)) continue;
-      latest = this.review(entry, run, { trigger: presented ? current.trigger : "run", note: presented ? current.note : undefined, path: entry.lastPath ?? "/", shot: after, before });
+      latest = this.review(entry, run, { trigger: presented ? current.trigger : "run", note: presented ? current.note : undefined, path: entry.lastPath ?? "/", shot: after, before, evidence: evidence.get(entry.app.id)?.changed ? evidence.get(entry.app.id)!.rows : undefined });
     }
     // Reviewer notes that arrived since the last hand-over ride on the view's
     // card for this run, or get a card of their own. A count only: the notes
@@ -279,6 +294,12 @@ export class AppService {
         // A visible change stays what "finished" talks about; notes fill in when there's nothing else.
         latest ??= card;
       }
+    }
+    // A backend-only change: the evidence is the card.
+    for (const [appId, found] of evidence) {
+      if (!found.changed || run.muted || run.reviews.has(appId) || this.registry.reviewMode(appId) === "off") continue;
+      const entry = this.registry.getView(found.rows[0]!.viewId);
+      if (entry) latest = this.review(entry, run, { trigger: "run", path: "/", evidence: found.rows });
     }
     if (!latest) {
       const id = [...run.reviews.values()].at(-1);
@@ -338,7 +359,7 @@ export class AppService {
     return views.reduce((best, entry) => (entry.openedAt ?? 0) > (best.openedAt ?? 0) || ((entry.openedAt ?? 0) === (best.openedAt ?? 0) && entry.app.createdAt > best.app.createdAt) ? entry : best);
   }
   /** Makes or updates a card, keeping each view's images to the latest card. */
-  private review(entry: RegisteredView, run: Run | undefined, fields: Pick<AppReview, "trigger" | "path" | "note" | "screenshotsOff" | "notes"> & { shot?: Buffer; before?: Buffer }): AppReview {
+  private review(entry: RegisteredView, run: Run | undefined, fields: Pick<AppReview, "trigger" | "path" | "note" | "screenshotsOff" | "notes" | "evidence"> & { shot?: Buffer; before?: Buffer }): AppReview {
     const id = (run && run.reviews.get(entry.app.id)) ?? `review-${randomBytes(8).toString("hex")}`;
     const { shot, before, ...rest } = fields;
     const review = this.reviews.publish({
@@ -644,7 +665,9 @@ export class AppService {
     server.pending ??= this.startProgram(entry)
       .then((termId) => {
         if (!this.registry.getView(id)) { this.terminals.close(termId); throw new Error("App was removed while starting."); }
-        server.termId = termId; return termId;
+        server.termId = termId;
+        this.backend.attach(id, termId);
+        return termId;
       })
       .finally(() => { server.pending = undefined; });
     // Watch for exits and restart, backing off a crash loop.
@@ -672,6 +695,15 @@ export class AppService {
     if (server.termId) this.terminals.close(server.termId);
     void server.pending?.then((termId) => this.terminals.close(termId)).catch(() => {});
     this.servers.delete(id);
+  }
+  /** A backend view of a session, by exact IDs (the app) or by name (`bivy app requests`). */
+  backendView(sessionId: string, kind: BackendKind, input: { appId?: string; viewId?: string; target?: string }) {
+    if (input.appId && input.viewId) {
+      const entry = this.registry.requireView(sessionId, input.appId, input.viewId);
+      if (entry.target.kind !== kind) throw new Error(`That isn't a ${kind} view.`);
+      return entry as Parameters<Backend["requests"]>[0];
+    }
+    return this.backend.pick(sessionId, kind, input.target);
   }
   share(sessionId: string, appId: string, viewId: string, options: ShareOptions = {}): ShareAppViewResult {
     if (this.registry.requireView(sessionId, appId, viewId).view.kind !== "web") throw new Error("Only web views have preview links.");
@@ -730,6 +762,7 @@ export class AppService {
   remove(sessionId: string, appId: string): void {
     const app = this.registry.require(sessionId, appId);
     this.registry.remove(sessionId, appId);
+    this.backend.forget(app.views.map((view) => view.id), app.id);
     for (const view of app.views) {
       this.gateway?.revoke(view.id);
       this.stopServer(view.id);

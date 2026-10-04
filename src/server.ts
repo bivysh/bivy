@@ -1323,7 +1323,7 @@ function harnessDirFor(record: SessionRecord): string {
  *  waits on git. Never throws into the prompt path. */
 function harnessBeginTurn(record: SessionRecord): void {
   // A run starts: review cards measure what the app looked like before it.
-  appService.runStarted(record.id);
+  void appService.runStarted(record.id);
   record.runReview = undefined;
   const dir = harnessDirFor(record);
   record.harnessTurnReady = undefined;
@@ -2437,6 +2437,7 @@ const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   },
   has: (id) => terminals.has(id),
   close: (id) => { terminals.close(id); },
+  tap: (id, onData) => terminals.tap(id, onData) ?? undefined,
 }, {
   scan: async (workspace) => notAgentServers(await scanListeners(workspace)),
   scanMachine: async (root) => notAgentServers(await scanMachineListeners(root)),

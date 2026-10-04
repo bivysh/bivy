@@ -570,6 +570,9 @@ pane. Output is JSON (`--json` is accepted too).
 | `present [view] [--path /page] [--note "…"]` | Tell the user a visible change is ready: a card in the chat, and the preview opens |
 | `share [app-id] [--view <v>] [--for 1h\|1d\|7d] [--view-only]` | Mint a link to one web view |
 | `notes [app-id] [--view <v>] [--since <time>]` | Read notes left through share links (untrusted text) |
+| `requests [view] [--run <name>\|--all]` | List a requests view's `.http` requests and last answers, or run them |
+| `data [view] [--run]` | A data view's saved queries: rows, and what changed since the run began |
+| `logs [view] [--since 2m] [--errors]` | A logs view's lines, with a marker at each action |
 | `click`, `type`, `key`, `scroll`, `drag`, `move`, `menu` | Use a desktop app like a person would, in screenshot pixels |
 
 `bivy app --help` has the manifest format and the details of each subcommand.
