@@ -4,7 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import type { AppRegistry, BackendTarget, RegisteredView } from "../registry.js";
-import type { DataQuery, DataViewResult, EvidenceRow, LogLine, LogsViewResult, RequestAnswer, RequestDetail, RequestItem, RequestsViewResult } from "../types.js";
+import type { DataQuery, DataViewResult, EvidenceRow, LogLine, LogsViewResult, RequestAnswer, RequestDetail, RequestItem, RequestScenario, RequestsViewResult } from "../types.js";
+import { loadScenarios, matchRule, planScenario, type NetworkRule, type ScenarioPlan } from "../scenarios.js";
 import { parseHttpFile, resolveRequest, type HttpRequestSpec } from "./http-file.js";
 import { answerChanged, answerChanges, rowChanges } from "./compare.js";
 import { parseRows, readQueryFile, type Rows } from "./rows.js";
@@ -192,22 +193,38 @@ export class Backend {
   requests(entry: Entry): RequestsViewResult {
     const base = this.base(entry as Entry & { target: { kind: "requests" } });
     const { requests, problems } = this.requestsOf(entry);
-    return { base, requests: requests.map((request) => this.item(entry, request, base)), problems };
+    return { base, requests: requests.map((request) => this.item(entry, request, base)), problems, scenarios: this.scenariosOf(entry).map(({ id, name, plan }) => ({ id, name, simulated: plan.simulated! })) };
+  }
+  /** The app's scenarios a request can run in: those that simulate responses. */
+  private scenariosOf(entry: Entry): (Omit<RequestScenario, "simulated"> & { plan: ScenarioPlan })[] {
+    const { scenarios } = loadScenarios(entry.workspace);
+    const names = [entry.app.name, ...entry.app.views.map((view) => view.name)].map((name) => name.toLowerCase());
+    return scenarios.filter((scenario) => !scenario.view || names.includes(scenario.view.toLowerCase())).flatMap((scenario) => {
+      try {
+        const plan = planScenario(scenarios, scenario.id, scenario.kind ?? "web");
+        return plan.network.length ? [{ id: scenario.id, name: scenario.name, plan }] : [];
+      } catch { return []; }
+    });
   }
   detail(entry: Entry, id: string): RequestDetail {
     const base = this.base(entry as Entry & { target: { kind: "requests" } });
     const request = this.findRequest(entry, id);
     const item = this.item(entry, request, base);
-    return { item, request: resolveRequest(request.spec, request.variables, { base }), ...(item.before && item.last ? { changes: answerChanges(item.before, item.last) } : {}) };
+    // A scenario's made-up answer isn't compared with the real one: it isn't a change in the app.
+    return { item, request: resolveRequest(request.spec, request.variables, { base }), ...(item.before && item.last && !item.last.simulated ? { changes: answerChanges(item.before, item.last) } : {}) };
   }
-  /** Runs one request now, from this machine. `as`: keep it as the run's "before". */
+  /** Runs one request now, from this machine. `as`: keep it as the run's "before".
+   *  `scenario`: run it inside one, getting the answers the app gets there:
+   *  a network rule for its path answers, anything else reaches the server. */
   /** `quiet`: Bivy's own before/after runs leave no marker; someone's run does. */
-  async run(entry: Entry, id: string, as: "last" | "before" = "last", quiet = false): Promise<RequestDetail> {
+  async run(entry: Entry, id: string, as: "last" | "before" = "last", scenario?: string, quiet = false): Promise<RequestDetail> {
     const base = this.base(entry as Entry & { target: { kind: "requests" } });
     const request = this.findRequest(entry, id);
     const resolved = resolveRequest(request.spec, request.variables, { base });
-    if (!quiet) this.marks.add(entry.app.id, `Ran “${request.spec.name}”`);
-    const answer = await send(resolved);
+    const inside = scenario ? this.scenariosOf(entry).find((item) => item.id === scenario) : undefined;
+    if (scenario && !inside) throw new Error(`No scenario "${scenario}" that simulates responses for ${entry.app.name}.`);
+    if (!quiet) this.marks.add(entry.app.id, `Ran “${request.spec.name}”${inside ? ` in “${inside.name}”` : ""}`);
+    const answer = inside ? await sendInside(resolved, inside.plan.network, inside.name) : await send(resolved);
     let kept = this.answers.get(entry.view.id);
     if (!kept) { kept = new Map(); this.answers.set(entry.view.id, kept); }
     kept.set(request.id, as === "before" ? { before: answer, last: answer } : { ...kept.get(request.id), last: answer });
@@ -217,7 +234,7 @@ export class Backend {
    *  `mark`: someone asked ("Run all"), so the log gets one marker for it. */
   async runAuto(entry: Entry, as: "last" | "before" = "last", mark?: string): Promise<RequestsViewResult> {
     if (mark) this.marks.add(entry.app.id, mark);
-    for (const item of this.requests(entry).requests.filter((request) => request.auto)) await this.run(entry, item.id, as, true).catch(() => {});
+    for (const item of this.requests(entry).requests.filter((request) => request.auto)) await this.run(entry, item.id, as, undefined, true).catch(() => {});
     return this.requests(entry);
   }
 
@@ -369,4 +386,23 @@ async function send(request: { method: string; url: string; headers: [string, st
     const reason = (error as Error).name === "TimeoutError" ? `No answer within ${REQUEST_TIMEOUT_MS / 1000} seconds.` : ((error as { cause?: { code?: string } }).cause?.code === "ECONNREFUSED" ? `Nothing is answering at ${url.host}.` : (error as Error).message);
     return { status: 0, statusText: "", ms: Date.now() - at, at, headers: {}, body: "", error: reason };
   }
+}
+
+/** A request inside a scenario: the first network rule that matches its path
+ *  answers (after its delay), or drops it ("offline"); a delay alone, or no
+ *  rule, lets it reach the server. Either way the answer says where it ran. */
+async function sendInside(request: { method: string; url: string; headers: [string, string][]; body: string }, rules: NetworkRule[], scenario: string): Promise<RequestAnswer> {
+  let at: URL | undefined;
+  try { at = new URL(request.url); } catch { /* send() says why */ }
+  const rule = at && matchRule(rules, request.method, at.pathname + at.search);
+  const started = Date.now();
+  if (rule?.delayMs) await new Promise((r) => setTimeout(r, Math.min(rule.delayMs!, REQUEST_TIMEOUT_MS)));
+  if (rule?.offline) return { status: 0, statusText: "", ms: Date.now() - started, at: started, headers: {}, body: "", error: "Dropped: the scenario takes this offline.", scenario, simulated: true };
+  if (rule && (rule.status !== undefined || rule.json !== undefined || rule.body !== undefined)) {
+    const json = rule.json !== undefined;
+    return { status: rule.status ?? 200, statusText: "", ms: Date.now() - started, at: started, headers: { "content-type": json ? "application/json" : "text/plain", "x-bivy-simulated": "1" },
+      body: json ? JSON.stringify(rule.json) : rule.body ?? "", ...(json ? { json: true } : {}), scenario, simulated: true };
+  }
+  const answer = await send(request);
+  return { ...answer, ms: Date.now() - started, scenario };
 }

@@ -176,7 +176,11 @@ export type OpenAppViewResult = { kind: "web"; url: string } | { kind: "terminal
 
 /** Backend views, as the client shows them. Bodies, rows and log lines are the
  *  app's own output: shown as text, never run. */
-export interface RequestAnswer { status: number; statusText: string; ms: number; at: number; headers: Record<string, string>; body: string; json?: boolean; truncated?: boolean; error?: string }
+export interface RequestAnswer { status: number; statusText: string; ms: number; at: number; headers: Record<string, string>; body: string; json?: boolean; truncated?: boolean; error?: string;
+  /** Run inside this scenario (its name); `simulated`: one of its network rules answered, not the server. */
+  scenario?: string; simulated?: boolean }
+/** A scenario a request can run in: one with network rules. */
+export interface RequestScenario { id: string; name: string; simulated: string }
 /** One change between two JSON answers (or two rows), by path. Absent sides are undefined. */
 export interface ValueChange { path: string; before?: string; after?: string }
 export interface RequestItem {
@@ -187,7 +191,7 @@ export interface RequestItem {
   external?: string;
   last?: RequestAnswer; before?: RequestAnswer;
 }
-export interface RequestsViewResult { base: string; requests: RequestItem[]; problems: { file: string; error: string }[] }
+export interface RequestsViewResult { base: string; requests: RequestItem[]; problems: { file: string; error: string }[]; scenarios: RequestScenario[] }
 export interface RequestDetail { item: RequestItem; request: { method: string; url: string; headers: [string, string][]; body: string }; changes?: ValueChange[] }
 export interface DataRowChange { key: string; row: Record<string, string>; fields?: ValueChange[] }
 export interface DataQuery {

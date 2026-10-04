@@ -37,11 +37,15 @@ test.beforeEach(async ({ page }) => {
         { id: LOGS, kind: "backend", backend: "logs", name: "Server log", detail: "API output" },
       ] }] };
       if (kind === "apps.offers") return { offers: [] };
-      if (kind === "apps.requests") return { base: "http://127.0.0.1:3000", requests: items, problems: [] };
+      if (kind === "apps.requests") return { base: "http://127.0.0.1:3000", requests: items, problems: [], scenarios: w.scenarios ?? [] };
+      if (kind === "apps.runRequest" && fields.scenario) {
+        const item = items.find((entry) => entry.id === fields.id)!;
+        item.last = { status: 503, statusText: "", ms: 0, at: Date.now(), headers: {}, body: JSON.stringify({ error: "down" }), json: true, scenario: "Payments down", simulated: true } as any;
+      }
       if (kind === "apps.request" || kind === "apps.runRequest") {
         const item = items.find((entry) => entry.id === fields.id)!;
         return { item, request: { method: item.method, url: item.url, headers: [["Content-Type", "application/json"]], body: "{ \"coupon\": \"SPRING\" }" },
-          ...(item.before && item.last ? { changes: item.before.status === item.last.status ? [] : [{ path: "(status)", before: "201", after: "422" }, { path: "id", before: "1043" }, { path: "status", before: "\"pending\"" }, { path: "error", after: "\"coupon_expired\"" }] } : {}) };
+          ...(item.before && item.last && !(item.last as any).simulated ? { changes: item.before.status === item.last.status ? [] : [{ path: "(status)", before: "201", after: "422" }, { path: "id", before: "1043" }, { path: "status", before: "\"pending\"" }, { path: "error", after: "\"coupon_expired\"" }] } : {}) };
       }
       if (kind === "apps.data") return { detail: "sqlite3", problems: [], queries: [
         { id: "coupons", file: "coupons.sql", title: "coupons", key: "code", columns: ["code", "expires_at", "percent"], count: 2, at: now - 30_000,
@@ -127,4 +131,30 @@ test("a backend run's card shows its evidence and opens the changed answer, rows
   await page.getByRole("region", { name: "orders.http" }).getByRole("button", { name: /Create order, expired coupon/ }).click();
   await page.getByRole("button", { name: "Send to agent…" }).click();
   expect(await page.evaluate(() => (window as any).drafts.at(-1))).toContain("answered 422 (it answered 201 before your last run)");
+});
+
+// Inside a scenario, a request gets what the app gets there: the scenario's
+// rule answers, and the answer says so instead of looking like a regression.
+test("a request runs inside a scenario and its answer says it was simulated", async ({ page }) => {
+  await page.evaluate(({ APP, REQUESTS }) => {
+    const w = window as any;
+    w.scenarios = [{ id: "payments-down", name: "Payments down", simulated: "POST /orders → 503" }];
+    w.c.store.apply({ type: "session.event", sessionId: "s", event: { type: "app_review", id: "review-backend0000001", review: {
+      id: "review-backend0000001", sessionId: "s", appId: APP, viewId: REQUESTS, name: "Orders API", view: "Requests", path: "/", trigger: "run", at: Date.now(),
+      evidence: [{ viewId: REQUESTS, view: "Requests", backend: "requests", summary: "POST Create order, expired coupon", detail: "201 → 422", tone: "warn", item: "orders/create-order-expired-coupon" }],
+    } } });
+  }, { APP, REQUESTS });
+  await page.getByRole("button", { name: "Review changes" }).click();
+  await page.getByRole("combobox", { name: "Run in" }).selectOption("payments-down");
+  await expect(page.getByText("Simulates POST /orders → 503; other requests reach the server.")).toBeVisible();
+  await page.getByRole("button", { name: "Run again" }).click();
+  await expect(page.getByText("Simulated by “Payments down”")).toBeVisible();
+  await expect(page.getByRole("radio", { name: "Now" })).toHaveAttribute("aria-checked", "true");
+  await expect(page.getByRole("radio", { name: "Changes" })).toBeDisabled();
+  await expect(page.getByText("was 201")).toBeHidden();
+  await page.screenshot({ path: test.info().outputPath("request-in-scenario.png"), animations: "disabled" });
+  expect(await page.evaluate(() => (window as any).commands.find((c: any) => c.kind === "apps.runRequest"))).toMatchObject({ id: "orders/create-order-expired-coupon", scenario: "payments-down" });
+  await page.getByRole("button", { name: "‹ Requests" }).click();
+  await expect(page.getByRole("region", { name: "orders.http" }).getByRole("button", { name: /Create order, expired coupon/ })).toContainText("503 · simulated");
+  await expect(page.getByRole("combobox", { name: "Run in" })).toHaveValue("payments-down");
 });
