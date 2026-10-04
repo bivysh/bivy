@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Agent suggestions appear below the response instead of above the final answer.
+- Long suggestion descriptions can be expanded with Show more and collapsed with Show less.
+
 ## [0.20.6] - 2026-10-03
 
 ### Added
