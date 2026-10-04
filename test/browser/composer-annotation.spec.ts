@@ -47,7 +47,10 @@ for (const theme of themes) {
     await page.screenshot({ path: testInfo.outputPath(`composer-annotation-${theme}.png`) });
     await chip.click();
     await expect(page.getByRole("dialog").getByRole("img", { name: "Attachment preview" })).toBeVisible();
-    await page.getByRole("button", { name: "Close preview" }).click();
+    await page.getByRole("button", { name: "Zoom in", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Fit image" })).toHaveText("150%");
+    await page.getByRole("button", { name: "Close", exact: true }).click();
+    await expect(chip).toBeFocused();
 
     // Sent with the prompt, like any image the user adds.
     await page.getByRole("button", { name: /^Send/ }).click();

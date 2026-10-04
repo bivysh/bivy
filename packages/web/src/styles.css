@@ -1180,11 +1180,28 @@ button.sheet-action:last-child { border-bottom: 0; }
 /* Fullscreen image viewer (tap a composer thumbnail). */
 .image-viewer {
   position: fixed; inset: 0; z-index: var(--z-modal); display: grid; place-items: center;
-  background: var(--overlay-strong); padding: var(--space-6); cursor: zoom-out;
+  background: var(--overlay-strong);
+  padding: calc(max(var(--space-3), env(safe-area-inset-top)) + var(--space-7) + var(--space-3)) var(--space-6) calc(var(--space-7) + env(safe-area-inset-bottom));
+  touch-action: none; overscroll-behavior: none;
   grid-template-rows: minmax(0, 1fr); grid-template-columns: minmax(0, 1fr);
   height: 100dvh; box-sizing: border-box; overflow: hidden;
 }
-.image-viewer-img { min-width: 0; min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--radius-sm); cursor: default; }
+.image-viewer-viewport {
+  width: 100%; height: 100%; min-width: 0; min-height: 0;
+  display: grid; place-items: center; overflow: hidden;
+  touch-action: none; overscroll-behavior: none; user-select: none;
+  cursor: zoom-in;
+}
+.image-viewer-viewport[data-zoomed="true"] { cursor: grab; }
+.image-viewer-viewport[data-zoomed="true"]:active { cursor: grabbing; }
+.image-viewer-img { grid-area: 1 / 1; min-width: 0; min-height: 0; max-width: 100%; max-height: 100%; object-fit: contain; border-radius: var(--radius-sm); }
+.image-viewer-viewport > [role="status"] { grid-area: 1 / 1; }
+.image-viewer-message { color: var(--ink); background: var(--surface); padding: var(--space-3); border-radius: var(--radius-sm); }
+.image-viewer-tools {
+  position: absolute; top: max(var(--space-3), env(safe-area-inset-top));
+  left: max(var(--space-3), env(safe-area-inset-left));
+  display: flex; gap: var(--space-1);
+}
 .image-viewer-close {
   position: absolute; top: max(var(--space-3), env(safe-area-inset-top)); right: max(var(--space-4), env(safe-area-inset-right));
 }
