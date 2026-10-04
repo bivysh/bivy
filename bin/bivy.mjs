@@ -3124,7 +3124,8 @@ async function cmdApp(args = []) {
        bivy app list [--session <id>]
        bivy app remove <app-id> [--session <id>]
        bivy app shot [app-id] [--widths 390,1280] [--themes light,dark] [--path /page] [--session <id>]
-       bivy app present [view] [--path /page] [--note "…"] [--session <id>]
+       bivy app present [view] [--path /page] [--note "…"] [--try a,b] [--session <id>]
+       bivy app scenarios [view] [--session <id>]
        bivy app share [app-id] [--view <view>] [--for 1h|1d|7d] [--view-only] [--session <id>]
        bivy app notes [app-id] [--view <view>] [--since <time>] [--session <id>]
        bivy app run [--name <name>] [--restart-on-change] [--session <id>] -- <command> [args…]
@@ -3170,6 +3171,25 @@ chooses an item — more reliable than clicking, and prints a screenshot after.
 the chat with the app at phone width (and before/after), and it opens the live
 preview. Use it when you finish a visible change, or when the user asks to see
 it. [view] is an app or view name or ID (default: the one opened last).
+--try lists scenarios (by file name) the card offers: each opens the live
+preview in that state.
+"scenarios" lists a view's scenarios and any file that can't be opened, with
+what's wrong. A scenario is a JSON file in .bivy/scenarios/<id>.json: a named
+starting point the user can open, use, and reset from the preview:
+  {"name":"Payment API down","open":"/checkout",
+   "steps":[{"click":"text=Pay"}],
+   "network":[{"match":"POST /api/payments*","status":503,"json":{"error":"down"}}]}
+Optional: "description", "view" (app or view name), "from" (another scenario
+to start from), "fresh": true (start as a new visitor). Steps: {"click":sel},
+{"fill":sel,"with":"text"}, {"press":"Enter"}, {"wait":sel or ms}; sel is a CSS
+selector or text=Visible text. Network rules answer matching requests for that
+viewer only: "status", "json" or "body", "delayMs", or "offline": true.
+Desktop apps restart in a scenario: "args" and "env" are added to the app's
+command, "api": {"env":"API_URL","target":"http://127.0.0.1:4000"} points the
+app at a proxy that applies "network", and steps are {"click":[x,y]},
+{"type":"text"}, {"press":"cmd+s"}, {"menu":"File > Open"}, {"wait":ms}. When
+you finish a visible change, add scenarios for the states it affects (errors,
+empty, slow) and pass them to present --try.
 "share" mints a reusable link to one web view and prints its URL and expiry
 (--for: 1h, 1d or 7d, default 1d; sooner if the user stops sharing in Apps, the
 app is removed or the machine restarts). [app-id] is an app ID or name, --view
@@ -3187,7 +3207,7 @@ Web previews require operator setup; see docs/apps.md.`);
   }
   if (INPUT_ACTIONS[action]) return appInput(action, rest);
   if (action === "menu") return appMenu(rest, { json });
-  if (!["publish", "list", "remove", "shot", "run", "present", "share", "notes"].includes(action)) throw new Error("Unknown app command. Run bivy app --help.");
+  if (!["publish", "list", "remove", "shot", "run", "present", "scenarios", "share", "notes"].includes(action)) throw new Error("Unknown app command. Run bivy app --help.");
   // `run -- <command> [args…]`: publish a one-window desktop app without a manifest file.
   let runManifest;
   if (action === "run") {
@@ -3233,7 +3253,7 @@ Web previews require operator setup; see docs/apps.md.`);
     }
   }
   if (action === "shot" || action === "present") {
-    for (const flag of action === "shot" ? ["--widths", "--themes", "--path"] : ["--path", "--note"]) {
+    for (const flag of action === "shot" ? ["--widths", "--themes", "--path"] : ["--path", "--note", "--try"]) {
       const i = rest.indexOf(flag);
       if (i < 0) continue;
       const value = rest[i + 1];
@@ -3241,6 +3261,7 @@ Web previews require operator setup; see docs/apps.md.`);
       if (flag === "--widths") shot.widths = value.split(",").map((w) => Number(w.trim()));
       else if (flag === "--themes") shot.themes = value.split(",").map((t) => t.trim());
       else if (flag === "--note") shot.note = value;
+      else if (flag === "--try") shot.try = value.split(",").map((id) => id.trim()).filter(Boolean);
       else shot.path = value;
       rest.splice(i, 2);
     }
@@ -3250,10 +3271,10 @@ Web previews require operator setup; see docs/apps.md.`);
   const sessionId = resolveAttachSessionId({ sessionFlag: sessionIndex >= 0 ? rest[sessionIndex + 1] : undefined, env: process.env });
   if (!sessionId) throw new Error("Set --session <id> or run inside a Bivy agent session.");
   const positional = rest.filter((_, i) => i !== sessionIndex && (sessionIndex < 0 || i !== sessionIndex + 1));
-  if (positional.some((a) => a.startsWith("-")) || (action === "shot" || action === "present" || action === "share" || action === "notes" ? positional.length > 1 : positional.length !== (action === "list" || action === "run" ? 0 : 1))) throw new Error("Invalid arguments. Run bivy app --help.");
+  if (positional.some((a) => a.startsWith("-")) || (action === "shot" || action === "present" || action === "scenarios" || action === "share" || action === "notes" ? positional.length > 1 : positional.length !== (action === "list" || action === "run" ? 0 : 1))) throw new Error("Invalid arguments. Run bivy app --help.");
   const body = { sessionId, ...shot };
   if (action === "shot" && positional[0]) body.appId = positional[0];
-  if (action === "present" && positional[0]) body.target = positional[0];
+  if ((action === "present" || action === "scenarios") && positional[0]) body.target = positional[0];
   if ((action === "share" || action === "notes") && positional[0]) body.appId = positional[0];
   if (action === "publish") {
     const file = path.resolve(positional[0]);

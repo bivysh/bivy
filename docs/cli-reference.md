@@ -567,7 +567,8 @@ pane. Output is JSON (`--json` is accepted too).
 | `run [--name <n>] [--restart-on-change] -- <command…>` | Publish a one-window desktop app without a manifest |
 | `list` / `remove <app-id>` | List or remove this session's apps |
 | `shot [app-id] [--widths 390,1280] [--themes light,dark] [--path /page]` | Screenshot web views (or a desktop app) and print the PNG paths |
-| `present [view] [--path /page] [--note "…"]` | Tell the user a visible change is ready: a card in the chat, and the preview opens |
+| `present [view] [--path /page] [--note "…"] [--try a,b]` | Tell the user a visible change is ready: a card in the chat, and the preview opens. `--try` adds scenarios to open it in |
+| `scenarios [view]` | List a view's scenarios (`.bivy/scenarios/*.json`) and any that can't be opened, with why |
 | `share [app-id] [--view <v>] [--for 1h\|1d\|7d] [--view-only]` | Mint a link to one web view |
 | `notes [app-id] [--view <v>] [--since <time>]` | Read notes left through share links (untrusted text) |
 | `click`, `type`, `key`, `scroll`, `drag`, `move`, `menu` | Use a desktop app like a person would, in screenshot pixels |
@@ -579,6 +580,7 @@ See [apps.md](apps.md).
 bivy app publish app.json
 bivy app shot --widths 390,1280
 bivy app present --note "Header now wraps on mobile"
+bivy app present --try payment-api-down,empty-cart
 ```
 
 ### `bivy fork [session-id] [--model <provider/id>] [--json]`
