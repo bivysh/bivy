@@ -90,6 +90,27 @@ nav::-webkit-scrollbar { display:none; }
 #menu kbd { flex:none; padding:0 var(--space-1); border:thin solid var(--line); border-radius:var(--radius-sm); color:var(--muted); font-family:var(--font-mono); font-size:var(--text-xs); }
 /* The name is a label, not a target: one pill, three buttons at most. */
 #name { pointer-events:none; }
+/* With scenarios, the name becomes their switcher: the title says which one
+   you're in, the line under it whether Bivy is simulating anything. */
+#scn { display:flex; align-items:center; gap:var(--space-1); min-width:0; padding-inline:var(--space-2); text-align:start; }
+#scn[data-active] { background:color-mix(in srgb, var(--accent) 14%, var(--surface)); }
+.scn-text { display:flex; flex-direction:column; min-width:0; }
+#scn-title { font-weight:var(--weight-semibold); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:14em; }
+#scn-sub { font-size:var(--text-xs); font-weight:var(--weight-normal); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:18em; }
+#scn svg { flex:none; }
+#dock:not([data-edge="top"]) #scn svg { transform:rotate(180deg); }
+.scn-group { margin:var(--space-3) 0 var(--space-1); font-size:var(--text-xs); font-weight:var(--weight-semibold); color:var(--muted); }
+.scn-group:first-of-type { margin-top:0; }
+.scn-list { list-style:none; margin:0; padding:0; display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr)); gap:var(--space-2); }
+.scn-row { display:flex; align-items:flex-start; gap:var(--space-2); width:100%; height:100%; min-block-size:var(--space-7); box-sizing:border-box; padding:var(--space-2) var(--space-3); border:thin solid var(--line); border-radius:var(--radius-md); background:var(--surface); color:var(--ink); font:inherit; text-align:start; cursor:pointer; }
+.scn-row:hover { background:var(--surface-2); }
+.scn-row:focus-visible { outline:2px solid var(--focus-ring); outline-offset:1px; }
+.scn-row[aria-current="true"] { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+.scn-row-text { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px; }
+.scn-row-name { font-size:var(--text-sm); font-weight:var(--weight-semibold); overflow-wrap:anywhere; }
+.scn-row-sub { font-size:var(--text-xs); color:var(--muted); overflow-wrap:anywhere; }
+.scn-row .badge { flex:none; }
+#scn-fail-text { font-size:var(--text-sm); margin:0; overflow-wrap:anywhere; }
 #more { position:relative; gap:var(--space-1); }
 #dock:not([data-edge="top"]) #more svg { transform:rotate(180deg); }
 #compare-draw { margin-top:var(--space-2); }
@@ -97,7 +118,7 @@ nav::-webkit-scrollbar { display:none; }
 #compare[data-drawing] #compare-stage img { max-height:min(60vh, 560px); }
 #compare[data-drawing] #compare-slider, #compare[data-drawing] #compare-hint, #compare[data-drawing] #compare-draw { display:none; }
 .label-narrow { display:none; }
-@media (max-width: 699px) { .wide-only { display:none; } .label-wide { display:none; } .label-narrow { display:inline; } #title { max-width:9em; } }
+@media (max-width: 699px) { .wide-only { display:none; } .label-wide { display:none; } .label-narrow { display:inline; } #title, #scn-title { max-width:9em; } #scn-sub { max-width:12em; } }
 /* "Made with Bivy": a quiet strip under a shared app, never over it. */
 #made-with { flex-shrink:0; display:flex; align-items:center; justify-content:center; gap:var(--space-1); min-height:var(--space-6); padding:0 var(--space-3) env(safe-area-inset-bottom); box-sizing:border-box; background:var(--surface); border-top:thin solid var(--line); color:var(--muted); font-size:var(--text-xs); text-decoration:none; }
 #made-with:hover, #made-with:focus-visible { color:var(--ink); }
@@ -121,6 +142,15 @@ body.badged #dock:not([data-edge="top"]) { bottom:calc(var(--space-2) + var(--sp
     <div id="compare-stage"><img id="compare-after" alt="After the agent’s last change"><img id="compare-before" alt="Before the agent’s last change"><input type="range" id="compare-slider" min="0" max="100" value="50" aria-label="Show more of before or after"></div>
     <p class="muted" id="compare-hint">Left of the handle: before. Right: now. Screenshots at phone width.</p>
     <button class="btn sm" id="compare-draw" type="button" hidden>Draw on “now”</button>
+  </section>
+  <section class="panel" id="scenarios" hidden aria-labelledby="scenarios-title">
+    <h2><span id="scenarios-title">Scenarios</span><button class="btn sm ghost" id="scenarios-close" type="button" aria-label="Close scenarios">✕</button></h2>
+    <div id="scenarios-body"></div>
+  </section>
+  <section class="panel" id="scn-fail" hidden aria-labelledby="scn-fail-title" role="alertdialog">
+    <h2 id="scn-fail-title">Couldn’t finish the scenario</h2>
+    <p id="scn-fail-text"></p>
+    <div class="panel-actions"><button class="btn sm ghost" id="scn-stay" type="button">Stay here</button><button class="btn sm primary" id="scn-fix" type="button">Ask agent to fix</button></div>
   </section>
   <section class="panel" id="draft" hidden aria-labelledby="draft-title">
     <div id="draft-body">
@@ -158,6 +188,8 @@ body.badged #dock:not([data-edge="top"]) { bottom:calc(var(--space-2) + var(--sp
   <nav aria-label="Bivy preview controls">
     <button class="btn sm ghost" id="back" aria-label="Back to chat">‹ <span class="label-wide">Chat</span></button>
     <span id="name"><span id="title">App preview</span><span id="stamp" class="muted" role="status"></span></span>
+    <button class="btn sm ghost" id="scn" type="button" hidden aria-haspopup="dialog" aria-expanded="false" aria-controls="scenarios"><span class="scn-text"><span id="scn-title"></span><span id="scn-sub" class="muted" aria-live="polite"></span></span><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
+    <button class="btn sm ghost" id="scn-reset" type="button" hidden aria-label="Reset scenario" title="Start this scenario over"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/></svg></button>
     <button class="btn sm primary" id="update" type="button" hidden><span class="label-wide">Show new version</span><span class="label-narrow">New</span></button>
     <button class="btn sm ghost" id="more" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="Preview options"><span class="badge" data-variant="solid" data-tone="danger" id="error-count" hidden></span><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
   </nav>
@@ -167,7 +199,9 @@ body.badged #dock:not([data-edge="top"]) { bottom:calc(var(--space-2) + var(--sp
 const $=id=>document.getElementById(id);
 const frame=$('app'),status=$('status'),back=$('back'),reload=$('reload'),stage=$('stage');
 // "#ticket~page": a review card opens the preview on the page it shows.
-const [ticket,startPage='']=location.hash.slice(1).split('~');history.replaceState(null,'',location.pathname);
+// "#ticket~page~scenario": a review card's "Try it" opens the preview in a scenario.
+const [ticket,startPage='',startAt='']=location.hash.slice(1).split('~');history.replaceState(null,'',location.pathname);
+let pendingScenario=/^[a-z0-9][a-z0-9-]{0,63}$/.test(startAt)?startAt:'';
 let metadata,currentPath='/';
 // Peek: framed by a Bivy client, which owns closing and the composer.
 const embedded=parent!==window;
@@ -207,7 +241,11 @@ function show(data,launch){
   reviewerTools(false);
   status.textContent='Loading app…';
   frame.onload=()=>{
-    status.hidden=true;void loadCompare();
+    loads++;
+    if(runner&&!runner.desktop)sendSteps();else status.hidden=true;
+    // A desktop app's viewer has no inspector to say it has loaded.
+    if(metadata.inspect===false&&!scenariosLoaded)void loadScenarios();
+    void loadCompare();
     // Put them back where they were before an update they asked for.
     if(restore){const at=restore;restore=null;frame.contentWindow?.postMessage(Object.assign({type:'bivy:restore'},at),metadata.origin);}
     if(!watching){watching=true;latest=-1;shown=null;watch();firstHint();}else if(wake)wake();
@@ -243,6 +281,8 @@ async function watch(){
     const r=await fetch(metadata.origin+'/__bivy/revision?after='+latest,{credentials:'include',cache:'no-store'});
     if(!r.ok)throw Error();
     const d=await r.json();
+    // A turn may have written or changed scenario files.
+    if(latest!==null&&latest!==-1&&d.revision!==latest)void loadScenarios();
     latest=d.revision;newPath=safePath(d.path);
     // The first poll after a load describes what the frame already has.
     if(shown===null)shown=latest;
@@ -256,6 +296,7 @@ function waiting(on){
   if($('update').hidden===!on)return;
   $('update').hidden=!on;
   $('stamp').textContent=on?'New version ready':'';
+  renderScenarioPill();
 }
 /** Asks the page where it is, so the update can put it back. Without an
  *  inspector (a desktop app) there is nothing to ask. */
@@ -409,6 +450,153 @@ function finishNote(d){
   status.hidden=false;status.textContent=$('stamp').textContent+'. The app’s owner will see it.';
   $('more').focus();
 }
+// Scenarios: named starting points for the live app, from the project's
+// .bivy/scenarios. Opening one tells the gateway (so its simulated responses
+// apply to this browser only), opens its page and walks its steps through the
+// page's inspector, one at a time; a step that loads a new page is picked up
+// after on the next one. Reset does it all again; "Your data" leaves it.
+let scenarios=[],activeScenario=null,runner=null,runSeq=0,loads=0,scenariosLoaded=false;
+const scnBtn=$('scn'),scnReset=$('scn-reset');
+async function loadScenarios(){
+  if(!metadata||metadata.controls===false)return;
+  try{
+    const r=await fetch(metadata.origin+'/__bivy/scenarios',{credentials:'include',cache:'no-store'});if(!r.ok)return;
+    const d=await r.json();
+    scenarios=(Array.isArray(d.scenarios)?d.scenarios:[]).slice(0,100);
+    if(!runner)activeScenario=d.active&&typeof d.active.id==='string'?d.active:null;
+    scenariosLoaded=true;
+    renderScenarioPill();
+    if(!$('scenarios').hidden)renderScenarioList();
+    if(pendingScenario){const id=pendingScenario;pendingScenario='';void enterScenario(id);}
+  }catch{}
+}
+function renderScenarioPill(){
+  if(!metadata)return;
+  const on=scenarios.length>0||Boolean(activeScenario);
+  scnBtn.hidden=!on;$('name').hidden=on;scnReset.hidden=!activeScenario||Boolean(runner);
+  if(!on)return;
+  const sim=activeScenario?.simulated;
+  $('scn-title').textContent=activeScenario?activeScenario.name:metadata.name;
+  $('scn-sub').textContent=runner?'Opening…':activeScenario?(sim?'Simulated: '+sim:metadata.name):$('stamp').textContent||(scenarios.length===1?'1 scenario':scenarios.length+' scenarios');
+  scnBtn.toggleAttribute('data-active',Boolean(activeScenario));
+  scnBtn.setAttribute('aria-label',(activeScenario?'Scenario: '+activeScenario.name+(sim?', simulated':'')+'. ':'')+'Choose a scenario');
+  scnReset.setAttribute('aria-label','Reset '+(activeScenario?.name||'scenario'));
+}
+function scenarioRow(s){
+  const b=document.createElement('button');b.type='button';b.className='scn-row';
+  const current=(activeScenario?.id||'')===s.id;
+  if(current)b.setAttribute('aria-current','true');
+  const text=document.createElement('span');text.className='scn-row-text';
+  const name=document.createElement('span');name.className='scn-row-name';name.textContent=s.name;
+  text.append(name);
+  const lines=s.error?[s.error]:[s.description,s.details??[s.open,s.simulated?'simulates '+s.simulated:'',s.steps?s.steps+' step'+(s.steps===1?'':'s'):'',s.fresh?'as a new visitor':''].filter(Boolean).join(' · ')];
+  for(const line of lines.filter(Boolean)){const sub=document.createElement('span');sub.className='scn-row-sub';sub.textContent=String(line).slice(0,300);text.append(sub);}
+  b.append(text);
+  if(s.error||s.isNew){const tag=document.createElement('span');tag.className='badge';tag.dataset.tone=s.error?'warn':'accent';tag.textContent=s.error?'Needs a fix':'New';b.append(tag);}
+  if(s.error&&(!metadata.returnTo||metadata.reviewer))b.disabled=true;
+  b.onclick=()=>{if(s.error)return toChat(fixRequest(s.name,s.id,s.error));void enterScenario(s.id);};
+  return b;
+}
+function renderScenarioList(){
+  const body=$('scenarios-body'),fresh=scenarios.filter(s=>s.isNew&&!s.error);
+  const group=(label,rows)=>{
+    const h=document.createElement('h3');h.className='scn-group';h.textContent=label;
+    const ul=document.createElement('ul');ul.className='scn-list';
+    for(const row of rows){const li=document.createElement('li');li.append(scenarioRow(row));ul.append(li);}
+    return [h,ul];
+  };
+  const mine={id:'',name:'Your data',details:'The app as it is, no scenario'};
+  body.replaceChildren(...(fresh.length?group('New in this session',fresh):[]),...group(fresh.length?'All':'Start from',[mine,...scenarios.filter(s=>!fresh.includes(s))]));
+}
+scnBtn.onclick=()=>{
+  if(!$('scenarios').hidden)return panels(null);
+  panels('scenarios');renderScenarioList();void loadScenarios();
+  ($('scenarios-body').querySelector('[aria-current="true"]')||$('scenarios-body').querySelector('.scn-row:not(:disabled)'))?.focus();
+};
+$('scenarios-close').onclick=()=>{panels(null);scnBtn.focus();};
+scnReset.onclick=()=>{if(activeScenario)void enterScenario(activeScenario.id);};
+const fixRequest=(name,id,problem)=>'The scenario “'+name+'” (.bivy/scenarios/'+id+'.json) for the app preview "'+metadata.name+'" doesn’t work: '+problem+'\\n\\nPlease fix the scenario, or the app if that’s what broke, and tell me when it opens cleanly.';
+async function enterScenario(id){
+  panels(null);
+  const run=++runSeq;
+  if(runner)clearTimeout(runner.timer);
+  runner=null;
+  // A desktop app: the machine restarts it in the scenario and takes the
+  // steps in its window, then answers. Nothing to walk here.
+  if(metadata.inspect===false)return enterDesktopScenario(id,run);
+  let d={};
+  try{
+    const r=await fetch(metadata.origin+'/__bivy/scenario',{method:'POST',credentials:'include',cache:'no-store',headers:{'content-type':'text/plain'},body:id});
+    d=await r.json().catch(()=>({}));
+    if(!r.ok)throw Error(typeof d.error==='string'?d.error.slice(0,300):'The preview didn’t answer.');
+  }catch(error){if(run===runSeq)failScenario({id,name:scenarios.find(s=>s.id===id)?.name||id},error.message||'The preview didn’t answer.');return;}
+  if(run!==runSeq)return;
+  const plan=d.plan;
+  if(!plan){activeScenario=null;renderScenarioPill();open(currentPath,'Reloading app…');return;}
+  activeScenario={id:plan.id,name:plan.name,...(plan.simulated?{simulated:plan.simulated}:{})};
+  runner={run,plan,stage:0,step:0,timer:0};
+  // As a new visitor: the page forgets what it kept before the first page opens.
+  if(plan.fresh)frame.contentWindow?.postMessage({type:'bivy:forget'},metadata.origin);
+  renderScenarioPill();
+  setTimeout(()=>{if(runner?.run===run)goStage();},plan.fresh?200:0);
+}
+async function enterDesktopScenario(id,run){
+  const name=id?scenarios.find(s=>s.id===id)?.name||id:'';
+  runner={run,desktop:true,timer:0,plan:{id,name}};renderScenarioPill();
+  let d={};
+  try{
+    const r=await fetch(metadata.origin+'/__bivy/scenario',{method:'POST',credentials:'include',cache:'no-store',headers:{'content-type':'text/plain'},body:id});
+    d=await r.json().catch(()=>({}));
+    if(!r.ok)throw Error(typeof d.error==='string'?d.error.slice(0,300):'The app didn’t answer.');
+  }catch(error){if(run===runSeq){runner=null;failScenario({id,name},error.message||'The app didn’t answer.');}return;}
+  if(run!==runSeq)return;
+  activeScenario=d.plan?{id:d.plan.id,name:d.plan.name,...(d.plan.simulated?{simulated:d.plan.simulated}:{})}:null;
+  if(typeof d.error==='string')failScenario(d.plan,d.error.slice(0,400));else finishScenario();
+}
+/** Opens the stage's page (its steps follow when it has loaded), or walks its steps where we are. */
+function goStage(){
+  const st=runner.plan.stages[runner.stage];
+  if(!st)return finishScenario();
+  runner.step=0;
+  if(st.open){shown=latest;waiting(false);open(st.open,'Opening '+runner.plan.name+'…');watchdog();}
+  else sendSteps();
+}
+function sendSteps(){
+  const st=runner.plan.stages[runner.stage];
+  if(!st)return finishScenario();
+  if(runner.step>=st.steps.length){runner.stage++;return goStage();}
+  frame.contentWindow?.postMessage({type:'bivy:steps',run:runner.run,load:loads,steps:st.steps,from:runner.step},metadata.origin);
+  watchdog();
+}
+/** A page that stops answering (no inspector, a hung script) fails the scenario rather than leaving it opening forever. */
+function watchdog(){
+  const at=runner;clearTimeout(at.timer);
+  at.timer=setTimeout(()=>{if(runner===at)failScenario(at.plan,'The page stopped answering at step '+(at.step+1)+' of “'+at.plan.name+'”.');},12000);
+}
+const stepWords=s=>s?('click' in s?'click '+s.click:'fill' in s?'fill '+s.fill:'press' in s?'press '+s.press:'wait' in s?'wait for '+s.wait:'step'):'step';
+function stepReport(d){
+  if(d.type==='steps-done'){runner.stage++;return goStage();}
+  const i=Number(d.i)||0;
+  if(d.ok){runner.step=i+1;return watchdog();}
+  const st=runner.plan.stages[runner.stage],before=runner.plan.stages.slice(0,runner.stage).reduce((n,x)=>n+x.steps.length,0);
+  failScenario(runner.plan,'Step '+(before+i+1)+' ('+stepWords(st.steps[i])+'): '+String(d.error||'it failed').slice(0,300)+'.');
+}
+function finishScenario(){
+  if(runner)clearTimeout(runner.timer);
+  runner=null;status.hidden=true;renderScenarioPill();
+}
+function failScenario(s,message){
+  if(runner)clearTimeout(runner.timer);
+  runner=null;status.hidden=true;renderScenarioPill();
+  panels(null);
+  $('scn-fail-title').textContent='Couldn’t finish “'+s.name+'”';
+  $('scn-fail-text').textContent=message+(metadata.inspect===false?' The app is running with what ran so far.':' You’re on '+currentPath+' with what ran so far.');
+  $('scn-fix').hidden=!metadata.returnTo||Boolean(metadata.reviewer);
+  $('scn-fix').onclick=()=>{$('scn-fail').hidden=true;toChat(fixRequest(s.name,s.id,message));};
+  $('scn-fail').hidden=false;
+  ($('scn-fix').hidden?$('scn-stay'):$('scn-fix')).focus();
+}
+$('scn-stay').onclick=()=>{$('scn-fail').hidden=true;scnBtn.hidden?more.focus():scnBtn.focus();};
 // Console
 let entries=[];
 function resetConsole(){entries=[];serverSince='page';renderConsole();}
@@ -687,7 +875,7 @@ async function loadCompare(){
   if(metadata.reviewer)return;
   try{const r=await fetch(metadata.origin+'/__bivy/compare',{credentials:'include',cache:'no-store'});if(!r.ok)return;shots=(await r.json()).shots||[];compareBtn.hidden=shots.length<2;}catch{}
 }
-function panels(open){if(listening)cancelListening();if(draw&&!(open==='compare'&&draw.target==='compare'))endDraw();for(const [id,btn] of [['console','errors'],['compare','compare-btn']]){$(id).hidden=id!==open;$(btn).setAttribute('aria-checked',String(id===open));}$('draft').hidden=true;}
+function panels(open){if(listening)cancelListening();if(draw&&!(open==='compare'&&draw.target==='compare'))endDraw();for(const [id,btn] of [['console','errors'],['compare','compare-btn'],['scenarios','scn']]){$(id).hidden=id!==open;$(btn).setAttribute(btn==='scn'?'aria-expanded':'aria-checked',String(id===open));}$('draft').hidden=true;$('scn-fail').hidden=true;}
 compareBtn.onclick=async()=>{
   if(!$('compare').hidden)return panels(null);
   panels('compare');
@@ -757,7 +945,11 @@ addEventListener('message',e=>{
     ask.hidden=!metadata.returnTo;
   }else if(d.source==='bivy-inspector'){
     if(d.type==='note-sent'&&metadata.reviewer)finishNote(d);
-    else if(d.type==='route'){currentPath=safePath(d.path);reviewerTools(true);}
+    else if(d.type==='route'){
+      currentPath=safePath(d.path);reviewerTools(true);
+      if(!scenariosLoaded)void loadScenarios();
+    }
+    else if((d.type==='step'||d.type==='steps-done')&&runner&&d.run===runner.run&&d.load===loads)stepReport(d);
     else if(d.type==='console'&&(d.level==='error'||d.level==='warn')){entries.push({level:d.level,text:String(d.text).slice(0,500)});if(entries.length>50)entries.shift();renderConsole();}
     else if(d.type==='release'&&heldAt){heldAt=0;stopListening();}
     else if(d.type==='draw-state'){if(draw&&draw.waiting)draw.waiting(d);else if(stateWaiter)stateWaiter(d);}

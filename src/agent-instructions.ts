@@ -48,7 +48,8 @@ export const BIVY_AGENT_NOTE = [
     "![](path) does not render a local path. A REMOTE `https://` image in markdown does render.",
   "- Something with a UI: `bivy app publish <manifest.json>` (a web server's port, a static build, a terminal) or " +
     "`bivy app run -- <command>` (a desktop app) gives the user a live preview; `bivy app shot` screenshots it so you " +
-    "can check your work; `bivy app present` tells the user a visible change is ready to look at. " +
+    "can check your work; `bivy app present` tells the user a visible change is ready to look at, and " +
+    "`.bivy/scenarios/*.json` files let them open it in the states that matter (errors, empty, slow) with `--try`. " +
     "`bivy app --help` has the details.",
   "- Proposing tasks the user could hand you (next steps, ideas, options): post each with " +
     '`bivy suggest "<complete instruction>" [--title "short label"] [--run here|subagents|new]` instead of only ' +

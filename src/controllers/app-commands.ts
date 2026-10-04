@@ -30,11 +30,12 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
       published(app);
       return { app };
     },
-    "apps.open": (msg) => service.open(String(msg.sessionId), String(msg.appId), String(msg.viewId), typeof msg.returnTo === "string" ? msg.returnTo : undefined, msg.direct === true, typeof msg.scale === "number" ? msg.scale : undefined, typeof msg.path === "string" ? msg.path : undefined),
+    "apps.open": (msg) => service.open(String(msg.sessionId), String(msg.appId), String(msg.viewId), typeof msg.returnTo === "string" ? msg.returnTo : undefined, msg.direct === true, typeof msg.scale === "number" ? msg.scale : undefined, typeof msg.path === "string" ? msg.path : undefined, typeof msg.scenario === "string" ? msg.scenario : undefined),
     "apps.shot": (msg) => service.shot(String(msg.sessionId), typeof msg.appId === "string" ? msg.appId : undefined, { widths: msg.widths as number[] | undefined, themes: msg.themes as ("light" | "dark")[] | undefined, path: typeof msg.path === "string" ? msg.path : undefined }),
     "apps.input": (msg) => service.act(String(msg.sessionId), typeof msg.target === "string" ? msg.target : undefined, msg.action),
     "apps.menu": (msg) => service.menu(String(msg.sessionId), typeof msg.target === "string" ? msg.target : undefined, msg.path),
-    "apps.present": (msg) => service.present(String(msg.sessionId), { target: typeof msg.target === "string" ? msg.target : undefined, path: typeof msg.path === "string" ? msg.path : undefined, note: typeof msg.note === "string" ? msg.note : undefined }),
+    "apps.present": (msg) => service.present(String(msg.sessionId), { target: typeof msg.target === "string" ? msg.target : undefined, path: typeof msg.path === "string" ? msg.path : undefined, note: typeof msg.note === "string" ? msg.note : undefined, try: Array.isArray(msg.try) ? msg.try.filter((id): id is string => typeof id === "string") : undefined }),
+    "apps.scenarios": (msg) => service.scenarios(String(msg.sessionId), typeof msg.target === "string" ? msg.target : undefined),
     "apps.showMe": (msg) => service.present(String(msg.sessionId), { target: typeof msg.appId === "string" ? msg.appId : undefined, trigger: "asked" }),
     "apps.mute": (msg) => service.mute(String(msg.sessionId)),
     "apps.reviewMode": (msg) => service.setReviewMode(String(msg.sessionId), String(msg.appId), msg.mode as ReviewCardMode),

@@ -122,6 +122,8 @@ export function ReviewCard({ review }: { review: AppReview }) {
   const firstChange = evidence.find((row) => row.tone === "warn" || row.tone === "danger") ?? evidence[0];
   const label = backendOnly ? review.name : `${review.name}${review.view && review.view !== review.name ? ` · ${review.view}` : ""}`;
   const meta = backendOnly ? `${TRIGGER_LABELS[review.trigger]} · backend` : `${TRIGGER_LABELS[review.trigger]} · ${review.path}`;
+  // A scenario opens on its own page, so the card's page isn't passed.
+  const openScenario = (scenario: string) => requestAppsSheet({ sessionId: review.sessionId, appId: review.appId, openView: { viewId: review.viewId, scenario } });
   return <section ref={card} className="apps-card review-card" aria-label={`${review.name}: ${TRIGGER_LABELS[review.trigger].toLowerCase()}`}>
       <AppRow tile={appInitial(review.name)} name={label} meta={meta}
         action={<MoreMenu label={`Preview card options for ${review.name}`} onOpen={loadMode} items={[
@@ -159,6 +161,10 @@ export function ReviewCard({ review }: { review: AppReview }) {
         </li>)}
       </ul>}
       {review.note && <p className="review-note">{review.note}</p>}
+      {review.try?.length ? <div className="review-try" role="group" aria-label={`Try ${review.name} in a scenario`}>
+        <span className="review-try-label" aria-hidden="true">Try it:</span>
+        {review.try.map((item) => <button key={item.id} type="button" className="btn sm" disabled={!online} onClick={() => openScenario(item.id)}>{item.name}</button>)}
+      </div> : null}
       {review.notes ? <div className="banner inline review-banner" data-tone="neutral" role="group" aria-label={`Reviewer notes on ${label}`}>
         <span className="banner-text">{review.notes === 1 ? "1 note" : `${review.notes} notes`} from people with a shared link. They reach the agent only if you send them.</span>
         <span className="banner-actions">

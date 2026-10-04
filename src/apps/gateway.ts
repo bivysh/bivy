@@ -18,6 +18,8 @@ import type { AppService } from "./service.js";
 import type { ReviewShot } from "./types.js";
 import { readStrokes, readElementScrolls } from "./annotate.js";
 import { contentType } from "./mime.js";
+import { loadScenarios, matchRule, planScenario, scenariosFor, summarize, type ScenarioKind, type ScenarioPlan } from "./scenarios.js";
+import { simulate } from "./scenario-proxy.js";
 
 export type NoteCapture = (entry: RegisteredView, mark: Parameters<AppService["annotate"]>[1]) => Promise<ReviewShot | undefined>;
 
@@ -30,6 +32,9 @@ const INSPECTOR_PATH = "/__bivy/inspector.js";
 const COMPARE_PATH = "/__bivy/compare";
 const NOTES_PATH = "/__bivy/notes";
 const SERVER_ERRORS_PATH = "/__bivy/server-errors";
+const SCENARIOS_PATH = "/__bivy/scenarios";
+const SCENARIO_PATH = "/__bivy/scenario";
+const scenarioKind = (entry: RegisteredView): ScenarioKind => entry.target.kind === "display" ? "desktop" : "web";
 /** Larger HTML documents pass through without the inspector. */
 const MAX_INJECT_BYTES = 5 * 1024 * 1024;
 
@@ -123,6 +128,12 @@ const poll=async()=>{try{const r=await fetch(location.href,{method:'HEAD',cache:
 export const SHARE_TTL = 24 * HOUR;
 /** The longest a copied link may be asked to last. */
 export const SHARE_TTL_MAX = 7 * 24 * HOUR;
+/** One browser's access to one view. `reviewer`: it came from a copied
+ *  (shared) link; `viewOnly`: that link came without the reviewer tools;
+ *  `embedded`: it runs framed inside a Bivy client (a third-party frame);
+ *  `scenario`: the scenario this browser is in, whose network rules apply to
+ *  its requests only. */
+type PreviewSession = { appId: string; expires: number; reviewer?: boolean; viewOnly?: boolean; embedded?: boolean; scenario?: ScenarioPlan };
 /** `viewOnly`: a copied link without the reviewer tools. */
 type Grant = { appId: string; expires: number; returnTo?: string; reusable?: boolean; viewOnly?: boolean };
 /** Bivy's packaged apps load the client from their own scheme, so a preview
@@ -194,10 +205,7 @@ export class AppGateway {
     ["/__bivy/tokens.css", readFileSync(new URL("./tokens.css", import.meta.url))],
     ["/__bivy/styles.css", readFileSync(new URL("./styles.css", import.meta.url))],
   ]);
-  /** `reviewer`: the browser session came from a copied (shared) link.
-   *  `viewOnly`: that link came without the reviewer tools.
-   *  `embedded`: it runs framed inside a Bivy client (a third-party frame). */
-  private readonly sessions = new Map<string, { appId: string; expires: number; reviewer?: boolean; viewOnly?: boolean; embedded?: boolean }>();
+  private readonly sessions = new Map<string, PreviewSession>();
   private readonly sockets = new Map<string, Set<Duplex>>();
   /** Connections opened by people with a copied link, so Stop sharing can end
    * theirs and leave the owner's. */
@@ -299,7 +307,7 @@ export class AppGateway {
     const entry = this.registry.getView(id);
     return entry?.view.kind === "web" ? entry : undefined;
   }
-  private session(req: IncomingMessage, id: string): { expires: number; reviewer?: boolean; viewOnly?: boolean; embedded?: boolean } | undefined {
+  private session(req: IncomingMessage, id: string): PreviewSession | undefined {
     this.sweep();
     const token = (req.headers.cookie ?? "").split(";").map((part) => part.trim()).find((part) => part.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1);
     const session = token ? this.sessions.get(token) : undefined;
@@ -392,6 +400,8 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     const signIn = !session && req.method === "GET" && req.headers["sec-fetch-dest"] === "document" && req.url?.startsWith("/") ? this.signIn?.(entry, req.url) : undefined;
     if (signIn) { res.writeHead(303, { location: signIn }); res.end(); return; }
     if (!session) { res.writeHead(401); res.end("Preview access expired. Open a new preview link from Bivy."); return; }
+    // The shell (its own origin) chooses this browser's scenario; nothing else may.
+    if (req.url === SCENARIO_PATH && req.method === "POST") { await this.enterScenario(req, res, entry, session); return; }
     // Block cross-site mutations even if a client sends the preview cookie.
     if (!["GET", "HEAD"].includes(req.method ?? "") && req.headers.origin !== this.origin(id)) { res.writeHead(403); res.end("Forbidden origin."); return; }
     if (req.headers["sec-fetch-dest"] === "serviceworker") { res.writeHead(403); res.end(); return; }
@@ -400,6 +410,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     if (req.url.startsWith(`${REVISION_PATH}?`) && req.method === "GET") { this.revision(req, res, entry); return; }
     if ((req.url === COMPARE_PATH || req.url.startsWith(`${COMPARE_PATH}/`)) && req.method === "GET") { this.compare(req, res, entry); return; }
     if (req.url.startsWith(SERVER_ERRORS_PATH) && req.method === "GET") { this.serverErrors(req, res, entry, session); return; }
+    if (req.url === SCENARIOS_PATH && req.method === "GET") { this.scenarios(res, entry, session); return; }
     if (req.url === INSPECTOR_PATH && req.method === "GET") {
       res.writeHead(200, { "content-type": "text/javascript; charset=utf-8", "cache-control": "no-store" });
       res.end(inspectorScript(this.shellOrigin(id), session.reviewer === true && !session.viewOnly, session.embedded === true)); return;
@@ -410,6 +421,8 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
       await this.note(req, res, entry); return;
     }
     if (entry.target.kind === "display") { await this.display(req, res, entry); return; }
+    const rule = session.scenario && matchRule(session.scenario.network, req.method, req.url);
+    if (rule && await simulate(req, res, rule, responseHeaders({}, this.ancestors(id)))) return;
     const inspect = isPageLoad(req);
     // What the person does in the preview marks the app's logs ("your last
     // action"): opening a page, or sending something. Assets don't count.
@@ -599,6 +612,57 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     const found = Number.isFinite(since) ? this.registry.serverErrors?.(entry.view.id, since) : undefined;
     res.writeHead(200, { ...cors, "content-type": "application/json", "cache-control": "no-store" });
     res.end(JSON.stringify(found ?? { now: Date.now(), lines: [] }));
+  }
+  /** The view's scenarios for the shell's switcher, and the one it's in: this
+   *  browser's for a web page, the app's for a desktop app. */
+  private scenarios(res: ServerResponse, entry: RegisteredView, session: PreviewSession): void {
+    const { scenarios, problems } = loadScenarios(entry.workspace);
+    const kind = scenarioKind(entry);
+    const own = scenariosFor(scenarios, entry.app.name, entry.view.name, kind);
+    const active = kind === "desktop" ? entry.scenario : session.scenario;
+    res.writeHead(200, { "access-control-allow-origin": this.shellOrigin(entry.view.id), "access-control-allow-credentials": "true", vary: "Origin", "content-type": "application/json" });
+    res.end(JSON.stringify({ kind, scenarios: summarize(own, problems, entry.app.createdAt, kind), active: active ? { id: active.id, name: active.name, ...(active.simulated ? { simulated: active.simulated } : {}) } : null }));
+  }
+  /** Puts this browser in a scenario (or back in none, for an empty body) and
+   *  returns the plan the shell walks through: pages to open and steps to take.
+   *  A "fresh" scenario also expires the app's cookies this browser sent, so it
+   *  starts as a new visitor. Only the shell's origin may ask. */
+  private async enterScenario(req: IncomingMessage, res: ServerResponse, entry: RegisteredView, session: PreviewSession): Promise<void> {
+    const shell = this.shellOrigin(entry.view.id);
+    const cors = { "access-control-allow-origin": shell, "access-control-allow-credentials": "true", vary: "Origin" };
+    if (req.headers.origin !== shell) { res.writeHead(403); res.end(); return; }
+    let body = "";
+    for await (const chunk of req) { body += chunk.toString(); if (body.length > 64) { res.writeHead(413, cors); res.end(); return; } }
+    const id = body.trim();
+    const json = (status: number, value: object) => { res.writeHead(status, { ...cors, "content-type": "application/json" }); res.end(JSON.stringify(value)); };
+    // A desktop app is one program for everyone watching it: its scenario
+    // restarts it, and the steps run in its window before this answers.
+    if (scenarioKind(entry) === "desktop") {
+      if (!this.registry.desktopScenario) { json(400, { error: "Desktop scenarios aren't available on this machine." }); return; }
+      try { json(200, await this.registry.desktopScenario(entry.view.id, id)); }
+      catch (error) { json(400, { error: (error as Error).message }); }
+      return;
+    }
+    if (!id) {
+      session.scenario = undefined;
+      res.writeHead(200, { ...cors, "content-type": "application/json" }); res.end(JSON.stringify({ plan: null })); return;
+    }
+    let plan: ScenarioPlan;
+    try {
+      const own = scenariosFor(loadScenarios(entry.workspace).scenarios, entry.app.name, entry.view.name, "web");
+      plan = planScenario(own, id, "web");
+    } catch (error) {
+      res.writeHead(400, { ...cors, "content-type": "application/json" }); res.end(JSON.stringify({ error: (error as Error).message })); return;
+    }
+    session.scenario = plan;
+    const headers: OutgoingHttpHeaders = { ...cors, "content-type": "application/json" };
+    if (plan.fresh) {
+      const names = (req.headers.cookie ?? "").split(";").map((part) => part.split("=", 1)[0]!.trim()).filter((name) => name && name !== COOKIE && /^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name));
+      const expire = (name: string) => `${name}=; Path=/; Max-Age=0`;
+      headers["set-cookie"] = names.map((name) => session.embedded ? partitionCookie(expire(name)) : expire(name));
+    }
+    res.writeHead(200, headers);
+    res.end(JSON.stringify({ plan }));
   }
   /** Compare shots for the shell: the list, or one PNG by index. */
   private compare(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): void {

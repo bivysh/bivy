@@ -15,6 +15,12 @@ import { inputEvents, readAction } from "./input.js";
 import { pressMenu, readMenuPath, readMenus, type AppMenu } from "./menu.js";
 import { pngSize } from "./review.js";
 import { Backend } from "./backend/index.js";
+import { SCENARIO_DIR, loadScenarios, planScenario, scenariosFor, summarize, type ScenarioKind, type ScenarioPlan, type ScenarioStep, type ScenarioSummary } from "./scenarios.js";
+import { startScenarioProxy } from "./scenario-proxy.js";
+
+const scenarioKind = (entry: RegisteredView): ScenarioKind => entry.target.kind === "display" ? "desktop" : "web";
+/** A desktop step in words, for the message when one fails. */
+const stepWords = (step: ScenarioStep): string => "click" in step ? `click ${Array.isArray(step.click) ? step.click.join(",") : step.click}` : "type" in step ? `type "${step.type.slice(0, 40)}"` : "press" in step ? `press ${step.press}` : "menu" in step ? `menu ${step.menu}` : "wait" in step ? `wait ${step.wait}` : "step";
 
 export interface AppPreviewProvider {
   readonly available?: boolean;
@@ -119,6 +125,8 @@ export class AppService {
   private latest = new Map<string, AppReview>();
   /** Per view: the newest reviewer note a run-end card has already counted. */
   private handedOver = new Map<string, number>();
+  /** Per desktop app in a scenario with an API: the proxy in front of it and the variable pointing there. */
+  private proxies = new Map<string, { close(): void; env: Record<string, string> }>();
   /** Screenshots in progress, so a card, Compare and a baseline share one browser run. */
   private inflight = new Map<string, Promise<Buffer | undefined>>();
   /** Requests, data and logs views: what a backend change did. */
@@ -142,6 +150,7 @@ export class AppService {
     this.pinSink = options.pins ?? NO_PINS;
     this.settleMs = options.settleMs ?? COMPARE_SETTLE_MS;
     this.backend = new Backend(registry, terminals);
+    registry.desktopScenario = (viewId, scenario) => this.desktopScenario(viewId, scenario);
   }
 
   /** A session's apps, or every app on this machine when no session is given. */
@@ -175,6 +184,8 @@ export class AppService {
       const entry = this.registry.getView(id);
       const server = this.servers.get(id);
       if (entry?.target.kind !== "display" || !server?.termId) continue;
+      // In a scenario, the new code starts in it again, steps and all.
+      if (entry.scenario) { void this.desktopScenario(id, entry.scenario.id).catch(() => {}); continue; }
       this.terminals.close(server.termId);
       server.termId = undefined;
       void this.ensureServer(entry).catch(() => {});
@@ -273,7 +284,7 @@ export class AppService {
       const current = this.latest.get(entry.view.id);
       const presented = current && run.reviews.get(entry.app.id) === current.id;
       if (!shouldReview({ trigger: "run", mode, muted: run.muted, revisionChanged: true, change }) && !(presented && after)) continue;
-      latest = this.review(entry, run, { trigger: presented ? current.trigger : "run", note: presented ? current.note : undefined, path: entry.lastPath ?? "/", shot: after, before, evidence: evidence.get(entry.app.id)?.changed ? evidence.get(entry.app.id)!.rows : undefined });
+      latest = this.review(entry, run, { trigger: presented ? current.trigger : "run", note: presented ? current.note : undefined, try: presented ? current.try : undefined, path: entry.lastPath ?? "/", shot: after, before, evidence: evidence.get(entry.app.id)?.changed ? evidence.get(entry.app.id)!.rows : undefined });
     }
     // Reviewer notes that arrived since the last hand-over ride on the view's
     // card for this run, or get a card of their own. A count only: the notes
@@ -308,12 +319,13 @@ export class AppService {
     return latest;
   }
   /** `bivy app present`, or Show me ("asked"): a card for one view now. */
-  async present(sessionId: string, input: { target?: string; path?: string; note?: string; trigger?: "present" | "asked" }): Promise<{ review?: AppReview; message: string }> {
+  async present(sessionId: string, input: { target?: string; path?: string; note?: string; trigger?: "present" | "asked"; try?: string[] }): Promise<{ review?: AppReview; message: string }> {
     const trigger = input.trigger ?? "present";
     const page = input.path;
     if (page !== undefined && (typeof page !== "string" || !page.startsWith("/") || page.startsWith("//") || page.length > 2048)) throw new Error("Path must start with /.");
     const note = typeof input.note === "string" ? input.note.trim().slice(0, 500) : undefined;
     const entry = this.pickView(sessionId, input.target);
+    const tries = input.try?.length ? this.tryScenarios(entry, input.try) : undefined;
     const mode = this.registry.reviewMode(entry.app.id);
     const active = this.runs.get(sessionId);
     const run = active && !active.ended ? active : undefined;
@@ -328,8 +340,71 @@ export class AppService {
     const shot = enabled ? await this.shotOf(entry, path) : undefined;
     const baseline = run?.baseline.get(entry.view.id);
     const before = baseline && shot && !baseline.equals(shot) && path === (entry.lastPath ?? "/") ? baseline : undefined;
-    const review = this.review(entry, run, { trigger, note, path, shot, before, screenshotsOff: !enabled });
+    const review = this.review(entry, run, { trigger, note, path, shot, before, screenshotsOff: !enabled, ...(tries ? { try: tries } : {}) });
     return { review, message: enabled ? (shot ? "The user sees it in the chat." : "The user sees a card in the chat, but the screenshot failed.") : "The user sees a card in the chat. Screenshots are off on this machine, so it has no picture." };
+  }
+  /** `bivy app scenarios`: a view's scenarios as the preview shows them, and
+   *  files that can't be opened, with what's wrong (picked like `present`). */
+  scenarios(sessionId: string, target?: string): { app: string; view: string; dir: string; scenarios: ScenarioSummary[] } {
+    const entry = this.pickView(sessionId, target);
+    const { scenarios, problems } = loadScenarios(entry.workspace);
+    const kind = scenarioKind(entry);
+    return { app: entry.app.name, view: entry.view.name, dir: SCENARIO_DIR, scenarios: summarize(scenariosFor(scenarios, entry.app.name, entry.view.name, kind), problems, entry.app.createdAt, kind) };
+  }
+  /** Scenarios a review card offers to try, by ID, each one that can be opened. */
+  private tryScenarios(entry: RegisteredView, ids: string[]): NonNullable<AppReview["try"]> {
+    const { scenarios, problems } = loadScenarios(entry.workspace);
+    const kind = scenarioKind(entry);
+    const known = summarize(scenariosFor(scenarios, entry.app.name, entry.view.name, kind), problems, entry.app.createdAt, kind);
+    const wanted = [...new Set(ids.map((id) => id.trim().toLowerCase().replace(/\.json$/, "")).filter(Boolean))].slice(0, 6);
+    return wanted.map((id) => {
+      const found = known.find((item) => item.id === id);
+      if (!found) throw new Error(`No scenario "${id}" for ${entry.view.name}. ${known.length ? `Its scenarios: ${known.map((item) => item.id).join(", ")}.` : `Write one in ${SCENARIO_DIR}/${id}.json.`}`);
+      if (found.error) throw new Error(`Scenario "${id}" can't be opened: ${found.error}`);
+      return { id: found.id, name: found.name };
+    });
+  }
+  /** Puts a desktop app in a scenario ("" for none). It is one program for
+   *  everyone watching, so the scenario is the app's: it restarts with the
+   *  scenario's arguments and environment, its API (if the scenario has one)
+   *  behind a proxy that applies the network rules, and then the steps run in
+   *  its window the way an agent's input does. A step that fails leaves the app
+   *  where it got to and says which step, rather than throwing. */
+  async desktopScenario(viewId: string, id: string): Promise<{ plan: ScenarioPlan | null; error?: string }> {
+    const entry = this.registry.getView(viewId);
+    if (entry?.target.kind !== "display") throw new Error("Desktop scenarios are for desktop apps.");
+    const plan = id ? planScenario(scenariosFor(loadScenarios(entry.workspace).scenarios, entry.app.name, entry.view.name, "desktop"), id, "desktop") : null;
+    this.proxies.get(viewId)?.close();
+    this.proxies.delete(viewId);
+    if (plan?.api) {
+      const proxy = await startScenarioProxy(plan.api.target, plan.network);
+      this.proxies.set(viewId, { close: proxy.close, env: { [plan.api.env]: proxy.url } });
+    }
+    entry.scenario = plan ?? undefined;
+    const server = this.servers.get(viewId);
+    if (server?.termId) { this.terminals.close(server.termId); server.termId = undefined; }
+    await this.windowShown(entry);
+    if (!plan) return { plan: null };
+    const steps = plan.stages.flatMap((stage) => stage.steps);
+    for (const [index, step] of steps.entries()) {
+      try { await this.desktopStep(entry, step); }
+      catch (error) { return { plan, error: `Step ${index + 1} (${stepWords(step)}): ${(error as Error).message}` }; }
+      await new Promise((r) => setTimeout(r, AFTER_INPUT_MS));
+    }
+    return { plan };
+  }
+  private async desktopStep(entry: RegisteredView, step: ScenarioStep): Promise<void> {
+    if ("wait" in step) { if (typeof step.wait === "number") await new Promise((r) => setTimeout(r, step.wait as number)); return; }
+    if ("menu" in step) {
+      if (!entry.displayControl) throw new Error("This machine's desktop apps don't expose their menus (macOS only). Use a key combo instead.");
+      await pressMenu(entry.displayControl, readMenuPath(step.menu));
+      return;
+    }
+    if (!entry.display) throw new Error("The app isn't running. Check its Logs in the Apps sheet.");
+    const action = "click" in step && Array.isArray(step.click) ? { kind: "click", x: step.click[0], y: step.click[1] }
+      : "type" in step ? { kind: "type", text: step.type } : "press" in step ? { kind: "key", keys: step.press } : undefined;
+    if (!action) throw new Error("That step is for web pages.");
+    await sendInput(entry.display, inputEvents(readAction(action)));
   }
   /** No more cards for the rest of the session's current run. */
   mute(sessionId: string): { ok: true } {
@@ -359,7 +434,7 @@ export class AppService {
     return views.reduce((best, entry) => (entry.openedAt ?? 0) > (best.openedAt ?? 0) || ((entry.openedAt ?? 0) === (best.openedAt ?? 0) && entry.app.createdAt > best.app.createdAt) ? entry : best);
   }
   /** Makes or updates a card, keeping each view's images to the latest card. */
-  private review(entry: RegisteredView, run: Run | undefined, fields: Pick<AppReview, "trigger" | "path" | "note" | "screenshotsOff" | "notes" | "evidence"> & { shot?: Buffer; before?: Buffer }): AppReview {
+  private review(entry: RegisteredView, run: Run | undefined, fields: Pick<AppReview, "trigger" | "path" | "note" | "screenshotsOff" | "notes" | "evidence" | "try"> & { shot?: Buffer; before?: Buffer }): AppReview {
     const id = (run && run.reviews.get(entry.app.id)) ?? `review-${randomBytes(8).toString("hex")}`;
     const { shot, before, ...rest } = fields;
     const review = this.reviews.publish({
@@ -392,14 +467,18 @@ export class AppService {
    * returning to a view's stable address. */
   /** `scale`: the opening device's pixel density, used if this starts a display. */
   /** `page`: start on this page instead of the app's root (a review card's page). */
-  async open(sessionId: string, appId: string, viewId: string, returnTo?: string, direct = false, scale?: number, page?: string): Promise<OpenAppViewResult> {
+  /** `scenario`: open it in that scenario (the shell enters it once the app has loaded). */
+  async open(sessionId: string, appId: string, viewId: string, returnTo?: string, direct = false, scale?: number, page?: string, scenario?: string): Promise<OpenAppViewResult> {
     const entry = this.registry.requireView(sessionId, appId, viewId);
     if (entry.target.kind === "display" && !entry.display) entry.displayScale = scale === 2 ? 2 : 1;
     if (entry.view.kind === "web") {
       if (!this.gateway) throw new Error("Bivy's preview service is unavailable on this connection.");
       if (direct && !this.gateway.openDirect) throw new Error("This machine can't open previews directly.");
       let url = direct ? this.gateway.openDirect!(viewId) : this.gateway.open(viewId, returnTo);
-      if (page && page.startsWith("/") && !page.startsWith("//") && page.length <= 2048) url += `~${encodeURIComponent(page).replace(/~/g, "%7E")}`;
+      const start = page && page.startsWith("/") && !page.startsWith("//") && page.length <= 2048 ? page : undefined;
+      const inScenario = !direct && scenario && /^[a-z0-9][a-z0-9-]{0,63}$/.test(scenario) ? scenario : undefined;
+      if (start || inScenario) url += `~${start ? encodeURIComponent(start).replace(/~/g, "%7E") : ""}`;
+      if (inScenario) url += `~${inScenario}`;
       // Don't wait for a managed server to boot: the preview shows it starting
       // and reloads itself once it answers.
       if (this.servers.get(viewId)) this.servers.get(viewId)!.restarts = [];
@@ -646,8 +725,10 @@ export class AppService {
     return this.displays.ensure(entry.view.id, entry.app.name, entry.displayScale).then((display) => {
       entry.display = display.socket;
       entry.displayControl = display.control;
-      const [command, ...args] = [...display.launch ?? [], target.command, ...target.args];
-      return { command: command!, args, workspace: target.workspace, env: display.env, name: `${entry.app.name} · ${entry.view.name}` };
+      // A scenario adds its arguments and environment; the display's own variables always win.
+      const [command, ...args] = [...display.launch ?? [], target.command, ...target.args, ...entry.scenario?.args ?? []];
+      const env = { ...entry.scenario?.env, ...this.proxies.get(entry.view.id)?.env, ...display.env };
+      return { command: command!, args, workspace: target.workspace, env, name: `${entry.app.name} · ${entry.view.name}` };
     });
   }
   /** Services start synchronously; a desktop app waits for its display. */
@@ -687,6 +768,8 @@ export class AppService {
   }
   private stopServer(id: string): void {
     this.displays.stop(id);
+    this.proxies.get(id)?.close();
+    this.proxies.delete(id);
     const entry = this.registry.getView(id);
     if (entry) { entry.display = undefined; entry.displayControl = undefined; entry.displayScale = undefined; }
     const server = this.servers.get(id);

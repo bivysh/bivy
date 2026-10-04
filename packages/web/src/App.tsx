@@ -1244,7 +1244,7 @@ export function App() {
             )}
 
             {appsSheet && !sidePane.wide && appsSheet.sessionId === activeSession?.sessionId && (
-              <AppsSheet key={`${appsSheet.sessionId}:${appsSheet.appId ?? ""}:${appsSheet.openView?.viewId ?? ""}`} {...appsSheet} onClose={() => setAppsSheet(null)} />
+              <AppsSheet key={`${appsSheet.sessionId}:${appsSheet.appId ?? ""}:${appsSheet.openView?.viewId ?? ""}:${appsSheet.openView?.scenario ?? ""}`} {...appsSheet} onClose={() => setAppsSheet(null)} />
             )}
 
             {forkSheetOpen && activeSession && (
@@ -1374,7 +1374,7 @@ export function App() {
           )}
           {paneTab === "apps" && (() => {
             const request = appsSheet?.sessionId === activeSession.sessionId ? appsSheet : { sessionId: activeSession.sessionId };
-            return <AppsSheet docked key={`${request.sessionId}:${request.appId ?? ""}:${request.openView?.viewId ?? ""}`} {...request} onClose={() => setAppsSheet(null)} />;
+            return <AppsSheet docked key={`${request.sessionId}:${request.appId ?? ""}:${request.openView?.viewId ?? ""}:${request.openView?.scenario ?? ""}`} {...request} onClose={() => setAppsSheet(null)} />;
           })()}
           {paneTab === "artifacts" && (
             <ArtifactsSheet docked artifacts={artifacts} onClose={() => sidePane.setTab(null)} />

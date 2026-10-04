@@ -6,6 +6,7 @@ import { randomBytes } from "node:crypto";
 import { EventEmitter } from "node:events";
 import type { AppManifest, AppView, DisplayStats, LogLine, ReviewCardMode, ReviewerNote, SessionApp } from "./types.js";
 import { REVIEW_CARD_MODES } from "./types.js";
+import type { ScenarioPlan } from "./scenarios.js";
 
 const MAX_BYTES = 25 * 1024 * 1024;
 /** Reviewer notes kept per view; the oldest drop first. */
@@ -36,7 +37,7 @@ const isNote = (value: unknown): value is ReviewerNote => {
 };
 export interface RegisteredView {
   app: SessionApp; view: AppView; target: AppTarget;
-  /** The session workspace it was published from. */
+  /** The session workspace it was published from (where its scenarios and backend files live). */
   workspace: string;
   /** Bumped when an agent turn changes files, so open previews reload. */
   revision: number;
@@ -60,6 +61,8 @@ export interface RegisteredView {
   stats?: DisplayStats;
   /** When the preview last loaded a page: the start of "since this page loaded". */
   loadedAt?: number;
+  /** A desktop app's scenario: it runs with this plan's arguments and environment. */
+  scenario?: ScenarioPlan;
 }
 
 const sameFiles = (a: Map<string, Buffer>, b: Map<string, Buffer>) => a.size === b.size && [...a].every(([key, data]) => b.get(key)?.equals(data));
@@ -171,6 +174,9 @@ export class AppRegistry extends EventEmitter {
   private apps = new Map<string, SessionApp>();
   private views = new Map<string, RegisteredView>();
   private persisted = new Map<string, Persisted>();
+  /** Puts a desktop app in a scenario (or none, for ""): set by the service,
+   *  which runs programs; asked by the gateway, which hears the shell. */
+  desktopScenario?: (viewId: string, scenario: string) => Promise<{ plan: ScenarioPlan | null; error?: string }>;
   constructor(private readonly reservedPorts: number[] = [], private readonly file?: string) {
     super(); this.setMaxListeners(0);
     this.restore();

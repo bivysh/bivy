@@ -80,6 +80,8 @@ export interface AppReview {
   /** What a run did to the app's backend views: one line each, the most
    *  important change first. A backend-only run's card has these instead of a picture. */
   evidence?: EvidenceRow[];
+  /** Scenarios the agent offered to try this in (`bivy app present --try`): each opens the preview in that state. */
+  try?: { id: string; name: string }[];
 }
 /** One line of backend evidence. `item` opens the view at that request or query. */
 export interface EvidenceRow { viewId: string; view: string; backend: BackendKind; summary: string; detail?: string; tone: "ok" | "warn" | "danger" | "neutral"; item?: string }
@@ -103,7 +105,8 @@ export function isAppReview(value: unknown): value is AppReview {
     && (review.shot === undefined || isShot(review.shot)) && (review.before === undefined || isShot(review.before))
     && (review.note === undefined || typeof review.note === "string")
     && (review.notes === undefined || (Number.isInteger(review.notes) && review.notes >= 0))
-    && (review.evidence === undefined || (Array.isArray(review.evidence) && review.evidence.length <= 12 && review.evidence.every(isEvidence)));
+    && (review.evidence === undefined || (Array.isArray(review.evidence) && review.evidence.length <= 12 && review.evidence.every(isEvidence)))
+    && (review.try === undefined || (Array.isArray(review.try) && review.try.length <= 6 && review.try.every((item) => !!item && typeof item.id === "string" && /^[a-z0-9][a-z0-9-]{0,63}$/.test(item.id) && typeof item.name === "string" && item.name.length <= 80)));
 }
 /** A mark the user sent to the agent: their words, a picture of what they
  * marked, and where it was. Unlike the message that carried it, a pin has a

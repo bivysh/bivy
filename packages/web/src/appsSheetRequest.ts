@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 
-/** What the Apps sheet opens at: a session's apps, one app, or straight into a view. */
 /** What the Apps sheet opens at: a session's apps, one app, or straight into a
- *  view (a web view on `path`; a backend view at `item`, a request or query). */
-export type AppsSheetRequest = { sessionId: string; appId?: string; openView?: { viewId: string; path?: string; item?: string } };
+ *  view (a web view on `path` or in a `scenario`; a backend view at `item`, a request or query). */
+export type AppsSheetRequest = { sessionId: string; appId?: string; openView?: { viewId: string; path?: string; scenario?: string; item?: string } };
 
 type Listener = (request: AppsSheetRequest) => void;
 const listeners = new Set<Listener>();
