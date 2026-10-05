@@ -213,9 +213,11 @@
       "supportTier": "supported",
       "certification": "adapter-tested",
       "headlessFlags": [
+        "--no-archive-after-execute",
         "-x",
         "threads",
-        "continue"
+        "continue",
+        "--stream-json"
       ],
       "install": {
         "kind": "npm",

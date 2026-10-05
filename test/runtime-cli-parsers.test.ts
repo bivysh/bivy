@@ -111,6 +111,26 @@ async function main() {
     assert.deepEqual(p.messages(), [{ role: "assistant", content: "Final answer." }]);
   });
 
+  // Real `amp --stream-json -x` output (Amp CLI 0.0.1791201662, init trimmed):
+  // Claude Code-compatible, with the thread id as `session_id` on every line.
+  await check("claudeStreamJson: parses Amp --stream-json and learns the thread id", () => {
+    const p = claudeStreamJsonParser();
+    const events = feed(p, [
+      "{\"type\": \"system\", \"subtype\": \"init\", \"cwd\": \"/tmp/amp-e2e\", \"session_id\": \"T-01a10c55-66e0-70ea-bdf0-433527bd0ea0\", \"agent_mode\": \"medium\"}",
+      "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"text\", \"text\": \"Create a file hello.txt containing the word banana, then reply DONE.\"}]}, \"parent_tool_use_id\": null, \"session_id\": \"T-01a10c55-66e0-70ea-bdf0-433527bd0ea0\"}",
+      "{\"type\": \"assistant\", \"message\": {\"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"tool_use\", \"id\": \"TU-034afv5DN3aiARUVUU0luL\", \"name\": \"create_file\", \"input\": {\"path\": \"/tmp/amp-e2e/hello.txt\", \"content\": \"banana\\n\"}}, {\"type\": \"tool_use\", \"id\": \"TU-034afv61ffcx3CBO9Zv1Po\", \"name\": \"shell_command\", \"input\": {\"command\": \"cat hello.txt\", \"workdir\": \"/tmp/amp-e2e\"}}], \"stop_reason\": \"tool_use\", \"usage\": {\"input_tokens\": 4, \"cache_creation_input_tokens\": 32392, \"cache_read_input_tokens\": 0, \"output_tokens\": 170, \"service_tier\": \"standard\"}}, \"parent_tool_use_id\": null, \"session_id\": \"T-01a10c55-66e0-70ea-bdf0-433527bd0ea0\"}",
+      "{\"type\": \"user\", \"message\": {\"role\": \"user\", \"content\": [{\"type\": \"tool_result\", \"tool_use_id\": \"TU-034afv5DN3aiARUVUU0luL\", \"content\": \"Successfully created file /tmp/amp-e2e/hello.txt\", \"is_error\": false}, {\"type\": \"tool_result\", \"tool_use_id\": \"TU-034afv61ffcx3CBO9Zv1Po\", \"content\": \"{\\\"output\\\":\\\"banana\\\\n\\\",\\\"exitCode\\\":0}\", \"is_error\": false}]}, \"parent_tool_use_id\": null, \"session_id\": \"T-01a10c55-66e0-70ea-bdf0-433527bd0ea0\"}",
+      "{\"type\": \"assistant\", \"message\": {\"type\": \"message\", \"role\": \"assistant\", \"content\": [{\"type\": \"text\", \"text\": \"DONE\\n\\n[hello.txt](file:///tmp/amp-e2e/hello.txt) now contains \\\"banana\\\". I read the file back to confirm.\"}], \"stop_reason\": \"end_turn\", \"usage\": {\"input_tokens\": 2, \"cache_creation_input_tokens\": 32665, \"cache_read_input_tokens\": 0, \"output_tokens\": 50, \"service_tier\": \"standard\"}}, \"parent_tool_use_id\": null, \"session_id\": \"T-01a10c55-66e0-70ea-bdf0-433527bd0ea0\"}",
+      "{\"type\": \"result\", \"subtype\": \"success\", \"duration_ms\": 7514, \"is_error\": false, \"num_turns\": 2, \"result\": \"DONE\\n\\n[hello.txt](file:///tmp/amp-e2e/hello.txt) now contains \\\"banana\\\". I read the file back to confirm.\", \"session_id\": \"T-01a10c55-66e0-70ea-bdf0-433527bd0ea0\"}",
+    ]);
+    assert.equal(p.sessionRef?.(), "T-01a10c55-66e0-70ea-bdf0-433527bd0ea0");
+    assert.equal(events.filter((e) => e.type === "tool_call").length, 2);
+    assert.equal(events.filter((e) => e.type === "tool_result").length, 2);
+    assert.equal(types(events).filter((t) => t === "agent_end").length, 1);
+    const assistant = p.messages().find((m) => m.role === "assistant") as any;
+    assert.match(assistant.content.find((b: any) => b.type === "text").text, /^DONE/);
+  });
+
   // Full ProcessRuntime structured-mode integration: spawn a node one-liner that
   // emits bivy-protocol JSONL; assert the runtime surfaces normalized events.
   await check("ProcessRuntime structured mode drives normalized events end-to-end", async () => {

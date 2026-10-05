@@ -144,7 +144,7 @@ const SECOND_WAVE = [
   { id: "cursor", bin: "cursor-agent", resumable: true, expect: ["--force", "--resume=SID", "-p"] },
   { id: "copilot", bin: "copilot", resumable: false, expect: ["--allow-all-tools", "-p"] },
   { id: "grok", bin: "grok", resumable: true, expect: ["--resume", "SID", "-p"] },
-  { id: "amp", bin: "amp", resumable: true, expect: ["threads", "continue", "SID", "-x"] },
+  { id: "amp", bin: "amp", resumable: true, expect: ["threads", "continue", "SID", "--stream-json", "-x"] },
   { id: "auggie", bin: "auggie", resumable: false, expect: ["--quiet", "--print"] },
   { id: "droid", bin: "droid", resumable: false, expect: ["exec", "--auto", "high"] },
   { id: "continue", bin: "cn", resumable: false, expect: ["--auto", "-p"] },
@@ -195,28 +195,40 @@ for (const agent of SECOND_WAVE) {
   });
 }
 
-// #3 — an agent whose structured JSON parser is unverified (spec.parserUnverified)
-// stays on the SAFE dumb-pipe path by default (a wrong flag can't regress it), but
-// flips to its JSON mode when an operator opts in with BIVY_AGENT_STRUCTURED=1.
-await check("amp: structured JSON mode is opt-in (dumb pipe by default, --stream-json under BIVY_AGENT_STRUCTURED=1)", async () => {
-  const defFile = path.join(tmp, "amp-default.txt");
-  writeStub("amp", defFile, ["hi"]);
-  const def = makeRuntime({ runtime: "amp", credsDir: tmp, piDir: tmp, sessionsDir: tmp });
-  const fresh = await def.createSession({ workspace: tmp });
-  await runToEnd(fresh.session);
-  const defaultArgs = fs.readFileSync(defFile, "utf8");
-  assert.ok(/(^|\s)-x(\s|$)/.test(defaultArgs), `default should still run -x, got: ${defaultArgs}`);
-  assert.ok(!/--stream-json/.test(defaultArgs), `default must NOT enable the unverified JSON flag, got: ${defaultArgs}`);
+// Amp's `--stream-json` is Claude Code-compatible and validated against the real
+// CLI, so structured mode is the default: the launch keeps the new thread
+// unarchived (an archived thread refuses `threads continue`), the Claude parser
+// learns the thread id from `session_id`, and the next turn continues that thread.
+await check("amp: structured by default; learns the thread id and continues it next turn", async () => {
+  const argsFile = path.join(tmp, "amp-structured.txt");
+  writeStub("amp", argsFile, [
+    '{"type":"system","subtype":"init","session_id":"T-amp-1"}',
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]},"session_id":"T-amp-1"}',
+    '{"type":"result","subtype":"success","result":"ok","session_id":"T-amp-1"}',
+  ]);
+  const runtime = makeRuntime({ runtime: "amp", credsDir: tmp, piDir: tmp, sessionsDir: tmp });
+  const { session } = await runtime.createSession({ workspace: tmp });
+  await runToEnd(session);
+  const first = fs.readFileSync(argsFile, "utf8");
+  assert.ok(/--no-archive-after-execute/.test(first), `fresh launch must keep the thread unarchived, got: ${first}`);
+  assert.ok(/--stream-json/.test(first), `structured mode should be the default, got: ${first}`);
+  assert.ok(!/threads continue/.test(first), `first turn starts a new thread, got: ${first}`);
 
-  process.env.BIVY_AGENT_STRUCTURED = "1";
+  // agent_end fires while stdout is parsed; wait for the child to exit too.
+  for (let i = 0; i < 100 && (session as unknown as { isStreaming: boolean }).isStreaming; i++) await new Promise((r) => setTimeout(r, 20));
+  await runToEnd(session);
+  const second = fs.readFileSync(argsFile, "utf8");
+  assert.ok(/threads continue T-amp-1 --stream-json -x/.test(second), `second turn should continue the learned thread, got: ${second}`);
+
+  process.env.BIVY_AGENT_STRUCTURED = "0";
   try {
-    const optFile = path.join(tmp, "amp-optin.txt");
-    writeStub("amp", optFile, ['{"type":"assistant","message":{"content":[{"type":"text","text":"ok"}]}}', '{"type":"result"}']);
-    const opt = makeRuntime({ runtime: "amp", credsDir: tmp, piDir: tmp, sessionsDir: tmp });
-    const s = await opt.createSession({ workspace: tmp });
+    const plainFile = path.join(tmp, "amp-plain.txt");
+    writeStub("amp", plainFile, ["hi"]);
+    const plain = makeRuntime({ runtime: "amp", credsDir: tmp, piDir: tmp, sessionsDir: tmp });
+    const s = await plain.createSession({ workspace: tmp });
     await runToEnd(s.session);
-    const optArgs = fs.readFileSync(optFile, "utf8");
-    assert.ok(/--stream-json/.test(optArgs), `BIVY_AGENT_STRUCTURED=1 should enable --stream-json, got: ${optArgs}`);
+    const plainArgs = fs.readFileSync(plainFile, "utf8");
+    assert.ok(!/--stream-json/.test(plainArgs), `BIVY_AGENT_STRUCTURED=0 should fall back to plain -x, got: ${plainArgs}`);
   } finally {
     delete process.env.BIVY_AGENT_STRUCTURED;
   }
