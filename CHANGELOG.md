@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.7] - 2026-10-05
+
 ### Added
 
 - **Backend views: review backend changes by seeing what they did.** Three new view kinds sit next to an app's web preview. **Requests** runs the API from your phone, using `.http` files. **Data** shows the rows that saved `.sql` queries return, through the project's own database client. **Logs** shows the server's output, with a marker at your last action. Bivy runs the safe requests and the queries before and after each agent run. The review card then lists what changed: an answer that went from 201 to 422, rows added or changed, errors the server logged. A backend-only run now gets a card too. Agents check the same views with `bivy app requests`, `bivy app data` and `bivy app logs`. Server errors also show in the web preview's Console, next to the page's own, from the moment the page was requested. A request can run inside a scenario: the scenario's simulated responses answer what they match, and the real server answers the rest.
