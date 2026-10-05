@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Amp: structured transcript, working resume, and a mode picker.** Amp runs with its Claude Code-compatible `--stream-json`, so its tool calls and results show as cards instead of only the last message. Follow-up turns continue the same Amp thread again: execute mode had started archiving new threads, which blocked `amp threads continue`. Amp's agent mode (`low`, `medium`, `high`, `ultra`) can be picked like a reasoning level.
 - **Zoom the image, not the app.** Image previews support pinch zoom, drag and wheel panning, plus zoom and fit controls, without moving the chat behind them.
 - **Codex turns with a sub-agent keep their answer.** When a Codex sub-agent finished before its parent, the parent's turn ended early and its answer, plan text and sub-agent card were lost from the saved transcript. The sub-agent's own commands now also show under its card instead of as the parent's work.
 - **A fork knows where its work is.** A fork works in its own copy of the repo, but its history still pointed at the original checkout, so the next agent could edit the wrong files. The history now points at the fork's copy and says so. A fork of a fork gets its copy next to its parent's instead of inside it.

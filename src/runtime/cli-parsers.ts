@@ -291,6 +291,9 @@ export function bivyProtocolParser(): CliParser {
 /** Parser for Claude Code CLI `--output-format stream-json`. */
 export function claudeStreamJsonParser(): CliParser {
   const acc = new TurnAccumulator({ provider: "claude", protocol: "structured-pipe" });
+  // Every line carries `session_id` (Claude Code's session uuid; Amp's thread id
+  // in its Claude-compatible `--stream-json`) — the agent's own resume ref.
+  let sessionRef: string | undefined;
   return {
     onLine(line) {
       const events: RuntimeEvent[] = [];
@@ -302,6 +305,7 @@ export function claudeStreamJsonParser(): CliParser {
       } catch {
         return events;
       }
+      if (typeof msg.session_id === "string" && msg.session_id.trim()) sessionRef = msg.session_id.trim();
       const type = String(msg.type ?? "");
       if (type === "assistant") {
         const content = (msg.message as { content?: unknown })?.content;
@@ -337,6 +341,7 @@ export function claudeStreamJsonParser(): CliParser {
       return events;
     },
     messages: () => acc.history(),
+    sessionRef: () => sessionRef,
   };
 }
 

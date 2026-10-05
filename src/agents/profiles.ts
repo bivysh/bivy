@@ -626,20 +626,31 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     command: "amp",
     packageName: "@sourcegraph/amp",
     supportTier: "supported",
-    blurb: "Sourcegraph's autonomous coding agent with persistent threads (Amp).",
-    // `amp -x "<prompt>"` (`--execute`) runs one thread turn and streams to stdout;
-    // Amp doesn't gate tools per-run (governed by its own allowlist config), so no
-    // approval flag is needed. Prompt trails `-x`.
-    args: ["-x"],
-    // Amp's `--stream-json` emits one JSON object per line; the tolerant generic
-    // parser reads it. Opt-in (unverified schema) — see parserUnverified below.
-    jsonArgs: ["--stream-json", "-x"],
-    parserId: "generic-stream-json",
-    parserUnverified: true,
-    // `amp threads continue <id> -x "<prompt>"` continues a prior thread by id.
-    resume: { template: ["threads", "continue", "{id}", "-x"] },
-    // No model flag: Amp manages model selection itself (agent "mode"), so we don't
-    // advertise a picker it can't drive.
+    blurb: "Amp's autonomous coding agent with persistent threads (Amp CLI).",
+    // `amp -x "<prompt>"` (`--execute`) runs one thread turn; by default it prints
+    // only the LAST assistant message. Amp doesn't gate tools per-run (governed by
+    // its own permissions config), so no approval flag is needed. Prompt trails `-x`.
+    // `--no-archive-after-execute`: execute mode archives a NEW thread when the
+    // turn ends, and an archived thread refuses `threads continue` ("This thread is
+    // archived and cannot be continued"), which would break resume.
+    args: ["--no-archive-after-execute", "-x"],
+    // `--stream-json` emits Claude Code-compatible stream JSON (system/init with
+    // `session_id` = the thread id, assistant/user content blocks with tool_use /
+    // tool_result, a final `result`), so the Claude parser reads it as-is.
+    // Validated end-to-end (fresh turn with tool calls, resume, mode switch)
+    // against Amp CLI 0.0.1791201662-g90a14c. Not release-certified (no pin):
+    // Amp ships continuous builds.
+    jsonArgs: ["--no-archive-after-execute", "--stream-json", "-x"],
+    parserId: "claude-stream-json",
+    // `amp threads continue <id> --stream-json -x "<prompt>"` continues a prior
+    // thread by id (continuing doesn't archive). The id is learned from the
+    // stream's `session_id`, so resume rides the structured path.
+    resume: { template: ["threads", "continue", "{id}", "--stream-json", "-x"] },
+    // No model flag: Amp picks the model per agent mode. `-m/--mode` selects the
+    // mode (low|medium|high|ultra; default medium) and is a global option, so it
+    // prepends to both a fresh launch and `threads continue` (switching the mode
+    // of a continued thread). Surfaced through the level picker.
+    thinking: { levels: ["low", "medium", "high", "ultra"], default: "medium", template: ["-m", "{level}"], insertAt: 0 },
     promptMode: "argv",
     install: { kind: "npm", pkg: "@sourcegraph/amp" },
   },
