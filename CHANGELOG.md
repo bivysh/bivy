@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`bivy exec --session` follow-ups run again.** Every `bivy exec` into a session sent the same message id, and the node drops a repeated id as a duplicate for a day. A second `bivy exec --session <id>` was accepted but never reached the agent, and waited until it timed out. Each run now sends its own id.
 - **Pi sessions no longer stop updating partway through.** If two of Pi's tool calls printed the same output, such as `(no output)`, Bivy mistook the second result for one it already had and dropped it. Every later message was then recorded out of order, so the bottom of the chat stayed on an old message while the agent kept working. Bivy now matches Pi's tool results by their call id. An affected session puts itself back in order on its next turn.
+- The unit test for the web runtime config no longer imports the managed-compute module removed from the control plane, which broke the root unit suite on `main`.
 
 ## [0.20.8] - 2026-10-06
 

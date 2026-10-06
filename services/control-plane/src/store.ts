@@ -225,8 +225,8 @@ export interface EphemeralNodeConfig {
   ttlMinutes?: number;
   teardownOnAgentFinish?: boolean;
   /** Which credential lane launches this config: "user" (default — the
-   * account's own hosted provider token) or "managed" (the deployment
-   * operator's token, see services/control-plane/src/managed-compute.ts).
+   * account's own hosted provider token) or "managed" (the
+   * deployment extension's credential, see services/control-plane/src/deployment-compute.ts).
    * Absent means "user", so stored configs are fully backward compatible. */
   computeSource?: "user" | "managed";
   createdAt: string;
