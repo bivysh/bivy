@@ -1,0 +1,71 @@
+# Contributor License Agreement check (see CLA.md).
+#
+# A contributor signs once by commenting the phrase below on any pull request
+# in this repository; that comment is the durable record. The job never checks
+# out or runs pull-request code, which is what makes pull_request_target safe.
+name: CLA
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  group: cla-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: false
+
+jobs:
+  cla:
+    if: >-
+      github.event_name == 'pull_request_target' ||
+      (github.event.issue.pull_request && contains(github.event.comment.body, 'I have read the CLA Document and I hereby sign the CLA'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PHRASE: I have read the CLA Document and I hereby sign the CLA
+      # Maintainers own their work outright and need no agreement.
+      MAINTAINERS: pettersj
+      PR: ${{ github.event.pull_request.number || github.event.issue.number }}
+      EVENT: ${{ github.event_name }}
+      COMMENTER: ${{ github.event.comment.user.login }}
+    steps:
+      - name: Check signature
+        run: |
+          set -euo pipefail
+          pr_json=$(gh api "repos/$REPO/pulls/$PR")
+          author=$(jq -r '.user.login' <<<"$pr_json")
+          sha=$(jq -r '.head.sha' <<<"$pr_json")
+
+          signed=false
+          if [[ "$author" == *"[bot]" ]] || [[ " $MAINTAINERS " == *" $author "* ]]; then
+            signed=true
+          elif [ "$EVENT" = "issue_comment" ] && [ "$COMMENTER" = "$author" ]; then
+            signed=true
+          else
+            # Any earlier signing comment by the author, on any PR here.
+            count=$(gh api -X GET search/issues \
+              -f q="repo:$REPO is:pr commenter:$author \"$PHRASE\"" --jq '.total_count')
+            [ "$count" -gt 0 ] && signed=true
+          fi
+
+          if [ "$signed" = true ]; then
+            gh api "repos/$REPO/statuses/$sha" -f state=success -f context=CLA \
+              -f description="CLA signed by $author" >/dev/null
+            exit 0
+          fi
+
+          gh api "repos/$REPO/statuses/$sha" -f state=failure -f context=CLA \
+            -f description="Please sign the CLA (see the comment)" >/dev/null
+          marker="<!-- bivy:cla-request -->"
+          if ! gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '.[].body' | grep -qF "$marker"; then
+            body=$(printf '%s\n\nThanks for the contribution, @%s! Before it can be merged, please read the [Contributor License Agreement](https://github.com/%s/blob/main/CLA.md) and sign it by replying with exactly:\n\n> %s\n\nYou only sign once; it covers your future contributions too.' "$marker" "$author" "$REPO" "$PHRASE")
+            gh api "repos/$REPO/issues/$PR/comments" -f body="$body" >/dev/null
+          fi

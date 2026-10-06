@@ -24,11 +24,13 @@ Ephemeral sessions are short-lived Bivy nodes created for one task/session. Inte
    - Bivy bootstraps the node with the installer, pairs it to the account, runs the session, then tears it down if Bivy created it.
 
 Saved ephemeral configurations record a `computeSource`: `user` uses that
-account's validated provider credential, while `managed` uses an operator-owned
-credential configured on the control plane. Existing configurations default to
+account's validated provider credential, while `managed` uses a credential and
+launch profile supplied by the deployment extension
+([self-host.md](self-host.md#deployment-supplied-compute)). Existing configurations default to
 `user`. Both sources use the same provisioner, lifecycle milestones, teardown,
 reconciliation, and orphan cleanup; only credential resolution differs.
-Managed launches are off by default and require `EPHEMERAL_MACHINES_ENABLED=1`.
+Managed launches are off by default and require `EPHEMERAL_MACHINES_ENABLED=1`
+and a deployment extension that supplies compute.
 Turning the flag off stops new managed launches but deliberately leaves cleanup
 running so existing machines cannot be stranded.
 
@@ -320,9 +322,10 @@ id for AWS.
 
 Every bootstrap now checks `command -v bivy` first. A prebuilt image starts the
 daemon immediately; a generic/old image falls back to the existing installer for
-BYO compatibility. Production managed compute instead fails deployment startup
-unless `MANAGED_SESSION_IMAGE` identifies a prebuilt image, preventing an
-accidental multi-minute install path. Cold-start success is still measured from
+BYO compatibility. A deployment that supplies managed compute should name a
+prebuilt image in its compute profile (see
+[self-host.md](self-host.md#deployment-supplied-compute)), so a managed launch
+never takes the multi-minute install path. Cold-start success is still measured from
 request to the first agent event—not image pull or provider “running.” A warm
 ready-capacity pool is the next latency layer after this image baseline.
 

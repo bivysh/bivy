@@ -5,7 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { EphemeralMachine } from "@bivy/core";
 import type { EphemeralNodeConfig, HostedMachineAttempt, HostedMachineRepository } from "./store.js";
 import { ownershipTagFor } from "./store.js";
-import { managedCapacityCount, managedConcurrencyLimit } from "./managed-admission.js";
+import { managedCapacityCount } from "./managed-admission.js";
 
 export class ManagedLaunchConflict extends Error {
   constructor(public readonly status: number, public readonly code: string, message: string) { super(message); }
@@ -33,10 +33,11 @@ export async function managedInteractiveLaunch(
   accountId: string,
   request: ManagedInteractiveRequest,
   effects: {
-    admit(attemptId: string): Promise<void>;
+    /** Deployment admission, given how many managed Machines the account
+     *  already holds. Runs inside the account lease, so the count is exact. */
+    admit(attemptId: string, activeManagedMachines: number): Promise<void>;
     launch(attemptId: string, nodeId: string): Promise<EphemeralMachine>;
     launchFailed?(attemptId: string): Promise<void>;
-    limit?: number;
   },
 ): Promise<{ machine: EphemeralMachine; duplicate: boolean }> {
   const requestId = managedRequestId(request.requestId);
@@ -82,11 +83,7 @@ export async function managedInteractiveLaunch(
         return conflict("managed_restore_active", "This node still has an active or unresolved machine. Reconnect or finish cleanup before restoring.");
       }
     }
-    const limit = effects.limit ?? managedConcurrencyLimit();
-    if (limit !== undefined && managedCapacityCount(machines, attempts) >= limit) {
-      return conflict("managed_concurrency_limit", "Managed machine capacity is already reserved for this account.", 429);
-    }
-    await effects.admit(attemptId);
+    await effects.admit(attemptId, managedCapacityCount(machines, attempts));
     admitted = true;
     await renew();
     if (lost) return conflict("managed_launch_busy", "Launch ownership expired before provisioning. Retry this same request.");

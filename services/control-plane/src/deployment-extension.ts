@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 
+import type { ComputeProfile, ComputePurpose, DeploymentComputeSource } from "./deployment-compute.js";
+
 /**
  * Deployment-neutral hooks for operators that compose Core with an external
  * account or admission service. With no URL configured every operation is
@@ -53,6 +55,9 @@ export interface DeploymentPolicyContext {
   ttlMinutes?: number;
   configId?: string;
   purpose?: string;
+  /** Managed Machines this account already has running or launching. A fact
+   * for the deployment's concurrency rule; Core sets no limit itself. */
+  activeManagedMachines?: number;
 }
 
 export type DeploymentLifecycleEvent =
@@ -150,6 +155,24 @@ export class DeploymentExtension {
     const result = await this.request(`/v1/account/actions/${action}`, { subject: { accountId, email } }) as { url?: unknown };
     if (typeof result.url !== "string" || !/^https:\/\//.test(result.url)) throw new Error("Deployment extension returned an invalid action URL");
     return { url: result.url };
+  }
+
+  /** Deployment-supplied compute (the "managed" lane), or undefined when no
+   * extension is configured — then there is no managed lane at all. */
+  computeSource(): DeploymentComputeSource | undefined {
+    if (!this.url) return undefined;
+    return {
+      profile: async (purpose: ComputePurpose, accountId?: string, runtimeId?: string) => {
+        const result = await this.request("/v1/compute/profile", { subject: accountId ? { accountId } : undefined, purpose, runtimeId }) as { profile?: ComputeProfile | null };
+        return result.profile && typeof result.profile === "object" ? result.profile : null;
+      },
+      credential: async (provider: string) => {
+        const result = await this.request("/v1/compute/credential", { provider }) as { token?: unknown; expiresAt?: unknown };
+        return typeof result.token === "string" && result.token
+          ? { token: result.token, expiresAt: typeof result.expiresAt === "string" ? result.expiresAt : undefined }
+          : null;
+      },
+    };
   }
 
   private async request(path: string, body: unknown): Promise<unknown> {

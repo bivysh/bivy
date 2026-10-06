@@ -5,6 +5,7 @@ import { spawnTestService, stopTestServices } from "../../test-service-process.j
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import net from "node:net";
+import http from "node:http";
 
 /**
  * Account-level ephemeral node configs + queue routing API. Exercises the real
@@ -234,11 +235,29 @@ async function main() {
   // Existing users who predate managed onboarding receive the deployment-owned
   // profile when their ordinary Machine picker lists configs. Explicit first-run
   // setup remains idempotent, and later reads reconcile a stale image.
+  // The deployment extension supplies the managed profile and credential.
+  const extension = http.createServer((request, response) => {
+    let raw = "";
+    request.on("data", (chunk) => { raw += chunk; });
+    request.on("end", () => {
+      const answers: Record<string, unknown> = {
+        "/v1/compute/profile": { profile: { provider: "fly", image: "ghcr.io/bivysh/bivy-ephemeral-runner:current-staging-sha", ttlMinutes: 60 } },
+        "/v1/compute/credential": { token: "operator-token-not-used-by-default-setup" },
+        "/v1/policy/check": { allowed: true },
+        "/v1/account": { presentation: {} },
+      };
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify(answers[request.url ?? ""] ?? {}));
+    });
+  });
+  await new Promise<void>((resolve) => extension.listen(0, "127.0.0.1", resolve));
+  extension.unref();
+  const extensionPort = (extension.address() as net.AddressInfo).port;
   const port3 = await startControlPlane({
     HOSTED_CREDENTIAL_KEY: Buffer.alloc(32, 9).toString("base64"),
     EPHEMERAL_MACHINES_ENABLED: "1",
-    MANAGED_PROVIDER_TOKEN_FLY: "operator-token-not-used-by-default-setup",
-    MANAGED_SESSION_IMAGE: "ghcr.io/bivysh/bivy-ephemeral-runner:current-staging-sha",
+    DEPLOYMENT_EXTENSION_URL: `http://127.0.0.1:${extensionPort}`,
+    DEPLOYMENT_EXTENSION_TOKEN: "test-extension-token",
   });
   const token3 = (await req(port3, "POST", "/auth/dev-login", { email: "managed-default@example.com" })).json.token;
   const adoptedConfigs = await req(port3, "GET", "/account/ephemeral-configs", undefined, token3);

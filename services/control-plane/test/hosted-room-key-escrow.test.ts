@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 // Must be set before any hosted-crypto encrypt/decrypt runs (read per-call).
 process.env.HOSTED_CREDENTIAL_KEY = Buffer.alloc(32, 7).toString("base64");
 import { createPgMemStore } from "../src/pg-mem-store.js";
+import { DeploymentCompute, setDeploymentCompute } from "../src/deployment-compute.js";
 import { provisionEphemeralForAccount, provisionEphemeralRestore, type ProvisionEnv } from "../src/ephemeral-provisioner.js";
 import { decryptSecret } from "../src/hosted-crypto.js";
 import type { EphemeralMachine, launchEphemeralMachine } from "@bivy/core";
@@ -85,8 +86,7 @@ await test("provisionEphemeralRestore hands the escrowed key back to the rebuilt
 for (const computeSource of ["user", "managed"] as const) {
   for (const purpose of ["interactive", "auth-runner", "queue-default"] as const) {
     await test(`${computeSource} ${purpose} rebuild preserves fresh-launch credential privileges`, async () => {
-      const previous = process.env.MANAGED_PROVIDER_TOKEN_FLY;
-      process.env.MANAGED_PROVIDER_TOKEN_FLY = "managed-test-token";
+      setDeploymentCompute(new DeploymentCompute({ profile: async () => null, credential: async () => ({ token: "managed-test-token" }) }));
       try {
         const store = await makeStore();
         const acct = await store.findOrCreateAccount(`${computeSource}-${purpose}@example.com`);
@@ -107,8 +107,7 @@ for (const computeSource of ["user", "managed"] as const) {
           assert.equal(opts.hostedTasks, purpose === "queue-default");
         }
       } finally {
-        if (previous === undefined) delete process.env.MANAGED_PROVIDER_TOKEN_FLY;
-        else process.env.MANAGED_PROVIDER_TOKEN_FLY = previous;
+        setDeploymentCompute(new DeploymentCompute(undefined));
       }
     });
   }

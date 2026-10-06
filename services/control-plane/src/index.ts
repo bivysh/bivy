@@ -25,9 +25,9 @@ import { listAppInstallations, listInstallationRepositories, listInstallationBra
 import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { usageFromManagedMachine } from "./compute-metering.js";
-import { managedCapacityCount, managedConcurrencyLimit } from "./managed-admission.js";
+import { managedCapacityCount } from "./managed-admission.js";
 import { managedInteractiveLaunch, ManagedLaunchConflict, type ManagedInteractiveRequest } from "./managed-interactive-launch.js";
-import { managedAuthRunnerImage, managedSessionImage, managedComputeEnabled, managedProviderConfigured } from "./managed-compute.js";
+import { DeploymentCompute, deploymentCompute, managedComputeEnabled, setDeploymentCompute, type ComputePurpose } from "./deployment-compute.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
 import { configureProxyTrust } from "./proxy-trust.js";
@@ -118,20 +118,6 @@ function assertProductionConfig() {
     // believes it is on — refuse to boot instead.
     problems.push("BIVY_CENTRAL_GITHUB_APP_ID and BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY must be configured together");
   }
-  if (managedComputeEnabled() && managedProviderConfigured()) {
-    if (!process.env.DEPLOYMENT_EXTENSION_URL || !process.env.DEPLOYMENT_EXTENSION_TOKEN) {
-      problems.push("production managed compute requires a deployment extension for spend, provider-budget, and account-suspension policy");
-    }
-    if (!managedConcurrencyLimit()) {
-      problems.push("MANAGED_COMPUTE_MAX_ACTIVE_PER_ACCOUNT must be a positive integer");
-    }
-    if (process.env.MANAGED_GUEST_HARDENING_ATTESTED !== "1") {
-      problems.push("MANAGED_GUEST_HARDENING_ATTESTED=1 is required after validating egress and process/mining controls in the production guest image");
-    }
-    if (!managedSessionImage()) {
-      problems.push("MANAGED_SESSION_IMAGE is required for production managed compute (generic provider images install at boot and cannot meet the startup SLO)");
-    }
-  }
   if (problems.length > 0) {
     console.error("Refusing to start: insecure production configuration:\n  - " + problems.join("\n  - "));
     process.exit(1);
@@ -154,6 +140,8 @@ process.on("unhandledRejection", (reason) => {
 
 const store = await createStore();
 const deploymentExtension = new DeploymentExtension();
+// The managed lane exists only when a deployment extension supplies compute.
+setDeploymentCompute(new DeploymentCompute(deploymentExtension.computeSource()));
 
 async function deploymentDecision(
   accountId: string,
@@ -161,23 +149,10 @@ async function deploymentDecision(
   idempotencyKey?: string,
   context: DeploymentPolicyContext = {},
 ) {
-  if (operation !== "ephemeral.provision" || context?.computeSource !== "managed") return deploymentExtension.authorize(accountId, operation, idempotencyKey, context);
-  const limit = managedConcurrencyLimit();
-  if (limit !== undefined) {
-    const active = managedCapacityCount(await store.getHostedMachines(accountId), await store.listHostedMachineAttempts(accountId, true));
-    if (active >= limit) {
-      const presentation = await deploymentExtension.account(accountId).catch(() => undefined);
-      return {
-        allowed: false,
-        code: "managed_concurrency_limit",
-        reason: `This account already has ${active} active managed Machine${active === 1 ? "" : "s"}.`,
-        usage: { used: active, limit },
-        actions: presentation?.actions,
-      };
-    }
+  if (operation === "ephemeral.provision" && context.computeSource === "managed" && context.activeManagedMachines === undefined) {
+    // The deployment's concurrency rule needs the count; Core supplies the fact.
+    context = { ...context, activeManagedMachines: managedCapacityCount(await store.getHostedMachines(accountId), await store.listHostedMachineAttempts(accountId, true)) };
   }
-  // Do not reserve deployment-owned budget for a request already refused by
-  // the local capacity ceiling. Launch callers hold the provision lease.
   return deploymentExtension.authorize(accountId, operation, idempotencyKey, context);
 }
 
@@ -1367,19 +1342,22 @@ function managedAutomationNodeId(accountId: string): string {
   return `eph-managed-auto-${createHash("sha256").update(accountId).digest("hex").slice(0, 16)}`;
 }
 
-function managedSessionConfig(now = new Date().toISOString()): EphemeralNodeConfig | null {
-  const provider = String(process.env.MANAGED_SESSION_PROVIDER || process.env.MANAGED_AUTH_RUNNER_PROVIDER || "fly").trim();
-  const adapter = ephemeralAdapter(provider);
-  if (!adapter || !managedProviderConfigured(process.env, provider)) return null;
+/** The deployment's profile for a purpose as a managed ephemeral config, or
+ * null when the deployment offers no managed compute. */
+async function managedProfileConfig(purpose: ComputePurpose, accountId: string, runtimeId?: string): Promise<EphemeralNodeConfig | null> {
+  const profile = await deploymentCompute().profile(purpose, accountId, runtimeId);
+  const adapter = profile ? ephemeralAdapter(profile.provider) : undefined;
+  if (!profile || !adapter) return null;
+  const now = new Date().toISOString();
   return {
-    id: "managed-default",
-    name: "Bivy Cloud",
-    provider,
-    region: String(process.env.MANAGED_SESSION_REGION || adapter.defaultRegion),
-    size: String(process.env.MANAGED_SESSION_SIZE || adapter.defaultSize),
-    image: managedSessionImage(),
-    ttlMinutes: Math.max(5, Math.min(24 * 60, Number(process.env.MANAGED_SESSION_TTL_MINUTES) || 60)),
-    teardownOnAgentFinish: true,
+    id: purpose === "auth-runner" ? "managed-auth-runner" : "managed-default",
+    name: purpose === "auth-runner" ? "Authentication Machine" : "Bivy Cloud",
+    provider: profile.provider,
+    region: profile.region || adapter.defaultRegion,
+    size: profile.size || adapter.defaultSize,
+    image: profile.image,
+    ttlMinutes: Math.max(5, Math.min(24 * 60, Number(profile.ttlMinutes) || 60)),
+    ...(purpose === "interactive" ? { teardownOnAgentFinish: profile.teardownOnAgentFinish ?? true } : {}),
     computeSource: "managed",
     createdAt: now,
     updatedAt: now,
@@ -1387,7 +1365,7 @@ function managedSessionConfig(now = new Date().toISOString()): EphemeralNodeConf
 }
 
 async function ensureManagedDefaultForAccount(accountId: string): Promise<EphemeralNodeConfig> {
-  const desired = managedSessionConfig();
+  const desired = await managedProfileConfig("interactive", accountId);
   if (!desired) throw Object.assign(new Error("Managed session provider is not configured."), { status: 503 });
   const configs = await store.getEphemeralConfigs(accountId);
   const existing = configs.find((config) => config.computeSource === "managed");
@@ -1437,17 +1415,8 @@ app.post("/account/onboarding/auth-runner", managedOnboardingRateLimit, requireU
   // establish the later interactive profile before redirects/reloads can lose
   // browser-only onboarding state.
   await ensureManagedDefaultForAccount(account.id);
-  const provider = String(process.env.MANAGED_AUTH_RUNNER_PROVIDER || process.env.MANAGED_SESSION_PROVIDER || "fly").trim();
-  const adapter = ephemeralAdapter(provider);
-  if (!adapter) return res.status(503).json({ error: "Managed setup provider is not configured." });
-  const ttlMinutes = Math.max(5, Math.min(15, Number(process.env.MANAGED_AUTH_RUNNER_TTL_MINUTES) || 15));
-  const size = String(process.env.MANAGED_AUTH_RUNNER_SIZE || adapter.defaultSize).trim();
-  const config: EphemeralNodeConfig = {
-    id: "managed-auth-runner", name: "Authentication Machine", provider,
-    region: String(process.env.MANAGED_AUTH_RUNNER_REGION || adapter.defaultRegion), size,
-    image: managedAuthRunnerImage(),
-    ttlMinutes, computeSource: "managed", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-  };
+  const config = await managedProfileConfig("auth-runner", account.id);
+  if (!config) return res.status(503).json({ error: "Managed setup provider is not configured." });
   await respondManagedLaunch(res, account.id, { config, purpose: "auth-runner", requestId: req.body?.requestId ?? randomUUID() });
 }));
 
@@ -1503,8 +1472,9 @@ async function respondManagedLaunch(res: Response, accountId: string, request: M
   const size = adapter.sizes.find((entry) => entry.id === sizeId);
   try {
     const result = await managedInteractiveLaunch(store, accountId, request, {
-      admit: async (attemptId) => {
+      admit: async (attemptId, activeManagedMachines) => {
         const decision = await deploymentDecision(accountId, "ephemeral.provision", attemptId, {
+          activeManagedMachines,
           computeSource: "managed", provider: config.provider, sizeId, vcpus: size?.vcpus,
           memoryMiB: size?.memoryMiB, ttlMinutes: config.ttlMinutes ?? 60, configId: config.id,
           purpose: request.restore ? "interactive-restore" : request.purpose,
@@ -1550,7 +1520,7 @@ app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res)
   if (!storedConfig || storedConfig.computeSource !== "managed") return res.status(404).json({ error: "Managed session profile not found." });
   // Select the smallest prebuilt image that contains the requested runtime. The
   // deployment-owned baseline remains the fallback for custom/unknown agents.
-  const config = { ...storedConfig, image: managedSessionImage(process.env, runtimeId) ?? storedConfig.image };
+  const config = { ...storedConfig, image: (await managedProfileConfig("interactive", account.id, runtimeId))?.image ?? storedConfig.image };
   const adapter = ephemeralAdapter(config.provider);
   if (!adapter) return res.status(503).json({ error: "Managed session provider is not configured." });
   await respondManagedLaunch(res, account.id, { config, purpose: "interactive", runtimeId, requestId: req.body?.requestId ?? randomUUID() });
@@ -3884,8 +3854,8 @@ app.get("/account/ephemeral-configs", asyncHandler(async (req, res) => {
   // Listing the picker is the universal idempotent adoption seam: self-hosted
   // and disabled deployments stay untouched, while every eligible account sees
   // the deployment-owned Bivy Cloud destination alongside personal Machines.
-  if (managedComputeEnabled()) {
-    await ensureManagedDefaultForAccount(client.accountId);
+  if (managedComputeEnabled() && deploymentCompute().configured) {
+    await ensureManagedDefaultForAccount(client.accountId).catch(() => undefined);
   }
   res.json(await store.getEphemeralConfigs(client.accountId));
 }));
@@ -4090,7 +4060,7 @@ app.get("/account/github/central-app", asyncHandler(async (req, res) => {
     configured: Boolean(central),
     appId: central?.appId,
     slug: central?.slug,
-    managedComputeAvailable: managedComputeEnabled() && Boolean(managedSessionConfig()),
+    managedComputeAvailable: managedComputeEnabled() && Boolean(await managedProfileConfig("interactive", client.accountId)),
     installations: installations.map(({ installationId, githubAccount, githubAccountType, repositorySelection, createdAt }) => ({
       installationId, githubAccount, githubAccountType, repositorySelection, createdAt,
     })),

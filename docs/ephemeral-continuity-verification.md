@@ -90,11 +90,12 @@ Prepare **separate, disposable** control-plane and relay processes:
 - Generate a temporary shared `RELAY_SECRET` and a temporary 32-byte base64
   `HOSTED_CREDENTIAL_KEY`; never print them. Enable local dev-login only on the
   disposable control plane (`DISABLE_DEV_LOGIN=0`).
-- Enable `EPHEMERAL_MACHINES_ENABLED=1`,
-  `MANAGED_COMPUTE_MAX_ACTIVE_PER_ACCOUNT=1`,
-  `MANAGED_SESSION_TTL_MINUTES=5`, and
-  `MANAGED_SESSION_SIZE=shared-2x-4gb` on that control plane.
-- Set `MANAGED_SESSION_IMAGE` to the published `prebuild-<commit>` runner image.
+- Enable `EPHEMERAL_MACHINES_ENABLED=1` on that control plane and point
+  `DEPLOYMENT_EXTENSION_URL`/`DEPLOYMENT_EXTENSION_TOKEN` at a loopback
+  extension (see [self-host.md](self-host.md#deployment-supplied-compute)). Its
+  profile answers `ttlMinutes: 5`, `size: "shared-2x-4gb"` and the published
+  `prebuild-<commit>` runner image; its policy check denies a launch when
+  `activeManagedMachines` is already 1.
   `PUBLIC_CONTROL_PLANE_URL` points to your HTTPS gateway and `RELAY_PUBLIC_URL`
   to its `wss://…/relay` path. The relay's `CONTROL_PLANE_URL` is loopback.
 - Expose **only** node ingress through the temporary gateway: `/nodes/enroll`,
@@ -103,7 +104,7 @@ Prepare **separate, disposable** control-plane and relay processes:
   All other public routes, especially `/auth/dev-login` and `/account/*`, must
   return 404. Never tunnel the dev-login-enabled control plane directly.
 - Inject `MANAGED_PROVIDER_TOKEN_FLY` from the same secret-manager reference into
-  the control plane and probe. Do not paste its value or use a different cached
+  the loopback extension (as its credential answer) and the probe. Do not paste its value or use a different cached
   Fly CLI login. Keep service logs private.
 
 Run from the repository root, with that operator credential already injected:

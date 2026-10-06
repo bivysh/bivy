@@ -302,70 +302,63 @@ service-worker precaching so a cached app shell still reads current deployment
 flags on reload. A missing script uses the build default (off in standard
 images); runtime configuration never grants server-side authority.
 
-## Operator-owned managed compute
+## Deployment-supplied compute
 
-A self-hoster can expose the same managed-compute lane used by Bivy Cloud while
-keeping the provider account under their own control. It is the normal hosted
-ephemeral provisioner with an operator credential instead of each user's cloud
-token; model and repository credentials still belong to each user.
+A deployment can offer a "managed" compute lane: machines launched in a cloud
+account the deployment pays for, instead of each user's own. It is the normal
+hosted ephemeral provisioner. Only the provider credential and the launch
+profile come from the deployment. Model and repository credentials still belong
+to each user.
 
-For Fly, create a dedicated organization and a narrowly scoped token that can
-create, inspect, and destroy Machines, then configure the control plane:
+The control plane holds no configuration for this lane. It asks the deployment
+extension (`DEPLOYMENT_EXTENSION_URL` + `DEPLOYMENT_EXTENSION_TOKEN`, the same
+service that answers policy checks). With no extension configured there is no
+managed lane. Enable new launches with `EPHEMERAL_MACHINES_ENABLED=1`.
 
-```env
-# New managed launches are disabled unless this is exactly 1.
-EPHEMERAL_MACHINES_ENABLED=1
-MANAGED_PROVIDER_TOKEN_FLY=<operator Fly token>
+The extension answers two calls, both `POST` with the bearer token:
 
-# Required when NODE_ENV=production. The deployment extension owns spend,
-# provider-budget, upgrade, and suspension policy; Core enforces this additional
-# per-account ceiling even when that service admits a launch.
-MANAGED_COMPUTE_MAX_ACTIVE_PER_ACCOUNT=3
-DEPLOYMENT_EXTENSION_URL=https://policy.example.internal
-DEPLOYMENT_EXTENSION_TOKEN=<service token>
+```text
+POST /v1/compute/profile
+  { "subject": { "accountId": "…" }, "purpose": "interactive" | "auth-runner", "runtimeId": "claude" }
+→ { "profile": { "provider": "fly", "region": "iad", "size": "shared-4x-8gb",
+                 "image": "ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>",
+                 "ttlMinutes": 60, "teardownOnAgentFinish": true } }
+  or { "profile": null } when this account gets no managed compute.
 
-# Set only after the exact production guest image has passed egress and
-# process/mining-abuse validation. Production refuses managed launches otherwise.
-MANAGED_GUEST_HARDENING_ATTESTED=1
-
-# Interactive managed-session defaults. Production requires an immutable,
-# prebuilt baseline image: managed compute never silently installs onto a generic
-# provider image during boot. Users never receive the provider token.
-MANAGED_SESSION_PROVIDER=fly
-MANAGED_SESSION_TTL_MINUTES=60
-MANAGED_SESSION_IMAGE=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>
-# MANAGED_SESSION_REGION=<adapter default>
-# MANAGED_SESSION_SIZE=<adapter default>
-
-# Optional smaller runtime-specific images. The managed launch endpoint chooses
-# explicitly configured image for the requested agent; otherwise it uses
-# MANAGED_SESSION_IMAGE exactly as configured, for every runtime. No suffix is
-# inferred: deployment aliases do not guarantee runtime-specific tags exist.
-# MANAGED_SESSION_IMAGE_CLAUDE=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>-claude
-# MANAGED_SESSION_IMAGE_CODEX=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>-codex
-# MANAGED_SESSION_IMAGE_PI=ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>-pi
-
-# Optional first-run authentication Machine overrides. It falls back to the
-# baseline MANAGED_SESSION_IMAGE because provider selection happens after boot.
-MANAGED_AUTH_RUNNER_PROVIDER=fly
-MANAGED_AUTH_RUNNER_TTL_MINUTES=15
-# MANAGED_AUTH_RUNNER_REGION=<adapter default>
-# MANAGED_AUTH_RUNNER_SIZE=<adapter default>
-# MANAGED_AUTH_RUNNER_IMAGE=<defaults to MANAGED_SESSION_IMAGE>
+POST /v1/compute/credential
+  { "provider": "fly" }
+→ { "token": "<provider token>", "expiresAt": "<optional ISO time>" }
+  or {} when there is none.
 ```
 
-Restart the control plane after changing these values. The token is read only by
-the control plane, used transiently for provider API calls, and is never returned
-by an account API, persisted in Postgres, logged, or included in machine
-user-data. Keep it in your deployment secret manager or `deploy/.env` with mode
-`600`, and rotate it like any other infrastructure credential.
+- **Profile.** Choose the image per `runtimeId` if you publish runtime-specific
+  runner images. Use a prebuilt image: a generic provider image installs Bivy
+  at boot and starts slowly. Answers are reused for a minute.
+- **Credential.** The control plane uses it only transiently for provider API
+  calls. It is never persisted, logged, returned by an account API or put in
+  machine user-data. A fresh credential is reused for five minutes. If the
+  extension is unreachable, the last unexpired credential is still used for
+  teardown, reconciliation and orphan cleanup, so an extension outage can't
+  strand billable machines. Keep answering for a provider until every machine
+  launched with it is destroyed.
+- **Admission.** Every managed launch is checked through `/v1/policy/check`
+  (`operation: "ephemeral.provision"`, `context.computeSource: "managed"`). The
+  context includes `activeManagedMachines`, the account's running and
+  launching managed machines, counted inside the account's launch lease. Enforce
+  any concurrency limit there.
+- **Usage.** `/v1/events` receives `ephemeral.first-agent-event`,
+  `ephemeral.launch-failed` and `ephemeral.settled` (with `machineSeconds` and
+  `activeAgentSeconds`) for metering.
+
+For Fly, give the extension a dedicated organization and a narrowly scoped
+token that can create, inspect and destroy Machines. Validate the guest image
+for egress and process/mining abuse before you offer the lane to anyone you
+don't know.
 
 Setting `EPHEMERAL_MACHINES_ENABLED=0` blocks new launches in both lanes and
-hides their UI. Removing it also blocks new managed launches, but preserves
-legacy BYO API behavior.
-It does **not** disable teardown, reconciliation, creation-attempt cleanup, or
-orphan sweeps; leave `MANAGED_PROVIDER_TOKEN_FLY` available until every managed
-machine has been destroyed. User-token/BYO configurations are unaffected.
+hides their UI. It does **not** disable teardown, reconciliation,
+creation-attempt cleanup or orphan sweeps. User-token/BYO configurations are
+unaffected.
 
 ## Using a managed/hosted Postgres
 

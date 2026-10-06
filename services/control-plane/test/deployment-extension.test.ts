@@ -81,3 +81,24 @@ test("configured extension rejects malformed decisions instead of allowing", asy
 test("configuration requires URL and token together", () => {
   assert.throws(() => new DeploymentExtension("https://policy.example", undefined), /configured together/);
 });
+
+test("deployment compute is absent without a service and asks the configured one", async () => {
+  assert.equal(new DeploymentExtension(undefined, undefined, async () => { throw new Error("must not fetch"); }).computeSource(), undefined);
+  const requests: Array<{ url: string; body: unknown }> = [];
+  const replies: Record<string, unknown> = {
+    "https://policy.example/v1/compute/profile": { profile: { provider: "fly", image: "runner:claude" } },
+    "https://policy.example/v1/compute/credential": { token: "op", expiresAt: "2026-10-06T12:00:00.000Z" },
+  };
+  const source = new DeploymentExtension("https://policy.example", "secret", async (url, init) => {
+    requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+    return new Response(JSON.stringify(replies[String(url)]), { headers: { "content-type": "application/json" } });
+  }).computeSource()!;
+  assert.deepEqual(await source.profile("interactive", "a", "claude"), { provider: "fly", image: "runner:claude" });
+  assert.deepEqual(await source.credential("fly"), { token: "op", expiresAt: "2026-10-06T12:00:00.000Z" });
+  assert.deepEqual(requests.map((request) => request.body), [
+    { subject: { accountId: "a" }, purpose: "interactive", runtimeId: "claude" },
+    { provider: "fly" },
+  ]);
+  replies["https://policy.example/v1/compute/credential"] = {};
+  assert.equal(await source.credential("fly"), null, "no token means no managed credential");
+});

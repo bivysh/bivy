@@ -23,6 +23,18 @@ one large, entangled unit.
   out of the box, with little-to-no custom adaptation — so avoid a bespoke
   adapter per agent. A per-agent special case is a last resort, not the default.
 
+## What belongs in this repo
+
+This repo is everything a person or team needs to run Bivy on infrastructure
+they control, plus every piece of code that handles user secrets or session
+data, so its security claims stay auditable. Rules that only matter when
+operating Bivy for many unrelated accounts (plans, limits, quotas, operator
+credentials, launch profiles, fleet scheduling, abuse policy) do not live here.
+Core reaches them through the deployment extension
+(`services/control-plane/src/deployment-extension.ts`): add a neutral hook and
+pass technical facts, never tier names, prices or caps. With no extension
+configured, Core stays fully usable.
+
 ## Design system — follow it, don't fork it
 
 All user-facing surfaces share one visual language. When you build or change any

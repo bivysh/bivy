@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createPgMemStore } from "../src/pg-mem-store.js";
 import { managedInteractiveLaunch, managedRequestId, ManagedLaunchConflict, type ManagedInteractiveRequest } from "../src/managed-interactive-launch.js";
-import { managedCapacityCount, activeManagedMachineCount, managedConcurrencyLimit } from "../src/managed-admission.js";
+import { managedCapacityCount, activeManagedMachineCount } from "../src/managed-admission.js";
 import { reconcileHostedMachines, provisionEphemeralForAccount } from "../src/ephemeral-provisioner.js";
+import { DeploymentCompute, setDeploymentCompute } from "../src/deployment-compute.js";
 import type { launchEphemeralMachine } from "@bivy/core";
 import type { EphemeralMachine } from "@bivy/core";
 
@@ -16,9 +17,14 @@ async function fixture() {
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
   } };
   let creates = 0, admits = 0;
+  // Stands in for the deployment's concurrency rule: Core passes the exact
+  // count from inside the account lease; the deployment decides.
+  const allowUpTo = (limit: number) => async (_attemptId: string, active: number) => {
+    if (active >= limit) throw new ManagedLaunchConflict(429, "managed_concurrency_limit", "Managed machine capacity is already reserved for this account.");
+    admits++;
+  };
   const effects = {
-    limit: 1,
-    admit: async () => { admits++; },
+    admit: allowUpTo(1),
     launch: async (attemptId: string, nodeId: string): Promise<EphemeralMachine> => {
       creates++;
       const machine: EphemeralMachine = { id: `machine-${creates}`, attemptId, nodeId, provider: "fly", computeSource: "managed", purpose: request.purpose, region: "iad", name: "test", status: "running", ip: null, createdAt: new Date().toISOString() };
@@ -27,7 +33,7 @@ async function fixture() {
     },
   };
   const launch = (input = request, overrides: Partial<typeof effects> = {}) => managedInteractiveLaunch(store, account.id, input, { ...effects, ...overrides });
-  return { store, account, request, effects, launch, counts: () => ({ creates, admits }) };
+  return { store, account, request, effects, launch, allowUpTo, counts: () => ({ creates, admits }) };
 }
 const code = (wanted: string) => (error: unknown) => error instanceof ManagedLaunchConflict && error.code === wanted;
 
@@ -73,9 +79,8 @@ test("reconciliation cannot retry a reserved attempt while the original provider
 });
 
 test("receipt fingerprint survives the real provisioner's lifecycle writes and key escrow", async () => {
-  const oldToken = process.env.MANAGED_PROVIDER_TOKEN_FLY;
   const oldKey = process.env.HOSTED_CREDENTIAL_KEY;
-  process.env.MANAGED_PROVIDER_TOKEN_FLY = "test-only";
+  setDeploymentCompute(new DeploymentCompute({ profile: async () => null, credential: async () => ({ token: "test-only" }) }));
   process.env.HOSTED_CREDENTIAL_KEY = Buffer.alloc(32, 7).toString("base64");
   try {
     const f = await fixture();
@@ -98,7 +103,7 @@ test("receipt fingerprint survives the real provisioner's lifecycle writes and k
     assert.ok(await f.store.getNodeRoomKeyEnc(f.account.id, replay.machine.nodeId!));
     assert.equal(f.counts().creates, 0, "replay must never invoke a replacement launcher");
   } finally {
-    if (oldToken === undefined) delete process.env.MANAGED_PROVIDER_TOKEN_FLY; else process.env.MANAGED_PROVIDER_TOKEN_FLY = oldToken;
+    setDeploymentCompute(new DeploymentCompute(undefined));
     if (oldKey === undefined) delete process.env.HOSTED_CREDENTIAL_KEY; else process.env.HOSTED_CREDENTIAL_KEY = oldKey;
   }
 });
@@ -139,9 +144,9 @@ test("inventory failure fails closed without policy admission", async () => {
 test("concurrent restore identities cannot allocate the same node twice", async () => {
   const f = await fixture();
   const request = { ...f.request, restore: { nodeId: "eph-original", sessionId: "session-1" } };
-  const first = await f.launch(request, { limit: 3 });
+  const first = await f.launch(request, { admit: f.allowUpTo(3) });
   assert.equal(first.machine.nodeId, request.restore.nodeId);
-  await assert.rejects(f.launch({ ...request, requestId: "other-device" }, { limit: 3 }), code("managed_restore_active"));
+  await assert.rejects(f.launch({ ...request, requestId: "other-device" }, { admit: f.allowUpTo(3) }), code("managed_restore_active"));
   assert.equal((await f.launch(request)).machine.id, first.machine.id);
   assert.equal(f.counts().creates, 1);
 });
@@ -161,7 +166,7 @@ test("authentication setup is a singleton even with independent request IDs", as
   const f = await fixture();
   f.request.purpose = "auth-runner";
   const first = await f.launch();
-  const second = await f.launch({ ...f.request, requestId: "another-device" }, { limit: 3 });
+  const second = await f.launch({ ...f.request, requestId: "another-device" }, { admit: f.allowUpTo(3) });
   assert.equal(second.machine.id, first.machine.id);
   assert.equal(second.duplicate, true);
   assert.equal(f.counts().creates, 1);
@@ -196,12 +201,5 @@ test("request IDs reject ambiguous or unbounded input", () => {
       { computeSource: "managed", status: "stopped" },
       { computeSource: "managed", status: "gone" },
     ], now), 5);
-  });
-
-  test("managed concurrency limit accepts only positive integers", () => {
-    assert.equal(managedConcurrencyLimit("3"), 3);
-    assert.equal(managedConcurrencyLimit("0"), undefined);
-    assert.equal(managedConcurrencyLimit("1.5"), undefined);
-    assert.equal(managedConcurrencyLimit("nope"), undefined);
   });
 }
