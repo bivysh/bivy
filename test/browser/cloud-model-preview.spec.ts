@@ -28,6 +28,7 @@ for (const theme of themes) test(`Cloud model selection before any machine exist
     };
     controller.store.apply({ type: 'runtimes.list', current: { id: 'pi', name: 'Pi' }, runtimes: [{ id: 'pi', name: 'Pi', capabilities: { modelSelection: true } }] });
     globalThis.disableRuntimeModels = () => controller.store.apply({ type: 'runtime.updated', current: { id: 'pi', name: 'Pi' }, runtimes: [{ id: 'pi', name: 'Pi', capabilities: { modelSelection: false } }] });
+    globalThis.clearRuntimeModels = () => controller.store.apply({ type: 'models.list', runtimeId: 'pi', models: [] });
     globalThis.beginLaunch = () => {
       controller.store.apply({ type: 'runtime.updated', current: { id: 'pi', name: 'Pi' }, runtimes: [{ id: 'pi', name: 'Pi', capabilities: { modelSelection: true } }] });
       controller.store.persistPendingSession('starting-test', 'Test', false, 'Bivy Cloud');
@@ -80,6 +81,9 @@ for (const theme of themes) test(`Cloud model selection before any machine exist
   await page.getByRole("button", { name: "Launch Machine and send task", exact: true }).click();
   expect(await page.evaluate("globalThis.sent")).toMatchObject({ text: "Test, are we up?", model: { id: "claude-opus-4-8", provider: "anthropic" } });
   await page.evaluate("globalThis.disableRuntimeModels()");
+  // A conservative catalog refresh cannot invalidate this runtime's configured list.
+  await expect(pill).toBeEnabled();
+  await page.evaluate("globalThis.clearRuntimeModels()");
   await expect(pill).toBeDisabled();
   await expect(pill).toHaveAttribute("title", "This agent uses its own default model");
   await page.evaluate("globalThis.beginLaunch()");
