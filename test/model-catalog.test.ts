@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createCredentialVault } from "../src/runtime/credential-store.js";
-import { aggregateModelCatalog, catalogReplyEvent, mergeProviderCatalog } from "../src/runtime/model-catalog.js";
+import { aggregateModelCatalog, catalogReplyEvent, mergeProviderCatalog, warmSessionCatalog } from "../src/runtime/model-catalog.js";
 import { BIVY_PROVIDER_CATALOG as nodeProviderCatalog, BIVY_PROVIDER_CATALOG_VERSION } from "../src/runtime/bivy-provider-catalog.js";
 import { BIVY_PROVIDER_CATALOG as webProviderCatalog } from "../packages/core/src/provider-catalog.js";
 import { ProcessRuntime } from "../src/runtime/process.js";
@@ -29,6 +29,17 @@ assert.deepEqual(nodeProviderCatalog, webProviderCatalog, "node and browser prov
 function fakeRuntime(id: string, catalog: CatalogProvider[] | (() => Promise<CatalogProvider[]>)): AgentRuntime {
   return { id, listCatalog: typeof catalog === "function" ? catalog : () => catalog } as unknown as AgentRuntime;
 }
+
+await check("a session's real catalog is warmed before it is read, but never waited on forever", async () => {
+  let warmed = false;
+  await warmSessionCatalog({ warmModels: async () => { warmed = true; } }, 1_000);
+  assert.equal(warmed, true, "a quick warm completes before the caller reads the catalog");
+  const started = Date.now();
+  await warmSessionCatalog({ warmModels: () => new Promise<void>(() => {}) }, 50);
+  assert.ok(Date.now() - started < 1_000, "a hung spawn gives up at the bound");
+  await warmSessionCatalog({ warmModels: async () => { throw new Error("spawn failed"); } }, 1_000);
+  await warmSessionCatalog({}, 1_000);
+});
 
 await check("unions providers across agents, dedupes models, records contributing agents", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-catalog-"));

@@ -191,3 +191,18 @@ export async function catalogReplyEvent<E>(
     return { type: "session.error", sessionId, error: `Couldn't read this machine's model catalog: ${error instanceof Error ? error.message : String(error)}` };
   }
 }
+
+/**
+ * Give a session's agent up to `timeoutMs` to publish its real model catalog
+ * before a caller reads it. A not-yet-started agent otherwise answers from a
+ * placeholder list. Never throws; a runtime without warmModels() is a no-op.
+ */
+export async function warmSessionCatalog(session: { warmModels?(): Promise<void> }, timeoutMs: number): Promise<void> {
+  if (!session.warmModels) return;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  await Promise.race([
+    session.warmModels().catch(() => {}),
+    new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); }),
+  ]);
+  if (timer) clearTimeout(timer);
+}
