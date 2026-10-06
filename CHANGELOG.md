@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Files: browse the session's workspace before anything is committed.** A new **Files** tab in the side pane (or **Browse files** in the session menu on a phone) shows the worktree the agent is editing, folder by folder. Uncommitted files carry the same + / ~ / − marks as Changes, folders say how many changed files they hold, deleted files still appear, and **Changed** narrows the tree to just the agent's work. Open a file to read it with syntax highlighting and line numbers, or see an image. The view refreshes after each turn. It is read-only and confined to the workspace: `..`, absolute paths, `.git` and symlinks that lead outside are refused.
+
 ## [0.20.7] - 2026-10-05
 
 ### Added

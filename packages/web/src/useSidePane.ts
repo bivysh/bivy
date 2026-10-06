@@ -3,12 +3,12 @@
 import { useCallback, useState } from "react";
 import { useMediaQuery } from "./useMediaQuery.js";
 
-export type SidePaneTabId = "changes" | "apps" | "artifacts" | "terminal";
+export type SidePaneTabId = "changes" | "files" | "apps" | "artifacts" | "terminal";
 
 /** Wide enough for the sidebar, a readable chat column and the pane together. */
 export const SIDE_PANE_QUERY = "(min-width: 1200px)";
 const STORAGE_KEY = "bivy.sidePane";
-const TABS: ReadonlySet<string> = new Set<SidePaneTabId>(["changes", "apps", "artifacts", "terminal"]);
+const TABS: ReadonlySet<string> = new Set<SidePaneTabId>(["changes", "files", "apps", "artifacts", "terminal"]);
 
 function readTab(): SidePaneTabId | null {
   try {

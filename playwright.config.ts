@@ -37,6 +37,7 @@ const mobileSpecs = [
   "**/followup-new-session.spec.ts",
   "**/suggestion-card.spec.ts",
   "**/session-changes-section.spec.ts",
+  "**/files-sheet.spec.ts",
 ];
 
 // Mobile-specific specs whose mobile run does everything the desktop run does

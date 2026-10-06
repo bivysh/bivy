@@ -38,6 +38,7 @@ import { afterModalHistory } from "./modalHistory.js";
 import { usePreviewLanding } from "./usePreviewLanding.js";
 import { ForkProgressDialog } from "./components/ForkProgressDialog.js";
 import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
+import { FilesSheet } from "./components/FilesSheet.js";
 import { AppsSheet } from "./components/AppsSheet.js";
 import { ForkSheet } from "./components/ForkSheet.js";
 import { useSessionApps } from "./useSessionApps.js";
@@ -143,6 +144,7 @@ export function App() {
   // over the transcript the store already holds (see deriveArtifacts) — no
   // extra round trip to the node.
   const [artifactsSheetOpen, setArtifactsSheetOpen] = useState(false);
+  const [filesSheetOpen, setFilesSheetOpen] = useState(false);
   // Session apps sheet — opened from the run pill ("N apps"), so a published
   // app stays reachable after its inline launcher card scrolls out of the
   // transcript. Same pure-fold approach as artifacts (see deriveApps). Also
@@ -827,6 +829,7 @@ export function App() {
     if (view !== "changes") setSessionView(view);
   };
   const openArtifacts = () => { if (!sidePane.show("artifacts")) setArtifactsSheetOpen(true); };
+  const openFiles = () => { if (!sidePane.show("files")) setFilesSheetOpen(true); };
 
   return (
     <div className={`app${paneTab ? " has-pane" : ""}`}>
@@ -980,8 +983,8 @@ export function App() {
                 className="btn ghost icon side-pane-toggle"
                 onClick={() => sidePane.setTab(paneTab ? null : "changes")}
                 aria-pressed={Boolean(paneTab)}
-                aria-label={paneTab ? "Hide side pane" : "Show changes, apps, artifacts and terminal"}
-                title={paneTab ? "Hide side pane" : "Show changes, apps, artifacts and terminal"}
+                aria-label={paneTab ? "Hide side pane" : "Show changes, files, apps, artifacts and terminal"}
+                title={paneTab ? "Hide side pane" : "Show changes, files, apps, artifacts and terminal"}
               >
                 <PanelRightIcon size={18} />
               </button>
@@ -1017,6 +1020,7 @@ export function App() {
                 sessionFile={activeSession?.path}
                 auditHealth={activeSession?.auditHealth}
                 eventLogHealth={activeSession?.eventLogHealth}
+                onBrowseFiles={activeSession && !needsNode ? openFiles : undefined}
               />
             )}
           </div>
@@ -1239,6 +1243,10 @@ export function App() {
             )}
 
 
+            {filesSheetOpen && !sidePane.wide && activeSession && (
+              <FilesSheet sessionId={activeSession.sessionId} refreshKey={state.activeSession.changesHistory.length} onClose={() => setFilesSheetOpen(false)} />
+            )}
+
             {artifactsSheetOpen && !sidePane.wide && (
               <ArtifactsSheet artifacts={artifacts} onClose={() => setArtifactsSheetOpen(false)} />
             )}
@@ -1354,6 +1362,7 @@ export function App() {
         <SidePane
           tabs={[
             { id: "changes", label: "Changes", count: changedFiles },
+            { id: "files", label: "Files" },
             { id: "apps", label: "Apps", count: liveApps.published ?? apps.length },
             { id: "artifacts", label: "Artifacts", count: artifacts.length },
             { id: "terminal", label: "Terminal" },
@@ -1371,6 +1380,9 @@ export function App() {
               checks={runEvidence.get(activeSession.sessionId)?.checks?.map((c) => ({ name: c.name, status: c.status }))}
               onClose={() => sidePane.setTab(null)}
             />
+          )}
+          {paneTab === "files" && (
+            <FilesSheet docked key={activeSession.sessionId} sessionId={activeSession.sessionId} refreshKey={state.activeSession.changesHistory.length} onClose={() => sidePane.setTab(null)} />
           )}
           {paneTab === "apps" && (() => {
             const request = appsSheet?.sessionId === activeSession.sessionId ? appsSheet : { sessionId: activeSession.sessionId };
