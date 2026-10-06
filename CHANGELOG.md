@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.20.8] - 2026-10-06
+
 ### Fixed
 
 - The web model picker recognizes configured models discovered by the current agent even when its initial catalog does not advertise model selection. Models from another agent cannot enable the picker.
