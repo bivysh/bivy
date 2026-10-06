@@ -73,7 +73,17 @@ export interface BootstrapOpts {
    *  snapshot on boot (exported as `BIVY_RESTORE`). The machine reuses this
    *  session's node id + room key so it can fetch and decrypt the snapshot. */
   restoreSessionId?: string;
+  /** The machine sleeps instead of being destroyed: when idle the daemon exits
+   *  without signalling settled, the provider keeps the stopped machine and its
+   *  persistent disk, and `wake` starts it again. Bivy's data dir, the
+   *  workspace and HOME (agent sign-ins, package caches, user-installed tools)
+   *  live on that disk at `PERSISTENT_ROOT`. Only for providers that implement
+   *  `wake`. */
+  sleepOnIdle?: boolean;
 }
+
+/** Mount point of a sleeping machine's persistent disk. */
+export const PERSISTENT_ROOT = "/data";
 
 /** A pickable machine size. `id` is the provider-native identifier that gets
  *  passed back as `config.size` at provision time. */
@@ -114,6 +124,9 @@ export interface ProviderProvisionConfig {
   org?: string;
   cpus?: number;
   memoryMb?: number;
+  /** Keep the machine and a persistent disk of this many GB across idle
+   *  periods instead of destroying it (see `BootstrapOpts.sleepOnIdle`). */
+  persistentDiskGb?: number;
 }
 
 export interface ProviderAdapter {
@@ -146,6 +159,10 @@ export interface ProviderAdapter {
   provision(args: { exec: ExecFn; token: string; config: ProviderProvisionConfig; userData: string; bootstrap?: BootstrapOpts }): Promise<EphemeralMachine>;
   status(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<string>;
   destroy(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<void>;
+  /** Start a machine that went to sleep (stopped with its persistent disk).
+   *  Present only on providers whose stopped machines stop compute billing;
+   *  its presence is the sleep capability. Idempotent on a running machine. */
+  wake?(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<void>;
   /** List every live resource tagged with `ownershipTag` at the provider,
    *  independent of anything Bivy currently has tracked. This is the recovery
    *  path for the one failure #554's per-attempt idempotent-create/adopt can't

@@ -119,6 +119,26 @@ size's hourly rate, plus TTL and a jump to its audit evidence. These are estimat
 not invoices; the user's provider bill remains authoritative for discounts,
 storage, egress, taxes, and live price changes.
 
+### Sleeping machines (experimental)
+
+A machine can sleep instead of being destroyed. With `BootstrapOpts.sleepOnIdle`
+(and `ProviderProvisionConfig.persistentDiskGb`), the Fly adapter creates one
+encrypted volume per app (`bivy_data`), mounts it at `/data`, and launches the
+machine with `auto_destroy: false`. Bivy's data dir, the workspace and `HOME`
+live on the volume, so worktrees, dependency caches, agent sign-ins and
+user-installed tools survive. When the daemon's quiet condition passes it exits
+**without** `POST /node/settled`, and Fly keeps the stopped machine. A machine
+woken for nothing sleeps again after the idle window instead of running to its
+TTL. `ProviderAdapter.wake` starts it again; its presence is the provider's
+sleep capability. `destroy` removes the volume together with the app.
+
+The TTL bounds each awake period (the init `timeout`), not the machine's
+lifetime. Nothing launches sleeping machines yet. Before anything does, the
+control-plane reconciler has to stop expiring them by `createdAt + TTL`, and
+something has to call `wake` when traffic arrives for a sleeping node.
+`scripts/smoke-fly-sleep-wake.mts` measures stop/suspend → healthy latency and
+volume persistence against a real Fly account (opt-in, paid).
+
 ## Managed compute metering and operator policy
 
 Core records provider-neutral lifecycle facts from server-stamped durable

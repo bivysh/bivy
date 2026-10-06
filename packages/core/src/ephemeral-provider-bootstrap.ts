@@ -3,7 +3,7 @@
 // Shared projections used to bootstrap equivalent Bivy nodes on each substrate.
 
 import { clampTtlMinutes } from "./ephemeral-lifecycle.js";
-import type { BootstrapOpts } from "./ephemeral-provider-ports.js";
+import { PERSISTENT_ROOT, type BootstrapOpts } from "./ephemeral-provider-ports.js";
 import { shq } from "./ephemeral-provider-utils.js";
 
 function indentJson(json: string, pad: string): string {
@@ -34,8 +34,11 @@ function bivyBootstrapExports(opts: BootstrapOpts): string[] {
   // Every supported ephemeral provider is a destroy lane. The daemon learns
   // that it is disposable so it can snapshot and end the machine once idle.
   const ephemeral = Boolean(opts.provider);
+  const persistent = ephemeral && opts.sleepOnIdle;
   return [
-    "export BIVY_DATA_DIR=/etc/bivy",
+    persistent ? `export BIVY_DATA_DIR=${PERSISTENT_ROOT}/bivy` : "export BIVY_DATA_DIR=/etc/bivy",
+    persistent ? `export BIVY_WORKSPACE=${PERSISTENT_ROOT}/workspace` : "",
+    persistent ? `export HOME=${PERSISTENT_ROOT}/home` : "",
     opts.repo ? `export BIVY_REPO=${shq(opts.repo)}` : "",
     opts.hostedTasks ? `export BIVY_GITHUB_HOSTED_TASKS=1` : "",
     opts.hostedCredentialCustody ? `export BIVY_HOSTED_CREDENTIAL_CUSTODY=1` : "",
@@ -48,6 +51,7 @@ function bivyBootstrapExports(opts: BootstrapOpts): string[] {
     ephemeral ? `export BIVY_EPHEMERAL_TTL_MIN=${clampTtlMinutes(opts.ttlMinutes)}` : "",
     ephemeral && opts.teardownOnAgentFinish ? `export BIVY_TEARDOWN_ON_FINISH=1` : "",
     ephemeral && opts.restoreSessionId ? `export BIVY_RESTORE=${shq(opts.restoreSessionId)}` : "",
+    persistent ? "export BIVY_EPHEMERAL_SLEEP=1" : "",
   ].filter(Boolean);
 }
 

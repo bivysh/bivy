@@ -190,3 +190,70 @@ describe("fly adapter — orphan discovery", () => {
     expect(found).toEqual([{ id: "ok1", provider: "fly", app: "bivy-ok", name: "bivy-ok", region: "iad", status: "running", ip: null, createdAt: "", attemptId: undefined }]);
   });
 });
+
+describe("fly adapter — sleeping machine", () => {
+  /** Fly fake with an app-scoped volume list and a start endpoint. */
+  function sleepingFlyExec(volumes: { id: string; name: string }[] = [], machineState = "stopped") {
+    const calls: ExecRequest[] = [];
+    const exec = async (req: ExecRequest): Promise<ExecResult> => {
+      calls.push(req);
+      if (req.url === "https://api.fly.io/graphql") return FLY_ORG_GRAPHQL;
+      if (req.url === "https://api.machines.dev/v1/apps") return { status: 201, body: {} };
+      if (/\/volumes$/.test(req.url)) return req.method === "GET" ? { status: 200, body: volumes } : { status: 200, body: { id: "vol_new" } };
+      if (/\/machines$/.test(req.url)) return req.method === "GET" ? { status: 200, body: [] } : { status: 200, body: { id: "m1", state: "starting" } };
+      if (/\/start$/.test(req.url)) return machineState === "started" ? { status: 412, body: { error: "machine still active" } } : { status: 200, body: {} };
+      if (/\/machines\/m1$/.test(req.url)) return { status: 200, body: { state: machineState } };
+      return { status: 404, body: null };
+    };
+    return { exec, calls };
+  }
+  const provision = (exec: (req: ExecRequest) => Promise<ExecResult>) => ephemeralAdapter("fly")!.provision({
+    exec, token: "t", userData: "", bootstrap: { ...BOOTSTRAP, provider: "fly", sleepOnIdle: true },
+    config: { slug: "abc", region: "fra", size: "shared-4x-8gb", attemptId: "a1", persistentDiskGb: 10 },
+  });
+
+  it("mounts a persistent volume and stops instead of self-destructing", async () => {
+    const { exec, calls } = sleepingFlyExec();
+    await provision(exec);
+    const createVolume = calls.find((c) => c.method === "POST" && /\/volumes$/.test(c.url))!;
+    expect(createVolume.body).toMatchObject({ name: "bivy_data", region: "fra", size_gb: 10 });
+    const cfg = machineConfig(calls.find((c) => c.method === "POST" && /\/machines$/.test(c.url))!) as FlyMachineBody["config"] & { mounts?: unknown };
+    expect(cfg.auto_destroy).toBe(false);
+    expect(cfg.mounts).toEqual([{ volume: "vol_new", path: "/data" }]);
+    expect(cfg.init.exec![5]).toContain("install -m 600 /etc/bivy/relay.json /data/bivy/relay.json");
+  });
+
+  it("adopts the app's existing volume on a retried launch", async () => {
+    const { exec, calls } = sleepingFlyExec([{ id: "vol_old", name: "bivy_data" }]);
+    await provision(exec);
+    expect(calls.some((c) => c.method === "POST" && /\/volumes$/.test(c.url))).toBe(false);
+    const cfg = machineConfig(calls.find((c) => c.method === "POST" && /\/machines$/.test(c.url))!) as FlyMachineBody["config"] & { mounts?: unknown };
+    expect(cfg.mounts).toEqual([{ volume: "vol_old", path: "/data" }]);
+  });
+
+  it("wakes a stopped machine, and treats an already-running one as awake", async () => {
+    const machine = { id: "m1", provider: "fly", app: "bivy-abc", name: "bivy-abc", region: "fra", status: "stopped", ip: null, createdAt: "" };
+    const stopped = sleepingFlyExec();
+    await ephemeralAdapter("fly")!.wake!({ exec: stopped.exec, token: "t", machine });
+    expect(stopped.calls.at(-1)).toMatchObject({ method: "POST", url: "https://api.machines.dev/v1/apps/bivy-abc/machines/m1/start" });
+    const running = sleepingFlyExec([], "started");
+    await expect(ephemeralAdapter("fly")!.wake!({ exec: running.exec, token: "t", machine })).resolves.toBeUndefined();
+  });
+
+  it("deletes the volume with the app on destroy", async () => {
+    const calls: ExecRequest[] = [];
+    const exec = async (req: ExecRequest): Promise<ExecResult> => {
+      calls.push(req);
+      if (/\/machines$/.test(req.url)) return { status: 200, body: [] };
+      if (/\/volumes$/.test(req.url)) return { status: 200, body: [{ id: "vol_1", name: "bivy_data" }] };
+      return { status: 200, body: {} };
+    };
+    await ephemeralAdapter("fly")!.destroy({ exec, token: "t", machine: { id: "m1", provider: "fly", app: "bivy-abc", name: "bivy-abc", region: "fra", status: "stopped", ip: null, createdAt: "" } });
+    const deletes = calls.filter((c) => c.method === "DELETE").map((c) => c.url);
+    expect(deletes).toEqual([
+      "https://api.machines.dev/v1/apps/bivy-abc/machines/m1?force=true",
+      "https://api.machines.dev/v1/apps/bivy-abc/volumes/vol_1",
+      "https://api.machines.dev/v1/apps/bivy-abc",
+    ]);
+  });
+});

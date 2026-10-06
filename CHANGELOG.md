@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - A [Contributor License Agreement](CLA.md), checked on pull requests, and a [trademark policy](TRADEMARKS.md) for the Bivy name and logo. The code stays AGPL-3.0.
+- **Fly machines can sleep instead of being destroyed (experimental, not yet used by any launch path).** A machine launched with `sleepOnIdle` gets a persistent volume for Bivy's data, the workspace and `HOME`. Worktrees, dependency caches and agent sign-ins then survive between uses. When idle the daemon stops the machine without reporting it settled, and the new `ProviderAdapter.wake` starts it again. Destroying the machine also deletes its volume. `scripts/smoke-fly-sleep-wake.mts` measures wake latency on a real Fly account.
 
 ### Changed
 
