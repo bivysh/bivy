@@ -88,6 +88,7 @@ export function SessionMenu({
   sessionFile,
   auditHealth,
   eventLogHealth,
+  onBrowseFiles,
 }: {
   sessionId: string;
   name: string;
@@ -105,6 +106,8 @@ export function SessionMenu({
     corruptLines: number;
   };
   eventLogHealth?: { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number };
+  /** Open the read-only browser over the session's workspace. */
+  onBrowseFiles?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -220,6 +223,11 @@ export function SessionMenu({
               <strong>Session history persistence degraded</strong>
               <span>The last {eventLogHealth.operation ?? "storage"} operation failed. History may be incomplete.</span>
             </div>
+          )}
+          {onBrowseFiles && (
+            <button className="menu-item session-actions-item" role="menuitem" onClick={() => { close(); onBrowseFiles(); }} disabled={prBusy}>
+              Browse files
+            </button>
           )}
           <button className="menu-item session-actions-item" role="menuitem" onClick={copyReference} disabled={prBusy}>
             Copy session reference

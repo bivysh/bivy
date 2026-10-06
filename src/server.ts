@@ -44,6 +44,7 @@ import { pngSize, reviewHint } from "./apps/review.js";
 import type { AppPin, AppReview, ReviewShot } from "./apps/types.js";
 import { createDisplayHost } from "./apps/display.js";
 import { createAppCommands } from "./controllers/app-commands.js";
+import { createFileCommands } from "./controllers/file-commands.js";
 import { bindClientCommandRoutes } from "./http/client-command-routes.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, catalogReplyEvent, mergeProviderCatalog } from "./runtime/model-catalog.js";
@@ -2542,6 +2543,14 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     const meta = attachmentStore.readMeta(hash);
     ctx.reply({ type: "attachment.data", requestId, hash, mimeType: meta?.mimeType ?? "application/octet-stream", name: meta?.name, data: bytes.toString("base64") });
   },
+  // Read-only browsing of a session's workspace: an open session's worktree,
+  // else the one metadata remembers, else a live terminal run's directory.
+  ...createFileCommands((id) => {
+    const record = resolveSession(id);
+    if (record) return harnessDirFor(record);
+    const meta = metadata.getSession(id);
+    return meta?.worktree || meta?.workspace || runTerms.liveRun(id)?.workspace;
+  }),
   ...createArtifactCommands({
     sessionIds: () => new Set([...metadata.listSessions().map((session) => session.id), ...[...openSessions.values()].map((record) => record.id)]),
     scan: (id) => eventLog.scan(id, ["outbound-attachment"]),
