@@ -15,6 +15,7 @@
 // unauthenticated CLI) exits non-zero with the error on stderr, rather than
 // reporting a silent empty success.
 
+import { randomUUID } from "node:crypto";
 import { WebSocket } from "ws";
 
 type Args = {
@@ -214,7 +215,9 @@ async function main() {
     try {
       await api(args.url, args.token, "/api/session/prompt", {
         method: "POST",
-        body: JSON.stringify({ sessionId, text: prompt, clientMessageId: `exec-${sessionId}` }),
+        // One id per exec run: the node drops a repeated id as a duplicate send
+        // for a day, so an id shared by every run in a session ate follow-ups.
+        body: JSON.stringify({ sessionId, text: prompt, clientMessageId: `exec-${randomUUID()}` }),
       });
     } catch (error) {
       finish(1, `Prompt failed: ${error instanceof Error ? error.message : String(error)}`);

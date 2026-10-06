@@ -54,6 +54,7 @@ async function withFakeDaemon(behavior: Behavior, fn: (url: string, probe: Creat
   const sessionId = "sess-fake-1";
   let wsSocket: import("ws").WebSocket | undefined;
   const probe: CreateProbe = {};
+  const seenMessageIds = new Set<string>();
 
   const server = http.createServer((req, res) => {
     let body = "";
@@ -65,8 +66,16 @@ async function withFakeDaemon(behavior: Behavior, fn: (url: string, probe: Creat
         res.end(JSON.stringify({ id: sessionId }));
         return;
       }
+      if (req.method === "POST" && req.url === "/api/sessions/open") {
+        res.end(JSON.stringify({ id: sessionId }));
+        return;
+      }
       if (req.method === "POST" && req.url === "/api/session/prompt") {
         res.end(JSON.stringify({ ok: true }));
+        // Like the real daemon, a repeated clientMessageId is a duplicate send: accepted, never run.
+        const messageId = (JSON.parse(body || "{}") as { clientMessageId?: string }).clientMessageId;
+        if (messageId && seenMessageIds.has(messageId)) return;
+        if (messageId) seenMessageIds.add(messageId);
         // Drive the turn's WS events once the prompt is "accepted", mirroring
         // how the real daemon streams a turn after /api/session/prompt returns.
         queueMicrotask(() => {
@@ -182,6 +191,14 @@ await check("sends --name/--model/--workspace to the daemon instead of leaking t
     assert.equal(probe.body!.name, "nightly audit", "explicit --name must be sent as the `name` field");
     assert.equal(probe.body!.workspace, "/tmp/ws");
     assert.deepEqual(probe.body!.model, { provider: "", id: "gpt-5.6-sol" }, "--model must be sent as a model ref, verbatim id");
+  });
+});
+
+await check("a follow-up exec into the same session runs its turn instead of waiting forever", async () => {
+  await withFakeDaemon("complete-normally", async (url) => {
+    assert.equal((await runExec(url, ["--session", "sess-fake-1"])).code, 0);
+    const second = await runExec(url, ["--session", "sess-fake-1", "--timeout", "3"]);
+    assert.equal(second.code, 0, `the follow-up must complete, got ${second.code} (stderr=${JSON.stringify(second.stderr)})`);
   });
 });
 
