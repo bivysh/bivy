@@ -5,6 +5,7 @@ import { ImageViewer } from "./ImageViewer.js";
 import type { AppState, PromptAttachment, SlashCommand } from "@bivy/core";
 import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
+import { modelSelectionAvailable } from "../modelSelection.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
 import { FollowupQueue } from "./FollowupQueue.js";
 import { HandoffBanner } from "./HandoffBanner.js";
@@ -199,14 +200,10 @@ export function Composer({
     onAbort();
   };
 
-  // Some runtimes (e.g. Codex / Codex approvals) own model selection themselves
-  // and expose no in-app model list — advertised via
-  // `capabilities.modelSelection === false`. Keep the model pill visible (it
-  // shows the default-model label) but disable it for those agents so clicking
-  // never opens a picker that can only ever say "No models available." Anything
-  // not explicitly false (including runtimes that haven't loaded yet) stays
-  // interactive, so we never disable it for a capable agent.
-  const currentRuntime = state.catalogs.runtimes.find((r) => r.id === (state.activeSession.activeRuntimeId ?? state.catalogs.selectedAgentId));
+  // ACP agents can discover selectable models after the static catalog was
+  // built. Refine its conservative flag using only this runtime's live list.
+  const currentRuntimeId = state.activeSession.activeRuntimeId ?? state.catalogs.selectedAgentId;
+  const currentRuntime = state.catalogs.runtimes.find((r) => r.id === currentRuntimeId);
   const currentCaps = currentRuntime?.capabilities as
     | { modelSelection?: boolean; commands?: SlashCommand[] }
     | undefined;
@@ -215,7 +212,9 @@ export function Composer({
   // for its destination catalog (and uses the launch-specific model picker).
   const pendingLaunch = state.sessionIndex.sessions.find(session => session.sessionId === state.activeSession.activeSessionId)?.pendingLaunch;
   const destinationCatalogPending = Boolean(pendingLaunch);
-  const modelSelectable = !destinationCatalogPending && currentCaps?.modelSelection !== false;
+  const modelSelectable = !destinationCatalogPending && modelSelectionAvailable(
+    currentRuntimeId, currentCaps?.modelSelection, state.catalogs.modelsRuntimeId, state.catalogs.models,
+  );
   // The active agent's own slash commands (e.g. Claude Code's `/compact`). These
   // are advertised PER SESSION (session.created / session.capabilities → the
   // store's commandsBySession), so we read the *active session's* set — never a
