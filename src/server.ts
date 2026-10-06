@@ -7811,6 +7811,7 @@ function evaluateEphemeralTeardown(): void {
     }
     await performSelfTeardown({
       provider: ephemeralTeardownCfg.provider,
+      sleep: ephemeralTeardownCfg.sleep,
       signalSettled: signalSettledToControlPlane,
       shutdown: () => { try { spawnSync("shutdown", ["-h", "now"], { stdio: "ignore" }); } catch { /* TTL backstops */ } },
     });
@@ -7823,7 +7824,7 @@ if (ephemeralTeardownCfg.enabled) {
   const ephemeralEvalMs = Math.max(2_000, Math.min(ephemeralTeardownCfg.finishGraceMs, 15_000));
   const ephemeralTeardownTimer = setInterval(() => evaluateEphemeralTeardown(), ephemeralEvalMs);
   ephemeralTeardownTimer.unref?.();
-  console.log(`[ephemeral-teardown] armed: provider=${ephemeralTeardownCfg.provider} onFinish=${ephemeralTeardownCfg.onFinish} ttl=${ephemeralTeardownCfg.ttlMin}m`);
+  console.log(`[ephemeral-teardown] armed: provider=${ephemeralTeardownCfg.provider} onFinish=${ephemeralTeardownCfg.onFinish} sleep=${ephemeralTeardownCfg.sleep} ttl=${ephemeralTeardownCfg.ttlMin}m`);
 }
 setTimeout(() => void sweepDiskGuardrails(), 30_000).unref?.();
 // One sweep shortly after boot clears ghosts left by a previous run before any

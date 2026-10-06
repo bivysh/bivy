@@ -10,7 +10,7 @@ import {
   type EphemeralTeardownConfig,
 } from "../src/ephemeral-teardown.js";
 
-const base: EphemeralTeardownConfig = { enabled: true, provider: "fly", ttlMin: 60, onFinish: false, finishGraceMs: 10_000, idleGraceMs: 30 * 60_000 };
+const base: EphemeralTeardownConfig = { enabled: true, provider: "fly", ttlMin: 60, onFinish: false, finishGraceMs: 10_000, idleGraceMs: 30 * 60_000, sleep: false };
 const quiet = { everBusy: true, anyWorking: false, anyRemoteActive: false, inFlightWork: 0 };
 
 // Disabled (persistent node — env absent) → never self-teardown.
@@ -67,6 +67,24 @@ assert.equal(readEphemeralTeardownConfig({} as NodeJS.ProcessEnv).enabled, false
   await performSelfTeardown({ provider: "fly", exit: () => { calls++; }, log: () => {} });
   await performSelfTeardown({ provider: "fly", exit: () => { calls++; }, log: () => {} });
   assert.equal(calls, 1);
+}
+
+// A sleeping machine woken for nothing goes back to sleep after the idle
+// window; it does not wait for work like a fresh destroy-lane box.
+{
+  const sleeper = { ...base, sleep: true };
+  assert.equal(readEphemeralTeardownConfig({ BIVY_EPHEMERAL: "1", BIVY_EPHEMERAL_SLEEP: "1" } as NodeJS.ProcessEnv).sleep, true);
+  assert.equal(shouldSelfTeardown(sleeper, { ...quiet, everBusy: false, idleForMs: 29 * 60_000 }), false);
+  assert.equal(shouldSelfTeardown(sleeper, { ...quiet, everBusy: false, idleForMs: 31 * 60_000 }), true);
+}
+// Sleep exits WITHOUT signalling settled: the control plane must not reap it.
+{
+  __resetTeardownLatch();
+  let exited = -1, signalled = 0, shut = 0;
+  await performSelfTeardown({ provider: "fly", sleep: true, exit: (c) => { exited = c; }, shutdown: () => { shut++; }, signalSettled: async () => { signalled++; }, log: () => {} });
+  assert.equal(exited, 0);
+  assert.equal(signalled, 0);
+  assert.equal(shut, 0);
 }
 
 console.log("ephemeral-teardown: all tests passed");

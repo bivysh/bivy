@@ -38,6 +38,14 @@ describe("bootstrap ephemeral self-teardown env", () => {
     expect(buildBootstrapUserData({ ...base, provider: "fly" })).not.toContain("BIVY_RESTORE");
   });
 
+  it("puts a sleeping machine's data, workspace and HOME on its persistent disk", () => {
+    const ud = buildBootstrapUserData({ ...base, provider: "fly", sleepOnIdle: true });
+    expect(ud).toContain("export BIVY_EPHEMERAL_SLEEP=1");
+    expect(ud).toContain("export BIVY_DATA_DIR=/data/bivy");
+    expect(ud).toContain("export HOME=/data/home");
+    expect(buildBootstrapUserData({ ...base, provider: "fly" })).toContain("export BIVY_DATA_DIR=/etc/bivy");
+  });
+
   it("skips network installation when a runner image already has bivy", () => {
     const userData = buildBootstrapUserData({ ...base, provider: "hetzner" });
     expect(userData).toContain("command -v bivy >/dev/null 2>&1 || curl --connect-timeout 10 --max-time 120 -fsSL");

@@ -5,7 +5,7 @@ import { b64 } from "../base64.js";
 import { bivyBootstrapStatusCommand, bivyRelayJson, bivyStartScript } from "../ephemeral-provider-bootstrap.js";
 import { clampTtlMinutes } from "../ephemeral-lifecycle.js";
 import type { EphemeralMachine } from "../ephemeral-machine.js";
-import type { BootstrapOpts, ExecFn, ProviderAdapter } from "../ephemeral-provider-ports.js";
+import { PERSISTENT_ROOT, type BootstrapOpts, type ExecFn, type ProviderAdapter } from "../ephemeral-provider-ports.js";
 import { bearer, call, extractProviderMessage, nowIso, providerError, shq, utf8 } from "../ephemeral-provider-utils.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -15,8 +15,11 @@ import { bearer, call, extractProviderMessage, nowIso, providerError, shq, utf8 
 export const FLY_RUNNER_IMAGE = "ghcr.io/bivysh/bivy-ephemeral-runner@sha256:30705bdda88425646b0c5dc19fc0e95cc4a026ca9c09a4f904c15b3a21e246ac";
 
 function mapFlyStatus(s: string): string {
-  return s === "started" ? "running" : s === "destroyed" ? "gone" : s === "stopped" ? "stopped" : "starting";
+  return s === "started" ? "running" : s === "destroyed" ? "gone" : s === "stopped" || s === "suspended" ? "stopped" : "starting";
 }
+
+/** The one persistent volume a sleeping machine's app owns. */
+const FLY_VOLUME_NAME = "bivy_data";
 
 // Fly's Machines API scopes `/v1/apps` to an org: the endpoint is
 // `GET /v1/apps?org_slug=<org>`, and called bare (no org_slug) it 404s with a
@@ -97,6 +100,13 @@ function flyInit(opts: BootstrapOpts): {
     "chmod 600 /etc/bivy/relay.json /etc/bivy/start.sh",
     "export BIVY_DATA_DIR=/etc/bivy",
     "export BIVY_WORKSPACE=/workspace",
+    // A sleeping machine keeps its state on the volume. Seed relay.json once;
+    // after that the daemon's own copy (and pairing state) wins.
+    ...(opts.sleepOnIdle ? [
+      `mkdir -p ${PERSISTENT_ROOT}/bivy ${PERSISTENT_ROOT}/workspace ${PERSISTENT_ROOT}/home`,
+      `chmod 700 ${PERSISTENT_ROOT}/bivy`,
+      `[ -f ${PERSISTENT_ROOT}/bivy/relay.json ] || install -m 600 /etc/bivy/relay.json ${PERSISTENT_ROOT}/bivy/relay.json`,
+    ] : []),
     `trap ${shq(bivyBootstrapStatusCommand(opts, "failed"))} ERR`,
     bivyBootstrapStatusCommand(opts, "booting"),
     `if ! command -v bivy >/dev/null 2>&1; then\n${bivyBootstrapStatusCommand(opts, "installing")}\napt-get update -qq\napt-get install -y -qq curl ca-certificates\ncurl --connect-timeout 10 --max-time 120 -fsSL ${shq(installUrl)} | bash\nfi`,
@@ -124,8 +134,34 @@ async function deleteEmptyFlyApp(exec: ExecFn, token: string, app: string): Prom
   if (inventory.status >= 300) throw new Error(providerError(inventory, "check empty app"));
   if (!Array.isArray(inventory.body)) throw new Error("Fly returned an invalid app inventory; keeping the app for cleanup retry");
   if (inventory.body.length) return;
+  // A sleeping machine's volume outlives its machine record; delete it with
+  // the app so a destroyed cloud computer leaves nothing billing.
+  const volumes = await call(exec, { method: "GET", url: `${url}/volumes`, headers: bearer(token) });
+  for (const volume of Array.isArray(volumes.body) ? volumes.body : []) {
+    if (!volume?.id) continue;
+    const removed = await call(exec, { method: "DELETE", url: `${url}/volumes/${encodeURIComponent(volume.id)}`, headers: bearer(token) });
+    if (removed.status >= 300 && removed.status !== 404) throw new Error(providerError(removed, "delete volume"));
+  }
   const deleted = await call(exec, { method: "DELETE", url, headers: bearer(token) });
   if (deleted.status >= 300 && deleted.status !== 404) throw new Error(providerError(deleted, "delete empty app"));
+}
+
+/** Reuse the app's persistent volume, or create it. Name-scoped to the app,
+ * so a retried launch adopts the volume a previous attempt created. */
+async function ensureFlyVolume(exec: ExecFn, token: string, app: string, region: string, sizeGb = 20): Promise<string> {
+  const url = `https://api.machines.dev/v1/apps/${encodeURIComponent(app)}/volumes`;
+  const listed = await call(exec, { method: "GET", url, headers: bearer(token) });
+  if (listed.status >= 300) throw new Error(providerError(listed, "list volumes"));
+  const existing = (Array.isArray(listed.body) ? listed.body : []).find((v: any) => v?.name === FLY_VOLUME_NAME && v?.id && v?.state !== "destroyed");
+  if (existing) return String(existing.id);
+  const created = await call(exec, {
+    method: "POST",
+    url,
+    headers: { ...bearer(token), "content-type": "application/json" },
+    body: { name: FLY_VOLUME_NAME, region, size_gb: Math.max(1, Math.round(sizeGb)), encrypted: true },
+  });
+  if (created.status >= 300 || !created.body?.id) throw new Error(providerError(created, "create volume"));
+  return String(created.body.id);
 }
 
 export const flyProvider: ProviderAdapter = {
@@ -210,6 +246,8 @@ export const flyProvider: ProviderAdapter = {
     // device; the TTL `timeout` remains an independent hard backstop. Falls back
     // without ever relying on cloud-init user_data.
     const machineInit = flyInit(bootstrap);
+    const sleeps = Boolean(bootstrap.sleepOnIdle);
+    const volumeId = sleeps ? await ensureFlyVolume(exec, token, app, config.region || "iad", config.persistentDiskGb) : undefined;
     const machine = await call(exec, {
       method: "POST",
       url: `https://api.machines.dev/v1/apps/${encodeURIComponent(app)}/machines`,
@@ -220,8 +258,10 @@ export const flyProvider: ProviderAdapter = {
           image: config.image || FLY_RUNNER_IMAGE,
           // DEBUG: when keeping failed machines, don't auto-destroy — a boot
           // failure then stops the machine (logs retained) instead of vanishing.
-          auto_destroy: bootstrap?.debugKeepMachine ? false : true,
+          // A sleeping machine stops (keeping its volume) when the daemon exits.
+          auto_destroy: bootstrap?.debugKeepMachine || sleeps ? false : true,
           restart: { policy: "no" },
+          ...(volumeId ? { mounts: [{ volume: volumeId, path: PERSISTENT_ROOT }] } : {}),
           guest: { cpu_kind: guest.cpuKind, cpus: Number(config.cpus) || guest.cpus, memory_mb: Number(config.memoryMb) || guest.memoryMb },
           metadata: {
             bivy: "ephemeral",
@@ -272,6 +312,17 @@ export const flyProvider: ProviderAdapter = {
     });
     if (res.status >= 300 && res.status !== 404) throw new Error(providerError(res, "delete machine"));
     await deleteEmptyFlyApp(exec, token, machine.app || "");
+  },
+  async wake({ exec, token, machine }) {
+    const res = await call(exec, {
+      method: "POST",
+      url: `https://api.machines.dev/v1/apps/${encodeURIComponent(machine.app || "")}/machines/${encodeURIComponent(machine.id)}/start`,
+      headers: bearer(token),
+    });
+    if (res.status < 300) return;
+    // Starting an already-running machine fails at Fly; that is still awake.
+    if (await flyProvider.status({ exec, token, machine }) === "running") return;
+    throw new Error(providerError(res, "start machine"));
   },
   // Fly has no account-wide "list machines by tag" call — a Machine is scoped
   // to its app. Discovery instead lists every `bivy-`-prefixed app reachable

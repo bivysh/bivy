@@ -31,6 +31,9 @@ export interface EphemeralTeardownConfig {
   /** Idle window before an idle-teardown fires (a shared queue worker only exits
    *  once its queue AND sessions have been quiet this long). */
   idleGraceMs: number;
+  /** The machine sleeps rather than being destroyed: exiting stops it with its
+   *  persistent disk, and the control plane must not reap it as settled. */
+  sleep: boolean;
 }
 
 /** Parse the daemon's ephemeral-teardown config from the process env. */
@@ -42,6 +45,7 @@ export function readEphemeralTeardownConfig(env: NodeJS.ProcessEnv = process.env
     onFinish: env.BIVY_TEARDOWN_ON_FINISH === "1",
     finishGraceMs: Number(env.BIVY_TEARDOWN_FINISH_GRACE_MS) || 10_000,
     idleGraceMs: Number(env.BIVY_SESSION_IDLE_CLOSE_MS) || 30 * 60 * 1000,
+    sleep: env.BIVY_EPHEMERAL_SLEEP === "1",
   };
 }
 
@@ -67,7 +71,9 @@ export interface TeardownState {
  */
 export function shouldSelfTeardown(cfg: EphemeralTeardownConfig, state: TeardownState): boolean {
   if (!cfg.enabled) return false;
-  if (!state.everBusy) return false;
+  // A fresh box waits for its first work. A sleeping machine woken for
+  // nothing goes back to sleep after the idle window instead of running to TTL.
+  if (!state.everBusy) return cfg.sleep && state.idleForMs >= cfg.idleGraceMs;
   if (state.anyWorking || state.anyRemoteActive || state.inFlightWork > 0) return false;
   const grace = cfg.onFinish ? cfg.finishGraceMs : cfg.idleGraceMs;
   return state.idleForMs >= grace;
@@ -93,6 +99,8 @@ export interface TeardownActionDeps {
   signalSettled?: () => Promise<void>;
   /** Run `shutdown -h now` — EC2 self-terminates (InstanceInitiatedShutdownBehavior). */
   shutdown?: () => void;
+  /** Sleep instead of tearing down (see `EphemeralTeardownConfig.sleep`). */
+  sleep?: boolean;
   exit?: (code: number) => void;
   log?: (msg: string) => void;
 }
@@ -117,6 +125,13 @@ export async function performSelfTeardown(deps: TeardownActionDeps): Promise<voi
   torndown = true;
   const log = deps.log ?? ((m: string) => console.log(`[ephemeral-teardown] ${m}`));
   const exit = deps.exit ?? ((c: number) => process.exit(c));
+  if (deps.sleep) {
+    // Exit only: the provider keeps the stopped machine and its disk, and a
+    // wake starts it again. Signalling settled would get it reaped.
+    log(`machine idle — sleeping (provider=${deps.provider})`);
+    exit(0);
+    return;
+  }
   log(`machine idle — self-teardown (provider=${deps.provider})`);
   try {
     await deps.signalSettled?.();
