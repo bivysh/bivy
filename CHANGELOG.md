@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Pi sessions no longer stop updating partway through.** If two of Pi's tool calls printed the same output, such as `(no output)`, Bivy mistook the second result for one it already had and dropped it. Every later message was then recorded out of order, so the bottom of the chat stayed on an old message while the agent kept working. Bivy now matches Pi's tool results by their call id. An affected session puts itself back in order on its next turn.
+
 ## [0.20.8] - 2026-10-06
 
 ### Fixed
