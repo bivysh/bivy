@@ -485,6 +485,12 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 }
 .transcript-turn { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
 .transcript-standalone { display: flex; justify-content: center; min-width: 0; }
+/* A centered flex row lets a child grow past the column on one long unbroken
+   token (a path in an error); cap every standalone item to the column. */
+.transcript-standalone > * { min-width: 0; max-width: 100%; }
+/* Errors span the column so their edges line up with the turn content. */
+.transcript-error { flex: 1; display: flex; flex-direction: column; gap: var(--space-2); overflow-wrap: anywhere; }
+.transcript-error .settings-disclosure-body { margin: 0; padding: 0; white-space: pre-wrap; font-size: var(--text-xs); color: var(--muted); }
 .turn-response-body { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
 .jump-latest {
   position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
@@ -655,20 +661,6 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .entry-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); font-style: normal; }
 .msg.system .entry-actions { justify-content: center; }
 .msg.thinking { align-self: flex-start; color: var(--muted); font-size: 13px; border-left: 2px solid var(--line-strong); padding-left: 10px; }
-.msg.error {
-  align-self: stretch; display: flex; gap: 8px; align-items: flex-start;
-  background: var(--danger-soft); border: 1px solid color-mix(in srgb, var(--danger) 45%, transparent);
-  border-left: 3px solid var(--danger); border-radius: var(--radius-sm); padding: 10px 12px;
-}
-.msg-error-icon {
-  flex: none; width: 18px; height: 18px; margin-top: 1px; border-radius: var(--radius-full);
-  background: var(--danger); color: var(--danger-contrast); font-weight: 700; font-size: 12px;
-  display: grid; place-items: center;
-}
-.msg-error-text {
-  flex: 1; min-width: 0; font-size: 13px; line-height: 1.45; color: var(--ink);
-  white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word;
-}
 .msg.streaming { position: relative; }
 .msg.streaming::after { content: "▍"; color: var(--accent); animation: blink 1s steps(2) infinite; }
 @keyframes blink { 50% { opacity: 0; } }
@@ -2647,7 +2639,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .connect-option-link:hover { text-decoration: underline; }
 .connect-option-cta { align-self: flex-start; }
 /* A one-time "next step" card above the composer (automations, notifications). */
-.next-step { margin: 0 var(--space-4) var(--space-3); display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+.next-step { box-sizing: border-box; width: min(100% - 2 * var(--space-3), 800px - 2 * var(--space-3)); margin: 0 auto var(--space-3); display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 .next-step p { margin: var(--space-1) 0 0; color: var(--muted); font-size: var(--text-sm); }
 .next-step .banner { margin-top: var(--space-2); }
 .next-step .next-step-ok { margin: 0; color: var(--ok); font-weight: var(--weight-medium); }

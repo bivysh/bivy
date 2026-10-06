@@ -461,7 +461,7 @@ const EntryView = memo(function EntryView({
     // retry often recovers without signing in again.
     const actions = entry.actions?.length ? entry.actions : (authAction && looksLikeAuthFailure(entry.text) ? [authAction, "retry-auth"] : undefined);
     return (
-      <div className="card" data-tone="danger" role="alert">
+      <div className="card transcript-error" data-tone="danger" role="alert">
         <strong>{summary}</strong>
         <EntryActions actions={actions} onAction={onAction} />
         {details && (
