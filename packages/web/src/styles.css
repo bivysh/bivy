@@ -1469,10 +1469,8 @@ button.sheet-action:last-child { border-bottom: 0; }
 }
 /* Password-manager-style provider credential vault. Saved items are the primary
    list; the provider catalog appears only inside Add. */
-/* Wide settings panels that read as a shallow "vault": the credential vault and
-   the isolated-machine-profiles panel share this container + header layout. */
-.credential-vault, .machine-profiles { gap: 14px; max-width: 680px; width: 100%; }
-.credential-vault { overflow-wrap: anywhere; }
+/* The credential vault: a wide settings panel that reads as a shallow "vault". */
+.credential-vault { gap: 14px; max-width: 680px; width: 100%; overflow-wrap: anywhere; }
 .vault-title-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .vault-title-row > div { min-width: 0; }
 /* The header action (e.g. "+ Add profile") never shrinks or wraps — the title
@@ -2609,15 +2607,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .connect-option:hover { border-color: var(--line-strong); box-shadow: var(--shadow-md); }
-.connect-option-head { display: flex; align-items: flex-start; gap: 12px; }
-.connect-option-badge {
-  flex: none; width: 36px; height: 36px; display: grid; place-items: center;
-  border-radius: var(--radius-md); color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 12%, transparent);
-}
-.connect-option-copy { min-width: 0; }
-.connect-option-copy h3 { margin: 1px 0 3px; font-size: 15px; }
-.connect-option-copy p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.45; }
 
 .connect-command {
   display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px;
@@ -2637,7 +2626,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .connect-option-links { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
 .connect-option-link { align-self: flex-start; color: var(--accent); font-size: 12.5px; font-weight: 600; text-decoration: none; }
 .connect-option-link:hover { text-decoration: underline; }
-.connect-option-cta { align-self: flex-start; }
 /* A one-time "next step" card above the composer (automations, notifications). */
 .next-step { box-sizing: border-box; width: min(100% - 2 * var(--space-3), 800px - 2 * var(--space-3)); margin: 0 auto var(--space-3); display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
 .next-step p { margin: var(--space-1) 0 0; color: var(--muted); font-size: var(--text-sm); }

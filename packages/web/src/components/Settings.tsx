@@ -3,8 +3,8 @@
 import { lazy, Suspense, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { SANDBOX_TIERS } from "./sandboxTiers.js";
-import type { AccountMe, AppState, EphemeralNodeConfig, LocalModelEndpointResult, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences, EphemeralMachine, ProviderKeyInfo, ProviderSize, HostedAuditEvent, HostedMachineSummary, HostedProvisioningStatus } from "@bivy/core";
-import { NOTIFICATION_KIND_META, EPHEMERAL_PROVIDERS, ephemeralAdapter, ephemeralCatalogEntry, ephemeralComputeIntentLabel, ephemeralCostHint, ephemeralCostEstimate, ephemeralLifecyclePhase, formatEphemeralPrice } from "@bivy/core";
+import type { AccountMe, AppState, LocalModelEndpointResult, LocalModelPreset, LocalModelProvider, PairedDevice, NodeSettings, NotificationPreferences } from "@bivy/core";
+import { NOTIFICATION_KIND_META } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -16,9 +16,6 @@ import { AccessCard, AccessNudge } from "./AccessCard.js";
 import { currentThemeSetting, machineTheme, onMachineThemeChange, setTheme, type ThemeSetting } from "../theme.js";
 import { useModalBack, useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
-import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
-import { setCloudMachinesEnabled, useCloudMachinesEnabled } from "../cloudMachines.js";
-import { requestSignIn } from "../signInRequest.js";
 import { clientConfiguration } from "../client-config.js";
 import { accountHeader, accountOffer, planFacts, type AccountHeader as AccountHeaderView, type MeterState } from "../accountHeader.js";
 import { accountExtensionFacts, accountOrigin, hasNativeSubscriptions, isPackagedClient, openAccountAction, openNativeSubscriptions, showAccountExtension } from "../packaged-client.js";
@@ -78,9 +75,6 @@ const IconMonitor = () => (
 );
 const IconServer = () => (
   <Glyph><rect x="3" y="4" width="18" height="7" rx="2" /><rect x="3" y="13" width="18" height="7" rx="2" /><path d="M7 7.5h.01M7 16.5h.01" /></Glyph>
-);
-const IconBolt = () => (
-  <Glyph><path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" /></Glyph>
 );
 const IconSun = () => (
   <Glyph><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></Glyph>
@@ -191,7 +185,6 @@ const TITLES: Record<View, string> = {
   webhooks: "Webhooks",
   rulesets: "Rulesets",
   nodes: "Machines",
-  ephemeral: "Cloud machine profiles",
   account: "Account",
   link: "Link a device",
 };
@@ -213,8 +206,7 @@ const SEARCH_TERMS: Record<View, string> = {
   queue: "work queue issue run evidence outcome retry lease checks",
   webhooks: "webhook trigger secret event",
   rulesets: "rules policy routing agent runtime model sandbox",
-  nodes: "node daemon online offline diagnostics version update storage disk cloud machines experimental unstable",
-  ephemeral: "cloud machine profiles automation offline teardown retention",
+  nodes: "node daemon online offline diagnostics version update storage disk",
   account: "account email devices machines usage",
   link: "device qr code phone mobile pair",
 };
@@ -284,9 +276,6 @@ export function Settings({
     return () => { opener?.focus?.(); };
   }, []);
 
-  const cloudMachinesOptIn = useCloudMachinesEnabled();
-  const cloudMachinesEnabled = EPHEMERAL_MACHINES_ENABLED && cloudMachinesOptIn;
-
   const groups: NavGroup[] = [
     {
       label: "Models & keys",
@@ -304,9 +293,6 @@ export function Settings({
       label: "Machines",
       items: [
         { id: "nodes", label: "Machines", icon: <IconServer /> },
-        ...(cloudMachinesEnabled
-          ? [{ id: "ephemeral" as View, label: "Cloud machine profiles", icon: <IconBolt /> }]
-          : []),
         // Pasting a link code is a fallback for adding a machine — signing in is
         // the main flow — so it sits here rather than beside the account.
         ...(hosted ? [{ id: "link" as View, label: "Link a device", icon: <IconLink /> }] : []),
@@ -465,8 +451,7 @@ export function Settings({
             {/* github / linear / slack / queue / webhooks / rulesets moved to the
                 Automations hub — a deep link to any of them redirects there (see
                 the redirect effect above), so they render nothing here. */}
-            {activeView === "nodes" && <NodesPanel state={state} cloudMachinesEnabled={cloudMachinesEnabled} />}
-            {activeView === "ephemeral" && EPHEMERAL_MACHINES_ENABLED && (cloudMachinesEnabled ? <EphemeralPanel /> : <CloudMachinesDisabledPanel />)}
+            {activeView === "nodes" && <NodesPanel state={state} />}
             {activeView === "account" && <AccountPanel />}
             {activeView === "link" && <LinkPanel onDone={onClose} />}
           </div>
@@ -559,36 +544,6 @@ function SharePanel() {
           </button>
         </div>
         <p className="muted small">Sharing opens Bivy in Safari with the shared text in the composer — sign in there once if Safari and the installed app don't share a session.</p>
-      </section>
-    </div>
-  );
-}
-
-function CloudMachinesToggleRow({ enabled }: { enabled: boolean }) {
-  return (
-    <div className="settings-toggle-row">
-      <div className="settings-toggle-text">
-        <span className="settings-toggle-title">Cloud machines <Badge tone="warn">Experimental</Badge></span>
-        <span className="muted small">
-          Show cloud machine profiles and automation routing. This feature is experimental and unstable;
-          machines may fail to boot or require manual cleanup in your cloud provider account.
-        </span>
-      </div>
-      <Toggle
-        checked={enabled}
-        onChange={setCloudMachinesEnabled}
-        label="Enable experimental cloud machines"
-      />
-    </div>
-  );
-}
-
-function CloudMachinesDisabledPanel() {
-  const enabled = useCloudMachinesEnabled();
-  return (
-    <div className="settings-form">
-      <section className="settings-section">
-        <CloudMachinesToggleRow enabled={enabled} />
       </section>
     </div>
   );
@@ -1097,7 +1052,7 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
 }
 
 // ---- Nodes (per-node defaults) ----
-function NodesPanel({ state, cloudMachinesEnabled }: { state: AppState; cloudMachinesEnabled: boolean }) {
+function NodesPanel({ state }: { state: AppState }) {
   const hosted = !controller.direct;
   const [nodes, setNodes] = useState<Awaited<ReturnType<typeof controller.listNodes>>>([]);
   const [form, setForm] = useState<NodeSettings | null>(null);
@@ -1317,12 +1272,6 @@ function NodesPanel({ state, cloudMachinesEnabled }: { state: AppState; cloudMac
           </select>
           {selectedNode && <p className={`muted small${selectedNode.online ? "" : " warn-text"}`}>{selectedHealth}</p>}
           <p className="muted small">Run <code>bivy update</code> on the machine to update or repair its service, then refresh this list.</p>
-        </section>
-      )}
-
-      {EPHEMERAL_MACHINES_ENABLED && (
-        <section className="settings-section">
-          <CloudMachinesToggleRow enabled={cloudMachinesEnabled} />
         </section>
       )}
 
@@ -1579,680 +1528,6 @@ function NodesPanel({ state, cloudMachinesEnabled }: { state: AppState; cloudMac
           </div>
         </>
       )}
-    </div>
-  );
-}
-
-// ---- Ephemeral machines (per-provider setup + launch preferences) ----
-// The new-session flow (the header "Ephemeral machine…" sheet) still owns
-// launching; this panel is the persistent home for *configuring* each cloud
-// provider — saving its token and the default region/size/TTL/repo the launch
-// flow pre-fills from. Additive: it reuses the same device-local stores and
-// leaves the launch sheet untouched.
-const EPHEMERAL_TTL_OPTIONS = [
-  { v: 30, label: "30 min" },
-  { v: 60, label: "1 hour" },
-  { v: 180, label: "3 hours" },
-  { v: 480, label: "8 hours" },
-];
-
-// One-line, humanized lifecycle for a saved profile — used in list subtitles and
-// the editor's summary card so the same wording appears everywhere.
-function ephemeralLifecycleLabel(setup: EphemeralNodeConfig): string {
-  if (setup.teardownOnAgentFinish) return "runs until the agent finishes";
-  if (setup.ttlMinutes) return `destroys ${setup.ttlMinutes} min after launch`;
-  return "provider-default lifetime";
-}
-// The scannable subtitle for a profile row: provider · region · size · lifecycle.
-function ephemeralProfileMeta(setup: EphemeralNodeConfig): string {
-  const provider = EPHEMERAL_PROVIDERS.find((x) => x.id === setup.provider);
-  return [provider?.name, setup.region, setup.size, ephemeralLifecycleLabel(setup)].filter(Boolean).join(" · ");
-}
-
-// The panel is a shallow view machine (like the credential vault): profiles are
-// the whole list, while adding and editing use focused screens.
-type EphemeralView =
-  | { k: "list" }
-  | { k: "add" }
-  | { k: "editor"; provider: string; setupId: string | null };
-
-function EphemeralPanel() {
-  const [keys, setKeys] = useState<ProviderKeyInfo[]>([]);
-  const [setups, setSetups] = useState<EphemeralNodeConfig[]>([]);
-  const [view, setView] = useState<EphemeralView>({ k: "list" });
-  const refreshKeys = () => controller.listEphemeralKeys().then(setKeys).catch(() => {});
-  // Account-level ephemeral configs — the same records the new-session node
-  // picker lists, so profiles and their E2E-vaulted provider token are available
-  // across the account's signed-in devices.
-  const refreshSetups = () => controller.listEphemeralConfigs().then(setSetups).catch(() => {});
-  // One-time migration: earlier builds saved machines as device-local "setups"
-  // (invisible to the node picker, which reads account-level configs). Copy any
-  // legacy setup that doesn't already have a matching config to the account,
-  // then drop the device-local copy so it can't resurrect. Idempotent and
-  // best-effort — the panel works regardless of whether this runs.
-  const migrateLegacySetups = async () => {
-    try {
-      const [legacy, configs] = await Promise.all([
-        controller.listEphemeralSetups(),
-        controller.listEphemeralConfigs(),
-      ]);
-      if (!legacy.length) return;
-      const have = new Set(configs.map((c) => `${c.provider} ${c.name}`));
-      for (const s of legacy) {
-        if (!have.has(`${s.provider} ${s.name}`)) {
-          await controller.createEphemeralConfig({
-            provider: s.provider, name: s.name,
-            region: s.region ?? null, size: s.size ?? null,
-            ttlMinutes: s.ttlMinutes ?? null,
-            teardownOnAgentFinish: s.teardownOnAgentFinish === true,
-          });
-        }
-        await controller.removeEphemeralSetup(s.id).catch(() => {});
-      }
-      refreshSetups();
-    } catch { /* best effort */ }
-  };
-  useEffect(() => {
-    if (!controller.signedIn) return; // accountless: the signpost below renders instead
-    refreshKeys();
-    refreshSetups();
-    void migrateLegacySetups();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const backToList = () => { setView({ k: "list" }); refreshSetups(); refreshKeys(); };
-
-  // No account session (solo QR pairing or loopback/direct): profiles live on
-  // the account — that's what lets any signed-in device or an automation launch
-  // a machine — so there's nothing to list or create here yet. Say so instead
-  // of silently swallowing the 401s the fetches above would hit.
-  if (!controller.signedIn) {
-    return (
-      <div className="settings-form machine-profiles">
-        <div className="vault-title-row">
-          <div><h3>Cloud machine profiles</h3></div>
-        </div>
-        <div className="banner inline" data-tone="warn">Experimental and unstable — cloud machines may fail to boot or require manual cleanup.</div>
-        <div className="vault-empty">
-          <h4>Cloud machines need an account</h4>
-          <p className="muted">
-            A profile and its provider credential are stored on your account, so any signed-in
-            device — or an automation — can launch a temporary machine. This device is paired to
-            your machine directly, without an account.
-          </p>
-          <p className="muted">
-            {controller.solo
-              ? "Sign in here to add this machine to an account — on Bivy Cloud or on a control plane you host yourself."
-              : "Open the Bivy app from a control plane — Bivy Cloud or one you host yourself — and sign in there."}
-          </p>
-          {controller.solo && (
-            <button type="button" className="btn primary" onClick={requestSignIn}>
-              Sign in or create an account
-            </button>
-          )}
-          <a className="btn" href="https://github.com/bivysh/bivy/blob/main/docs/self-host.md" target="_blank" rel="noopener">
-            Self-hosting guide
-          </a>
-        </div>
-      </div>
-    );
-  }
-
-  if (view.k === "add") {
-    return (
-      <EphemeralProviderChooser
-        keys={keys}
-        onBack={() => setView({ k: "list" })}
-        onPick={(provider) => setView({ k: "editor", provider, setupId: null })}
-      />
-    );
-  }
-
-  if (view.k === "editor") {
-    const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === view.provider);
-    if (catalog) {
-      return (
-        <div className="settings-form machine-profiles">
-          <button className="btn link" onClick={backToList}>‹ Cloud machine profiles</button>
-          <EphemeralProviderConfig
-            providerId={catalog.id}
-            initialSetupId={view.setupId}
-            onKeysChanged={refreshKeys}
-            onSetupsChanged={refreshSetups}
-            onBack={backToList}
-          />
-        </div>
-      );
-    }
-    return (
-      <div className="settings-form machine-profiles">
-        <button className="btn link" onClick={backToList}>‹ Cloud machine profiles</button>
-        <Badge tone="warn">Unsupported provider</Badge>
-        <p className="muted">This profile uses {view.provider}, which Bivy no longer supports. It cannot launch a new machine.</p>
-        {view.setupId && <button className="btn danger-ghost" onClick={() => {
-          void controller.removeEphemeralConfig(view.setupId!).then(backToList);
-        }}>Remove profile</button>}
-      </div>
-    );
-  }
-
-  // List view — profiles first, with offline automation as one inline option.
-  return (
-    <div className="settings-form machine-profiles">
-      <div className="vault-title-row">
-        <div><h3>Cloud machine profiles</h3></div>
-        <button className="btn primary" onClick={() => setView({ k: "add" })}>Add profile</button>
-      </div>
-      <div className="banner inline" data-tone="warn">Experimental and unstable — cloud machines may fail to boot or require manual cleanup.</div>
-      <p className="muted">
-        A profile tells Bivy where to create a temporary machine. Pick one for a chat, or let an
-        automation use it while you're offline. Your cloud provider bills the compute directly.
-      </p>
-
-      {setups.length === 0 ? (
-        <div className="vault-empty">
-          <h4>No cloud profiles yet</h4>
-          <p className="muted">Add a provider and choose the region, server size, and when the machine should be destroyed.</p>
-          <button className="btn primary" onClick={() => setView({ k: "add" })}>Add your first profile</button>
-        </div>
-      ) : (
-        <div className="picker-list vault-items">
-          {setups.map((setup) => (
-            <PickerItem
-              key={setup.id}
-              title={setup.name}
-              meta={ephemeralProfileMeta(setup)}
-              right={ephemeralCatalogEntry(setup.provider)
-                ? <span className="picker-meta" aria-hidden>›</span>
-                : <Badge tone="warn">Unsupported</Badge>}
-              onClick={() => setView({ k: "editor", provider: setup.provider, setupId: setup.id })}
-            />
-          ))}
-        </div>
-      )}
-
-      {!controller.direct && setups.length > 0 && <HostedRunnerActivity />}
-    </div>
-  );
-}
-
-// Add flow: pick where to run. The recommended provider is a highlighted card;
-// the rest are a plain list, each showing whether its token is already saved.
-function EphemeralProviderChooser({ keys, onBack, onPick }: { keys: ProviderKeyInfo[]; onBack: () => void; onPick: (provider: string) => void }) {
-  const recommended = EPHEMERAL_PROVIDERS.find((p) => p.id === "fly") ?? EPHEMERAL_PROVIDERS[0];
-  const others = EPHEMERAL_PROVIDERS.filter((p) => p.id !== recommended?.id);
-  const statusChip = (id: string, hostedOnly?: boolean) => {
-    if (hostedOnly) return <Badge tone="accent">Server-managed</Badge>;
-    if (keys.find((x) => x.id === id)?.configured) return <Badge tone="ok">Token saved</Badge>;
-    return <Badge>Not set up</Badge>;
-  };
-  return (
-    <div className="settings-form machine-profiles">
-      <button className="btn link" onClick={onBack}>‹ Cloud machine profiles</button>
-      <h3>Add a cloud profile</h3>
-      <p className="muted">Choose a cloud provider. Bivy will create a temporary machine there when work starts and destroy it automatically.</p>
-      {recommended && (
-        <button type="button" className="custom-provider-card" onClick={() => onPick(recommended.id)}>
-          <span className="custom-provider-card-icon" aria-hidden>✦</span>
-          <span><strong>{recommended.name} · Recommended</strong><small>{recommended.blurb}</small></span>
-          {keys.find((x) => x.id === recommended.id)?.configured
-            ? <Badge tone="ok">Token saved</Badge>
-            : <span className="picker-meta" aria-hidden>›</span>}
-        </button>
-      )}
-      <p className="vault-picker-label">Other providers</p>
-      <div className="picker-list">
-        {others.map((p) => (
-          <PickerItem
-            key={p.id}
-            title={p.name}
-            meta={p.blurb}
-            right={statusChip(p.id, p.hostedOnly)}
-            onClick={() => onPick(p.id)}
-          />
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// Account-wide view of what offline automations have done: the machines they
-// started and the audit trail. Opting a profile in — and the credential it uses —
-// lives in that profile's editor (EphemeralProviderConfig), not here.
-function HostedRunnerActivity() {
-  const [machines, setMachines] = useState<HostedMachineSummary[]>([]);
-  const [audit, setAudit] = useState<HostedAuditEvent[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [confirmDestroy, setConfirmDestroy] = useState<HostedMachineSummary | null>(null);
-  const [, setClock] = useState(0);
-
-  const refresh = async () => {
-    const [nextMachines, nextAudit] = await Promise.all([
-      controller.listHostedMachines(),
-      controller.listHostedAudit(),
-    ]);
-    setMachines(nextMachines);
-    setAudit(nextAudit);
-  };
-  useEffect(() => { void refresh().catch((e) => setErr(String((e as Error)?.message || e))); }, []);
-  useEffect(() => {
-    const timer = setInterval(() => setClock((n) => n + 1), 15_000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const act = async (fn: () => Promise<unknown>, success: string) => {
-    if (busy) return;
-    setBusy(true); setErr(null); setMsg(null);
-    try { await fn(); await refresh(); setMsg(success); }
-    catch (e) { setErr(String((e as Error)?.message || e)); }
-    finally { setBusy(false); }
-  };
-
-  return (
-    <div className="settings-form">
-      {confirmDestroy && <ConfirmDialog
-        title="Destroy hosted machine?"
-        message={`Destroy ${confirmDestroy.name || confirmDestroy.nodeId || confirmDestroy.id} at ${confirmDestroy.provider} now? Active work on it will stop.`}
-        confirmLabel="Destroy now"
-        danger
-        onCancel={() => setConfirmDestroy(null)}
-        onConfirm={() => {
-          const nodeId = confirmDestroy.nodeId;
-          setConfirmDestroy(null);
-          if (nodeId) void act(() => controller.destroyHostedMachine(nodeId), "Machine destroyed and removed from inventory.");
-        }}
-      />}
-      <details className="vault-advanced">
-        <summary>Active cloud machines ({machines.length})</summary>
-        {machines.length === 0 ? <p className="muted small">No automation machines are running.</p> : <div className="picker-list">
-          {machines.map((m) => {
-            const providerAdapter = ephemeralAdapter(m.provider);
-            const providerSize = providerAdapter?.sizes.find((size) => size.id === m.size);
-            const estimate = ephemeralCostEstimate(providerSize, m.createdAt, m.ttlMinutes);
-            const failure = audit.find((event) => event.nodeId === m.nodeId && (event.action === "reconcile_failed" || (event.action === "provision_failed" && /destroy|reap|teardown|settled/i.test(event.detail || ""))));
-            const phase = ephemeralLifecyclePhase(m, Boolean(failure));
-            const cost = estimate && providerAdapter
-              ? `${formatEphemeralPrice(estimate.accrued, providerAdapter.currency)} accrued`
-              : "cost via provider bill";
-            return <PickerItem
-              key={`${m.provider}:${m.id}`}
-              title={<>{m.name || m.nodeId || m.id} <Badge tone={failure ? "danger" : phase === "ready" ? "ok" : undefined}>{phase.replaceAll("-", " ")}</Badge></>}
-              meta={[m.provider, m.region, m.size, cost, m.ttlMinutes ? `TTL ${m.ttlMinutes}m` : null].filter(Boolean).join(" · ")}
-              right={<button type="button" className="btn sm danger-ghost" disabled={!m.nodeId || busy} onClick={(e) => { e.stopPropagation(); setConfirmDestroy(m); }}>Destroy</button>}
-            />;
-          })}
-        </div>}
-      </details>
-
-      <details className="vault-advanced">
-        <summary>Offline automation activity</summary>
-        {audit.some((event) => event.action === "reconcile_failed") && <div className="banner inline" data-tone="danger" role="alert">A machine couldn't be reconciled or deleted. It stays tracked for retry — check the events below and your provider console.</div>}
-        {audit.length === 0 ? <p className="muted small">No offline automation activity yet.</p> : <div className="picker-list">
-          {audit.slice(0, 10).map((e, i) => <PickerItem
-            key={`${e.at}:${e.action}:${i}`}
-            title={e.action.replaceAll("_", " ")}
-            meta={[e.provider, e.nodeId, e.detail, e.at ? new Date(e.at).toLocaleString() : null].filter(Boolean).join(" · ")}
-          />)}
-        </div>}
-      </details>
-
-      {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}
-      {msg && <div className="banner inline">{msg}</div>}
-    </div>
-  );
-}
-
-function EphemeralProviderConfig({ providerId, initialSetupId, onKeysChanged, onSetupsChanged, onBack }: { providerId: string; initialSetupId: string | null; onKeysChanged: () => void; onSetupsChanged: () => void; onBack: () => void }) {
-  const catalog = EPHEMERAL_PROVIDERS.find((p) => p.id === providerId)!;
-  const adapter = ephemeralAdapter(providerId)!;
-  const [confirm, setConfirm] = useState<null | { title: string; message: string; label?: string; action: () => void }>(null);
-  const [token, setToken] = useState("");
-  const [hasToken, setHasToken] = useState(false);
-  // Server-side (offline automation) credential status. Fetched for every
-  // provider on a hosted account; a hosted-only provider needs it even in
-  // direct mode because its credential only ever lives on the server.
-  const [hosted, setHosted] = useState<HostedProvisioningStatus | null>(null);
-  const hasHostedToken = Boolean(hosted?.providers.includes(providerId));
-  const [region, setRegion] = useState(adapter.defaultRegion);
-  const [sizes, setSizes] = useState<ProviderSize[]>(adapter.sizes);
-  const [size, setSize] = useState(adapter.defaultSize);
-  const [ttl, setTtl] = useState(60);
-  const [teardownOnAgentFinish, setTeardownOnAgentFinish] = useState(false);
-  const [setupId, setSetupId] = useState<string | null>(null);
-  const [setupName, setSetupName] = useState("");
-  const [machines, setMachines] = useState<EphemeralMachine[]>([]);
-  const [savedMsg, setSavedMsg] = useState<string | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  const refreshMachines = () =>
-    controller.listEphemeralMachines().then((all) => setMachines(all.filter((m) => m.provider === providerId))).catch(() => {});
-  const editSetup = (setup: EphemeralNodeConfig | null) => {
-    setSetupId(setup?.id ?? null);
-    setSetupName(setup?.name ?? "");
-    setRegion(setup?.region || adapter.defaultRegion);
-    setSize(setup?.size || adapter.defaultSize);
-    setTtl(setup?.ttlMinutes ?? 60);
-    setTeardownOnAgentFinish(setup?.teardownOnAgentFinish === true);
-  };
-
-  // Seed the form from the saved token + the machine we drilled in to edit (or a
-  // blank form when adding).
-  useEffect(() => {
-    controller.getEphemeralToken(providerId).then((t) => setHasToken(Boolean(t))).catch(() => {});
-    if (catalog.hostedOnly || !controller.direct) {
-      controller.getHostedProvisioning().then(setHosted).catch(() => {});
-    }
-    controller.listEphemeralConfigs().then((rows) => {
-      editSetup(initialSetupId ? rows.find((s) => s.id === initialSetupId) ?? null : null);
-    }).catch(() => {});
-    refreshMachines();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [providerId, initialSetupId]);
-
-  // Once a token is saved, swap the static catalog for the provider's live,
-  // non-deprecated sizes for the chosen region (mirrors the launch sheet).
-  useEffect(() => {
-    if (!(catalog.hostedOnly ? hasHostedToken : hasToken)) return;
-    let active = true;
-    controller.listEphemeralSizes(providerId, region).then((list) => {
-      if (!active || !list.length) return;
-      setSizes(list);
-      setSize((cur) => (list.some((s) => s.id === cur) ? cur : list.some((s) => s.id === adapter.defaultSize) ? adapter.defaultSize : (list[0]?.id ?? adapter.defaultSize)));
-    }).catch(() => {});
-    return () => { active = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hasHostedToken, hasToken, providerId, region]);
-
-  const saveToken = async () => {
-    if (busy) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      const value = token.trim();
-      if (catalog.hostedOnly) {
-        await controller.validateHostedProviderCredential(providerId, value, region);
-        setHosted(await controller.setHostedProvisioning({ providerTokens: { [providerId]: value } }));
-        setMsg("Credential checked and stored securely.");
-      } else {
-        await controller.setEphemeralToken(providerId, value);
-        setHasToken(true);
-        onKeysChanged();
-        setMsg("Token saved on this device.");
-      }
-      setToken("");
-    } catch (e) {
-      setErr(String((e as Error).message || e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const savePrefs = async () => {
-    if (busy) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      // Repo isn't a machine setting — it comes from the new-session composer at
-      // launch time — so it's never part of a saved config.
-      const values = { name: setupName.trim(), region, size, ttlMinutes: ttl, teardownOnAgentFinish };
-      if (setupId) await controller.updateEphemeralConfig(setupId, values);
-      else {
-        const created = await controller.createEphemeralConfig({ provider: providerId, ...values });
-        setSetupId(created.id);
-      }
-      onSetupsChanged();
-      setSavedMsg("Saved");
-      setTimeout(() => setSavedMsg(null), 1500);
-    } catch (e) {
-      setErr(String((e as Error).message || e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  // Offline automations are opted into per profile, using the credential this
-  // profile already has — never a second paste. On the server that means the
-  // account switch plus an encrypted copy of this provider's credential, so the
-  // switch reads as "on" for every profile of the same provider.
-  const offlineOn = Boolean(hosted?.enabled && hosted.validatedProviders.includes(providerId));
-  const otherOfflineProviders = (hosted?.validatedProviders ?? []).filter((p) => p !== providerId);
-  const setOffline = async (on: boolean) => {
-    if (busy || !hosted) return;
-    setBusy(true);
-    setErr(null);
-    setMsg(null);
-    try {
-      if (on) {
-        if (catalog.hostedOnly) {
-          const next = await controller.setHostedProvisioning({ enabled: true });
-          setHosted(next);
-          if (!next.validatedProviders.includes(providerId)) throw new Error(`The ${catalog.name} credential hasn't been checked yet — reconnect ${catalog.name} to validate it.`);
-        } else {
-          const value = (await controller.getEphemeralToken(providerId)).trim();
-          if (!value) throw new Error(`No ${catalog.name} token is saved on this device — connect ${catalog.name} first.`);
-          await controller.validateHostedProviderCredential(providerId, value, region);
-          setHosted(await controller.setHostedProvisioning({ enabled: true, providerTokens: { [providerId]: value } }));
-        }
-        setMsg(`Automations can start ${catalog.name} profiles while you're offline.`);
-      } else if (catalog.hostedOnly) {
-        // The server must keep a hosted-only credential (it alone can delete
-        // those machines), so the only thing to turn off is the account switch.
-        setHosted(await controller.setHostedProvisioning({ enabled: false }));
-        setMsg("Offline automations turned off.");
-      } else {
-        // Withdraw the server's copy of this provider's credential; drop the
-        // account switch too once no provider is left for it to use.
-        setHosted(await controller.setHostedProvisioning({ providerTokens: { [providerId]: "" }, ...(otherOfflineProviders.length ? {} : { enabled: false }) }));
-        setMsg(`Bivy's server no longer holds your ${catalog.name} credential.`);
-      }
-    } catch (e) {
-      setErr(String((e as Error).message || e));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const selectedSize = sizes.find((s) => s.id === size);
-  const costHint = ephemeralCostHint(selectedSize, ttl, adapter.currency);
-  const lifecycleSummary = teardownOnAgentFinish
-    ? `Destroyed when the agent finishes (TTL ${ttl} min backstop)`
-    : `Destroyed ${ttl} min after launch`;
-
-  const confirmDialog = confirm && (
-    <ConfirmDialog
-      title={confirm.title}
-      message={confirm.message}
-      confirmLabel={confirm.label || "Remove"}
-      danger
-      onCancel={() => setConfirm(null)}
-      onConfirm={() => { confirm.action(); setConfirm(null); }}
-    />
-  );
-
-  const credentialReady = catalog.hostedOnly ? hasHostedToken : hasToken;
-
-  // Connect the provider (no token yet): show the catalog steps + doc links,
-  // then take the token. Saving flips this view into the profile form.
-  if (!credentialReady) {
-    return (
-      <div className="settings-form">
-        {confirmDialog}
-        <h3>Connect {catalog.name}</h3>
-        <p className="muted">{catalog.blurb}</p>
-        <ol className="eph-steps">
-          {catalog.steps.map((s, i) => <li key={i}>{s}</li>)}
-        </ol>
-        <div className="row-actions">
-          {catalog.links.map((l) => (
-            <a key={l.url} className="btn ghost" href={l.url} target="_blank" rel="noopener">{l.label}</a>
-          ))}
-        </div>
-        <label className="field-label">{catalog.tokenLabel}</label>
-        <input className="picker-search" type="password" value={token} onChange={(e) => setToken(e.target.value)} placeholder="Paste token" />
-        <div className="row-actions">
-          <button className="btn primary" disabled={!token.trim() || busy} onClick={saveToken}>{busy ? "Saving…" : "Save token"}</button>
-        </div>
-        <p className="muted small">{catalog.hostedOnly
-          ? `Bivy's server stores this credential securely so it can always delete the ${catalog.name} machine and stop billing.`
-          : `End-to-end encrypted in your key vault, synced to your signed-in devices, and sent only to ${catalog.name}.`}</p>
-        {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}
-        {msg && <div className="banner inline">{msg}</div>}
-      </div>
-    );
-  }
-
-  // Token saved: read a summary, then the form, with running machines and the
-  // destructive actions tucked behind disclosures.
-  return (
-    <div className="settings-form">
-      {confirmDialog}
-      <div className="vault-title-row">
-        <div>
-          <h3>{setupId ? (setupName || `${catalog.name} profile`) : `New ${catalog.name} profile`}</h3>
-          <p className="muted small">{catalog.name} · {catalog.hostedOnly ? "server-managed credential saved" : "token saved on this device"}</p>
-        </div>
-        <Badge tone="ok">{catalog.name} connected</Badge>
-      </div>
-
-      <div className="vault-detail-grid">
-        <span className="muted">Provider</span><strong>{catalog.name}</strong>
-        <span className="muted">Lifecycle</span><strong>{lifecycleSummary}</strong>
-        <span className="muted">Compute class</span><strong>{selectedSize ? ephemeralComputeIntentLabel(selectedSize) : "Provider default"}</strong>
-        <span className="muted">Est. cost</span><strong>{costHint ? `${costHint} · billed by ${catalog.name}` : `provider's live rate · billed by ${catalog.name}`}</strong>
-      </div>
-
-      <label className="field-label">Name</label>
-      <input className="picker-search" value={setupName} onChange={(e) => setSetupName(e.target.value)} placeholder="e.g. EU quick tasks" />
-
-      <label className="field-label">Region</label>
-      <select className="picker-search" value={region} onChange={(e) => setRegion(e.target.value)}>
-        {adapter.regions.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-      </select>
-
-      <label className="field-label">Server type</label>
-      <select className="picker-search" value={size} onChange={(e) => setSize(e.target.value)}>
-        {sizes.map((s) => <option key={s.id} value={s.id}>{ephemeralComputeIntentLabel(s)} · {s.label}{s.id === adapter.defaultSize ? " · Recommended" : ""}</option>)}
-      </select>
-
-      <label className="field-label">Auto-destroy after</label>
-      <select className="picker-search" value={ttl} onChange={(e) => setTtl(Number(e.target.value))}>
-        {EPHEMERAL_TTL_OPTIONS.map((o) => <option key={o.v} value={o.v}>{o.label}</option>)}
-      </select>
-      <label className="checkbox-row">
-        <input type="checkbox" checked={teardownOnAgentFinish} onChange={(e) => setTeardownOnAgentFinish(e.target.checked)} />
-        <span>Destroy as soon as the agent finishes <span className="muted small">(the machine handles teardown; the TTL stays a safety fallback)</span></span>
-      </label>
-
-      <div className="banner inline">The repo this machine works on comes from the composer when you launch — it isn't set here.</div>
-
-      <div className="row-actions">
-        <button className="btn primary" disabled={busy || !setupName.trim()} onClick={savePrefs}>{busy ? "Saving…" : setupId ? "Save profile" : "Create profile"}</button>
-      </div>
-      {savedMsg && <div className="banner inline">{savedMsg}</div>}
-
-      {hosted && (
-        <section className="offline-runs-card" aria-labelledby="offline-runs-title">
-          <div className="settings-toggle-row">
-            <div className="settings-toggle-text">
-              <div className="settings-toggle-title" id="offline-runs-title">Run automations while I'm offline</div>
-              <p className="muted small">
-                Automations can start this profile even when none of your devices are online. Uses the {catalog.name} credential
-                you saved for this profile — {catalog.hostedOnly
-                  ? "already held encrypted on Bivy's server"
-                  : "an encrypted copy is kept on Bivy's server"} — and every use is recorded.
-                {catalog.hostedOnly
-                  ? ` Because ${catalog.name} is server-managed, this switch applies to offline automations for your whole account.`
-                  : ` Applies to every profile that uses ${catalog.name}.`}
-              </p>
-            </div>
-            <Toggle
-              checked={offlineOn}
-              disabled={busy || !hosted.encryptionReady}
-              onChange={(on) => void setOffline(on)}
-              label="Run automations while I am offline"
-            />
-          </div>
-          {!hosted.encryptionReady && (
-            <div className="banner inline" data-tone="danger" role="alert">
-              Not available yet: this Bivy server has no encryption key for stored credentials. There's no setting for it in the app — whoever runs the control plane sets <code>HOSTED_CREDENTIAL_KEY</code> in its environment and restarts it.{" "}
-              <a href="https://github.com/bivysh/bivy/blob/main/docs/self-host.md#offline-automations-encrypted-credential-storage" target="_blank" rel="noopener">How to enable it</a>
-            </div>
-          )}
-        </section>
-      )}
-
-      {msg && <div className="banner inline">{msg}</div>}
-      {err && <div className="banner inline" data-tone="danger" role="alert">{err}</div>}
-
-      {machines.length > 0 && (
-        <details className="vault-advanced" open>
-          <summary>Running machines ({machines.length})</summary>
-          <div className="picker-list">
-            {machines.map((m) => (
-              <PickerItem
-                key={m.id}
-                title={m.name || m.id}
-                meta={[m.region, m.ip, m.repo, m.status].filter(Boolean).join(" · ")}
-                right={
-                  <button
-                    type="button"
-                    className="btn sm danger-ghost"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setConfirm({
-                        title: "Destroy machine?",
-                        message: `Destroy ${m.name || m.id} now? This can't be undone.`,
-                        label: "Destroy",
-                        action: () => controller.destroyEphemeral(m).then(refreshMachines).catch((error) => setErr(String((error as Error)?.message || error))),
-                      });
-                    }}
-                  >
-                    Destroy
-                  </button>
-                }
-              />
-            ))}
-          </div>
-        </details>
-      )}
-
-      <details className="vault-advanced">
-        <summary>Danger zone</summary>
-        <div className="row-actions">
-          {setupId && (
-            <button className="btn danger-ghost" onClick={() => setConfirm({
-              title: "Remove profile?",
-              message: `Remove ${setupName || "this profile"}? Running machines are not affected.`,
-              label: "Remove",
-              action: () => controller.removeEphemeralConfig(setupId).then(() => { onSetupsChanged(); onBack(); }),
-            })}>Remove profile</button>
-          )}
-          {!catalog.hostedOnly && <button
-            className="btn danger-ghost"
-            onClick={() => setConfirm({
-              title: "Forget provider token?",
-              message: hasHostedToken
-                ? `Forget the ${catalog.name} token on this device? Bivy's server also drops its offline-automation copy.`
-                : `Forget the ${catalog.name} token on this device?`,
-              action: () => controller.removeEphemeralToken(providerId).then(async () => {
-                setHasToken(false);
-                onKeysChanged();
-                if (hasHostedToken) {
-                  await controller.setHostedProvisioning({ providerTokens: { [providerId]: "" }, ...(otherOfflineProviders.length ? {} : { enabled: false }) })
-                    .then(setHosted)
-                    .catch((error) => setErr(String((error as Error)?.message || error)));
-                }
-              }),
-            })}
-          >
-            Forget {catalog.name} token
-          </button>}
-        </div>
-      </details>
     </div>
   );
 }

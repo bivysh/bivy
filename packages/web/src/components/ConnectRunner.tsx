@@ -8,23 +8,18 @@ import { StatusDot } from "./StatusDot.js";
 
 /**
  * The "no Machine connected" onboarding screen shown on a fresh session before a
- * node is selected. Presents the two ways to get a Machine online — install on
- * your own computer, or (when enabled) spin up an ephemeral cloud server — plus,
- * when the account already has enrolled nodes, a list of them: picking one opens
+ * node is selected. Shows how to install Bivy on your own computer or server,
+ * plus, when the account already has enrolled nodes, a list of them: picking one opens
  * a new session on that node. A live "waiting to connect" indicator sits above
  * the machine list.
  */
 export function ConnectRunner({
   nodes,
-  ephemeralEnabled,
   onPickNode,
-  onEphemeral,
   onRefresh,
 }: {
   nodes: AccountNode[];
-  ephemeralEnabled: boolean;
   onPickNode: (nodeId: string) => void;
-  onEphemeral: () => void;
   onRefresh: () => void;
 }) {
   // Ephemeral machines (id `eph-…`) live in their own launcher, not the
@@ -51,9 +46,7 @@ export function ConnectRunner({
         <p className="connect-sub">
           {persistentNodes.length > 0
             ? "Pick an online machine to start, or add another machine."
-            : ephemeralEnabled
-              ? "Use a machine with your real repository, services, and warm caches, or launch an isolated machine. Any hosted credential custody is disclosed before enablement."
-              : "Your agents run here, using your existing environment. Keep your repositories, tools, and agent logins."}
+            : "Your agents run here, using your existing environment. Keep your repositories, tools, and agent logins."}
         </p>
       </div>
 
@@ -97,26 +90,6 @@ export function ConnectRunner({
         <div className="connect-option machine-install-card">
           <MachineInstallInstructions onEnrolled={setEnrolledNodeId} />
         </div>
-
-        {ephemeralEnabled && (
-          <div className="connect-option">
-            <div className="connect-option-head">
-              <span className="connect-option-badge" aria-hidden>
-                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97A6 6 0 0 0 6.34 9.2 4 4 0 0 0 7 17" />
-                  <path d="M12 12v6m0 0-2.5-2.5M12 18l2.5-2.5" />
-                </svg>
-              </span>
-              <div className="connect-option-copy">
-                <h3>Launch an isolated Machine</h3>
-                <p>Fastest if you don't want to install locally. Start with the recommended cloud, review its estimated cost and teardown policy, then launch explicitly with your first task. Bivy adds no fee.</p>
-              </div>
-            </div>
-            <button type="button" className="btn primary connect-option-cta" onClick={onEphemeral}>
-              Launch isolated Machine
-            </button>
-          </div>
-        )}
       </div>
       <p className="connect-sub">Next: choose a repository, send your first task, and review the result right here.</p>
     </section>

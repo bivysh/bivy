@@ -87,39 +87,6 @@ test("Stop shows progress at once and offers recovery when the agent never confi
   await expect(page.getByRole("button", { name: "Reload" })).toBeVisible();
 });
 
-test("a billable machine profile is chosen only after its cost and teardown are shown", async ({ page }) => {
-  await render(page, "billable-runner", `
-    const { EphemeralSheet } = await import('/src/components/Ephemeral.tsx');
-    const { ephemeralAdapter } = await import('@bivy/core');
-    const size = ephemeralAdapter('fly').sizes[0];
-    Object.assign(controller, {
-      listEphemeralKeys: async () => [],
-      getEphemeralToken: async () => null,
-      getDeviceVaultSyncState: () => ({ phase: 'idle', attemptedAt: null, succeededAt: null, pending: false, failure: null }),
-      connectEphemeralProvider: async (provider) => ({ id: 'runner-1', provider, size: size.id, region: 'ams', ttlMinutes: 60, teardownOnAgentFinish: true }),
-      defaultEphemeralRunner: async (provider) => ({ id: 'runner-1', provider, size: size.id, region: 'ams', ttlMinutes: 60, teardownOnAgentFinish: true }),
-      pickDraftEphemeralRunner: (runner) => window.calls.push(['pick', runner.id]),
-    });
-    root.render(h(EphemeralSheet, { onClose: () => window.calls.push('closed') }));
-  `);
-  await page.getByText("Fly.io · Recommended").click();
-  await page.getByPlaceholder("Paste token").fill("fly-token");
-  await page.getByRole("button", { name: "Connect", exact: true }).click();
-
-  const dialog = page.getByRole("dialog", { name: "Use this billable machine profile?" });
-  await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText("in ams");
-  await expect(dialog).toContainText("It will be destroyed when the agent finishes; the TTL remains a backstop.");
-  expect(await calls(page)).toEqual([]);
-
-  await dialog.getByRole("button", { name: "Cancel" }).click();
-  expect(await calls(page)).toEqual([], "cancelling never selects the billable profile");
-  // The provider is now connected; choosing its profile asks again.
-  await page.getByRole("button", { name: "Use this profile" }).click();
-  await page.getByRole("dialog", { name: "Use this billable machine profile?" }).getByRole("button", { name: "Use profile" }).click();
-  expect(await calls(page)).toEqual([["pick", "runner-1"], "closed"]);
-});
-
 test("a new approval is announced and takes keyboard focus in the real app", async ({ page }) => {
   await page.route("**/api/**", (route) => route.fulfill({ json: {} }));
   // Drive the real App from store events; keep it off the network.
