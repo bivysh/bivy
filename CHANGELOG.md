@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The unit test for the web runtime config no longer imports the managed-compute module removed from the control plane, which broke the root unit suite on `main`.
 - **Long error messages stay on screen.** An error with a long unbroken path, such as a missing-package error, grew wider than the chat and was cut off on both sides on a phone. Error cards now wrap and span the chat column, and the "Make this repeatable" and notification cards above the composer line up with its edges.
 - **A new cloud session no longer rejects a model it actually has.** Before the first message, a session's agent hadn't started, so asking it for models returned a built-in placeholder list. On a freshly launched cloud machine that list could be missing the model you'd saved (for example Opus 5.5), and the launch stopped with "Your saved model isn't available on this machine". A session now briefly warms its agent and answers with the account's real models (bounded at 8 s).
+- **A Bivy Cloud launch no longer stops at "Loading encrypted credentials" on a cloud computer.** The machine's launch milestones were only recorded for per-session machines, so the app never saw "credentials ready". They are now kept on the node for its current boot, cleared whenever it starts again, and returned with the account's cloud machine.
 
 ## [0.20.8] - 2026-10-06
 

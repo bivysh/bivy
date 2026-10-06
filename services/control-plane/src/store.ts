@@ -57,6 +57,9 @@ export interface NodeRecord {
   providers?: NodeProviderSummary[];
   /** Non-secret, fixed-vocabulary cloud-init progress from an ephemeral node. */
   bootstrapStatus?: { phase: string; updatedAt: string };
+  /** Launch milestones of the account's cloud computer for its current boot
+   * (credential-free timestamps, first write wins). */
+  milestones?: Record<string, string>;
   /** Manually declared, owner-asserted capability tags (e.g. "gpu", "docker") —
    * pushed by the owning node from its local config.yaml, overwritten wholesale
    * on every change, same trust tier as `providers`. Never auto-detected or
@@ -1285,6 +1288,10 @@ export interface NodeRepository {
   // overwritten wholesale by the owning node on every credential change.
   setNodeProviders(nodeId: string, providers: NodeProviderSummary[]): Promise<void>;
   setNodeBootstrapStatus(nodeId: string, phase: string): Promise<void>;
+  /** Record a boot milestone once; a later report keeps the first time. */
+  setNodeMilestone(nodeId: string, milestone: string, at: string): Promise<void>;
+  /** Forget the previous boot's milestones before the machine starts again. */
+  resetNodeMilestones(nodeId: string): Promise<void>;
   // Owner-declared capability tags (see NodeRecord.capabilities) — overwritten
   // wholesale by the owning node on every config change, same trust tier as
   // setNodeProviders. Never verified; a stale/offline declaration is kept as-is.

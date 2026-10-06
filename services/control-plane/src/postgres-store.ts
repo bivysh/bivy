@@ -329,6 +329,7 @@ export class PostgresStore implements ControlPlaneStore {
       -- tier as online/last_seen_at above: never credential material.
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS providers JSONB;
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS bootstrap_status JSONB;
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS milestones JSONB;
       -- Manually declared, owner-asserted capability tags (see NodeRecord.capabilities
       -- in store.ts) — same trust tier as providers: plaintext, self-reported, never
       -- verified. Overwritten wholesale by the owning node on every change.
@@ -1271,6 +1272,27 @@ export class PostgresStore implements ControlPlaneStore {
       `UPDATE nodes SET bootstrap_status = $2 WHERE id = $1`,
       [nodeId, JSON.stringify({ phase, updatedAt: new Date().toISOString() })],
     );
+  }
+
+  async setNodeMilestone(nodeId: string, milestone: string, at: string): Promise<void> {
+    const client = await this.database.beginTransaction();
+    try {
+      const row = (await client.query(`SELECT milestones FROM nodes WHERE id = $1 FOR UPDATE`, [nodeId])).rows[0];
+      const current = (row?.milestones ?? {}) as Record<string, string>;
+      if (row && !current[milestone]) {
+        await client.query(`UPDATE nodes SET milestones = $2 WHERE id = $1`, [nodeId, JSON.stringify({ ...current, [milestone]: at })]);
+      }
+      await client.commit();
+    } catch (error) {
+      await client.rollback();
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
+  async resetNodeMilestones(nodeId: string): Promise<void> {
+    await this.query(`UPDATE nodes SET milestones = NULL WHERE id = $1`, [nodeId]);
   }
 
   async setNodeName(nodeId: string, name: string): Promise<NodeRecord | undefined> {
@@ -3770,6 +3792,7 @@ function mapNode(row: any): NodeRecord {
     createdAt: new Date(row.created_at).toISOString(),
     providers: row.providers ?? undefined,
     bootstrapStatus: row.bootstrap_status ?? undefined,
+    milestones: row.milestones ?? undefined,
     capabilities: mapStringList(row.capabilities),
   };
 }

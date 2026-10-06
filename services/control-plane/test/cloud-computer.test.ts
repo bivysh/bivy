@@ -125,6 +125,15 @@ async function main() {
   await waitFor(() => calls.some((c) => c.path === "/v1/compute/wake" && c.body.nodeId === nodeId), "wake on connect");
   console.log("✓ connecting to a sleeping cloud computer wakes it");
 
+  // The node reports this boot's milestones; the launch reads them back.
+  const reported = await req(port, "POST", "/node/ephemeral-milestone", { milestone: "credentialsReadyAt" }, relay.enrollmentToken);
+  expect(reported.status === 200, "the cloud computer reports its milestones");
+  const withMilestones = await req(port, "GET", "/account/hosted-machines", undefined, token);
+  expect(typeof withMilestones.json?.[0]?.milestones?.credentialsReadyAt === "string", "the launch sees credentials ready for this boot");
+  await req(port, "POST", "/account/managed-machines", { configId: cloud.id, requestId: "r4" }, token);
+  const afterStart = await req(port, "GET", "/account/hosted-machines", undefined, token);
+  expect(!afterStart.json?.[0]?.milestones?.credentialsReadyAt, "starting the machine again forgets the previous boot's milestones");
+
   // Inventory and release go through the extension.
   const machines = await req(port, "GET", "/account/hosted-machines", undefined, token);
   expect(machines.json?.[0]?.nodeId === nodeId && machines.json?.[0]?.lifecycleState === "asleep", "the hosted-machines panel shows the extension's machine");
