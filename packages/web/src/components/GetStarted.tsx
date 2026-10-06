@@ -27,17 +27,17 @@ export function openAppPrompt(app: FirstApp): string {
       `publish port ${app.port}; otherwise have Bivy run it from your folder on a free port (a "start" command in the manifest).`,
     "Don't change anything else yet; once it's published, reply in one short line that it's ready.",
     "When my marks arrive, fix them and check your fix. Then make a share link with `bivy app share` " +
-      "and send it to me with `bivy notify`, so it reaches my phone if I've closed the app.",
+      "and reply with it.",
   ].join("\n");
 }
 
-/** Sent when nothing is running: one small change, reported back by push. */
+/** Sent when nothing is running: one small change, reported back in one line. */
 export const FIRST_CHANGE_PROMPT = [
   "I'm new to Bivy. Make one small, useful change in this workspace that I'd keep: a few minutes of work, " +
     "not a chore like running the tests. If the workspace is empty, build something small I can open.",
   "Pick it yourself. If you really need a decision from me, ask with `bivy ask`.",
   "If it's something I can see, run it and publish a preview with `bivy app publish`.",
-  "Last step, always: send me the result in one line with `bivy notify`, since I may have closed the app. Keep replies short, I'm probably on my phone.",
+  "Finish with the result in one line. Keep replies short, I'm probably on my phone.",
 ].join("\n");
 
 /** How long to wait for the machine's list of running servers before offering the other path. */

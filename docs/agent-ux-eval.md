@@ -54,7 +54,7 @@ question card. Its `expect` list takes these checks:
 
 | Check | Passes when |
 | --- | --- |
-| `{"block": "bivy_notice", "min": 1}` | The transcript has at least `min` cards of that type (`bivy_attachment`, `bivy_notice`, `bivy_suggestion`, …) |
+| `{"block": "bivy_notice", "min": 1}` | The transcript has at least `min` cards of that type (`bivy_attachment`, `bivy_notice`, …) |
 | `{"asked": true}` | The agent raised a question card, through `bivy ask` or its own ask-the-user tool |
 | `{"approval": "apply_automations"}` | The agent raised an approval card for that tool. The harness declines every approval card, so a run never changes the account. |
 | `{"reply": "{machine}"}` | Its last message contains the text; `{machine}` is the node's name |

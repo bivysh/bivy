@@ -2595,38 +2595,6 @@ async function cmdContext(args = []) {
   console.log(`\nEverything else: ${c.cyan("bivy help")} (or ${c.cyan("bivy help --json")}).`);
 }
 
-// `bivy suggest "<task>" [--title "…"] [--run here|subagents|new] [--session <id>]`
-// — propose a task the user can start in one tap, in this session or beside it. For an agent
-// offering next steps: write the task as a complete instruction.
-async function cmdSuggest(args = []) {
-  const usage = 'Usage: bivy suggest "<task>" [--title "short label"] [--run here|subagents|new] [--session <id>] [--json]';
-  if (args.includes("-h") || args.includes("--help")) {
-    console.log(`${usage}\n\nPost a task the user can start in one tap: in this session, through your sub-agents, or in a parallel session that works in its own copy of the project. Write it as a complete instruction, with paths relative to the project root.\n\n--run says where you recommend running it, which becomes the card's main button: here (builds on this conversation), subagents (independent tasks you can split across your own sub-agents; only if you have them), or new (bigger independent work the user will want to follow in its own session). Without it, one card recommends here and several recommend new.\n\n--json prints {"ok","id"}.`);
-    return;
-  }
-  const json = wantsJson(args);
-  const fail = (error) => cliError(error, { json, paint: c.red });
-  const flagsWithValue = new Set(["--session", "--title", "--run"]);
-  const flag = (name) => {
-    const i = args.indexOf(name);
-    return i >= 0 && i + 1 < args.length ? args[i + 1] : undefined;
-  };
-  const text = args.filter((a, i) => !a.startsWith("-") && !(i > 0 && flagsWithValue.has(args[i - 1]))).join(" ").trim();
-  const sessionId = resolveAttachSessionId({ sessionFlag: flag("--session"), env: process.env });
-  if (!text) return fail({ code: "usage", message: usage, exit: EXIT.usage });
-  const run = flag("--run");
-  if (run !== undefined && !["here", "subagents", "new"].includes(run)) return fail({ code: "usage", message: `--run is here, subagents or new (got "${run}").`, exit: EXIT.usage });
-  if (!sessionId) return fail({ code: "no_session", message: "No session id.", hint: "Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.", next: "bivy sessions --json", exit: EXIT.usage });
-  const config = loadConfig();
-  if (!(await ensureNodeRunning(config))) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable });
-  const res = await sessionPost(config, sessionId, "suggest", { text, title: flag("--title"), run }).catch((error) => error);
-  if (res instanceof Error) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node: ${res.message}`, next: "bivy status", exit: EXIT.unavailable });
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) return fail(sessionHttpError("Suggest", res.status, body));
-  if (json) { console.log(JSON.stringify(body)); return; }
-  console.log(c.green("Suggested in the chat. The user can start it in one tap."));
-}
-
 // `bivy title "<title>" [--session <id>]` — rename the session the agent runs in.
 async function cmdTitle(args = []) {
   const usage = 'Usage: bivy title "<title>" [--session <id>] [--json]';
@@ -2674,45 +2642,37 @@ function durationSeconds(text) {
   return m ? Number(m[1]) * (m[2] === "h" ? 3600 : m[2] === "m" ? 60 : 1) : NaN;
 }
 
-// `bivy notify "<message>" [--urgent]` — reach the user: a card in the chat,
-// and a push naming the session (never the text) when nobody has the app open.
+// `bivy notify [--urgent]` — bring the user back: a push naming the session
+// (never any text) when nobody has the app open. Nothing is posted in the chat.
 async function cmdNotify(args = []) {
-  const usage = 'Usage: bivy notify "<message>" [--urgent] [--session <id>] [--json]';
+  const usage = "Usage: bivy notify [--urgent] [--session <id>] [--json]";
   if (args.includes("-h") || args.includes("--help")) {
     console.log(`${usage}
 
-Send the user a message: it appears as a card in the chat, and their devices get
-a push notification (naming this session, not the text) when nobody has the app
-open. --urgent pushes even while they do. At most one push a minute per session;
-later messages still reach the chat. Use it when you finish long work, get
-blocked, or need the user to look at something. --json prints
-{"ok","id","push":"sent"|"user_watching"|"rate_limited","userWatching"}.`);
+Push to the user's devices so they come back to this session. The push names the
+session, nothing else, and nothing is posted in the chat: say what you need in
+your reply. It is sent only when nobody has the app open; --urgent pushes even
+while they do. At most one push a minute per session. You don't need it when you
+finish: Bivy already pushes when a turn ends while the user is away. --json prints
+{"ok","push":"sent"|"user_watching"|"rate_limited"|"unavailable","userWatching"}.`);
     return;
   }
   const json = wantsJson(args);
   const fail = (error) => cliError(error, { json, paint: c.red });
   const parsed = parseSessionArgs(args, ["--session"]);
   if (parsed.error) return fail({ code: "usage", message: parsed.error, exit: EXIT.usage });
-  const text = parsed.positional.join(" ").trim();
-  if (!text) return fail({ code: "usage", message: usage, exit: EXIT.usage });
   const sessionId = resolveAttachSessionId({ sessionFlag: parsed.one("--session"), env: process.env });
   if (!sessionId) return fail({ code: "no_session", message: "No session id.", hint: "Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.", next: "bivy sessions --json", exit: EXIT.usage });
   const config = loadConfig();
   if (!(await ensureNodeRunning(config))) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable });
-  const res = await sessionPost(config, sessionId, "notify", { text, urgent: parsed.has("--urgent") }).catch((error) => error);
+  const res = await sessionPost(config, sessionId, "notify", { urgent: parsed.has("--urgent") }).catch((error) => error);
   if (res instanceof Error) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node: ${res.message}`, next: "bivy status", exit: EXIT.unavailable });
   const body = await res.json().catch(() => ({}));
   if (!res.ok) return fail(sessionHttpError("Notify", res.status, body));
   if (json) { console.log(JSON.stringify(body)); return; }
-  const noPush = { user_watching: "the user has the app open; add --urgent to push anyway", rate_limited: "this session pushed less than a minute ago", unavailable: "this machine isn't signed in to a Bivy account" }[body.push];
-  // A terminal run (`bivy run`) has no chat to hold a card: the push is the notice.
-  if (body.posted === false) {
-    if (body.push === "sent") console.log(c.green("Pushed to the user's devices."));
-    else console.log(c.yellow(`Not delivered: a terminal run has no chat to post in, and no push was sent (${noPush ?? body.push}).`));
-    return;
-  }
-  const pushed = body.push === "sent" ? "and pushed to the user's devices" : noPush ? `(no push: ${noPush})` : "";
-  console.log(c.green(`Posted in the chat ${pushed}.`.replace(" .", ".")));
+  if (body.push === "sent") { console.log(c.green("Pushed to the user's devices.")); return; }
+  const noPush = { user_watching: "the user has the app open, so they see your reply; add --urgent to push anyway", rate_limited: "this session pushed less than a minute ago", unavailable: "this machine isn't signed in to a Bivy account" }[body.push];
+  console.log(c.yellow(`No push sent: ${noPush ?? body.push}.`));
 }
 
 // `bivy ask "<question>" [--option …]` — the question card, for any agent.
@@ -6514,9 +6474,6 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       break;
     case "attach":
       await cmdAttach(args);
-      break;
-    case "suggest":
-      await cmdSuggest(args);
       break;
     case "title":
       await cmdTitle(args);

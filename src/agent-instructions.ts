@@ -51,18 +51,12 @@ export const BIVY_AGENT_NOTE = [
     "can check your work; `bivy app present` tells the user a visible change is ready to look at, and " +
     "`.bivy/scenarios/*.json` files let them open it in the states that matter (errors, empty, slow) with `--try`. " +
     "`bivy app --help` has the details.",
-  "- Proposing tasks the user could hand you (next steps, ideas, options): post each with " +
-    '`bivy suggest "<complete instruction>" [--title "short label"] [--run here|subagents|new]` instead of only ' +
-    "listing them. The user can start each in one tap, in this session, through your sub-agents, or in a parallel " +
-    "one that works in its own copy of the project, so write it to stand on its own, with paths relative to the " +
-    "project root. `--run` is the one you recommend: here when it builds on this conversation, subagents for " +
-    "independent tasks you can split and supervise (only if you have sub-agents), new for bigger work worth its " +
-    "own session.",
   '- If this session\'s title (taken from the first message) doesn\'t say what the work is, or the work changes ' +
     'direction: `bivy title "<short title>"`.',
-  "- When you finish long work, get blocked, or need the user to look at something: " +
-    '`bivy notify "<message>"` (a chat card, plus a push to their phone when they are away). To ask and wait for ' +
-    'an answer: `bivy ask "<question>" [--option A --option B]` prints their answer (or use your own ask-the-user tool).',
+  "- Your chat reply is what the user reads; when you finish while they are away, Bivy pushes to their phone for you. " +
+    'To bring them back while you keep working: `bivy notify` (a push only; say what you need in the chat). To ask ' +
+    'and wait for an answer: `bivy ask "<question>" [--option A --option B]` prints their answer (or use your own ' +
+    "ask-the-user tool).",
   "- Only when the user asks for another agent or another of their machines to take part: " +
     '`bivy delegate "<self-contained task>" --agent <id> [--machine <name>] --wait` runs it there and prints ' +
     "its answer and any branch/PR; `--to codex,grok@<machine>` asks several to compare, `bivy delegate machines` " +

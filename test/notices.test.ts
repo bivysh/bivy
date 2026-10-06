@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-// `bivy notify`: the card replays where it was sent, lands once live, and the
-// push goes out only when it should.
+// Notices: Bivy's own chat card replays where it was posted and lands once live;
+// a `bivy notify` push goes out only when it should.
 import assert from "node:assert/strict";
 import test from "node:test";
 import fs from "node:fs";

@@ -21,7 +21,6 @@ import type { ToolActivity, TranscriptEntry } from "./store.js";
  *  uploads use. */
 export const AGENT_ATTACHMENT_BLOCK = "bivy_attachment";
 import { APP_PIN_BLOCK, APP_PUBLICATION_BLOCK, APP_REVIEW_BLOCK, isAppPin, isAppReference, isAppReview } from "./apps.js";
-import { SUGGESTION_BLOCK, isTaskSuggestion } from "./suggestions.js";
 import { NOTICE_BLOCK, isAgentNotice } from "./notices.js";
 import { DELEGATION_BLOCK, isDelegationCard } from "./delegations.js";
 
@@ -322,9 +321,6 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
             flushRuns();
             // The live app_published event's id, so the card survives the reload.
             entries.push({ id: `app-${block.app.appId}`, role: "assistant", text: "", app: block.app });
-          } else if (block?.type === SUGGESTION_BLOCK && isTaskSuggestion(block.suggestion)) {
-            flushRuns();
-            entries.push({ id: block.suggestion.id, role: "assistant", text: "", suggestion: block.suggestion });
           } else if (block?.type === NOTICE_BLOCK && isAgentNotice(block.notice)) {
             flushRuns();
             entries.push({ id: block.notice.id, role: "assistant", text: "", notice: block.notice });

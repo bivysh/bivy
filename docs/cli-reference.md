@@ -25,9 +25,8 @@ get shell completion. Agents in a session should start with `bivy context`.
 | Hand a task to another agent or machine | `bivy delegate "<task>" --agent <id> --wait` |
 | List every command as JSON | `bivy help --json` |
 | Read the playbooks for agents | `bivy guide` |
-| Propose a task the user can start in one tap | `bivy suggest "<task>"` |
 | Rename the session an agent runs in | `bivy title "<title>"` |
-| Tell the user something when they're away | `bivy notify "<message>"` |
+| Bring the user back to a session (phone push) | `bivy notify` |
 | Ask the user a question and wait for the answer | `bivy ask "<question>" --option A --option B` |
 | Stop a session | `bivy kill <id>` |
 | Sign this machine into my Bivy account | `bivy login` |
@@ -58,8 +57,8 @@ get shell completion. Agents in a session should start with `bivy context`.
   (via the installed background service, or as a detached background process).
 - Commands that need the node authenticate with a device token minted from
   `<data-dir>/bootstrap.json`. If that file is missing, restart the node.
-  Inside an agent session, the session commands (`attach`, `suggest`, `notify`,
-  `ask`, `context`, `app`, `fork`, `delegate`) use the session's own
+  Inside an agent session, the session commands (`attach`, `notify`, `ask`,
+ , `context`, `app`, `fork`, `delegate`) use the session's own
   `$BIVY_SESSION_TOKEN` instead; see
   [security-model.md](security-model.md#local-daemon-exposure-cross-origin-and-dns-rebinding).
 - `<data-dir>` is the Bivy state directory. See
@@ -73,7 +72,7 @@ get shell completion. Agents in a session should start with `bivy context`.
   (see [agent-ux-eval.md](agent-ux-eval.md)).
 - **JSON output.** Commands marked `json` in `bivy help --json` accept `--json`.
   `BIVY_OUTPUT=json` turns it on for all of them, which suits scripts and agents.
-- **Errors.** With JSON output on, `context`, `attach`, `suggest`, `app` and
+- **Errors.** With JSON output on, `context`, `attach`, `app` and
   unknown commands print failures to stderr as
   `{"error":{"code","message","hint"?,"next"?}}`, where `next` is a command that
   helps (for example `bivy sessions --json`).
@@ -413,34 +412,6 @@ bivy attach coverage/index.html --artifact --caption "Coverage report"
 
 `--json` prints `{"ok","name","kind","size","mimeType","hash"}`.
 
-### `bivy suggest "<task>" [--title "…"] [--run here|subagents|new] [--session <id>] [--json]`
-
-Posts a **suggested task** card into the chat: a task the agent proposes (a next
-step, an idea, one of several options). The user starts it with one tap:
-
-- **Do it here** sends it to this session's agent.
-- **Use sub-agents** sends it here too, asking the agent to run it through its
-  own sub-agents. It only appears when the agent recommends it.
-- **Start in new session** runs it beside the current session (same project,
-  agent, model and safety; a git checkout gets its own worktree).
-
-`--run` names the one the agent recommends, which becomes the card's main
-button. Without it, a single card recommends `here` and a run of several
-recommends `new`. In a run, each card has a checkbox and the last card starts
-the selected ones together (`Do 3 here` sends them as one message). Like `bivy
-attach`, it is meant to be run by the agent itself and finds the session
-through `$BIVY_SESSION_ID`.
-
-Write the task as a complete instruction with paths relative to the project
-root: it becomes the first message of a session that works in its own copy.
-`--title` is the short label on the card.
-
-```bash
-bivy suggest "Add a GET /version endpoint that returns the package version and git commit." --title "Add /version" --run new
-```
-
-`--json` prints `{"ok","id"}`.
-
 ### `bivy approvals [list|approve <id>|reject <id>] [--json]`
 
 Tool calls on this node that are waiting for a person to approve them, and
@@ -474,7 +445,7 @@ bivy takeover 3f1c9a02-6b41-4a0f-9c2e-5d7f1b0a8e33
 
 These commands act on the session the agent runs in: they read
 `$BIVY_SESSION_ID` (or `$PI_SESSION_ID` under Pi), or take `--session <id>`.
-`bivy attach` and `bivy suggest` above belong here too.
+`bivy attach` above belongs here too.
 
 ### `bivy title "<title>" [--session <id>] [--json]`
 
@@ -506,24 +477,26 @@ bivy context --json | jq .session.workspace
 Exits 3 when the session isn't open on this node, and 75 when the node can't be
 reached or is too old to answer.
 
-### `bivy notify "<message>" [--urgent] [--session <id>] [--json]`
+### `bivy notify [--urgent] [--session <id>] [--json]`
 
-Sends the user a message. It appears as a card in the chat, and when nobody has
-the app open, the user's devices get a push notification that names the session
-and says it has a message. The push never carries the text; that stays in the
-chat. `--urgent` pushes even while the user has the app open. Each session
-pushes at most once a minute; later messages still reach the chat. Users can
-mute these pushes under **Agent messages** in the notification settings.
+Brings the user back to the session: their devices get a push notification
+that names the session and asks them to take a look. Nothing is posted in the
+chat and the push carries no text, so the agent says what it needs in its
+reply. The push goes out only when nobody has the app open; `--urgent` pushes
+even while the user has it open. Each session pushes at most once a minute.
+Users can mute these pushes under **Agent messages** in the notification
+settings.
 
-Use it when long work finishes, when the agent is blocked, or when something
-needs a look.
+An agent doesn't need it to report finished work: Bivy already pushes when a
+turn ends while nobody has the app open. Use it while the work is still
+running and the agent needs the user, for example when it is blocked on them.
 
 ```bash
-bivy notify "Migration finished: 3 tables rewritten, all tests pass."
-bivy notify --urgent "The deploy failed and production is serving the old build."
+bivy notify
+bivy notify --urgent
 ```
 
-`--json` prints `{"ok","id","push","userWatching"}`, where `push` is `sent`,
+`--json` prints `{"ok","push","userWatching"}`, where `push` is `sent`,
 `user_watching`, `rate_limited`, or `unavailable` (the machine isn't signed in to
 a Bivy account, so it can't push).
 
@@ -1420,7 +1393,6 @@ MCP `instructions`, the guides as resources, and these tools:
 | `bivy_context` | `bivy context` |
 | `notify_user` | `bivy notify` |
 | `ask_user` | `bivy ask` |
-| `suggest_task` | `bivy suggest` |
 | `set_session_title` | `bivy title` |
 | `app_publish`, `app_screenshot`, `app_present` | `bivy app publish`, `shot`, `present` |
 | `automation_plan`, `automation_apply` | `bivy automation plan`, `apply` (a proposal the user approves) |

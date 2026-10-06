@@ -246,8 +246,8 @@ machine.
 **Agent sessions get a session token.** Each agent process the node starts has
 `BIVY_SESSION_TOKEN` in its environment, next to `BIVY_SESSION_ID`
 (`bivySessionEnv`, `src/runtime/session-env.ts`). The `bivy` CLI and the MCP
-tools use it for that session's own commands (`attach`, `suggest`, `notify`,
-`ask`, `context`, `app`, `fork`, `delegate`), so those work when the loopback
+tools use it for that session's own commands (`attach`, `notify`, `ask`,
+`context`, `app`, `fork`, `delegate`), so those work when the loopback
 bypass is off, and for an agent that can't read `.bivy/bootstrap.json`.
 
 - A token is `bst_<session id>.<HMAC-SHA256>` under a key held only in the

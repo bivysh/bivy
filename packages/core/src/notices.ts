@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 
-/** A message the agent sent with `bivy notify`. Mirrors
+/** A message from Bivy in the chat, such as which automations were applied. Mirrors
  *  src/session/notices.ts; the block string MUST match there. */
 export interface AgentNotice {
   id: string;
