@@ -1363,6 +1363,9 @@ async function respondCloudComputer(
       res.status(403).json({ error: decision.reason || "Cloud machine launch denied", code: decision.code || "managed_launch_denied", ...decision });
       return;
     }
+    // A starting machine reports this boot's milestones afresh; an earlier
+    // boot's "credentials ready" must not let a prompt in early.
+    if (acquired.state !== "awake") await store.resetNodeMilestones(acquired.nodeId);
     const roomKey = await cloudComputerRoomKey(store, accountId);
     res.status(201).json({
       ok: true,
@@ -1744,6 +1747,7 @@ app.post("/node/heartbeat", requireNode, asyncHandler(async (req, res) => {
   await store.setNodeOnline(node.id, true);
   await store.setNodeBootstrapStatus(node.id, "ready");
   await markHostedMachineMilestone(store, node.accountId, node.id, "nodeReadyAt").catch(() => false);
+  if (isCloudComputerNode(node.accountId, node.id)) await store.setNodeMilestone(node.id, "nodeReadyAt", new Date().toISOString());
   res.json({ ok: true });
 }));
 
@@ -1763,6 +1767,12 @@ app.post("/node/ephemeral-milestone", requireNode, asyncHandler(async (req, res)
   const milestone = String(req.body?.milestone ?? "");
   if (!(EPHEMERAL_MILESTONES as readonly string[]).includes(milestone)) return res.status(400).json({ error: "unknown milestone" });
   const at = new Date().toISOString();
+  // The account's cloud computer has no per-launch record: its milestones live
+  // on the node, for the current boot.
+  if (isCloudComputerNode(node.accountId, node.id)) {
+    await store.setNodeMilestone(node.id, milestone, at);
+    return res.json({ ok: true, tracked: true });
+  }
   const tracked = await markHostedMachineMilestone(store, node.accountId, node.id, milestone as (typeof EPHEMERAL_MILESTONES)[number], at);
   if (tracked && milestone === "firstAgentEventAt") {
     const machine = (await store.getHostedMachines(node.accountId)).find((candidate) => candidate.nodeId === node.id);
@@ -4063,7 +4073,9 @@ app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   if (await accountMachineMode(client.accountId)) {
+    const nodes = await store.listNodes(client.accountId);
     res.json((await deploymentExtension.computeMachines(client.accountId).catch(() => [])).map((m) => ({
+      milestones: nodes.find((n) => n.id === m.nodeId)?.milestones,
       id: typeof m.id === "string" ? m.id : "",
       nodeId: typeof m.nodeId === "string" ? m.nodeId : undefined,
       name: typeof m.name === "string" ? m.name : "Bivy Cloud",
@@ -5038,6 +5050,7 @@ async function wakeCloudComputerIfAsleep(accountId: string): Promise<void> {
     const nodeId = cloudComputerNodeId(accountId);
     const node = (await store.listNodes(accountId)).find((candidate) => candidate.id === nodeId);
     if (!node || node.online || !(await accountMachineMode(accountId))) return;
+    await store.resetNodeMilestones(nodeId);
     await deploymentExtension.computeWake(accountId, nodeId);
   } catch (error) {
     console.warn(`[cloud-computer] wake failed for ${accountId}:`, error instanceof Error ? error.message : error);
@@ -5061,6 +5074,7 @@ app.post("/internal/compute/bootstrap", requireDeploymentExtension, asyncHandler
   const awakeCapMinutes = Math.max(5, Math.min(24 * 60, Number(req.body?.awakeCapMinutes) || 360));
   const restoreSessionId = typeof req.body?.restoreSessionId === "string" && req.body.restoreSessionId ? req.body.restoreSessionId : undefined;
   res.setHeader("cache-control", "no-store");
+  await store.resetNodeMilestones(cloudComputerNodeId(accountId));
   res.json(await bootCloudComputer(store, {
     accountId, awakeCapMinutes, restoreSessionId,
     relayUrl: provisionEnv().relayUrl, controlPlaneUrl: provisionEnv().cpBaseUrl,
