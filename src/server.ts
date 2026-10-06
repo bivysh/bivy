@@ -47,7 +47,7 @@ import { createAppCommands } from "./controllers/app-commands.js";
 import { createFileCommands } from "./controllers/file-commands.js";
 import { bindClientCommandRoutes } from "./http/client-command-routes.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
-import { aggregateModelCatalog, catalogReplyEvent, mergeProviderCatalog } from "./runtime/model-catalog.js";
+import { aggregateModelCatalog, catalogReplyEvent, warmSessionCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
 import { resolveModelRef } from "./runtime/model-ref.js";
 import { RuntimeHost, enforcementLevelFor, remoteRuntimeEnabled } from "./runtime/host.js";
 import { RemoteRuntime, RemoteRuntimeSession } from "./runtime/remote.js";
@@ -3022,6 +3022,12 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     // stale `active` on another runtime lingers on the node.
     if (!requestedSessionId && wantedRuntimeId && record?.runtimeId !== wantedRuntimeId) record = null;
     record ??= await sessionForModelQuery(wantedRuntimeId);
+    // A session whose agent hasn't started yet answers from the runtime's
+    // placeholder catalog, which can be missing the account's current models —
+    // a freshly launched machine then rejected a saved model it actually has.
+    // Warm the real catalog first (a no-op re-read once the agent is running),
+    // bounded so a slow spawn still answers with what is known.
+    if (requestedSessionId) await warmSessionCatalog(record.session, SESSION_MODELS_WARM_MS);
     // Tag the list with the runtime it was resolved for so the client can
     // tell whether it belongs to the agent it currently has selected. Without
     // this a models.list answered for one agent (e.g. Codex's models) could
@@ -9203,6 +9209,10 @@ async function sessionForModelQuery(runtimeId?: string): Promise<SessionRecord> 
   modelQueryScratchPending.set(wanted, build);
   return build;
 }
+
+/** How long a session's models.list waits for its agent's real catalog before
+ *  answering with what is known (below the client's 15 s launch timeout). */
+const SESSION_MODELS_WARM_MS = 8_000;
 
 // A fresh scratch answers its first models.list from the runtime's placeholder
 // list (no live agent yet). Warm the real catalog in the background — for Claude
