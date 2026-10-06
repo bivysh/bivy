@@ -4,16 +4,6 @@ import { describe, expect, it } from "vitest";
 import { validateEphemeralProviderToken, type ExecRequest } from "../src/ephemeral.js";
 
 describe("ephemeral provider credential validation", () => {
-  it("Hetzner uses one read-only request", async () => {
-    const calls: ExecRequest[] = [];
-    await validateEphemeralProviderToken("hetzner", "secret", async (request) => {
-      calls.push(request);
-      return { status: 200, body: {} };
-    });
-    expect(calls).toHaveLength(1);
-    expect(calls[0].method).toBe("GET");
-  });
-
   it("Fly discovers the token's org, then scopes the list-apps check to it", async () => {
     const calls: ExecRequest[] = [];
     await validateEphemeralProviderToken("fly", "secret", async (request) => {
@@ -37,21 +27,8 @@ describe("ephemeral provider credential validation", () => {
       .rejects.toThrow(/no accessible organizations/i);
   });
 
-
-  it("AWS signs read-only DescribeInstances", async () => {
-    const calls: ExecRequest[] = [];
-    await validateEphemeralProviderToken("aws", "AKID:SECRET", async (request) => {
-      calls.push(request);
-      return { status: 200, body: "<DescribeInstancesResponse/>" };
-    }, "us-east-1");
-    expect(calls).toHaveLength(1);
-    expect(calls[0].method).toBe("POST");
-    expect(String(calls[0].body)).toContain("Action=DescribeInstances");
-    expect(String(calls[0].body)).not.toContain("RunInstances");
-  });
-
   it("rejects provider authentication errors", async () => {
-    await expect(validateEphemeralProviderToken("hetzner", "bad", async () => ({ status: 401, body: { error: { message: "unauthorized" } } })))
+    await expect(validateEphemeralProviderToken("fly", "bad", async () => ({ status: 401, body: { error: { message: "unauthorized" } } })))
       .rejects.toThrow(/401.*unauthorized/i);
   });
 });

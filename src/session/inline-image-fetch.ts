@@ -25,9 +25,7 @@ import { sanitizeAttachmentName, sniffMime } from "./attach-to-chat.js";
  * in `inline()` in packages/core/src/markdown.ts exactly. Not a shared import: the
  * node (src/) intentionally does not depend on @bivy/core (a browser/client
  * package — see packages/core's own description). Kept in lock-step by comment
- * instead, the same convention EPHEMERAL_ALLOWED_HOSTS uses in
- * src/ephemeral-exec.ts for its cross-copy host allowlist. If you change one,
- * change the other.
+ * instead: if you change one, change the other.
  */
 const INLINE_IMAGE_MD_RE = /!\[[^\]]*\]\((https:\/\/[^)\s]+)\)/g;
 

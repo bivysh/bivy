@@ -185,7 +185,7 @@ try {
     });
   });
 
-  await test("legacy BYO API behavior is preserved when unset, and operator tokens never replace user credentials", async () => {
+  await test("a user-lane profile never launches, even with a deployment credential present", async () => {
     delete process.env.EPHEMERAL_MACHINES_ENABLED;
     operatorToken(OPERATOR_TOKEN); // present but must not be used for the user lane
     const store = await makeStore();
@@ -194,10 +194,10 @@ try {
     await store.setEphemeralConfigs(account.id, [{ ...MANAGED_CONFIG, id: "cfg-user", computeSource: undefined }]);
     await store.setQueueRouting(account.id, { primary: { kind: "config", configId: "cfg-user" } });
     const plan = await planAutoProvision(store, account.id);
-    assert.equal(plan.willProvision, false, "an operator token never substitutes for the user's own credential");
-    assert.match(plan.reason, /no hosted token for provider fly/);
+    assert.equal(plan.willProvision, false, "a deployment credential never launches a user-lane profile");
+    assert.match(plan.reason, /own cloud accounts are no longer supported/);
     await store.setHostedProvisioning(account.id, { enabled: true, providerTokens: { fly: "user-fly-token" }, validatedProviders: { fly: providerCredentialFingerprint("user-fly-token") } });
-    assert.equal((await planAutoProvision(store, account.id)).willProvision, true, "legacy BYO API works when the deployment flag is unset");
+    assert.equal((await planAutoProvision(store, account.id)).willProvision, false, "a stored user token doesn't launch either");
   });
 
   await test("managed launch uses the operator token and records the same attempt/audit trail", async () => {

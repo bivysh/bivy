@@ -3,7 +3,6 @@
 import { describe, expect, it } from "vitest";
 import {
   buildBootstrapUserData,
-  createGithubTaskTokenStore,
   ephemeralNodeLabel,
   memoryBackend,
 } from "../src/ephemeral.js";
@@ -98,23 +97,5 @@ describe("buildBootstrapUserData — hosted queue opt-in", () => {
     // The install step still runs, and the TTL self-shutdown backstop remains.
     expect(userData).toContain("curl --connect-timeout 10 --max-time 120 -fsSL");
     expect(userData).toContain("shutdown -h now");
-  });
-});
-
-describe("createGithubTaskTokenStore", () => {
-  it("round-trips a token through a fresh backend", async () => {
-    const store = createGithubTaskTokenStore(memoryBackend());
-    expect(await store.get()).toBe("");
-    await store.set("ghp_xyz");
-    expect(await store.get()).toBe("ghp_xyz");
-    await store.remove();
-    expect(await store.get()).toBe("");
-  });
-
-  it("trims the token and rejects an empty one", async () => {
-    const store = createGithubTaskTokenStore(memoryBackend());
-    await store.set("  ghp_padded  ");
-    expect(await store.get()).toBe("ghp_padded");
-    await expect(store.set("   ")).rejects.toThrow("cannot be empty");
   });
 });

@@ -14,9 +14,9 @@ import { resolveWebhookAuth, verifyWebhookAuth, DEFAULT_WEBHOOK_HEADER, type Web
 import { matchGithubItemTrigger } from "./github-item-trigger.js";
 import { ephemeralAdapter, validateCapabilityTags } from "@bivy/core";
 import { notificationLink } from "./notification-link.js";
-import { providerCredentialFingerprint, type Account, type NodeRecord, type NotificationKind, type EphemeralQueueDefault, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { type Account, type NodeRecord, type NotificationKind, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity } from "./central-github-app.js";
-import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, provisionEphemeralForAccount, provisionEphemeralRestore, reapSettledHostedMachine, reconcileAllHostedMachines, reconcileAllReadyCapacity, sweepAllOrphanProviderResources, validateHostedProviderToken, markHostedMachineMilestone, EPHEMERAL_MILESTONES, ephemeralMachinesEnabled, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
+import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, provisionEphemeralForAccount, provisionEphemeralRestore, reapSettledHostedMachine, reconcileAllHostedMachines, sweepAllOrphanProviderResources, markHostedMachineMilestone, EPHEMERAL_MILESTONES, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
 import { hostedVaultWriteRejection, legacyEscrowWriteRejection } from "./hosted-vault-policy.js";
 import { webRuntimeConfigScript } from "./web-runtime-config.js";
@@ -458,10 +458,6 @@ async function reconcileHostedMachineFleet() {
     const result = await reconcileAllHostedMachines(store, provisionEnv());
     if (result.reaped || result.failed) {
       console.log(`[hosted-reconcile] accounts=${result.accounts} reaped=${result.reaped} failed=${result.failed}`);
-    }
-    const capacity = await reconcileAllReadyCapacity(store, provisionEnv());
-    if (capacity.created || capacity.failed) {
-      console.log(`[hosted-capacity] accounts=${capacity.accounts} ensured=${capacity.created} failed=${capacity.failed}`);
     }
   } catch (error) {
     console.error("[hosted-reconcile] account scan failed:", error);
@@ -2090,76 +2086,6 @@ app.put("/api/push/preferences", asyncHandler(async (req, res) => {
   }
   const preferences = await store.setNotificationPreferences(client.accountId, patch);
   res.json({ preferences });
-}));
-
-// Ephemeral provisioning cold-start relay. When a signed-in device has no node
-// online to broker for it, it can ask the control plane to forward ONE
-// allowlisted provider request (Fly/Hetzner/AWS/...) so it can create/destroy
-// a machine from just a phone. The token/credentials ride in the request and
-// are used transiently — NEVER stored or logged here. The host allowlist is
-// the SSRF guard; this is a deliberately narrow, non-storing exception to
-// "the control plane holds no secrets" (the secret is only in-flight, for the
-// user's own cloud account). Must be kept in lock-step with the two other
-// copies: `ALLOWED_HOSTS` in packages/core/src/ephemeral.ts (browser adapter)
-// and `EPHEMERAL_ALLOWED_HOSTS` in src/ephemeral-exec.ts (node broker).
-const EPHEMERAL_ALLOWED_HOSTS = new Set([
-  "api.hetzner.cloud",
-  "api.machines.dev",
-  "api.fly.io",
-  "ec2.us-east-1.amazonaws.com",
-  "ec2.us-west-2.amazonaws.com",
-  "ec2.eu-west-1.amazonaws.com",
-  "ec2.eu-central-1.amazonaws.com",
-  "ec2.ap-southeast-1.amazonaws.com",
-  "ec2.ap-northeast-1.amazonaws.com",
-  "ssm.us-east-1.amazonaws.com",
-  "ssm.us-west-2.amazonaws.com",
-  "ssm.eu-west-1.amazonaws.com",
-  "ssm.eu-central-1.amazonaws.com",
-  "ssm.ap-southeast-1.amazonaws.com",
-  "ssm.ap-northeast-1.amazonaws.com",
-]);
-app.post("/api/ephemeral/exec", requireUser, asyncHandler(async (req, res) => {
-  const account = (req as Request & { account: Account }).account;
-  await requireDeploymentAdmission(account.id, "ephemeral.provision");
-  // Deployment kill switch: ephemeral machines are on unless the deploy set
-  // EPHEMERAL_MACHINES_ENABLED=0 (ephemeralMachinesEnabled). Device-initiated
-  // launches route their provider create/destroy calls through this relay, so
-  // refusing here stops them server-side even if a client bypasses the web
-  // EPHEMERAL_MACHINES_ENABLED flag. Mirrors the planAutoProvision guard.
-  if (!ephemeralMachinesEnabled()) {
-    return res.status(403).json({ error: "Ephemeral machines are disabled." });
-  }
-  const url = String(req.body?.url ?? "");
-  let host: string;
-  try { host = new URL(url).host; } catch { return res.status(400).json({ error: `Bad provider URL` }); }
-  if (!EPHEMERAL_ALLOWED_HOSTS.has(host)) return res.status(403).json({ error: `Refusing to proxy to non-provider host: ${host}` });
-  const method = String(req.body?.method ?? "GET").toUpperCase();
-  const headers: Record<string, string> = { ...(req.body?.headers ?? {}) };
-  let payload: string | undefined;
-  if (req.body?.body !== undefined && req.body?.body !== null && method !== "GET" && method !== "HEAD") {
-    payload = typeof req.body.body === "string" ? req.body.body : JSON.stringify(req.body.body);
-    if (!Object.keys(headers).some((h) => h.toLowerCase() === "content-type")) headers["content-type"] = "application/json";
-  }
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
-  try {
-    // Do NOT auto-follow redirects: the host allowlist is enforced once, above,
-    // so a 3xx from an allowlisted provider (open redirect) could otherwise
-    // bounce this request to an internal target like 169.254.169.254 (SSRF).
-    const upstream = await fetch(url, { method, headers, body: payload, signal: controller.signal, redirect: "manual" });
-    if (upstream.status >= 300 && upstream.status < 400) {
-      return res.status(502).json({ error: "Refusing to follow a redirect from the provider host (SSRF guard)." });
-    }
-    const text = await upstream.text();
-    let body: unknown = text;
-    try { body = text ? JSON.parse(text) : null; } catch { /* non-JSON */ }
-    res.json({ status: upstream.status, body });
-  } catch (error) {
-    res.status(502).json({ error: error instanceof Error ? error.message : String(error) });
-  } finally {
-    clearTimeout(timeout);
-  }
 }));
 
 // E2E model-provider auth vault. Ordinary account sync stores only ciphertext
@@ -3818,35 +3744,8 @@ app.post("/account/work-items/:id/assign", asyncHandler(async (req, res) => {
   res.json({ ok: true, id: item.id, label: item.label, runtimeId: item.runtimeId, model: item.model, ephemeral: item.ephemeral });
 }));
 
-// The account's ephemeral-queue-default preference (issue #532): whether a
-// signed-in device should auto-provision an ephemeral runner for this queue when
-// nothing persistent is online, and which saved provider/region/size/ttl to use.
-// Non-secret preferences only — the provider TOKEN that would actually act on this
-// stays device-local (see packages/core/src/ephemeral.ts's EphemeralKeyStore); the
-// control plane only remembers the choice so it's consistent across the account's
-// devices, the same way `/account/github-app/default-node` remembers a routing
-// choice without being able to act on it itself.
-app.get("/account/ephemeral-default", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
-  if (!client) return res.status(401).json({ error: "Unauthorized" });
-  res.json(await store.getEphemeralQueueDefault(client.accountId));
-}));
-
-app.put("/account/ephemeral-default", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
-  if (!client) return res.status(401).json({ error: "Unauthorized" });
-  const body = (req.body ?? {}) as Record<string, unknown>;
-  const patch: Partial<EphemeralQueueDefault> = {};
-  if (typeof body.enabled === "boolean") patch.enabled = body.enabled;
-  if (typeof body.provider === "string") patch.provider = body.provider.trim() || undefined;
-  if (typeof body.region === "string") patch.region = body.region.trim() || undefined;
-  if (typeof body.size === "string") patch.size = body.size.trim() || undefined;
-  if (typeof body.ttlMinutes === "number") patch.ttlMinutes = body.ttlMinutes;
-  res.json(await store.setEphemeralQueueDefault(client.accountId, patch));
-}));
-
-// Account-level ephemeral node configs (reusable runner templates). CRUD via
-// read-modify-write of the JSONB array — low write frequency, so no locking.
+// The deployment-provided cloud profiles ("Bivy Cloud") an account can pick.
+// They are created and reconciled by the server only.
 app.get("/account/ephemeral-configs", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
@@ -3857,63 +3756,7 @@ app.get("/account/ephemeral-configs", asyncHandler(async (req, res) => {
   if (managedComputeEnabled() && deploymentCompute().configured) {
     await ensureManagedDefaultForAccount(client.accountId).catch(() => undefined);
   }
-  res.json(await store.getEphemeralConfigs(client.accountId));
-}));
-
-app.post("/account/ephemeral-configs", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
-  if (!client) return res.status(401).json({ error: "Unauthorized" });
-  const body = (req.body ?? {}) as Record<string, unknown>;
-  const name = typeof body.name === "string" ? body.name.trim() : "";
-  const provider = typeof body.provider === "string" ? body.provider.trim() : "";
-  if (!name) return res.status(400).json({ error: "Config name is required" });
-  if (!provider) return res.status(400).json({ error: "Provider is required" });
-  const now = new Date().toISOString();
-  const config: EphemeralNodeConfig = {
-    id: `cfg-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
-    name, provider, createdAt: now, updatedAt: now,
-  };
-  if (typeof body.region === "string" && body.region.trim()) config.region = body.region.trim();
-  if (typeof body.size === "string" && body.size.trim()) config.size = body.size.trim();
-  if (typeof body.image === "string" && body.image.trim()) config.image = body.image.trim();
-  if (typeof body.readyCapacity === "number") config.readyCapacity = body.readyCapacity;
-  if (typeof body.ttlMinutes === "number") config.ttlMinutes = body.ttlMinutes;
-  if (body.teardownOnAgentFinish === true) config.teardownOnAgentFinish = true;
-  if (body.computeSource === "managed") config.computeSource = "managed";
-  const current = await store.getEphemeralConfigs(client.accountId);
-  const saved = await store.setEphemeralConfigs(client.accountId, [...current, config]);
-  res.json(saved.find((c) => c.id === config.id) ?? config);
-}));
-
-app.put("/account/ephemeral-configs/:id", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
-  if (!client) return res.status(401).json({ error: "Unauthorized" });
-  const id = String(req.params.id);
-  const body = (req.body ?? {}) as Record<string, unknown>;
-  const current = await store.getEphemeralConfigs(client.accountId);
-  const existing = current.find((c) => c.id === id);
-  if (!existing) return res.status(404).json({ error: "Config not found" });
-  const next: EphemeralNodeConfig = { ...existing, updatedAt: new Date().toISOString() };
-  if (typeof body.name === "string" && body.name.trim()) next.name = body.name.trim();
-  if (typeof body.provider === "string" && body.provider.trim()) next.provider = body.provider.trim();
-  if (typeof body.region === "string") next.region = body.region.trim() || undefined;
-  if (typeof body.size === "string") next.size = body.size.trim() || undefined;
-  if (typeof body.image === "string") next.image = body.image.trim() || undefined;
-  if (typeof body.readyCapacity === "number") next.readyCapacity = body.readyCapacity;
-  if (typeof body.ttlMinutes === "number") next.ttlMinutes = body.ttlMinutes;
-  if (typeof body.teardownOnAgentFinish === "boolean") next.teardownOnAgentFinish = body.teardownOnAgentFinish || undefined;
-  if (typeof body.computeSource === "string") next.computeSource = body.computeSource === "managed" ? "managed" : undefined;
-  const saved = await store.setEphemeralConfigs(client.accountId, current.map((c) => (c.id === id ? next : c)));
-  res.json(saved.find((c) => c.id === id) ?? next);
-}));
-
-app.delete("/account/ephemeral-configs/:id", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
-  if (!client) return res.status(401).json({ error: "Unauthorized" });
-  const id = String(req.params.id);
-  const current = await store.getEphemeralConfigs(client.accountId);
-  const saved = await store.setEphemeralConfigs(client.accountId, current.filter((c) => c.id !== id));
-  res.json({ ok: true, configs: saved });
+  res.json((await store.getEphemeralConfigs(client.accountId)).filter((config) => config.computeSource === "managed"));
 }));
 
 app.get("/account/queue-routing", asyncHandler(async (req, res) => {
@@ -3943,10 +3786,8 @@ app.put("/account/hosted-provisioning", asyncHandler(async (req, res) => {
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const body = (req.body ?? {}) as Record<string, unknown>;
   // Fail closed: never accept secrets to store unless encryption is configured.
-  const providerTokens = body.providerTokens as Record<string, unknown> | undefined;
   const settingSecret =
     (typeof body.githubToken === "string" && body.githubToken.trim() !== "")
-    || (providerTokens && typeof providerTokens === "object" && Object.values(providerTokens).some((v) => typeof v === "string" && v))
     || (body.githubApp != null && typeof body.githubApp === "object");
   if (settingSecret && !hostedEncryptionAvailable()) {
     return res.status(503).json({ error: "Credential encryption is not configured (set HOSTED_CREDENTIAL_KEY). Refusing to store secrets in plaintext." });
@@ -3962,34 +3803,10 @@ app.put("/account/hosted-provisioning", asyncHandler(async (req, res) => {
   }
   if (typeof body.githubToken === "string") patch.githubToken = body.githubToken;
   if (body.githubApp != null && typeof body.githubApp === "object") patch.githubApp = body.githubApp as HostedProvisioning["githubApp"];
-  if (providerTokens && typeof providerTokens === "object") patch.providerTokens = providerTokens as Record<string, string>;
   await store.setHostedProvisioning(client.accountId, patch);
   await store.appendHostedAudit(client.accountId, { at: new Date().toISOString(), action: "credential_updated", detail: Object.keys(patch).join(",") || "none" });
   const status = await store.getHostedProvisioningStatus(client.accountId);
   res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid() });
-}));
-
-// Read-only provider credential validation for hosted onboarding. This endpoint
-// deliberately does not persist the submitted token; callers validate first,
-// then opt in/store it through PUT /account/hosted-provisioning.
-app.post("/account/hosted-provisioning/validate-provider", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
-  if (!client) return res.status(401).json({ error: "Unauthorized" });
-  const provider = String(req.body?.provider ?? "").trim();
-  const token = String(req.body?.token ?? "").trim();
-  if (!provider || !token) return res.status(400).json({ error: "provider and token are required" });
-  try {
-    await validateHostedProviderToken(provider, token, typeof req.body?.region === "string" ? req.body.region : undefined);
-    const current = await store.getHostedProvisioning(client.accountId);
-    await store.setHostedProvisioning(client.accountId, {
-      validatedProviders: { ...(current.validatedProviders ?? {}), [provider]: providerCredentialFingerprint(token) },
-    });
-    res.json({ ok: true, provider });
-  } catch (error) {
-    const detail = String((error as Error)?.message || error).slice(0, 160);
-    await store.appendHostedAudit(client.accountId, { at: new Date().toISOString(), action: "credential_validation_failed", provider, detail });
-    res.status(400).json({ error: `${provider} credential validation failed: ${detail}` });
-  }
 }));
 
 // Audit trail of hosted-credential use (never contains secrets).

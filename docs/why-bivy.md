@@ -12,19 +12,19 @@ control of the Machine.
 ## The problem
 
 A coding agent is most capable in the environment where the real work lives.
-That is often a developer workstation, a private server, or an isolated Machine
-in your own cloud—not a generic hosted sandbox. But an agent tied to one
+That is often a developer workstation or a private server—not a generic hosted
+sandbox. But an agent tied to one
 terminal is difficult to reach, supervise, or trust with unattended work.
 
 Bivy closes that gap:
 
 - **Capability:** use the real repository and development environment.
-- **Freedom:** choose a supported agent, model, Machine, and cloud.
+- **Freedom:** choose a supported agent, model, and Machine.
 - **Reach:** reconnect, steer, stop, and approve from another device.
 - **Autonomy:** turn live work into background Runs and Automations.
 - **Safety:** show effective protection, checks, outcomes, and Receipts.
-- **Sovereignty:** keep control of execution; when you bring your own cloud
-  Machines you pay the provider directly, and Bivy resells no compute.
+- **Sovereignty:** keep control of execution on your own Machines, with your own
+  model accounts.
 
 ## The product loop
 
@@ -40,8 +40,8 @@ Install Bivy
 A **Session** is live agent work that can be steered and resumed. A **Run** is
 delegated work with checks and an explicit outcome. An **Automation** creates
 Runs from GitHub, Linear, Slack, a schedule, or a webhook. Work executes on a
-**Machine** (the node daemon on a computer you control): either a trusted
-workstation or an isolated environment in your own cloud. The **Inbox**
+**Machine** (the node daemon on a computer you control, or a cloud Machine your
+Bivy deployment provides). The **Inbox**
 collects questions, approvals, failures, and completed work. A **Receipt** reports what Bivy observed and enforced, what
 changed, which checks passed, and what it could not observe.
 

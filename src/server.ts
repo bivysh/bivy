@@ -90,7 +90,6 @@ import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
 import { sessionLikeFields } from "./session/start-like.js";
 import { BIVY_AGENT_NOTE, mergeSyncedAgentInstructions, readAgentInstructions, sessionInstructions, writeAgentInstructions, MAX_AGENT_INSTRUCTIONS_BYTES } from "./agent-instructions.js";
-import { execEphemeralRequest, type EphemeralExecRequest } from "./ephemeral-exec.js";
 import { ApprovalManager, type ApprovalRequest } from "./approval.js";
 import { QuestionManager, validQuestions, isAskUserQuestionTool, formatQuestionResult } from "./question.js";
 import { NodeIdentity } from "./identity.js";
@@ -3286,21 +3285,6 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     const epoch = await promoteReplicaHere(sessionId);
     if (epoch === undefined) return ctx.reply({ type: "session.promote.result", requestId, ok: false, error: "Promotion lost the epoch race" });
     ctx.reply({ type: "session.promote.result", requestId, ok: true, sessionId, epoch });
-  },
-  // Ephemeral provisioning transport (node-broker path). A remote device that
-  // holds the user's cloud credentials asks this node to make ONE allowlisted
-  // HTTPS request to a provider (Fly/Hetzner/AWS/...) on its behalf. The
-  // token/credentials ride in the request headers and are used transiently —
-  // never persisted here — so the provisioning stays end-to-end (the control
-  // plane never sees it). The host allowlist is the SSRF guard.
-  async "ephemeral.exec"(msg) {
-    const requestId = String(msg.requestId ?? "");
-    try {
-      const result = await execEphemeralRequest(msg.request as EphemeralExecRequest);
-      relay?.sendEvent({ type: "ephemeral.exec.result", requestId, ...result });
-    } catch (error) {
-      relay?.sendEvent({ type: "ephemeral.exec.result", requestId, error: error instanceof Error ? error.message : String(error) });
-    }
   },
   // Subscription / OAuth login driven from a remote device. The node runs the
   // provider's device-code (or paste-back) flow and reports the verification

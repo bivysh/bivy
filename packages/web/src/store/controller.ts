@@ -58,32 +58,20 @@ import {
   disconnectGithubApp,
   setGithubAppDefaultNode,
   setGithubAppTriggerAccess,
-  fetchEphemeralQueueDefault,
-  setEphemeralQueueDefault,
   fetchEphemeralConfigs,
-  createEphemeralConfig as apiCreateEphemeralConfig,
-  updateEphemeralConfig as apiUpdateEphemeralConfig,
-  deleteEphemeralConfig as apiDeleteEphemeralConfig,
   fetchQueueRouting,
   setQueueRouting as apiSetQueueRouting,
-  fetchHostedProvisioning,
   setHostedProvisioning as apiSetHostedProvisioning,
-  fetchHostedAudit,
   fetchHostedMachines,
   destroyHostedMachine as apiDestroyHostedMachine,
-  validateHostedProviderCredential as apiValidateHostedProviderCredential,
-  rotateHostedProvisioning as apiRotateHostedProvisioning,
   connectHostedGithubApp as apiConnectHostedGithubApp,
   fetchHostedGithubRepositories,
   fetchHostedGithubBranches,
   type HostedGithubAppConnection,
-  triggerHostedProvision as apiTriggerHostedProvision,
   type EphemeralNodeConfig,
-  type EphemeralConfigInput,
   type QueueRouting,
   type HostedProvisioningStatus,
   type HostedProvisioningPatch,
-  type HostedAuditEvent,
   type HostedMachineSummary,
   type RunTerminalSummary,
   removeAccountNode,
@@ -98,46 +86,21 @@ import {
   createEphemeralKeyStore,
   createEphemeralModelKeyStore,
   createDeviceOAuthCredentialStore,
-  createEphemeralPrefsStore,
-  createEphemeralSetupStore,
-  createMachineStore,
   createPendingEphemeralLaunchStore,
-  createGithubTaskTokenStore,
   createTranscriptCache,
-  cloudExec,
-  validateEphemeralProviderToken,
-  launchEphemeralMachine,
-  destroyEphemeralMachine,
-  ephemeralAdapter,
-  ephemeralCatalogEntry,
-  ephemeralMachineFromNode,
-  ephemeralMachineFromCorrelation,
   type SessionCorrelation,
   createDeviceVaultKeyStore,
   DeviceVaultConflictError,
   deviceKeypair,
   clearIndexedDbDeviceKey,
-  listEphemeralSizes,
-  ephemeralNodeLabel,
   type TranscriptCache,
   type DeviceVaultKeyStore,
   type DeviceVaultRemote,
   type EphemeralModelKeyStore,
   type EphemeralModelKeyInfo,
-  type EphemeralPrefsStore,
-  type EphemeralPrefs,
-  type EphemeralSetupStore,
-  type EphemeralSetup,
-  type EphemeralMachine,
   type PendingEphemeralLaunch,
   type PendingEphemeralLaunchStore,
   type SessionLaunchCheckpointId,
-  type GithubTaskTokenStore,
-  type EphemeralQueueDefault,
-  type LaunchOpts,
-  type ProviderSize,
-  type MachineStore,
-  type ProviderKeyInfo,
   type AccountMe,
   type NotificationPreferences,
   type AccountNode,
@@ -171,7 +134,7 @@ import { navigate, parseRoute, routePath, type Route } from "../router.js";
 import { requiresAccountConnection, showAccountExtension, accountPresentationMessage } from "../client-config.js";
 import { nativeSessionLink } from "../native-session-link.js";
 import { accountOrigin, clearNativeNotifications, clearNativeSubscriptions, clientStorage, flushClientStorage, hasNativeSubscriptions, isPackagedClient, nativeNotifications, onNativeOpenURL, onNativeForeground, synchronizeNativeSubscriptions } from "../packaged-client.js";
-import { EPHEMERAL_MACHINES_ENABLED, EPHEMERAL_KEEP_FAILED_MACHINES } from "../flags.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { setMachineTheme } from "../theme.js";
 import { runtimeBoolean } from "../runtime-config.js";
 import type { AccessReport, TailnetMachine } from "../access.js";
@@ -240,11 +203,6 @@ const LOOPBACK = /^(localhost|127\.0\.0\.1|\[?::1\]?)$/;
 // E2E template envelope for scheduled chat messages (mirrors AutomationsView).
 const TEMPLATE_PREFIX = "bivy-room-v1";
 
-/** How long to wait after a launched ephemeral runner comes online before
- *  concluding it has no model credentials and raising the first-run sign-in
- *  prompt — long enough for hosted-escrow / peer-vault sync to land first. */
-const FIRST_RUN_MODEL_AUTH_GRACE_MS = 8000;
-
 /** How long to wait for a freshly-launched ephemeral runner to come online before
  *  telling the user it likely failed to boot — generous, since a bare VM installs
  *  from scratch (1–3 min), but bounded so a self-destructed machine doesn't leave
@@ -310,7 +268,6 @@ export class AppController {
   // so a torn-down destroy-lane session stays rebuildable after its node drops
   // from the registry. Refreshed on reconnect; written (deduped) before teardown.
   private ephemeralCorrelations: SessionCorrelation[] = [];
-  private correlatedSessions = new Set<string>();
   /** Subscribers for terminal / multiplexer events (the terminal overlay). */
   private terminalListeners = new Set<(e: ServerEvent) => void>();
   /** In-flight transcription and speech requests, correlated with node replies. */
@@ -523,44 +480,13 @@ export class AppController {
     });
     this.ephemeralCoordinator = new EphemeralCoordinator({
       listConfigs: () => fetchEphemeralConfigs(this.local),
-      createConfig: (input) => apiCreateEphemeralConfig(this.local, input),
-      updateConfig: (id, patch) => apiUpdateEphemeralConfig(this.local, id, patch),
-      removeConfig: (id) => apiDeleteEphemeralConfig(this.local, id),
-      listSizes: (providerId, region) => listEphemeralSizes(providerId, { exec: cloudExec(this.local), keys: this.ephemeralKeys }, region),
-      signedIn: () => this.signedIn,
       direct: () => this.direct,
       currentNodeId: () => this.local.cur,
-      roomKey: (nodeId) => this.local.keys()[nodeId],
-      draftRepo: () => this.store.getState().draft.repo || undefined,
-      githubToken: () => this.githubTaskToken.get(),
-      machines: () => this.ephemeralMachines.list(),
       nodes: () => this.store.getState().connection.nodes,
       correlations: () => this.ephemeralCorrelations,
-      launchMachine: (opts) => launchEphemeralMachine({ ...opts, debugKeepMachine: EPHEMERAL_KEEP_FAILED_MACHINES }, { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines }),
       restoreManagedMachine: (input) => restoreManagedSessionMachine(this.local, input),
-      destroyMachine: (machine) => destroyEphemeralMachine(machine, { store: this.local, exec: cloudExec(this.local), keys: this.ephemeralKeys, machines: this.ephemeralMachines }),
-      machineFromNode: (node) => ephemeralMachineFromNode(node),
-      machineFromCorrelation: ephemeralMachineFromCorrelation,
       connectToNode: (nodeId, timeoutMs) => this.connectToNode(nodeId, timeoutMs),
-      refreshNodes: () => { void this.refreshNodes(); },
       reportError: (error) => this.store.setError(error.message),
-      defaultConfig: (providerId) => {
-        const adapter = ephemeralAdapter(providerId);
-        return {
-          name: ephemeralCatalogEntry(providerId)?.name ?? providerId,
-          region: adapter?.defaultRegion ?? null,
-          size: adapter?.defaultSize ?? null,
-        };
-      },
-      validateProviderToken: (id, token) => validateEphemeralProviderToken(id, token, cloudExec(this.local)),
-      setProviderToken: (id, token) => this.ephemeralKeys.setToken(id, token),
-      removeProviderToken: (id) => this.ephemeralKeys.remove(id),
-      getProviderToken: (id) => this.ephemeralKeys.getToken(id),
-      assignWorkItem: (id, input) => assignWorkItem(this.local, id, input),
-      nodeLabel: (id) => ephemeralNodeLabel(id),
-      followupCount: (sessionId) => this.store.getFollowups(sessionId).length,
-      recordSessionCorrelation: (sessionId, machine) => { void this.recordSessionCorrelation(sessionId, machine); },
-      schedule: (effect, delayMs) => { setTimeout(effect, delayMs); },
     });
     this.accountCoordinator = new AutomationsAccountCoordinator({
       local: this.local,
@@ -639,7 +565,6 @@ export class AppController {
       if (sid) {
         this.store.settleSendingFollowups(sid);
         this.followupCoordinator.drain(sid);
-        void this.maybeTeardownFinishedEphemeral(sid);
       }
     };
     // Live convergence: refresh the moment the node tells us a session was
@@ -2267,13 +2192,6 @@ export class AppController {
     // A scheduled message may have delivered while this device was offline —
     // drop its queue row so it stops showing as "scheduled" (see the method doc).
     void this.resyncScheduledFollowups();
-    // If this is a machine we just launched, seed its vault with the model API
-    // keys held on this device (closes the cold-start gap — see the method doc).
-    void this.seedEphemeralNodeIfNeeded();
-    // First-run subscription-OAuth: a launched runner that ends up with no model
-    // credentials at all (nothing seeded, no peer vault, no hosted escrow) needs
-    // the user to sign in once. See the method doc.
-    void this.maybePromptFirstRunModelAuth();
     // Pull durable session↔machine correlations so a torn-down session stays
     // rebuildable (Gap 1); then record one for the machine we're on, if owned.
     void this.refreshEphemeralCorrelations();
@@ -2533,19 +2451,9 @@ export class AppController {
         this.store.updateLaunchCheckpoint(provisionalId, "repository", "skipped");
       }
       if (config.computeSource === "managed") logSetup("Reserving secure managed compute…");
-      const machineLaunch = config.computeSource === "managed"
-        ? launchManagedSessionMachine(this.local, config.id, { runtimeId: requestedAgent, requestId: provisionalId })
-        : this.launchEphemeral({
-            provider: config.provider,
-            region: config.region ?? undefined,
-            size: config.size ?? undefined,
-            image: config.image ?? undefined,
-            ttlMinutes: config.ttlMinutes ?? undefined,
-            teardownOnAgentFinish: config.teardownOnAgentFinish === true,
-            name: config.name,
-            setupId: config.id,
-            onProgress: logSetup,
-          });
+      // Only deployment-provided profiles launch; the server owns the provider.
+      if (config.computeSource !== "managed") throw new Error("This machine profile is no longer supported.");
+      const machineLaunch = launchManagedSessionMachine(this.local, config.id, { runtimeId: requestedAgent, requestId: provisionalId });
       const [machine, managedCredentialsReady] = await Promise.all([machineLaunch, managedCredentialReadiness]);
       this.store.updateLaunchCheckpoint(provisionalId, "account", "done");
       if (!machine.nodeId) throw new Error("machine launched without a node id");
@@ -3703,24 +3611,11 @@ export class AppController {
       save: async (value) => { try { localStorage.setItem("bivy_device_vault_state", JSON.stringify(value)); } catch { /* status remains in memory */ } },
     },
   });
-  private ephemeralPrefs: EphemeralPrefsStore = createEphemeralPrefsStore();
-  private ephemeralSetups: EphemeralSetupStore = createEphemeralSetupStore();
-  private ephemeralMachines: MachineStore = createMachineStore();
   private pendingLaunchStore: PendingEphemeralLaunchStore = createPendingEphemeralLaunchStore();
-  /** Ephemeral node ids we've already seeded with device-held model keys this
-   *  session, so a reconnect doesn't re-push (the node write is idempotent
-   *  regardless). See `seedEphemeralNodeIfNeeded`. */
-  private seededEphemeralNodes = new Set<string>();
-  /** Launched ephemeral node ids we've already run the first-run model-auth
-   *  check for this session, so a reconnect doesn't re-schedule it. */
-  private firstRunAuthNodes = new Set<string>();
   /** Interactive Cloud Machines paused for provider setup before agent launch. */
   private managedCredentialSetupNodes = new Set<string>();
   private managedCredentialGrantInFlight = false;
   private managedCredentialReturnSessionId: string | null = null;
-  listEphemeralKeys(): Promise<ProviderKeyInfo[]> {
-    return this.ephemeralKeys.list();
-  }
   /** Device-held model **API keys** used to seed a freshly-launched machine's
    *  vault over the E2E channel (closes the cold-start gap — see
    *  docs/ephemeral-sessions.md, "Closing the cold-start gap"). API keys only. */
@@ -3733,31 +3628,7 @@ export class AppController {
   removeEphemeralModelKey(provider: string, label = "default"): Promise<void> {
     return this.ephemeralKeys.removeModelKey(provider, label);
   }
-  getEphemeralToken(id: string): Promise<string> {
-    return this.ephemeralCoordinator.getProviderToken(id);
-  }
-  setEphemeralToken(id: string, token: string): Promise<void> {
-    return this.ephemeralCoordinator.setProviderToken(id, token);
-  }
-  /** Save a provider token and return the provider's default runner (creating one
-   *  if needed), so the connect UI can immediately pick it for the draft session. */
-  connectEphemeralProvider(providerId: string, token: string): Promise<EphemeralNodeConfig | null> {
-    return this.ephemeralCoordinator.connectProvider(providerId, token);
-  }
-  /** The provider's default runner (creating one if needed) — for the connect
-   *  UI's "use this runner" action on an already-connected provider. */
-  defaultEphemeralRunner(providerId: string): Promise<EphemeralNodeConfig | null> {
-    return this.ensureDefaultRunner(providerId);
-  }
-  /** The provider's default ephemeral runner (account config), creating one if it
-   *  has none yet — so a freshly-connected provider is immediately pickable. */
-  private ensureDefaultRunner(providerId: string): Promise<EphemeralNodeConfig | null> {
-    return this.ephemeralCoordinator.ensureDefaultRunner(providerId);
-  }
 
-  removeEphemeralToken(id: string): Promise<void> {
-    return this.ephemeralCoordinator.removeProviderToken(id);
-  }
 
   // --- Cross-device credential sync --------------------------------------
   private oauthRecoveryEnabled(): boolean {
@@ -3820,74 +3691,6 @@ export class AppController {
       },
     };
   }
-  /** Per-provider saved launch preferences (region/size/TTL/repo) configured in
-   *  Settings → Ephemeral machines; used to pre-fill the launch flow. */
-  getEphemeralPrefs(id: string): Promise<EphemeralPrefs> {
-    return this.ephemeralPrefs.get(id);
-  }
-  setEphemeralPrefs(id: string, patch: Partial<EphemeralPrefs>): Promise<EphemeralPrefs> {
-    return this.ephemeralPrefs.set(id, patch);
-  }
-  listEphemeralSetups(provider?: string): Promise<EphemeralSetup[]> {
-    return this.ephemeralSetups.list(provider);
-  }
-  createEphemeralSetup(provider: string, input: { name: string } & Partial<EphemeralPrefs>): Promise<EphemeralSetup> {
-    return this.ephemeralSetups.create(provider, input);
-  }
-  updateEphemeralSetup(id: string, patch: Partial<Pick<EphemeralSetup, "name" | keyof EphemeralPrefs>>): Promise<EphemeralSetup> {
-    return this.ephemeralSetups.update(id, patch);
-  }
-  removeEphemeralSetup(id: string): Promise<void> {
-    return this.ephemeralSetups.remove(id);
-  }
-  listEphemeralMachines(): Promise<EphemeralMachine[]> {
-    return this.ephemeralMachines.list();
-  }
-  /**
-   * When we come online on a node WE launched (a device-local `MachineStore`
-   * record), push the model API keys held on THIS device into its vault so a
-   * brand-new machine has model credentials even when it's the account's only
-   * node and there's no peer to sync the model-auth vault from — the cold-start
-   * gap (docs/ephemeral-sessions.md, "Closing the cold-start gap").
-   *
-   * Uses the ordinary `provider.apiKey` frame over the already-paired E2E
-   * channel — the same path Settings → Keys uses — so the relay/control plane
-   * only ever see ciphertext and nothing lands in the machine's user-data. API
-   * keys only; agent-native OAuth logins are out of scope. Guarded per session
-   * (the node write is idempotent regardless).
-   */
-  private async seedEphemeralNodeIfNeeded(): Promise<void> {
-    if (!EPHEMERAL_MACHINES_ENABLED || this.direct) return;
-    const nodeId = this.local.cur;
-    if (!nodeId || this.seededEphemeralNodes.has(nodeId)) return;
-    let machines: EphemeralMachine[];
-    try {
-      machines = await this.ephemeralMachines.list();
-    } catch {
-      return;
-    }
-    // Only seed nodes this device provisioned — never a normal, persistent one.
-    if (!machines.some((m) => m.nodeId === nodeId)) return;
-    let entries: { provider: string; key: string }[];
-    try {
-      entries = await this.ephemeralKeys.modelKeyEntries();
-    } catch {
-      return;
-    }
-    // Mark seeded regardless of whether there were keys — an empty device just
-    // has nothing to contribute, and re-checking on every reconnect is wasteful.
-    this.seededEphemeralNodes.add(nodeId);
-    if (!entries.length) return;
-    // Push only while the transport is still live on this same node — an async
-    // hop above could have switched it out from under us.
-    if (this.store.getState().connection.status !== "online" || this.local.cur !== nodeId) {
-      this.seededEphemeralNodes.delete(nodeId); // let a later online retry
-      return;
-    }
-    for (const { provider, key } of entries) {
-      this.send({ kind: "provider.apiKey", provider, key });
-    }
-  }
   /**
    * First-run model access for a launched ephemeral runner.
    *
@@ -3931,61 +3734,12 @@ export class AppController {
     }
   }
 
-  private async maybePromptFirstRunModelAuth(): Promise<void> {
-    if (!EPHEMERAL_MACHINES_ENABLED || this.direct) return;
-    const nodeId = this.local.cur;
-    if (!nodeId || this.firstRunAuthNodes.has(nodeId)) return;
-    // Only a machine THIS device launched — never a normal persistent node,
-    // which manages its own logins through Settings.
-    const machines = await this.ephemeralMachines.list().catch(() => [] as EphemeralMachine[]);
-    if (!machines.some((m) => m.nodeId === nodeId)) return;
-    this.firstRunAuthNodes.add(nodeId);
-    // Ask the node for its provider status now; the freshest list will have
-    // arrived well before the grace elapses.
-    this.listProviders();
-    setTimeout(() => {
-      const st = this.store.getState();
-      // Bail if we've moved on, a login is already in flight, the prompt is
-      // already up, or creds have since landed.
-      if (st.connection.status !== "online" || this.local.cur !== nodeId) return;
-      if (st.presentation.needsModelAuth || st.presentation.oauth) return;
-      if (st.catalogs.providers.some((p) => p.configured)) return;
-      // Prefer an OAuth-capable provider (Anthropic first — subscription login
-      // is the whole point here), falling back to anthropic by id.
-      const provider =
-        st.catalogs.providers.find((p) => p.oauth && p.id === "anthropic")?.id ??
-        st.catalogs.providers.find((p) => p.oauth)?.id ??
-        "anthropic";
-      this.store.setNeedsModelAuth({ nodeId, provider });
-    }, FIRST_RUN_MODEL_AUTH_GRACE_MS);
-  }
 
   /** Dismiss the first-run model-auth prompt (user chose to handle it later). */
   dismissModelAuthPrompt(): void {
     this.store.setNeedsModelAuth(null);
   }
 
-  /** Destroy a configured ephemeral machine shortly after agent_end. The short
-   * grace period lets final transcript/PR metadata flush first. A queued
-   * follow-up suppresses teardown; its eventual agent_end will try again.
-   *
-   * This is the device-driven FAST PATH, kept for snappy teardown while a device
-   * is watching. It is no longer the sole authority: the machine's own daemon now
-   * self-terminates once idle (BIVY_EPHEMERAL — see src/ephemeral-teardown.ts) and
-   * the control-plane reconciler reaps leak-prone providers, so teardown happens
-   * even with no device online. Provider destroy is idempotent/404-tolerant, so
-   * these paths race harmlessly; TTL remains the final backstop. */
-  private maybeTeardownFinishedEphemeral(sessionId: string): Promise<void> {
-    if (this.isProvisionalSessionId(sessionId) || [...this.pendingLaunches.values()].some(task => task.sessionId === sessionId)) return Promise.resolve();
-    return this.ephemeralCoordinator.teardownFinishedSession(sessionId);
-  }
-
-  listEphemeralSizes(providerId: string, region?: string): Promise<ProviderSize[]> {
-    return this.ephemeralCoordinator.listSizes(providerId, region);
-  }
-  launchEphemeral(opts: LaunchOpts): Promise<EphemeralMachine> { return this.ephemeralCoordinator.launch(opts); }
-  destroyEphemeral(machine: EphemeralMachine): Promise<void> { return this.ephemeralCoordinator.destroy(machine); }
-  resumeAndConnectNode(nodeId: string, timeoutMs = 90_000): Promise<void> { return this.ephemeralCoordinator.resumeAndConnect(nodeId, timeoutMs); }
 
   /** Base control-plane URL + bearer for the account-authenticated (`requireUser`)
    *  session-correlation endpoints. */
@@ -4009,40 +3763,6 @@ export class AppController {
     }
   }
 
-  /** Persist (upsert) the session↔machine correlation for a machine this device
-   *  launched, so it survives the node's teardown/unenroll (Gap 1). Deduped per
-   *  (node, session); updates the local cache so an immediate rebuild sees it. */
-  private async recordSessionCorrelation(sessionId: string, machine: EphemeralMachine): Promise<void> {
-    if (this.isProvisionalSessionId(sessionId)) return;
-    if (this.direct || !this.local.s || !machine.nodeId || !sessionId) return;
-    const dedupe = `${machine.nodeId}:${sessionId}`;
-    if (this.correlatedSessions.has(dedupe)) return;
-    this.correlatedSessions.add(dedupe);
-    const body: SessionCorrelation = {
-      sessionId,
-      nodeId: machine.nodeId,
-      provider: machine.provider,
-      region: machine.region || undefined,
-      ttlMinutes: machine.ttlMinutes,
-      repo: machine.repo,
-      setupId: machine.setupId,
-      machineId: machine.id,
-      app: machine.app,
-      computeSource: machine.computeSource,
-    };
-    try {
-      const { base, auth } = this.correlationApi();
-      const response = await fetch(`${base}/session-correlation/${encodeURIComponent(sessionId)}`, { method: "PUT", headers: auth, body: JSON.stringify(body) });
-      if (response.status === 410) {
-        this.ephemeralCorrelations = this.ephemeralCorrelations.filter((entry) => entry.sessionId !== sessionId);
-        return;
-      }
-      if (!response.ok) throw new Error("Couldn't save session routing metadata.");
-      this.ephemeralCorrelations = [body, ...this.ephemeralCorrelations.filter((c) => c.sessionId !== sessionId)];
-    } catch {
-      this.correlatedSessions.delete(dedupe); // let a later attempt retry
-    }
-  }
 
   reprovisionEphemeral(nodeId: string, sessionId: string): Promise<void> {
     return this.ephemeralCoordinator.reprovision(nodeId, sessionId);
@@ -4075,69 +3795,10 @@ export class AppController {
     }
   }
 
-  // --- GitHub work queue on ephemeral servers (issue #532) ----------------
-  // Reuses the exact provision/destroy lifecycle above; the only new pieces are
-  // (1) booting the machine opted into the hosted work queue and pre-labelled so
-  // it can be targeted, and (2) the account-level default that lets a signed-in
-  // device offer to auto-provision a general-purpose runner when the queue has
-  // work and no persistent node is online.
-
-  private githubTaskToken: GithubTaskTokenStore = createGithubTaskTokenStore();
-
-  /** The saved GitHub token (if any) an ephemeral queue runner boots with. */
-  getGithubTaskToken(): Promise<string> {
-    return this.githubTaskToken.get();
-  }
-  setGithubTaskToken(token: string): Promise<void> {
-    return this.githubTaskToken.set(token);
-  }
-  removeGithubTaskToken(): Promise<void> {
-    return this.githubTaskToken.remove();
-  }
-
-  /**
-   * Provision an ephemeral server for ONE pending queue item and assign the item
-   * to it — the per-item "Run on ephemeral server" action in the queue UI. The
-   * label is known as soon as the machine is provisioned (derived from its node
-   * id), so the item can be assigned before the machine has even booted; the
-   * machine then picks it up via the normal hosted-queue poll once it's up.
-   */
-  runWorkItemOnEphemeral(
-    id: string,
-    opts: { provider: string; region?: string; size?: string; ttlMinutes?: number; runtimeId?: string; model?: string; configId?: string },
-  ): Promise<EphemeralMachine> {
-    return this.ephemeralCoordinator.runWorkItem(id, opts);
-  }
-
-  /**
-   * Provision a general-purpose ephemeral server that serves the shared queue
-   * (no specific item), so incoming work can run without a persistent node —
-   * the queue-level "auto-provision" default's manual/triggered form.
-   */
-  launchEphemeralQueueWorker(opts: { provider: string; region?: string; size?: string; ttlMinutes?: number; configId?: string }): Promise<EphemeralMachine> {
-    return this.ephemeralCoordinator.launchQueueWorker(opts);
-  }
-
-  /** The account's saved ephemeral-queue-default preference (whether/how to
-   *  auto-provision), shared across the account's devices. */
-  getEphemeralQueueDefault(): Promise<EphemeralQueueDefault> {
-    return fetchEphemeralQueueDefault(this.local);
-  }
-  setEphemeralQueueDefault(patch: Partial<EphemeralQueueDefault>): Promise<EphemeralQueueDefault> {
-    return setEphemeralQueueDefault(this.local, patch);
-  }
+  // --- Deployment-provided cloud machines and queue routing --------------
   /** Account-level ephemeral node configs (shared across the account's devices). */
   listEphemeralConfigs(): Promise<EphemeralNodeConfig[]> {
     return this.ephemeralCoordinator.listConfigs();
-  }
-  createEphemeralConfig(input: EphemeralConfigInput): Promise<EphemeralNodeConfig> {
-    return this.ephemeralCoordinator.createConfig(input);
-  }
-  updateEphemeralConfig(id: string, patch: Partial<EphemeralConfigInput>): Promise<EphemeralNodeConfig> {
-    return this.ephemeralCoordinator.updateConfig(id, patch);
-  }
-  removeEphemeralConfig(id: string): Promise<void> {
-    return this.ephemeralCoordinator.removeConfig(id);
   }
   /** The account's default queue routing (primary runner + optional fallback). */
   getQueueRouting(): Promise<QueueRouting> {
@@ -4146,30 +3807,14 @@ export class AppController {
   setQueueRouting(routing: QueueRouting): Promise<QueueRouting> {
     return apiSetQueueRouting(this.local, routing);
   }
-  /** Hosted (control-plane-orchestrated) provisioning: status, credentials, audit. */
-  getHostedProvisioning(): Promise<HostedProvisioningStatus> {
-    return fetchHostedProvisioning(this.local);
-  }
   setHostedProvisioning(patch: HostedProvisioningPatch): Promise<HostedProvisioningStatus> {
     return apiSetHostedProvisioning(this.local, patch);
-  }
-  listHostedAudit(): Promise<HostedAuditEvent[]> {
-    return fetchHostedAudit(this.local);
   }
   listHostedMachines(): Promise<HostedMachineSummary[]> {
     return fetchHostedMachines(this.local);
   }
   destroyHostedMachine(nodeId: string): Promise<void> {
     return apiDestroyHostedMachine(this.local, nodeId);
-  }
-  validateHostedProviderCredential(provider: string, token: string, region?: string): Promise<void> {
-    return apiValidateHostedProviderCredential(this.local, provider, token, region);
-  }
-  rotateHostedProvisioning(): Promise<HostedProvisioningStatus> {
-    return apiRotateHostedProvisioning(this.local);
-  }
-  triggerHostedProvision(execute = false) {
-    return apiTriggerHostedProvision(this.local, execute);
   }
 
   // --- Terminal ----------------------------------------------------------

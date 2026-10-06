@@ -6,13 +6,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-test("failed ephemeral machines are retained only by an explicit debug build opt-in", async () => {
-  // Retaining a boot-failed machine keeps a billable resource alive; production
-  // builds (no VITE_BIVY_KEEP_FAILED_EPHEMERAL=1) must never do it.
-  const { EPHEMERAL_KEEP_FAILED_MACHINES } = await import("../packages/web/src/flags.js");
-  assert.equal(EPHEMERAL_KEEP_FAILED_MACHINES, false);
-});
-
 test("browser-node credential sync keeps an offline key rotation and honors newer deletions", async () => {
   const { CredentialsModelsCoordinator } = await import("../packages/web/src/store/coordinators/credentials-models-coordinator.js");
   type Key = { provider: string; label: string; key: string; updatedAt?: string | null };

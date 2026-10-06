@@ -106,20 +106,6 @@ describe("launchEphemeralMachine — durable lifecycle", () => {
     expect(providerCalls).toBe(0);
   });
 
-  it("refuses device-only providers whose guest shutdown cannot stop billing", async () => {
-    const keys = createEphemeralKeyStore(memoryBackend());
-    await keys.setToken("hetzner", "hz-token");
-    let fetched = false;
-    await expect(launchEphemeralMachine(
-      { provider: "hetzner" },
-      {
-        store: fakeStore(), exec: flyExec, keys, machines: createMachineStore(memoryBackend()),
-        fetchImpl: (async () => { fetched = true; return {} as Response; }) as typeof fetch,
-      },
-    )).rejects.toThrow(/requires hosted provisioning/);
-    expect(fetched).toBe(false);
-  });
-
   it("refuses a removed provider before reading credentials or enrolling", async () => {
     let fetched = false;
     await expect(launchEphemeralMachine(

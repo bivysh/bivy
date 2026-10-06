@@ -193,23 +193,10 @@ test("session coordinator owns draft creation ordering and first prompt framing"
   assert.deepEqual(events, ["message", "launch"]);
 });
 
-test("ephemeral coordinator assigns queue work only after launch", async () => {
-  const events: string[] = [];
-  const coordinator = new EphemeralCoordinator({
-    signedIn: () => true, githubToken: async () => "gh", draftRepo: () => undefined,
-    launchMachine: async () => { events.push("launch"); return { id: "m1", nodeId: "n1", provider: "fly" } as any; },
-    assignWorkItem: async () => { events.push("assign"); }, nodeLabel: (id: string) => `bivy/${id}`,
-    refreshNodes: () => events.push("refresh"),
-  } as any);
-  await coordinator.runWorkItem("work-1", { provider: "fly" });
-  assert.deepEqual(events, ["launch", "refresh", "assign", "refresh"]);
-});
-
 test("ephemeral coordinator restores managed sessions without a device cloud token or room key", async () => {
   const events: string[] = [];
   const coordinator = new EphemeralCoordinator({
     currentNodeId: () => "eph-managed",
-    roomKey: () => undefined,
     nodes: () => [],
     correlations: () => [{ sessionId: "s1", nodeId: "eph-managed", provider: "fly", setupId: "managed-default", computeSource: "managed" }],
     restoreManagedMachine: async (input: unknown) => { events.push(`restore:${JSON.stringify(input)}`); return { nodeId: "eph-managed" } as any; },

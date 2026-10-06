@@ -287,13 +287,14 @@ bivy link     # mint a fresh pairing QR
 
 ## "This Bivy server has no encryption key for stored credentials"
 
-**Symptom.** In **Settings → Cloud machine profiles → a profile**, the *Run
-automations while I'm offline* toggle is disabled and this banner shows. There is
-no switch for it anywhere in the app.
+**Symptom.** Allowing a credential for unattended runs, or saving a GitHub
+credential for cloud machines, fails with *"Credential encryption is not
+configured (set HOSTED_CREDENTIAL_KEY)"*. There is no switch for it anywhere in
+the app.
 
 **Cause.** It's a control-plane setting: the server has no
-`HOSTED_CREDENTIAL_KEY`, so it refuses (fail-closed) to store the cloud
-credential offline automations need.
+`HOSTED_CREDENTIAL_KEY`, so it refuses (fail-closed) to store the credentials
+runs need while your devices are offline.
 
 **Fix.** On the machine running the control plane:
 

@@ -9,7 +9,6 @@ import {
   buildBootstrapUserData,
   ephemeralAdapter,
   type ExecFn,
-  type ProviderSize,
 } from "./ephemeral-provider-adapters.js";
 import type { EphemeralMachine } from "./ephemeral-machine.js";
 import { planEphemeralLaunch, trackProvisionedMachine } from "./ephemeral-launch-plan.js";
@@ -62,9 +61,6 @@ export {
   createEphemeralKeyStore,
   createEphemeralModelKeyStore,
   createDeviceOAuthCredentialStore,
-  createEphemeralPrefsStore,
-  createEphemeralSetupStore,
-  createGithubTaskTokenStore,
   createMachineStore,
   createPendingEphemeralLaunchStore,
   indexedDbBackend,
@@ -76,11 +72,6 @@ export {
   type EphemeralModelKeyEntry,
   type EphemeralModelKeyInfo,
   type EphemeralModelKeyStore,
-  type EphemeralPrefs,
-  type EphemeralPrefsStore,
-  type EphemeralSetup,
-  type EphemeralSetupStore,
-  type GithubTaskTokenStore,
   type KvBackend,
   type MachineStore,
   type PendingEphemeralLaunch,
@@ -90,19 +81,11 @@ export {
 export {
   ALLOWED_HOSTS,
   assertAllowedUrl,
-  awsSign,
   buildBootstrapUserData,
   ephemeralAdapter,
   ephemeralCostEstimate,
   extractProviderMessage,
-  parseAwsToken,
-  parseXml,
   validateEphemeralProviderToken,
-  xmlChild,
-  xmlChildren,
-  xmlFind,
-  type AwsCreds,
-  type XmlEl,
 } from "./ephemeral-provider-adapters.js";
 export type {
   BootstrapOpts,
@@ -123,20 +106,6 @@ function nowIso(): string {
 
 function cpBase(store: LocalStore): string {
   return (store.cp || (typeof location !== "undefined" ? location.origin : "")).replace(/\/$/, "");
-}
-
-/** Cloud-relay transport: the control plane forwards one allowlisted request. */
-export function cloudExec(store: LocalStore, fetchImpl: typeof fetch = fetch): ExecFn {
-  return async (request) => {
-    const res = await fetchImpl(`${cpBase(store)}/api/ephemeral/exec`, {
-      method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${store.s}` },
-      body: JSON.stringify(request),
-    });
-    const data: any = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data?.error || `exec relay failed (${res.status})`);
-    return { status: data.status ?? res.status, body: data.body };
-  };
 }
 
 function randHex(bytes: number): string {
@@ -220,29 +189,6 @@ export interface LaunchOpts {
   reuseNodeId?: string;
   reuseRoomKeyB64?: string;
   restoreSessionId?: string;
-}
-
-/**
- * Resolve the pickable sizes for a provider. Prefers the provider's live
- * catalog (needs a saved token); falls back to the adapter's static list when
- * no adapter/token is available or the live call fails.
- */
-export async function listEphemeralSizes(
-  provider: string,
-  deps: { exec: ExecFn; keys: EphemeralKeyStore },
-  region?: string,
-): Promise<ProviderSize[]> {
-  const adapter = ephemeralAdapter(provider);
-  if (!adapter) return [];
-  if (!adapter.listSizes) return adapter.sizes;
-  const token = await deps.keys.getToken(provider).catch(() => "");
-  if (!token) return adapter.sizes;
-  try {
-    const live = await adapter.listSizes({ exec: deps.exec, token, region });
-    return live.length ? live : adapter.sizes;
-  } catch {
-    return adapter.sizes;
-  }
 }
 
 /**
