@@ -65,6 +65,11 @@ export function messageContentAtoms(message: RuntimeMessage | undefined): Messag
     const text = value.trim();
     if (text) texts.push(`${role}#${text}`);
   };
+  // Pi-shaped results carry their call id on the message (`role: "toolResult"`),
+  // not in a block. Without it a result's only atom was its text, so a second
+  // "(no output)" read as already logged and was dropped from the base.
+  const resultId = (message as { toolCallId?: unknown }).toolCallId;
+  if (typeof resultId === "string" && resultId) toolIds.push(`tr:${resultId}`);
   if (typeof content === "string") {
     pushText(content);
     return { toolIds, texts };
@@ -74,7 +79,7 @@ export function messageContentAtoms(message: RuntimeMessage | undefined): Messag
       if (!block || typeof block !== "object") continue;
       const b = block as Record<string, unknown>;
       const type = String(b.type || "");
-      if (type === "tool_use" && b.id) toolIds.push(`tu:${String(b.id)}`);
+      if ((type === "tool_use" || type === "toolCall") && b.id) toolIds.push(`tu:${String(b.id)}`);
       else if (type === "tool_result") {
         const id = b.tool_use_id ?? b.toolUseId;
         if (id) toolIds.push(`tr:${String(id)}`);
@@ -104,6 +109,11 @@ export function messageContentAtoms(message: RuntimeMessage | undefined): Messag
  */
 export function mergeBases(logged: RuntimeMessage[], runtime: readonly RuntimeMessage[]): RuntimeMessage[] {
   if (!logged.length) return runtime as RuntimeMessage[];
+  // A runtime that still holds every logged message verbatim is the complete,
+  // correctly ordered record. Taking it whole also repairs a base an earlier
+  // merge left out of order.
+  const runtimeKeys = new Set(runtime.map((m) => JSON.stringify(m)));
+  if (logged.every((m) => runtimeKeys.has(JSON.stringify(m)))) return runtime as RuntimeMessage[];
   // Streaming runtimes can refine a message in place after an early completion
   // boundary. Match those revisions by provider message id, or by the timestamp
   // and role Bivy assigned when the message was first stored. Without this, each

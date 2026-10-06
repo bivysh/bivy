@@ -184,6 +184,23 @@ test("mergeBases folds a reloaded thinking-only message instead of appending it 
   assert.deepEqual(mergeBases(streamed, reloaded), streamed);
 });
 
+test("mergeBases keeps a Pi tool result whose output repeats an earlier one, in order", () => {
+  // Pi shape: `toolCall` blocks, results as `role: "toolResult"` with the id on
+  // the message. Two "(no output)" results used to read as one re-serialized
+  // result: the second was dropped and the next turn landed before its call.
+  const call = (id: string, ts: number, usage = 1) => ({ role: "assistant", content: [{ type: "toolCall", id, name: "bash", arguments: {} }], usage, timestamp: ts });
+  const result = (id: string, ts: number) => ({ role: "toolResult", toolCallId: id, content: [{ type: "text", text: "(no output)" }], timestamp: ts });
+  const logged = [baseMsg("user", "go", 100), call("c1", 200), result("c1", 300), call("c2", 400, 0)];
+  const runtime = [logged[0]!, logged[1]!, logged[2]!, call("c2", 400), result("c2", 500), call("c3", 600)];
+  assert.deepEqual(mergeBases(logged as any, runtime as any), runtime);
+});
+
+test("mergeBases takes the runtime whole when it holds every logged message, repairing a misordered log", () => {
+  const ordered = [baseMsg("user", "go", 100), baseMsg("assistant", "one", 200), baseMsg("assistant", "two", 300), baseMsg("assistant", "three", 400)];
+  const scrambled = [ordered[0]!, ordered[2]!, ordered[1]!];
+  assert.deepEqual(mergeBases(scrambled, ordered), ordered);
+});
+
 test("mergeBases keeps a genuinely repeated message (positional, not set-based, dedup)", () => {
   // A user who sends "run tests" twice must keep BOTH turns — the content fold is
   // positional (aligns two serializations of ONE conversation), never a flat set
