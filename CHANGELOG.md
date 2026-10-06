@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Pi 1.0.** Bivy now ships and certifies Pi 1.0.4 (from 0.99.2). Pi sessions, tool calls, resume, model switching and stopping a turn work as before. Opening a Pi session in the terminal now uses Pi's fullscreen view by default; set `tuiMode` to `"regular"` in Pi's settings to keep normal scrollback.
 
+### Security
+
+- The control plane's lockfile moves `proxy-addr` to 2.0.8 (GHSA-jqcg-44mw-7w3h: IP spoofing through IPv4-mapped IPv6 addresses in trusted subnets) and `moment` to 2.31.0 (GHSA-4p3w-j4w9-5jqw).
+
 ### Fixed
 
 - **Pi sessions no longer stop updating partway through.** If two of Pi's tool calls printed the same output, such as `(no output)`, Bivy mistook the second result for one it already had and dropped it. Every later message was then recorded out of order, so the bottom of the chat stayed on an old message while the agent kept working. Bivy now matches Pi's tool results by their call id. An affected session puts itself back in order on its next turn.
