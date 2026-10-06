@@ -47,14 +47,11 @@ import { ErrorToast } from "./components/ErrorToast.js";
 import { NoticeToast } from "./components/NoticeToast.js";
 import { Spinner } from "./components/Spinner.js";
 import { StatusDot } from "./components/StatusDot.js";
-import { EphemeralSheet } from "./components/Ephemeral.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
 import { GetStarted, FIRST_CHANGE_PROMPT, openAppPrompt } from "./components/GetStarted.js";
 import { NotifyOffer } from "./components/NotifyOffer.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
-import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
-import { useCloudMachinesEnabled } from "./cloudMachines.js";
 import { PwaLifecycleNotice } from "./components/PwaLifecycleNotice.js";
 import { clearQueuedPrompts, markPromptQueued, setFollowupQueuedPrompts, setTurnActive } from "./pwaLifecycle.js";
 // The terminal pulls in xterm + its GPU/search/link addons (~a third of the JS
@@ -130,9 +127,6 @@ export function App() {
   useEffect(() => {
     if (githubAppReturning) openAutomations({ setup: "github" });
   }, [githubAppReturning]);
-  const cloudMachinesOptIn = useCloudMachinesEnabled();
-  const cloudMachinesEnabled = EPHEMERAL_MACHINES_ENABLED && cloudMachinesOptIn;
-  const [ephemeralOpen, setEphemeralOpen] = useState(false);
   // Full-session file changes sheet — opened from the run pill / summary sheet
   // ("N files edited"), not a card stacked above the composer.
   // On a narrow screen (no side pane) the session's changes can take the main
@@ -1089,9 +1083,7 @@ export function App() {
           <div className="connect-runner-scroll">
             <ConnectRunner
               nodes={state.connection.nodes}
-              ephemeralEnabled={false}
               onPickNode={(nodeId) => controller.switchNode(nodeId)}
-              onEphemeral={() => setEphemeralOpen(true)}
               onRefresh={() => controller.refreshNodes()}
             />
           </div>
@@ -1528,7 +1520,6 @@ export function App() {
         />
         </Suspense>
       )}
-      {ephemeralOpen && cloudMachinesEnabled && <EphemeralSheet onClose={() => setEphemeralOpen(false)} firstRun={needsNode} />}
       {state.presentation.forkProgress && <ForkProgressDialog progress={state.presentation.forkProgress} onClose={() => controller.store.setForkProgress(null)} />}
       {state.presentation.needsModelAuth && <FirstRunModelAuthSheet state={state} />}
       {terminalNodePicker && (

@@ -7,11 +7,9 @@ import { AddNodeSheet } from "./AddNodeSheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { Spinner } from "./Spinner.js";
 import { StatusDot } from "./StatusDot.js";
-import { Badge } from "./Badge.js";
 import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
-import { useCloudMachinesEnabled } from "../cloudMachines.js";
-import { ephemeralCatalogEntry, type EphemeralNodeConfig, type HostedMachineSummary } from "@bivy/core";
+import type { EphemeralNodeConfig, HostedMachineSummary } from "@bivy/core";
 import { cloudDestinations, type CloudDestination } from "../cloudDestinations.js";
 import type { TailnetMachine } from "../access.js";
 
@@ -22,8 +20,7 @@ import type { TailnetMachine } from "../access.js";
  */
 export function NodeSwitcher() {
   const { connection: { nodes, currentNodeId, status }, activeSession: { activeSessionId }, sessionIndex: { sessions }, draft } = useAppState();
-  const cloudMachinesOptIn = useCloudMachinesEnabled();
-  const cloudMachinesEnabled = EPHEMERAL_MACHINES_ENABLED && cloudMachinesOptIn;
+  const cloudMachinesEnabled = EPHEMERAL_MACHINES_ENABLED;
   const [open, setOpen] = useState(false);
   const [ephemeralConfigs, setEphemeralConfigs] = useState<EphemeralNodeConfig[]>([]);
   const [hostedMachines, setHostedMachines] = useState<HostedMachineSummary[]>([]);
@@ -44,7 +41,7 @@ export function NodeSwitcher() {
     if (!open) return;
     if (cloudMachinesEnabled) {
       controller.listEphemeralConfigs()
-        .then((configs) => setEphemeralConfigs(configs.filter((config) => Boolean(ephemeralCatalogEntry(config.provider)))))
+        .then(setEphemeralConfigs)
         .catch(() => {});
       controller.listHostedMachines().then(setHostedMachines).catch(() => {});
     }
@@ -72,16 +69,16 @@ export function NodeSwitcher() {
   // home. Applies to every provider, which all mint `eph-` node ids at launch.
   const persistentNodes = nodes.filter((n) => !n.id.startsWith("eph-"));
   const cloud = useMemo(() => cloudDestinations(ephemeralConfigs, hostedMachines, nodes), [ephemeralConfigs, hostedMachines, nodes]);
-  const cloudRows = [...cloud.managed, ...cloud.running, ...cloud.templates];
-  const isPicked = (row: CloudDestination) => row.config && draftRunner
+  const cloudRows = cloud;
+  const isPicked = (row: CloudDestination) => draftRunner
     ? row.config.id === draftRunner.id
-    : !draftRunner && Boolean(row.nodeId) && row.nodeId === currentNodeId;
+    : Boolean(row.nodeId) && row.nodeId === currentNodeId;
   const pickCloud = (row: CloudDestination) => {
     setOpen(false);
     // A running Machine is reused as-is; otherwise the profile launches one
     // when the first message is sent.
     if (row.nodeId) controller.switchNode(row.nodeId);
-    else if (row.config) controller.pickDraftEphemeralRunner(row.config);
+    else controller.pickDraftEphemeralRunner(row.config);
   };
   // A draft may choose its node. Once the session exists, its owning node is
   // immutable: this control becomes a label rather than a global node switcher.
@@ -141,7 +138,6 @@ export function NodeSwitcher() {
               <div className="node-menu-head">Cloud</div>
               {cloudRows.map((row) => {
                 const picked = isPicked(row);
-                const template = row.config?.computeSource === "managed" ? undefined : row.config;
                 return (
                   <button
                     key={row.key}
@@ -150,9 +146,8 @@ export function NodeSwitcher() {
                     onClick={() => pickCloud(row)}
                   >
                     <StatusDot status={row.online ? "online" : "idle"} label={row.online ? "Online — " : "Not running — "} />
-                    <span className="node-menu-name">{template ? `New ${row.label}` : row.label}</span>
-                    {row.config && !row.online && !template && <span className="node-menu-meta">starts when you send</span>}
-                    {template && <Badge>{template.provider}</Badge>}
+                    <span className="node-menu-name">{row.label}</span>
+                    {!row.online && <span className="node-menu-meta">starts when you send</span>}
                     {picked && <span className="node-menu-check">✓</span>}
                   </button>
                 );

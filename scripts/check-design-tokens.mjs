@@ -48,6 +48,7 @@ const declRe = new RegExp(`--(${PALETTE_TOKENS.join("|")})\\s*:`, "g");
 const hexRe = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/g;
 const rawZIndexRe = /z-index\s*:\s*-?\d/;
 const RETIRED_CLASSES = [
+  "machine-profiles", "connect-option-head", "connect-option-badge", "connect-option-copy", "connect-option-cta", // bring-your-own-cloud UI removed
   "apps-notice", // → canonical banner in shared AppAccess controls
   "stat-grid", "stat", "stat-label", "stat-value", // Account panel counts; the lists carry them
   "composer-starter",
