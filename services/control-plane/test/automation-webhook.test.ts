@@ -97,6 +97,11 @@ async function main() {
   expect(pwaDelete.status === 409, "the account/PWA API cannot delete a file-managed automation");
   const wrongNode = await json(port, "PUT", "/node/automation-config/wrong-node", { ...managedInput, configKey: "wrong-node", templateCiphertext: "bivy-room-v1:somebody-else:opaque" }, nodeToken);
   expect(wrongNode.status === 400, "a node cannot apply instructions encrypted for another node");
+  const templates = await json(port, "GET", "/node/automation-templates", undefined, nodeToken);
+  expect(templates.body.templates.some((t: any) => t.id === managed.body.id && t.templateCiphertext === managedInput.templateCiphertext), "a node reads templates sealed for itself to re-seal them");
+  const resealed = await json(port, "PUT", `/node/automation-templates/${managed.body.id}`, { templateCiphertext: "bivy-room-v1:node-as-code:resealed" }, nodeToken);
+  const foreignReseal = await json(port, "PUT", `/node/automation-templates/${managed.body.id}`, { templateCiphertext: "bivy-room-v1:somebody-else:x" }, nodeToken);
+  expect(resealed.status === 200 && foreignReseal.status === 400, "a node re-seals only under its own node id");
   const managedRun = await json(port, "POST", `/account/automations/${managed.body.id}/run`, undefined, token);
   expect(managedRun.status === 201, "a managed automation can be dispatched normally");
   const cliRun = await json(port, "POST", `/node/automations/${managed.body.id}/run`, undefined, nodeToken);

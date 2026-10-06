@@ -40,6 +40,9 @@ export interface LinkedDevice {
 interface PairingFile {
   nodeKeypair: PairingKeypair;
   roomKeyB64: string;
+  // Room keys replaced by a rotation, kept only until data sealed under them
+  // (stored automation instructions) has been re-sealed under the current key.
+  retiredRoomKeysB64?: string[];
   devices: LinkedDevice[];
 }
 
@@ -56,6 +59,7 @@ export interface RotateDelivery {
 
 const DEFAULT_PAIR_TTL_MS = 5 * 60_000;
 const ROOM_KEY_BYTES = 32;
+const MAX_RETIRED_ROOM_KEYS = 8;
 
 /**
  * Validate + canonicalize a pre-shared room-key seed. Returns the canonical
@@ -134,6 +138,7 @@ export class PairingStore {
       return new PairingStore(filePath, {
         nodeKeypair: parsed.nodeKeypair,
         roomKeyB64: parsed.roomKeyB64,
+        ...(Array.isArray(parsed.retiredRoomKeysB64) && parsed.retiredRoomKeysB64.length ? { retiredRoomKeysB64: parsed.retiredRoomKeysB64 } : {}),
         devices: Array.isArray(parsed.devices) ? parsed.devices : [],
       });
     }
@@ -194,6 +199,27 @@ export class PairingStore {
 
   roomKey(): Buffer {
     return Buffer.from(this.data.roomKeyB64, "base64");
+  }
+
+  /** Room keys replaced by earlier rotations that still guard stored data. */
+  retiredRoomKeys(): Buffer[] {
+    return (this.data.retiredRoomKeysB64 ?? []).map((key) => Buffer.from(key, "base64"));
+  }
+
+  /** Drop retired room keys once nothing stored is sealed under them. */
+  forgetRetiredRoomKeys() {
+    if (!this.data.retiredRoomKeysB64) return;
+    delete this.data.retiredRoomKeysB64;
+    this.persist();
+  }
+
+  /** Open a payload sealed under the current room key or a retired one. */
+  openSealed(payload: string): string {
+    let lastError: unknown;
+    for (const key of [this.roomKey(), ...this.retiredRoomKeys()]) {
+      try { return open(key, payload); } catch (error) { lastError = error; }
+    }
+    throw lastError;
   }
 
   /** Issue a single-use, expiring pairing secret to embed in a linking QR. */
@@ -283,6 +309,7 @@ export class PairingStore {
 
   /** Rotate the room key and re-wrap it for all current devices. */
   rotateRoomKey(): RotateDelivery[] {
+    this.data.retiredRoomKeysB64 = [this.data.roomKeyB64, ...(this.data.retiredRoomKeysB64 ?? [])].slice(0, MAX_RETIRED_ROOM_KEYS);
     this.data.roomKeyB64 = generateRoomKey().toString("base64");
     this.persist();
     const roomKey = this.roomKey();

@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PairingStore } from "../src/device-registry.js";
+import { resealAutomationTemplates } from "../src/automation-reseal.js";
+import { open, seal } from "../src/e2e.js";
 import {
   generatePairingKeypair,
   generatePairSecret,
@@ -90,6 +92,34 @@ await test("revoking a device rotates the key and re-wraps for survivors", () =>
 
   // The revoked device gets no delivery and its old key is dead.
   assert.equal(deliveries!.find((d) => d.deviceId === a.deviceId), undefined);
+});
+
+await test("automation instructions sealed before a revoke are re-sealed under the new key", async () => {
+  const dir = tmpDir();
+  const store = PairingStore.load(dir);
+  const { deviceId } = pairDevice(store);
+  pairDevice(store);
+  const stale = `bivy-room-v1:node-1:${seal(store.roomKey(), "nightly instructions")}`;
+  store.revokeDevice(deviceId);
+
+  // The retired key survives a restart, so queued runs still decrypt meanwhile.
+  const reloaded = PairingStore.load(dir);
+  assert.equal(reloaded.openSealed(stale.split(":")[2]), "nightly instructions");
+
+  const saved = new Map<string, string>();
+  const lost = `bivy-room-v1:node-1:${seal(Buffer.alloc(32, 7), "unrecoverable")}`;
+  const result = await resealAutomationTemplates({
+    nodeId: "node-1",
+    current: reloaded.roomKey(),
+    retired: reloaded.retiredRoomKeys(),
+    templates: [{ id: "a1", templateCiphertext: stale }, { id: "a2", templateCiphertext: lost }, { id: "a3", templateCiphertext: "bivy-room-v1:node-2:x" }],
+    save: async (id, ciphertext) => { saved.set(id, ciphertext); },
+  });
+  assert.deepEqual(result, { resealed: 1, unreadable: ["a2"] });
+  assert.equal(open(reloaded.roomKey(), saved.get("a1")!.split(":")[2]), "nightly instructions");
+
+  reloaded.forgetRetiredRoomKeys();
+  assert.deepEqual(PairingStore.load(dir).retiredRoomKeys(), []);
 });
 
 await test("state persists across reload (keypair, room key, devices)", () => {

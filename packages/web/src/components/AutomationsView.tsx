@@ -342,6 +342,8 @@ interface Draft {
   webhookAuthMode: "hmac" | "header";
   /** Webhook-only pre-agent gate; stored inside the encrypted template. */
   filter: WebhookFilterDraft;
+  /** The stored instructions were sealed under a room key this device no longer has. */
+  instructionsUnreadable?: boolean;
 }
 
 function emptyDraft(nodeId: string): Draft {
@@ -382,6 +384,12 @@ function rememberedRepo(state: AppState): string {
 
 function defaultSourceInstructions(): string {
   return "Handle the incoming item using its event context. Investigate the request, make the smallest safe change, run the relevant checks, and report the outcome with links to any pull request or follow-up.";
+}
+
+// Undefined when the payload was sealed under an older room key: the Machine
+// rotated its key (a device was revoked) before re-sealing this template.
+async function openTemplate(roomKey: string, payload: string): Promise<string | undefined> {
+  try { return await open(await importRoomKey(unb64url(roomKey)), payload); } catch { return undefined; }
 }
 
 interface Notice {
@@ -618,11 +626,14 @@ export function AutomationsView({
     }
 
     let instructions = defaultSourceInstructions();
+    let instructionsUnreadable = false;
     const parts = existing.templateCiphertext?.split(":");
     if (parts?.[0] === TEMPLATE_PREFIX && parts[1] && parts.slice(2).length) {
       const roomKey = controller.local.keys()[parts[1]];
       if (!roomKey) throw new Error("Instructions are locked on this device. Connect to the assigned Machine before editing this automation.");
-      instructions = await open(await importRoomKey(unb64url(roomKey)), parts.slice(2).join(":"));
+      const opened = await openTemplate(roomKey, parts.slice(2).join(":"));
+      instructionsUnreadable = opened === undefined;
+      instructions = opened ?? "";
     }
     const template = decodeAutomationTemplate(instructions);
     const base = emptyDraft(parts?.[1] || defaultNodeId);
@@ -632,6 +643,7 @@ export function AutomationsView({
       name: current.name.trim() ? current.name : opts?.keepExistingName ? existing.name : "",
       instructions: current.instructions.trim() ? current.instructions : template.instructions,
       credentialLabels: template.credentialLabels,
+      instructionsUnreadable,
       hasTrigger: true,
       trigger: source,
       repo: existing.repo || "",
@@ -660,6 +672,7 @@ export function AutomationsView({
       return;
     }
     let instructions = "";
+    let instructionsUnreadable = false;
     const parts = item.templateCiphertext?.split(":");
     if (parts?.[0] === TEMPLATE_PREFIX && parts[1] && parts.slice(2).length) {
       const roomKey = controller.local.keys()[parts[1]];
@@ -678,7 +691,9 @@ export function AutomationsView({
         });
         return;
       }
-      instructions = await open(await importRoomKey(unb64url(roomKey)), parts.slice(2).join(":"));
+      const opened = await openTemplate(roomKey, parts.slice(2).join(":"));
+      instructionsUnreadable = opened === undefined;
+      instructions = opened ?? "";
     }
     const template = decodeAutomationTemplate(instructions);
     const nodeId = parts?.[1] || defaultNodeId;
@@ -689,6 +704,7 @@ export function AutomationsView({
       name: item.name,
       instructions: template.instructions,
       credentialLabels: template.credentialLabels,
+      instructionsUnreadable,
       hasTrigger: true,
       trigger: item.trigger === "webhook" ? "webhook" : "schedule",
       requireSigning: item.trigger === "webhook" ? item.requireSigning !== false : base.requireSigning,
@@ -1340,7 +1356,8 @@ function SourceAutomationEditor({
       const [prefix, nodeId, ...payload] = item.templateCiphertext.split(":");
       const key = nodeId ? controller.local.keys()[nodeId] : undefined;
       if (prefix !== TEMPLATE_PREFIX || !key) return null;
-      return decodeAutomationTemplate(await open(await importRoomKey(unb64url(key)), payload.join(":")));
+      const opened = await openTemplate(key, payload.join(":"));
+      return opened === undefined ? null : decodeAutomationTemplate(opened);
     };
     void load().then((template) => { if (!cancelled) setAccountTemplate(template); }).catch((e) => {
       if (!cancelled) { setAccountTemplate(null); setError(String(e)); }
@@ -2411,6 +2428,11 @@ function AutomationEditor({
 
               <div className="autom-field-block">
                 <label className="autom-field-label" htmlFor="autom-instructions">Instructions</label>
+                {d.instructionsUnreadable && !d.instructions.trim() && (
+                  <div className="banner inline" data-tone="warn" role="status">
+                    <strong>Enter the instructions again.</strong> The saved instructions were encrypted with a key this machine has since replaced, so they can&apos;t be read. Runs fail until you save new ones.
+                  </div>
+                )}
                 <div className="autom-instructions">
                   <textarea
                     ref={instructionsRef}

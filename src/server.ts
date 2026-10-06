@@ -57,6 +57,7 @@ import { ControlPlaneSessionLocationRegistry, LayeredSessionLocationRegistry, ty
 import { attachAdoptedSessions, classifyAttachFailure } from "./runtime/adoption.js";
 import { createCredentialStore, testProviderCredential } from "./runtime/credentials.js";
 import { decodeAutomationTemplate, type AutomationFilter } from "./automation-template.js";
+import { resealAutomationTemplates, type StoredTemplate } from "./automation-reseal.js";
 import { passWebhookFilter } from "./automation-filter-gate.js";
 import { isModelAuthError, authProviderForSession, classifyModelAuthError } from "./runtime/auth-errors.js";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
@@ -1178,6 +1179,7 @@ const linkedDevices = createLinkedDeviceController({
     syncPairingMetadata();
     relay?.pushRotate(deliveries);
     broadcast({ type: "devices.updated", devices });
+    void resealRetiredAutomationTemplates();
   },
 });
 const accessDevices = createAccessDeviceController({
@@ -3635,6 +3637,7 @@ function startRelayIfConfigured() {
   if (config.controlPlaneUrl && config.enrollmentToken) {
     sessionAdvertiseTarget = { controlPlaneUrl: config.controlPlaneUrl, enrollmentToken: config.enrollmentToken };
     void syncModelAuthFromControlPlane();
+    void resealRetiredAutomationTemplates();
     if (remoteRuntimeEnabled()) {
       // Stage 3: layer a control-plane-backed location registry UNDER the in-memory
       // one (so a lookup surviving a restart resolves from durable state), then
@@ -3826,6 +3829,37 @@ async function modelAuthFetch(pathname: string, init: RequestInit = {}) {
   headers.set("authorization", `Bearer ${sessionAdvertiseTarget.enrollmentToken}`);
   if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json");
   return fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}${pathname}`, { ...init, headers });
+}
+
+// A device revoke rotates the room key. Re-seal this node's stored automation
+// instructions under the new key so the node and its devices can still read
+// them, then drop the retired keys. Retried at startup until it completes.
+async function resealRetiredAutomationTemplates() {
+  const retired = pairingStore.retiredRoomKeys();
+  if (!retired.length || !sessionAdvertiseTarget) return;
+  const current = pairingStore.roomKey();
+  try {
+    const res = await modelAuthFetch("/node/automation-templates");
+    if (!res?.ok) throw new Error(`control plane returned ${res?.status}`);
+    const { templates } = await res.json() as { templates: StoredTemplate[] };
+    const result = await resealAutomationTemplates({
+      nodeId: identity.nodeId,
+      current,
+      retired,
+      templates,
+      save: async (id, templateCiphertext) => {
+        const saved = await modelAuthFetch(`/node/automation-templates/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ templateCiphertext }) });
+        if (!saved?.ok) throw new Error(`control plane returned ${saved?.status}`);
+      },
+    });
+    if (result.resealed) console.log(`[automation-reseal] re-sealed ${result.resealed} automation template(s) under the rotated room key`);
+    if (result.unreadable.length) console.warn(`[automation-reseal] ${result.unreadable.length} automation template(s) were sealed under a key this node no longer has: ${result.unreadable.join(", ")}`);
+    // Another rotation during this pass retired `current`; run again for it.
+    if (!pairingStore.roomKey().equals(current)) return void resealRetiredAutomationTemplates();
+    pairingStore.forgetRetiredRoomKeys();
+  } catch (error) {
+    console.warn("[automation-reseal] will retry at next start:", (error as Error).message);
+  }
 }
 
 const remoteSessionAdmission = createRemoteSessionAdmission(async (idempotencyKey) => {
@@ -5702,7 +5736,7 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
       throw new Error("automation instructions were encrypted for a different node");
     }
     try {
-      const template = decodeAutomationTemplate(open(pairingStore.roomKey(), payload.join(":")));
+      const template = decodeAutomationTemplate(pairingStore.openSealed(payload.join(":")));
       credentialLabels = template.credentialLabels;
       filter = template.filter;
       item = { ...item, body: template.instructions };
