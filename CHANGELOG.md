@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - The control plane's lockfile moves `proxy-addr` to 2.0.8 (GHSA-jqcg-44mw-7w3h: IP spoofing through IPv4-mapped IPv6 addresses in trusted subnets) and `moment` to 2.31.0 (GHSA-4p3w-j4w9-5jqw).
+- `@modelcontextprotocol/sdk` moves to 1.31.0 (GHSA-6qxp-vccf-f47h: its OAuth client could send credentials to an authorization server chosen by the MCP server).
 
 ### Fixed
 
