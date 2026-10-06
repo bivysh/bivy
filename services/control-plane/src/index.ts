@@ -28,6 +28,7 @@ import { usageFromManagedMachine } from "./compute-metering.js";
 import { managedCapacityCount } from "./managed-admission.js";
 import { managedInteractiveLaunch, ManagedLaunchConflict, type ManagedInteractiveRequest } from "./managed-interactive-launch.js";
 import { DeploymentCompute, deploymentCompute, managedComputeEnabled, setDeploymentCompute, type ComputePurpose } from "./deployment-compute.js";
+import { bootCloudComputer, cloudComputerNodeId, cloudComputerRoomKey, isCloudComputerNode, routeWorkToCloudComputer } from "./cloud-computer.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
 import { configureProxyTrust } from "./proxy-trust.js";
@@ -334,8 +335,16 @@ async function notifyRelaysWorkAvailable(
   // Cancelling must never start a machine. Normal enqueue notifications retain
   // the unattended-provisioning check.
   if (options.autoProvision !== false) {
-    void maybeAutoProvision(store, accountId, provisionEnv(), undefined, managedProvisionAdmission(accountId), managedLaunchFailureRecorder(accountId))
-      .catch((error) => console.error("[deployment-extension] provisioning admission failed", error));
+    void (async () => {
+      if (await accountMachineMode(accountId)) {
+        if (await routeWorkToCloudComputer(store, accountId)) {
+          const acquired = await deploymentExtension.computeAcquire(accountId, { purpose: "automation", requestId: `work:${item.id}` });
+          if (!acquired.allowed) console.warn(`[cloud-computer] automation launch refused for ${accountId}: ${acquired.decision.code ?? acquired.decision.reason ?? "denied"}`);
+        }
+        return;
+      }
+      await maybeAutoProvision(store, accountId, provisionEnv(), undefined, managedProvisionAdmission(accountId), managedLaunchFailureRecorder(accountId));
+    })().catch((error) => console.error("[deployment-extension] provisioning admission failed", error));
   }
 }
 if (relayShardUrls.length > 1) {
@@ -1334,8 +1343,40 @@ function presentNodeClaim(claim: NodeClaim) {
   return { ...claim, status };
 }
 
-function managedAutomationNodeId(accountId: string): string {
-  return `eph-managed-auto-${createHash("sha256").update(accountId).digest("hex").slice(0, 16)}`;
+/** Whether the deployment runs one sleeping cloud computer per account (and
+ * owns its lifecycle) rather than a machine per session launched by Core. */
+async function accountMachineMode(accountId: string): Promise<boolean> {
+  return (await deploymentCompute().profile("interactive", accountId).catch(() => null))?.accountMachine === true;
+}
+
+/** Ask the deployment for the account's cloud computer and answer with the
+ * same shape as a per-session launch: the node to connect to and its key. */
+async function respondCloudComputer(
+  res: Response,
+  accountId: string,
+  input: { purpose: string; requestId: string; runtimeId?: string; sessionId?: string },
+): Promise<void> {
+  try {
+    const acquired = await deploymentExtension.computeAcquire(accountId, input);
+    if (!acquired.allowed) {
+      const { decision } = acquired;
+      res.status(403).json({ error: decision.reason || "Cloud machine launch denied", code: decision.code || "managed_launch_denied", ...decision });
+      return;
+    }
+    const roomKey = await cloudComputerRoomKey(store, accountId);
+    res.status(201).json({
+      ok: true,
+      duplicate: false,
+      roomKey,
+      machine: {
+        id: acquired.nodeId, nodeId: acquired.nodeId, provider: "fly", name: "Bivy Cloud", region: "",
+        status: acquired.state, ip: null, createdAt: new Date().toISOString(), computeSource: "managed", purpose: input.purpose,
+      },
+    });
+  } catch (error) {
+    // Never return extension or provider bodies.
+    res.status(502).json(publicManagedLaunchError(error));
+  }
 }
 
 /** The deployment's profile for a purpose as a managed ephemeral config, or
@@ -1411,6 +1452,9 @@ app.post("/account/onboarding/auth-runner", managedOnboardingRateLimit, requireU
   // establish the later interactive profile before redirects/reloads can lose
   // browser-only onboarding state.
   await ensureManagedDefaultForAccount(account.id);
+  if (await accountMachineMode(account.id)) {
+    return respondCloudComputer(res, account.id, { purpose: "auth-runner", requestId: String(req.body?.requestId ?? randomUUID()) });
+  }
   const config = await managedProfileConfig("auth-runner", account.id);
   if (!config) return res.status(503).json({ error: "Managed setup provider is not configured." });
   await respondManagedLaunch(res, account.id, { config, purpose: "auth-runner", requestId: req.body?.requestId ?? randomUUID() });
@@ -1439,7 +1483,7 @@ app.post("/account/managed-automation-target", requireUser, asyncHandler(async (
     return res.status(503).json({ error: "Bivy Cloud automations are not available." });
   }
   const config = await ensureManagedDefaultForAccount(account.id);
-  const nodeId = managedAutomationNodeId(account.id);
+  const nodeId = cloudComputerNodeId(account.id);
   let encrypted = await store.getNodeRoomKeyEnc(account.id, nodeId);
   if (!encrypted) {
     encrypted = await store.setNodeRoomKeyEncIfAbsent(
@@ -1514,6 +1558,9 @@ app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res)
   // execution remains paused until its initial filtered snapshot is confirmed.
   const storedConfig = (await store.getEphemeralConfigs(account.id)).find((candidate) => candidate.id === configId);
   if (!storedConfig || storedConfig.computeSource !== "managed") return res.status(404).json({ error: "Managed session profile not found." });
+  if (await accountMachineMode(account.id)) {
+    return respondCloudComputer(res, account.id, { purpose: "interactive", requestId: String(req.body?.requestId ?? randomUUID()), runtimeId: runtimeId || undefined });
+  }
   // Select the smallest prebuilt image that contains the requested runtime. The
   // deployment-owned baseline remains the fallback for custom/unknown agents.
   const config = { ...storedConfig, image: (await managedProfileConfig("interactive", account.id, runtimeId))?.image ?? storedConfig.image };
@@ -1534,6 +1581,11 @@ app.post("/account/managed-machines/restore", requireUser, asyncHandler(async (r
   const nodeId = String(req.body?.nodeId ?? "").trim();
   const configId = String(req.body?.configId ?? "").trim();
   if (!sessionId || !nodeId || !configId) return res.status(400).json({ error: "sessionId, nodeId and configId are required." });
+  // The account's cloud computer keeps its sessions on its own disk: bringing
+  // it back is a wake (or, if its disk was lost, a rebuild onto the same node).
+  if (isCloudComputerNode(account.id, nodeId) && await accountMachineMode(account.id)) {
+    return respondCloudComputer(res, account.id, { purpose: "interactive", requestId: String(req.body?.requestId ?? `restore:${sessionId}:${randomUUID()}`), sessionId });
+  }
   const [config, correlation, encryptedKey] = await Promise.all([
     store.getEphemeralConfigs(account.id).then((configs) => configs.find((candidate) => candidate.id === configId)),
     store.getSessionCorrelation(account.id, sessionId),
@@ -4010,6 +4062,21 @@ app.delete("/account/github/central-app/installations/:installationId", asyncHan
 app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
+  if (await accountMachineMode(client.accountId)) {
+    res.json((await deploymentExtension.computeMachines(client.accountId).catch(() => [])).map((m) => ({
+      id: typeof m.id === "string" ? m.id : "",
+      nodeId: typeof m.nodeId === "string" ? m.nodeId : undefined,
+      name: typeof m.name === "string" ? m.name : "Bivy Cloud",
+      provider: typeof m.provider === "string" ? m.provider : "",
+      region: typeof m.region === "string" ? m.region : undefined,
+      size: typeof m.size === "string" ? m.size : undefined,
+      status: typeof m.status === "string" ? m.status : undefined,
+      createdAt: typeof m.createdAt === "string" ? m.createdAt : "",
+      purpose: "interactive",
+      lifecycleState: typeof m.state === "string" ? m.state : undefined,
+    })));
+    return;
+  }
   const machines = await store.getHostedMachines(client.accountId);
   // Join in the durable attempt for lifecycle fields the legacy inventory row
   // doesn't carry — phase, deadline, last provider-observed status, and the
@@ -4050,6 +4117,11 @@ app.delete("/account/hosted-machines/:nodeId", asyncHandler(async (req, res) => 
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const nodeId = String(req.params.nodeId || "").trim();
   if (!nodeId) return res.status(400).json({ error: "nodeId is required" });
+  if (isCloudComputerNode(client.accountId, nodeId) && await accountMachineMode(client.accountId)) {
+    const released = await deploymentExtension.computeRelease(client.accountId, nodeId).catch(() => false);
+    if (!released) return res.status(502).json({ error: "The cloud machine couldn't be released; it remains tracked for retry" });
+    return res.json({ ok: true, nodeId });
+  }
   const existed = await reapSettledHostedMachine(store, client.accountId, nodeId, provisionEnv());
   if (!existed) return res.status(404).json({ error: "Hosted machine not found" });
   const retained = (await store.getHostedMachines(client.accountId)).some((m) => m.nodeId === nodeId);
@@ -4951,12 +5023,58 @@ app.post("/client/relay-ticket", asyncHandler(async (req, res) => {
   try {
     const ticket = await store.createRelayTicket({ role: "client", accountId: resolved.accountId, nodeId: resolved.nodeId });
     relayTicketMetrics.clientMinted += 1;
+    // Connecting to a sleeping cloud computer is the signal to wake it.
+    if (isCloudComputerNode(resolved.accountId, targetNodeId)) void wakeCloudComputerIfAsleep(resolved.accountId);
     res.json({ ok: true, ticket, relayUrl: relayUrlForNode(targetNodeId) });
   } catch (error) {
     relayTicketMetrics.clientFailed += 1;
     console.error(`[relay-ticket] failed to mint client ticket accountId=${resolved.accountId} nodeId=${targetNodeId ?? "unknown"}:`, error);
     throw error;
   }
+}));
+
+async function wakeCloudComputerIfAsleep(accountId: string): Promise<void> {
+  try {
+    const nodeId = cloudComputerNodeId(accountId);
+    const node = (await store.listNodes(accountId)).find((candidate) => candidate.id === nodeId);
+    if (!node || node.online || !(await accountMachineMode(accountId))) return;
+    await deploymentExtension.computeWake(accountId, nodeId);
+  } catch (error) {
+    console.warn(`[cloud-computer] wake failed for ${accountId}:`, error instanceof Error ? error.message : error);
+  }
+}
+
+// --- Internal: deployment compute ----------------------------------------
+// Called back by the deployment extension that runs cloud computers. It holds
+// the same shared token Core uses to call it.
+function requireDeploymentExtension(req: Request, res: Response, next: NextFunction) {
+  const token = process.env.DEPLOYMENT_EXTENSION_TOKEN;
+  if (!token || bearer(req) !== token) return res.status(401).json({ error: "Unauthorized" });
+  next();
+}
+
+// Boot payload for the account's cloud computer: re-enrolls its node and
+// returns the Fly files + init that start it with the escrowed room key.
+app.post("/internal/compute/bootstrap", requireDeploymentExtension, asyncHandler(async (req, res) => {
+  const accountId = typeof req.body?.accountId === "string" ? req.body.accountId : "";
+  if (!accountId || !(await store.getAccount(accountId))) return res.status(404).json({ error: "Account not found" });
+  const awakeCapMinutes = Math.max(5, Math.min(24 * 60, Number(req.body?.awakeCapMinutes) || 360));
+  const restoreSessionId = typeof req.body?.restoreSessionId === "string" && req.body.restoreSessionId ? req.body.restoreSessionId : undefined;
+  res.setHeader("cache-control", "no-store");
+  res.json(await bootCloudComputer(store, {
+    accountId, awakeCapMinutes, restoreSessionId,
+    relayUrl: provisionEnv().relayUrl, controlPlaneUrl: provisionEnv().cpBaseUrl,
+  }));
+}));
+
+// The deployment destroyed the machine (and its disk). The node stays enrolled
+// so its sessions remain listed and rebuildable from their snapshots.
+app.post("/internal/compute/retired", requireDeploymentExtension, asyncHandler(async (req, res) => {
+  const accountId = typeof req.body?.accountId === "string" ? req.body.accountId : "";
+  const nodeId = typeof req.body?.nodeId === "string" ? req.body.nodeId : "";
+  if (!isCloudComputerNode(accountId, nodeId)) return res.status(404).json({ error: "Not a cloud computer" });
+  await store.setNodeOnline(nodeId, false);
+  res.json({ ok: true });
 }));
 
 // --- Internal: relay introspection -------------------------------------

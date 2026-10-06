@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A [Contributor License Agreement](CLA.md), checked on pull requests, and a [trademark policy](TRADEMARKS.md) for the Bivy name and logo. The code stays AGPL-3.0.
 - **Fly machines can sleep instead of being destroyed (experimental, not yet used by any launch path).** A machine launched with `sleepOnIdle` gets a persistent volume for Bivy's data, the workspace and `HOME`. Worktrees, dependency caches and agent sign-ins then survive between uses. When idle the daemon stops the machine without reporting it settled, and the new `ProviderAdapter.wake` starts it again. Destroying the machine also deletes its volume. `scripts/smoke-fly-sleep-wake.mts` measures wake latency on a real Fly account.
+- **One sleeping cloud computer per account (deployment-supplied compute).** A deployment extension can now run one machine per account that sleeps when quiet and wakes on use, instead of Core launching a machine per session. Core asks it to `acquire` the machine for a launch or queued automation and to `wake` it when a client connects. It serves the machine's boot payload from `/internal/compute/bootstrap`: a fresh enrollment token, the escrowed room key, and a volume-backed node that sleeps instead of being destroyed. In the app, a session on a sleeping cloud computer stays usable, and sending wakes it. Deployments that don't opt in keep the existing behavior. See [self-host.md](docs/self-host.md#deployment-supplied-compute).
 
 ### Changed
 

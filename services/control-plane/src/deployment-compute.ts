@@ -39,6 +39,10 @@ export interface ComputeProfile {
   image?: string;
   ttlMinutes?: number;
   teardownOnAgentFinish?: boolean;
+  /** The deployment runs one sleeping machine per account and owns its
+   * lifecycle: Core asks it to acquire/wake that machine instead of launching
+   * a machine per session itself. */
+  accountMachine?: boolean;
 }
 
 /** The deployment's answers. Implemented by the deployment extension; absent

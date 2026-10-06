@@ -15,6 +15,12 @@ export interface CloudDestination {
 
 interface NodeLike { id: string; online?: boolean }
 
+/** The account's cloud computer: one deployment-provided node that sleeps when
+ * quiet and wakes when used. */
+export function isCloudComputerNodeId(nodeId: string | undefined): boolean {
+  return Boolean(nodeId?.startsWith("eph-managed-auto-"));
+}
+
 /**
  * The picker's cloud rows. Each deployment-provided profile ("Bivy Cloud") is
  * ONE destination that reuses its newest online Machine and otherwise starts one
@@ -30,7 +36,9 @@ export function cloudDestinations(
     .filter((machine) => machine.purpose === "interactive" && machine.desiredState !== "deleted" && online(machine.nodeId))
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   return configs.filter((config) => config.computeSource === "managed").map((config) => {
-    const reuse = live.find((machine) => machine.setupId === config.id);
+    // A per-session Machine names its profile; the account's cloud computer is
+    // recognised by its node id.
+    const reuse = live.find((machine) => machine.setupId === config.id || isCloudComputerNodeId(machine.nodeId));
     return { key: config.id, label: (config.name || "Bivy Cloud").replace(/^Hosted\s+/i, ""), online: Boolean(reuse), nodeId: reuse?.nodeId, config };
   });
 }
