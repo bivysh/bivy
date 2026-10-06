@@ -179,4 +179,8 @@ test("a managed cloud profile is one destination that reuses its newest online M
 
   const asleep = cloudDestinations([config], machines, [{ id: "eph-old", online: false }, { id: "eph-new", online: false }]);
   assert.deepEqual(asleep.map((row) => [row.nodeId, row.config.id]), [[undefined, "managed"]], "no online Machine → starts on send");
+
+  const account = { id: "cc", setupId: undefined, nodeId: "eph-managed-auto-0123456789abcdef", provider: "fly", purpose: "interactive" as const, createdAt: at(3) };
+  const reused = cloudDestinations([config], [account], [{ id: "eph-managed-auto-0123456789abcdef", online: true }]);
+  assert.equal(reused[0]?.nodeId, "eph-managed-auto-0123456789abcdef", "the account's cloud computer is reused by its node id");
 });

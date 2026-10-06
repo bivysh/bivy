@@ -76,6 +76,7 @@ export {
   formatEphemeralPrice,
   indexedDbBackend,
   isEphemeralNode,
+  flyMachineBoot,
   launchEphemeralMachine,
   memoryBackend,
   planEphemeralLaunch,

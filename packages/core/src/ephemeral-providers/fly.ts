@@ -77,7 +77,7 @@ const FLY_GUEST: Record<string, { cpus: number; memoryMb: number; cpuKind: strin
  *  written as `files` and the daemon is launched as a blocking foreground init
  *  process. `raw_value` is base64 per the Machines API; `start.sh` is invoked via
  *  `bash <path>` so it needs no execute bit. */
-function flyInit(opts: BootstrapOpts): {
+export function flyInit(opts: BootstrapOpts): {
   files: { guest_path: string; raw_value: string }[];
   init: { exec: string[] };
 } {
@@ -100,12 +100,13 @@ function flyInit(opts: BootstrapOpts): {
     "chmod 600 /etc/bivy/relay.json /etc/bivy/start.sh",
     "export BIVY_DATA_DIR=/etc/bivy",
     "export BIVY_WORKSPACE=/workspace",
-    // A sleeping machine keeps its state on the volume. Seed relay.json once;
-    // after that the daemon's own copy (and pairing state) wins.
+    // A sleeping machine keeps its state on the volume. relay.json is always
+    // replaced: the control plane is the source of truth for enrollment, and a
+    // machine recreated onto an existing volume is issued a fresh token.
     ...(opts.sleepOnIdle ? [
       `mkdir -p ${PERSISTENT_ROOT}/bivy ${PERSISTENT_ROOT}/workspace ${PERSISTENT_ROOT}/home`,
       `chmod 700 ${PERSISTENT_ROOT}/bivy`,
-      `[ -f ${PERSISTENT_ROOT}/bivy/relay.json ] || install -m 600 /etc/bivy/relay.json ${PERSISTENT_ROOT}/bivy/relay.json`,
+      `install -m 600 /etc/bivy/relay.json ${PERSISTENT_ROOT}/bivy/relay.json`,
     ] : []),
     `trap ${shq(bivyBootstrapStatusCommand(opts, "failed"))} ERR`,
     bivyBootstrapStatusCommand(opts, "booting"),

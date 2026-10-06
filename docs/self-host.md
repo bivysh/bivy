@@ -345,6 +345,32 @@ POST /v1/compute/credential
   `ephemeral.launch-failed` and `ephemeral.settled` (with `machineSeconds` and
   `activeAgentSeconds`) for metering.
 
+**One sleeping machine per account (optional).** If the profile answer also
+sets `"accountMachine": true`, the deployment runs one cloud computer per
+account and owns its lifecycle, and Core stops launching machines itself:
+
+```text
+POST /v1/compute/acquire   { "subject": {…}, "purpose": "interactive" | "auth-runner" | "automation",
+                             "requestId": "…", "runtimeId"?: "…", "sessionId"?: "…" }
+→ { "nodeId": "…", "state": "awake" | "waking" | "launching" }   or a policy denial
+POST /v1/compute/wake      { "subject": {…}, "nodeId": "…" }   → { "state": "…" }
+POST /v1/compute/machines  { "subject": {…} }                  → { "machines": [ … ] }
+POST /v1/compute/release   { "subject": {…}, "nodeId": "…" }   → { "released": true }
+```
+
+Core calls `acquire` for a launch, `wake` when a client connects to the
+sleeping node, and `acquire` with `"automation"` when queued work is routed to
+the cloud. The extension calls back with the same bearer token:
+
+- `POST /internal/compute/bootstrap` `{ accountId, awakeCapMinutes, restoreSessionId? }`
+  → `{ nodeId, files, init }`: the Fly Machine `files` and `init.exec` that boot
+  the account's node with a fresh enrollment token and its escrowed room key.
+  The node sleeps when quiet (it exits without settling; the deployment keeps
+  the stopped machine and a volume mounted at `/data`).
+- `POST /internal/compute/retired` `{ accountId, nodeId }`: the deployment
+  destroyed the machine and its volume; the node stays enrolled and its
+  sessions stay rebuildable from their snapshots.
+
 For Fly, give the extension a dedicated organization and a narrowly scoped
 token that can create, inspect and destroy Machines. Validate the guest image
 for egress and process/mining abuse before you offer the lane to anyone you

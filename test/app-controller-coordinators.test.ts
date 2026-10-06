@@ -212,6 +212,23 @@ test("ephemeral coordinator restores managed sessions without a device cloud tok
   ]);
 });
 
+test("a sleeping cloud computer is woken by sending, without a correlation", async () => {
+  const events: string[] = [];
+  const nodes = [{ id: "eph-managed-auto-0123456789abcdef", online: false }];
+  const coordinator = new EphemeralCoordinator({
+    currentNodeId: () => "eph-managed-auto-0123456789abcdef", direct: () => false,
+    nodes: () => nodes, correlations: () => [],
+    restoreManagedMachine: async (input: { nodeId: string }) => { events.push(`wake:${input.nodeId}`); return { nodeId: input.nodeId } as any; },
+    connectToNode: async (nodeId: string) => { events.push(`connect:${nodeId}`); },
+    reportError: (error: Error) => { throw error; },
+  } as any);
+  assert.equal(coordinator.isCurrentNodeResumable(), true, "asleep: the composer stays usable");
+  await coordinator.reprovision("eph-managed-auto-0123456789abcdef", "s1");
+  assert.deepEqual(events, ["wake:eph-managed-auto-0123456789abcdef", "connect:eph-managed-auto-0123456789abcdef"]);
+  nodes[0]!.online = true;
+  assert.equal(coordinator.isCurrentNodeResumable(), false, "awake: an ordinary connection");
+});
+
 test("enrolled managed nodes reconnect instead of being restored, even while offline", () => {
   for (const online of [true, false]) {
     const coordinator = new EphemeralCoordinator({

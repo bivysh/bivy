@@ -87,6 +87,7 @@ export {
   extractProviderMessage,
   validateEphemeralProviderToken,
 } from "./ephemeral-provider-adapters.js";
+export { flyInit as flyMachineBoot } from "./ephemeral-providers/fly.js";
 export type {
   BootstrapOpts,
   ExecFn,

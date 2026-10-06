@@ -70,6 +70,10 @@ export type DeploymentLifecycleEvent =
 export type DeploymentAccountEvent =
   | { type: "account.signed-in"; at: string; accountCreatedAt: string };
 
+export type CloudComputerAcquire =
+  | { allowed: true; nodeId: string; state: string }
+  | { allowed: false; decision: DeploymentDecision };
+
 export interface AccountExtensionView {
   title?: string;
   /** Short plan/status line shown under the email in the account header. */
@@ -173,6 +177,36 @@ export class DeploymentExtension {
           : null;
       },
     };
+  }
+
+  /** Ask the deployment for the account's cloud computer (create or wake it).
+   * A refusal comes back as a policy decision. */
+  async computeAcquire(accountId: string, input: { purpose: string; requestId: string; runtimeId?: string; sessionId?: string }): Promise<CloudComputerAcquire> {
+    if (!this.url) throw new Error("No deployment compute is configured");
+    const result = await this.request("/v1/compute/acquire", { subject: { accountId }, ...input }) as Partial<DeploymentDecision> & { nodeId?: unknown; state?: unknown };
+    if (result.allowed === false) return { allowed: false, decision: result as DeploymentDecision };
+    if (typeof result.nodeId !== "string" || !result.nodeId) throw new Error("Deployment extension returned an invalid compute acquisition");
+    return { allowed: true, nodeId: result.nodeId, state: typeof result.state === "string" ? result.state : "launching" };
+  }
+
+  /** Best-effort: start the account's sleeping cloud computer. */
+  async computeWake(accountId: string, nodeId: string): Promise<void> {
+    if (!this.url) return;
+    await this.request("/v1/compute/wake", { subject: { accountId }, nodeId });
+  }
+
+  /** The account's cloud machines, for the hosted-machines panel. */
+  async computeMachines(accountId: string): Promise<Array<Record<string, unknown>>> {
+    if (!this.url) return [];
+    const result = await this.request("/v1/compute/machines", { subject: { accountId } }) as { machines?: unknown };
+    return Array.isArray(result.machines) ? result.machines.filter((m): m is Record<string, unknown> => Boolean(m) && typeof m === "object") : [];
+  }
+
+  /** Destroy the account's cloud computer and its disk. */
+  async computeRelease(accountId: string, nodeId: string): Promise<boolean> {
+    if (!this.url) return false;
+    const result = await this.request("/v1/compute/release", { subject: { accountId }, nodeId }) as { released?: unknown };
+    return result.released === true;
   }
 
   private async request(path: string, body: unknown): Promise<unknown> {

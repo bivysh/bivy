@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import { isCloudComputerNodeId } from "../../cloudDestinations.js";
 import type {
   AccountNode,
   EphemeralMachine,
@@ -26,6 +27,13 @@ export class EphemeralCoordinator {
 
   async reprovision(nodeId: string, sessionId: string): Promise<void> {
     try {
+      // The account's cloud computer keeps its sessions on its own disk: bringing
+      // it back is a wake, and the control plane knows which machine that is.
+      if (isCloudComputerNodeId(nodeId)) {
+        await this.deps.restoreManagedMachine({ configId: "managed-default", nodeId, sessionId, requestId: `wake:${sessionId}:${Date.now()}` });
+        await this.deps.connectToNode(nodeId, 120_000);
+        return;
+      }
       const correlation = this.deps.correlations().find((item) => item.nodeId === nodeId || item.sessionId === sessionId);
       if (correlation?.computeSource !== "managed") throw new Error("This session's machine can't be rebuilt.");
       if (!correlation.setupId) throw new Error("This cloud session no longer has a Machine profile to rebuild from.");
@@ -47,6 +55,8 @@ export class EphemeralCoordinator {
     if (this.deps.direct()) return false;
     const nodeId = this.deps.currentNodeId();
     if (!nodeId) return false;
+    // A sleeping cloud computer wakes when a message is sent to it.
+    if (isCloudComputerNodeId(nodeId)) return !this.deps.nodes().find((candidate) => candidate.id === nodeId)?.online;
     const correlation = this.deps.correlations().find((item) => item.nodeId === nodeId);
     if (correlation?.computeSource !== "managed") return false;
     return !this.deps.nodes().some((candidate) => candidate.id === nodeId);
