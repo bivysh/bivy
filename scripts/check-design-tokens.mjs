@@ -66,7 +66,7 @@ const RETIRED_CLASSES = [
   // → .btn variants
   "link-btn", "ghost-btn", "icon-btn", "notice-action",
   // → <Toast> / <Spinner> / .field / <Sheet> / <SourceMark> / <StatusDot>
-  "error-toast-icon", "notice-toast-icon",
+  "error-toast-icon", "notice-toast-icon", "msg-error-icon", "msg-error-text",
   "chat-loading-spinner", "attach-spinner", "reconnect-spinner", "voice-spinner", "onboarding-spinner",
   "schedule-input", "action-sheet", "session-mark", "run-pill-glyph",
   "node-dot", "session-dot", "run-dot", "attn-dot", "voice-listening-dot", "mark-badge",
@@ -86,7 +86,7 @@ const STYLES_FILE = "packages/web/src/styles.css";
 const LAYOUT_ONLY = [
   { shell: ".card", owns: /(?:background|border(?!-collapse)|border-radius|box-shadow)\s*:/, selectors: [
     ".tui-locked-card", ".followup-card", ".wq-status-card", ".setup-card", ".changes-card", ".readiness",
-    ".ruleset-rule-card", ".queue-card", ".autom-runner-card", ".question-card", ".account-offer", ".next-step", ".suggestion-card"] },
+    ".ruleset-rule-card", ".queue-card", ".autom-runner-card", ".question-card", ".account-offer", ".next-step", ".suggestion-card", ".transcript-error"] },
   { shell: ".toast", owns: /(?:background|border(?!-collapse)|border-radius|box-shadow|padding)\s*:/, selectors: [
     ".update-toast", ".error-toast", ".notice-toast"] },
   { shell: ".field", owns: /(?:background|border(?!-collapse)|border-radius|color|font-size|font-family)\s*:/, selectors: [
