@@ -2,10 +2,11 @@
 // Copyright (c) 2026 Petter André Sjulstad
 
 /**
- * A message the agent sends the user with `bivy notify`: a card in the chat,
- * and a push to their devices when nobody has the app open (or it is urgent).
- * The push names the session only; the text stays in the chat. Mirrored in
- * packages/core/src/notices.ts; the block string MUST match there.
+ * A message from Bivy in the chat, such as which automations were applied.
+ * Mirrored in packages/core/src/notices.ts; the block string MUST match there.
+ *
+ * `noticePush` decides whether `bivy notify` buzzes the user's devices: a push
+ * naming the session only, with nothing posted in the chat.
  */
 export interface AgentNotice {
   id: string;

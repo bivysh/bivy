@@ -14,9 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **`bivy notify` only pushes to your phone; it no longer adds a "Message for you" card to the chat.** The card usually repeated the agent's last reply. The message argument is now ignored, and the push says the agent wants you to take a look. The agent note and onboarding prompts no longer ask agents to notify when they finish, because Bivy already pushes when a turn ends while you're away. `--json` output drops `id` and `posted`.
 - **Pi 1.0.** Bivy now ships and certifies Pi 1.0.4 (from 0.99.2). Pi sessions, tool calls, resume, model switching and stopping a turn work as before. Opening a Pi session in the terminal now uses Pi's fullscreen view by default; set `tuiMode` to `"regular"` in Pi's settings to keep normal scrollback.
 - **The machine picker shows Bivy Cloud as one place to run, not a list of machines to manage.** When Bivy Cloud is running, picking it reuses that machine. Otherwise it starts one when you send, and the row says so. The "Start a new … Machine" entries and the "N min remaining" countdown are gone. Your own cloud profiles are listed as "New …", with any running machines from them beside them. A session's machine label reads as "Runs on …" for screen readers.
 - **Managed compute is supplied by the deployment extension.** The control plane no longer reads `MANAGED_PROVIDER_TOKEN_*`, `MANAGED_SESSION_*`, `MANAGED_AUTH_RUNNER_*`, `MANAGED_COMPUTE_MAX_ACTIVE_PER_ACCOUNT` or `MANAGED_GUEST_HARDENING_ATTESTED`. It asks the extension for the launch profile (`POST /v1/compute/profile`) and the provider credential (`POST /v1/compute/credential`). Admission checks now carry `activeManagedMachines`, so the extension enforces any concurrency limit. Credentials stay in memory only. The last unexpired one keeps teardown and reconciliation working through an extension outage. Without an extension there is no managed lane; BYO-cloud and personal machines are unchanged. See [self-host.md](docs/self-host.md#deployment-supplied-compute).
+
+### Removed
+
+- **`bivy suggest` and its "Suggested task" cards.** Agents now list next steps in their reply as plain text. The `suggest_task` MCP tool and the `/api/session/:id/suggest` route are gone. Suggestion cards in older sessions no longer render.
 
 ### Security
 

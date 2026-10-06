@@ -47,7 +47,7 @@ export type NotificationPreferences = Record<NotificationKind, boolean>;
 
 export const NOTIFICATION_KIND_META: Array<{ id: NotificationKind; label: string; description: string }> = [
   { id: "question_asked", label: "Agent asked a question", description: "An agent is waiting on an answer from you." },
-  { id: "agent_notice", label: "Agent messages", description: "An agent sent you a message with `bivy notify` while you were away." },
+  { id: "agent_notice", label: "Agent messages", description: "An agent asked you to take a look with `bivy notify` while you were away." },
   { id: "approval_requested", label: "Approval needed", description: "A tool wants to run and needs you to approve or deny it." },
   { id: "agent_waiting", label: "Agent waiting", description: "A `bivy run` agent went quiet and may need input." },
   { id: "session_done", label: "Session finished", description: "A session completed its turn — ready to review." },

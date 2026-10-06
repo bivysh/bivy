@@ -134,7 +134,7 @@ await check("the real CLI supplies the tools and serves the guides as resources"
   const client = new Client({ name: "test", version: "1.0.0" });
   await client.connect(clientT);
   const names = (await client.listTools()).tools.map((t) => t.name);
-  for (const name of ["notify_user", "ask_user", "suggest_task", "app_present", "bivy_context"]) assert.ok(names.includes(name), `${name} is offered`);
+  for (const name of ["notify_user", "ask_user", "app_present", "bivy_context"]) assert.ok(names.includes(name), `${name} is offered`);
   assert.ok(!names.some((name) => /delegate|runs/.test(name)), "delegation and Runs stay shell-only");
   const resources = (await client.listResources()).resources.map((r) => r.uri);
   assert.ok(resources.includes("bivy://guide/talk-to-the-user"));

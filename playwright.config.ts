@@ -35,7 +35,6 @@ const mobileSpecs = [
   "**/pin-card.spec.ts",
   "**/notify-offer.spec.ts",
   "**/followup-new-session.spec.ts",
-  "**/suggestion-card.spec.ts",
   "**/session-changes-section.spec.ts",
   "**/files-sheet.spec.ts",
 ];

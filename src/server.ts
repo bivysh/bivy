@@ -89,7 +89,6 @@ import { exportProviderAuth, exportAccountApiKeys, exportAccountOAuthCredentials
 import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
 import { sessionLikeFields } from "./session/start-like.js";
-import { MAX_SUGGESTION_TEXT, MAX_SUGGESTION_TITLE, SUGGESTION_RUNS, isTaskSuggestion } from "./session/suggestions.js";
 import { BIVY_AGENT_NOTE, mergeSyncedAgentInstructions, readAgentInstructions, sessionInstructions, writeAgentInstructions, MAX_AGENT_INSTRUCTIONS_BYTES } from "./agent-instructions.js";
 import { execEphemeralRequest, type EphemeralExecRequest } from "./ephemeral-exec.js";
 import { ApprovalManager, type ApprovalRequest } from "./approval.js";
@@ -183,7 +182,7 @@ import { AgentQuestions, askQuestionsFrom } from "./session/agent-questions.js";
 import { AutomationProposals, describeChange } from "./session/automation-proposals.js";
 import { createSessionTokenCodec, isSessionToken, sessionTokenAllows } from "./session/session-tokens.js";
 import { setSessionTokenSigner } from "./runtime/session-env.js";
-import { MAX_NOTICE_TEXT, isAgentNotice, noticePush } from "./session/notices.js";
+import { MAX_NOTICE_TEXT, noticePush } from "./session/notices.js";
 import { createForkCommands } from "./controllers/fork-commands.js";
 import { createGithubCommands } from "./controllers/github-commands.js";
 import { createCredentialCommands } from "./controllers/credential-commands.js";
@@ -11949,25 +11948,18 @@ app.get("/api/session/:id/context", (req, res) => {
   }));
 });
 
-// `bivy notify "<message>"`: a card in the chat, and a push naming the session
-// (never the text) when nobody has the app open, or when it's urgent. At most
-// one push a minute per session; later notices still post a card. A `bivy run`
-// terminal has no chat to hold the card, so its notice is the push alone.
+// `bivy notify`: a push naming the session (never any text) when nobody has the
+// app open, or when it's urgent. At most one push a minute per session. It adds
+// nothing to the chat: what the agent has to say belongs in its reply there.
 const lastNotifyPush = new Map<string, number>();
 app.post("/api/session/:id/notify", (req, res) => {
   const record = openSessions.get(String(req.params.id));
   const run = record ? undefined : runTerms.liveRun(String(req.params.id));
   const sessionId = record?.id ?? run?.sessionId;
   if (!sessionId) return res.status(404).json({ error: "Session not found" });
-  const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
-  const notice = { id: `notice-${randomBytes(8).toString("hex")}`, text, ...(req.body?.urgent === true ? { urgent: true } : {}) };
-  if (!isAgentNotice(notice)) return res.status(400).json({ error: `A notice needs text (up to ${MAX_NOTICE_TEXT} characters).` });
-  if (record) {
-    eventLog.appendNotice(record.id, { afterMessageCount: record.session.getMessages().length, notice });
-    broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "notice", id: notice.id, notice } }));
-  }
+  const urgent = req.body?.urgent === true;
   const watching = Boolean(record) && (clients.size > 0 || (relay?.clientCount ?? 0) > 0);
-  const push = noticePush({ urgent: notice.urgent, userWatching: watching, lastPushAt: lastNotifyPush.get(sessionId), now: Date.now(), pushConfigured: Boolean(sessionAdvertiseTarget) });
+  const push = noticePush({ urgent, userWatching: watching, lastPushAt: lastNotifyPush.get(sessionId), now: Date.now(), pushConfigured: Boolean(sessionAdvertiseTarget) });
   if (push === "sent") {
     lastNotifyPush.set(sessionId, Date.now());
     void sendNotificationHint({
@@ -11975,10 +11967,10 @@ app.post("/api/session/:id/notify", (req, res) => {
       sessionId,
       targetSessionId: sessionId,
       title: sessionNotifyLabel(record, run?.name || "A terminal session"),
-      body: "Has a message for you — tap to read it.",
+      body: "Wants you to take a look — tap to open the session.",
     });
   }
-  res.json({ ok: true, id: notice.id, posted: Boolean(record), push, userWatching: watching });
+  res.json({ ok: true, push, userWatching: watching });
 });
 
 // `bivy ask`: the question card and "needs your input" push, for any agent.
@@ -12029,22 +12021,6 @@ app.post("/api/session/:id/title", (req, res) => {
   if (!title || title.length > MAX_SESSION_TITLE) return res.status(400).json({ error: `A title needs 1 to ${MAX_SESSION_TITLE} characters.` });
   sessionNamer.setSessionName(record, title);
   res.json({ ok: true, title });
-});
-
-// `bivy suggest "<task>"`: the agent proposes a task the user can start in one
-// tap, here, through this agent's sub-agents, or in a parallel session; `run`
-// is the one the agent recommends (see packages/web SuggestionCard).
-app.post("/api/session/:id/suggest", (req, res) => {
-  const record = openSessions.get(String(req.params.id));
-  if (!record) return res.status(404).json({ error: "Session not found" });
-  const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
-  const title = typeof req.body?.title === "string" && req.body.title.trim() ? req.body.title.trim() : undefined;
-  const run = req.body?.run || undefined;
-  const suggestion = { id: `suggestion-${randomBytes(8).toString("hex")}`, text, ...(title ? { title } : {}), ...(run ? { run } : {}) };
-  if (!isTaskSuggestion(suggestion)) return res.status(400).json({ error: `A suggestion needs text (up to ${MAX_SUGGESTION_TEXT} characters), an optional title (up to ${MAX_SUGGESTION_TITLE}) and an optional run (${SUGGESTION_RUNS.join(", ")}).` });
-  eventLog.appendSuggestion(record.id, { afterMessageCount: record.session.getMessages().length, suggestion });
-  broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "suggestion", id: suggestion.id, suggestion } }));
-  res.json({ ok: true, id: suggestion.id });
 });
 
 // Explicit child Run API for first-party/user-directed workflows. These routes

@@ -285,10 +285,9 @@ Every session gets the `bivy` CLI, so any agent with a shell can talk back
 through the app, not only agents with their own built-in tools:
 
 ```bash
-bivy notify "Tests are green, PR is up"     # chat card + phone push when you're away
+bivy notify                                 # push to your phone so you come back
 bivy ask "Ship to staging?" --option Yes --option No  # waits for your answer
 bivy attach report.png --caption "Before/after"       # show a file in the chat
-bivy suggest "Add a dark theme to settings"           # a next task you start in one tap
 bivy context --json                                   # session, workspace, machine, apps
 ```
 

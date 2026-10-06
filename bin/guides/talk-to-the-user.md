@@ -1,18 +1,24 @@
 # Talk to the user
 
-Summary: When to answer in chat, when to notify, when to ask and wait, and how to offer next steps.
+Summary: When to answer in chat, when to notify, and when to ask and wait.
 
 Your chat reply is the default. Reach for these when the chat alone won't do.
 
 ## They may be away: notify
 
-    bivy notify "Migration finished: 3 tables rewritten, all tests pass."
-    bivy notify --urgent "Production is serving the old build."
+    bivy notify
+    bivy notify --urgent
 
-Posts a card in the chat. When nobody has the app open, their devices get a push
-naming this session (the text stays in the chat). `--urgent` pushes even while
-they are looking. One push a minute per session; don't send one per step.
-Good moments: long work finished, you are blocked, something needs a look.
+Pushes to their devices so they come back to this session. The push names the
+session only and nothing is posted in the chat, so say what you need in your
+reply. It goes out only when nobody has the app open; `--urgent` pushes even
+while they are looking. One push a minute per session.
+
+You don't need it when you finish: Bivy already pushes when a turn ends while
+they are away. Use it while you keep working and need them, for example when a
+long run is blocked on something only they can do.
+
+Next steps and options go in your reply as plain text.
 
 ## You need a decision: ask
 
@@ -23,23 +29,6 @@ Blocks until they answer and prints the answer (exit 0). Exit 1 means they
 dismissed it (use your judgment), exit 5 that `--timeout` (default 10m) passed.
 For long waits use `--async`, keep working, and later `bivy ask wait <id>`.
 Ask only when you can't reasonably decide yourself.
-
-## Offer next steps: suggest
-
-    bivy suggest "Add a GET /version endpoint that returns the package version." --title "Add /version"
-
-Each suggestion is a card the user can start in one tap: here, through your
-sub-agents, or in a parallel session with its own copy of the project. Write it as
-a complete instruction with paths relative to the project root. Post one per idea
-instead of a bulleted list.
-
-`--run` picks the card's main button; the others stay one tap away:
-
-| `--run` | When |
-|---|---|
-| `here` | It builds on this conversation, or it's small. Default for a single card. |
-| `subagents` | Independent tasks you can split across your own sub-agents and report back on. Only if you have sub-agents. |
-| `new` | Bigger independent work the user will want to follow, review or merge on its own. Default for several cards. |
 
 ## Name the session: title
 
