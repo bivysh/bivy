@@ -9,7 +9,7 @@ import type { AgentRuntime, OpenSessionOptions, OpenSessionResult, SessionSummar
 import { PI_CAPABILITIES } from "./capabilities.js";
 import { bridgeInstalled, enableBridgeResolution } from "../../agent-bridges.mjs";
 
-export const PI_TESTED_VERSION = "0.99.2";
+export const PI_TESTED_VERSION = "1.0.4";
 
 export function piAgentDir(): string {
   return process.env.PI_CODING_AGENT_DIR?.trim() || path.join(os.homedir(), ".pi", "agent");

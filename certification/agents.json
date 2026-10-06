@@ -44,11 +44,11 @@
       "id": "pi",
       "name": "Pi",
       "status": "active",
-      "upstream": { "package": "@earendil-works/pi-coding-agent", "pinnedVersion": "0.99.2", "supportedRange": ">=0.99.2 <=0.99.2" },
+      "upstream": { "package": "@earendil-works/pi-coding-agent", "pinnedVersion": "1.0.4", "supportedRange": ">=1.0.4 <=1.0.4" },
       "platforms": ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"],
       "executionMode": "protocol",
       "probe": { "command": "pi", "args": ["--version"] },
-      "install": { "command": "npm", "args": ["install", "--global", "@earendil-works/pi-coding-agent@0.99.2"] },
+      "install": { "command": "npm", "args": ["install", "--global", "@earendil-works/pi-coding-agent@1.0.4"] },
       "auth": { "owner": "agent", "allowedEnvironment": ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY"] },
       "capabilities": ["toolInterception", "modelSelection", "resume", "attachments", "cancellation", "structuredStreaming", "tokenRefresh"]
     },
