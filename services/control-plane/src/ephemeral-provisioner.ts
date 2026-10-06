@@ -48,11 +48,11 @@ import {
   type WorkItem,
 } from "./store.js";
 import {
+  deploymentCompute,
   managedComputeEnabled,
   normalizeComputeSource,
-  operatorTokenSource,
   type ComputeSource,
-} from "./managed-compute.js";
+} from "./deployment-compute.js";
 import type { SecretEnvelope } from "./hosted-crypto.js";
 import { mintInstallationToken } from "./hosted-github-auth.js";
 import { encryptSecret, decryptSecret } from "./hosted-crypto.js";
@@ -291,7 +291,7 @@ export function ephemeralMachinesEnabled(env: NodeJS.ProcessEnv = process.env): 
  * source — the ONE place the user and managed lanes differ. "user" reads the
  * account's hosted token (optionally requiring the onboarding validation
  * fingerprint, as planAutoProvision always has); "managed" reads the
- * deployment's operator token source. The returned token is used exactly like
+ * deployment compute source (the extension). The returned token is used exactly like
  * hosted.providerTokens always was: transiently, never persisted, never logged,
  * never baked into machine user-data, never returned by an API.
  */
@@ -302,8 +302,8 @@ async function resolveProviderCredential(
   opts: { requireValidated?: boolean } = {},
 ): Promise<{ token?: string; reason: string }> {
   if (source === "managed") {
-    const token = await operatorTokenSource().getToken(provider);
-    if (!token) return { reason: `no operator token for provider ${provider} (managed lane)` };
+    const token = await deploymentCompute().credential(provider);
+    if (!token) return { reason: `no deployment credential for provider ${provider} (managed lane)` };
     return { token, reason: "ok" };
   }
   const token = hosted.providerTokens?.[provider];
@@ -1498,7 +1498,7 @@ export async function sweepOrphanProviderResources(
     if (normalizeComputeSource(attempt.desired?.computeSource) === "managed") managedProviders.add(attempt.provider);
   }
   for (const provider of managedProviders) {
-    const token = await operatorTokenSource().getToken(provider);
+    const token = await deploymentCompute().credential(provider);
     if (token) lanes.push({ provider, token });
   }
   for (const { provider, token } of lanes) {

@@ -73,10 +73,14 @@ pnpm run check:links
 - Update docs when changing user-visible behavior.
 - Do not commit secrets, tokens, private deployment details, or customer/user data.
 
-## Certificate of Origin
+## Contributor License Agreement
 
-By contributing, you certify that you have the right to submit your contribution under this project's license and agree to the Developer Certificate of Origin 1.1. Use signed-off commits when possible:
+Before your first pull request can be merged, please sign the
+[Contributor License Agreement](CLA.md). The CLA check on your pull request
+explains how: reply with the signing phrase once, and it covers all your future
+contributions. You keep the copyright in your work.
 
-```bash
-git commit -s
-```
+## Trademarks
+
+The code is AGPL-3.0, but the Bivy name and logo are covered by the
+[trademark policy](TRADEMARKS.md).

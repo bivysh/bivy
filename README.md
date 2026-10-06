@@ -527,6 +527,8 @@ use, modify, and self-host it under that license. If users interact with your
 modified version over a network, section 13 requires you to offer its
 corresponding source. See [LICENSE](LICENSE).
 
-Bivy Cloud is the hosted operation of that stack plus billing and plans, in a
-separate private repository. Contributions use the
-[DCO](CONTRIBUTING.md#certificate-of-origin); there is no CLA.
+Bivy Cloud is the hosted operation of that stack. Its plans, billing and
+managed-compute operations live in a separate private service behind Core's
+deployment extension. Contributions are made under the
+[Contributor License Agreement](CLA.md). The Bivy name and logo are covered by
+the [trademark policy](TRADEMARKS.md).
