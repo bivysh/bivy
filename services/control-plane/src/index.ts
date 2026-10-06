@@ -2965,6 +2965,31 @@ const automationWriteRateLimit = rateLimit({
   message: { error: "Too many automation updates. Try again shortly." },
 });
 
+// Templates sealed for the calling node, so it can re-seal them after a room-key
+// rotation (device revoke). Only ciphertext already bound to this node is read or
+// replaced; the server never sees plaintext.
+app.get("/node/automation-templates", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const prefix = `bivy-room-v1:${node.id}:`;
+  const templates = (await store.listAutomationDefinitions(node.accountId))
+    .filter((d) => d.templateCiphertext?.startsWith(prefix))
+    .map((d) => ({ id: d.id, templateCiphertext: d.templateCiphertext }));
+  res.json({ templates });
+}));
+
+app.put("/node/automation-templates/:id", requireNode, automationWriteRateLimit, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const prefix = `bivy-room-v1:${node.id}:`;
+  const templateCiphertext = typeof req.body?.templateCiphertext === "string" ? req.body.templateCiphertext : "";
+  if (!templateCiphertext.startsWith(prefix) || templateCiphertext.length === prefix.length) {
+    return res.status(400).json({ error: "instructions must be encrypted for the calling node" });
+  }
+  const current = await store.getAutomationDefinition(node.accountId, String(req.params.id));
+  if (!current?.templateCiphertext?.startsWith(prefix)) return res.status(404).json({ error: "Automation not found" });
+  await store.updateAutomationDefinition(node.accountId, current.id, { templateCiphertext });
+  res.json({ ok: true });
+}));
+
 // Node-authenticated reconciliation surface for `.bivy/automations.yaml`.
 // A definition applied from a node is deliberately bound to that node: its
 // instructions are encrypted with that node's room key, so allowing another
