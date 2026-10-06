@@ -12,6 +12,7 @@ import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { useCloudMachinesEnabled } from "../cloudMachines.js";
 import { ephemeralCatalogEntry, type EphemeralNodeConfig, type HostedMachineSummary } from "@bivy/core";
+import { cloudDestinations, type CloudDestination } from "../cloudDestinations.js";
 import type { TailnetMachine } from "../access.js";
 
 /**
@@ -62,27 +63,25 @@ export function NodeSwitcher() {
   // selection — offline/pending until the first message launches it.
   const draftRunner = cloudMachinesEnabled && !activeSessionId ? draft.ephemeralConfig : null;
   const concreteName = current?.name?.replace(/^Hosted\s+/i, "") || sessionNodeId || "Machine";
-  const label = draftRunner ? draftRunner.name : pendingNodeName || (current?.id.startsWith("eph-") ? `${concreteName} — running` : concreteName);
+  // Whether a cloud node is up is the status dot's job; the name stays the name.
+  const label = draftRunner ? draftRunner.name : pendingNodeName || concreteName;
   const showOnline = draftRunner ? false : current?.online;
   // Ephemeral machines enroll as real account nodes (id `eph-…`) once they boot,
-  // so they'd otherwise show up twice: here under "Your nodes" AND under the
-  // ephemeral section for their configured setup. Keep them out of the
-  // persistent list — the ephemeral section is their only home. Applies to every
-  // provider (Fly/Hetzner/AWS), which all mint `eph-` node ids at launch.
+  // so they'd otherwise show up twice: here under "Your machines" AND as a cloud
+  // row. Keep them out of the persistent list — the cloud section is their only
+  // home. Applies to every provider, which all mint `eph-` node ids at launch.
   const persistentNodes = nodes.filter((n) => !n.id.startsWith("eph-"));
-  // Profiles are reusable templates: every selection launches a fresh Machine.
-  // Running managed Machines are listed separately below as an explicit reuse
-  // choice, so a template is never disabled merely because it already launched.
-  const runningCloudMachines = useMemo(() => hostedMachines.filter((machine) =>
-    machine.purpose === "interactive" && machine.desiredState !== "deleted" && machine.nodeId && nodes.some((node) => node.id === machine.nodeId),
-  ), [hostedMachines, nodes]);
-  const runningLabel = (machine: HostedMachineSummary) => {
-    const profile = ephemeralConfigs.find((config) => config.id === machine.setupId);
-    const name = (profile?.name || machine.name || "Bivy Cloud").replace(/^Hosted\s+/i, "");
-    const createdAt = Date.parse(machine.createdAt);
-    if (!machine.ttlMinutes || !Number.isFinite(createdAt)) return `${name} — running`;
-    const remaining = Math.max(0, Math.ceil((createdAt + machine.ttlMinutes * 60_000 - Date.now()) / 60_000));
-    return `${name} — running · ${remaining} min remaining`;
+  const cloud = useMemo(() => cloudDestinations(ephemeralConfigs, hostedMachines, nodes), [ephemeralConfigs, hostedMachines, nodes]);
+  const cloudRows = [...cloud.managed, ...cloud.running, ...cloud.templates];
+  const isPicked = (row: CloudDestination) => row.config && draftRunner
+    ? row.config.id === draftRunner.id
+    : !draftRunner && Boolean(row.nodeId) && row.nodeId === currentNodeId;
+  const pickCloud = (row: CloudDestination) => {
+    setOpen(false);
+    // A running Machine is reused as-is; otherwise the profile launches one
+    // when the first message is sent.
+    if (row.nodeId) controller.switchNode(row.nodeId);
+    else if (row.config) controller.pickDraftEphemeralRunner(row.config);
   };
   // A draft may choose its node. Once the session exists, its owning node is
   // immutable: this control becomes a label rather than a global node switcher.
@@ -100,7 +99,7 @@ export function NodeSwitcher() {
         }}
         aria-haspopup={locked ? undefined : "menu"}
         aria-expanded={locked ? undefined : open}
-        aria-label={locked ? `Session machine: ${label}` : undefined}
+        aria-label={locked ? `Runs on ${label}` : undefined}
       >
         {/* Online/offline/reconnecting is otherwise color/shape-only (a 9px
             dot, sometimes a spinner) with no text — invisible to screen
@@ -137,49 +136,23 @@ export function NodeSwitcher() {
               </button>
             </div>
           ))}
-          {cloudMachinesEnabled && runningCloudMachines.length > 0 && (
+          {cloudMachinesEnabled && cloudRows.length > 0 && (
             <>
-              <div className="node-menu-head">Running Cloud machines</div>
-              {runningCloudMachines.map((machine) => {
-                const node = nodes.find((candidate) => candidate.id === machine.nodeId);
+              <div className="node-menu-head">Cloud</div>
+              {cloudRows.map((row) => {
+                const picked = isPicked(row);
+                const template = row.config?.computeSource === "managed" ? undefined : row.config;
                 return (
                   <button
-                    key={machine.id}
-                    className={`menu-item node-menu-item${machine.nodeId === currentNodeId && !draftRunner ? " active" : ""}`}
-                    role="menuitem"
-                    onClick={() => {
-                      if (!machine.nodeId) return;
-                      setOpen(false);
-                      controller.switchNode(machine.nodeId);
-                    }}
-                  >
-                    <StatusDot status={node?.online ? "online" : "idle"} label={`${node?.online ? "Online" : "Offline"} — `} />
-                    <span className="node-menu-name">{runningLabel(machine)}</span>
-                    {machine.nodeId === currentNodeId && !draftRunner && <span className="node-menu-check">✓</span>}
-                  </button>
-                );
-              })}
-            </>
-          )}
-          {cloudMachinesEnabled && ephemeralConfigs.length > 0 && (
-            <>
-              <div className="node-menu-head">Start a new Cloud machine</div>
-              {ephemeralConfigs.map((config) => {
-                const picked = config.id === draftRunner?.id;
-                const name = config.computeSource === "managed" ? `Start a new ${config.name} Machine` : config.name;
-                return (
-                  <button
-                    key={config.id}
+                    key={row.key}
                     className={`menu-item node-menu-item${picked ? " active" : ""}`}
                     role="menuitem"
-                    onClick={() => {
-                      setOpen(false);
-                      controller.pickDraftEphemeralRunner(config);
-                    }}
+                    onClick={() => pickCloud(row)}
                   >
-                    <StatusDot status="idle" label={picked ? "Selected — " : "Available — "} />
-                    <span className="node-menu-name">{name}</span>
-                    <Badge>{config.provider}</Badge>
+                    <StatusDot status={row.online ? "online" : "idle"} label={row.online ? "Online — " : "Not running — "} />
+                    <span className="node-menu-name">{template ? `New ${row.label}` : row.label}</span>
+                    {row.config && !row.online && !template && <span className="node-menu-meta">starts when you send</span>}
+                    {template && <Badge>{template.provider}</Badge>}
                     {picked && <span className="node-menu-check">✓</span>}
                   </button>
                 );

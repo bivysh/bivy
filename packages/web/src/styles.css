@@ -3000,7 +3000,7 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .node-switcher-btn.locked { cursor: default; }
 .node-switcher-name { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node-switcher-caret { color: var(--muted); font-size: 9px; }
-.node-menu { position: absolute; left: 0; top: calc(100% + 6px); min-width: 220px; z-index: var(--z-dropdown); }
+.node-menu { position: absolute; left: 0; top: calc(100% + 6px); min-width: 220px; width: max-content; max-width: calc(100vw - var(--space-6)); z-index: var(--z-dropdown); }
 /* "Reconnecting…" line at the top of the open switcher, under the node the
    button shows — the dropdown's spelled-out counterpart to the spinner dot. */
 .node-menu-status { display: flex; align-items: center; gap: 8px; padding: 10px 14px; font-size: 13px; color: var(--muted); border-bottom: 1px solid var(--line); }
@@ -3015,6 +3015,8 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 .node-menu-item.active { font-weight: 600; }
 .node-menu-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .node-menu-check { color: var(--accent); }
+/* Quiet trailing hint on a cloud row, e.g. "starts when you send". */
+.node-menu-meta { flex: none; color: var(--muted); font-size: var(--text-xs); }
 .node-menu-glyph { color: var(--accent); flex: none; }
 .eph-steps { margin: 4px 0; padding-left: 18px; color: var(--muted); font-size: 13px; display: grid; gap: 4px; }
 .code-snippet { margin: 6px 0 0; overflow: auto; border: 1px solid var(--line); border-radius: var(--radius-md); padding: 10px; background: var(--surface); font-size: 12px; }

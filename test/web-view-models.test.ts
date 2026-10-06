@@ -17,6 +17,7 @@ import { modelAccountChoice } from "../packages/web/src/modelAccounts.js";
 import { githubInstallationSettings, githubMentionHandles, githubSourceStatus } from "../packages/web/src/components/githubSource.js";
 import { focusEntries } from "../packages/web/src/focusTranscript.js";
 import { standbyCopyOf } from "../packages/web/src/standby.js";
+import { cloudDestinations } from "../packages/web/src/cloudDestinations.js";
 
 test("account routing follows project, active, default and ambiguity rules", () => {
   const records = [{ label: "default" }, { label: "work" }];
@@ -165,4 +166,23 @@ test("a standby copy offers Continue here only while its owner is offline", () =
   assert.equal(standbyCopyOf("replica:box", nodes)?.ownerOnline, true, "a live owner is where the session should be opened");
   assert.equal(standbyCopyOf("promoted:mac", nodes), undefined, "once promoted it is this machine's own session");
   assert.equal(standbyCopyOf("repo:acme/app", nodes), undefined);
+});
+
+test("a managed cloud profile is one destination that reuses its running Machine", () => {
+  const at = (minute: number) => `2026-10-06T10:${String(minute).padStart(2, "0")}:00Z`;
+  const config = (id: string, computeSource: "managed" | "user") => ({ id, name: id === "managed" ? "Bivy Cloud" : "My Fly", provider: "fly", computeSource, createdAt: at(0), updatedAt: at(0) });
+  const machine = (id: string, setupId: string, nodeId: string, minute: number) => ({ id, setupId, nodeId, provider: "fly", purpose: "interactive" as const, createdAt: at(minute) });
+  const configs = [config("managed", "managed"), config("byo", "user")];
+  const machines = [machine("m-old", "managed", "eph-old", 1), machine("m-new", "managed", "eph-new", 2), machine("b-1", "byo", "eph-byo", 3)];
+  const nodes = [{ id: "eph-old", online: true }, { id: "eph-new", online: true }, { id: "eph-byo", online: true }];
+
+  const up = cloudDestinations(configs, machines, nodes);
+  assert.deepEqual(up.managed.map((row) => [row.label, row.nodeId]), [["Bivy Cloud", "eph-new"]]);
+  assert.deepEqual(up.running.map((row) => [row.label, row.nodeId]), [["My Fly", "eph-byo"]]);
+  assert.deepEqual(up.templates.map((row) => row.key), ["byo"]);
+
+  const asleep = cloudDestinations(configs, machines, nodes.map((node) => ({ ...node, online: false })));
+  assert.equal(asleep.managed[0].nodeId, undefined);
+  assert.equal(asleep.managed[0].config?.id, "managed");
+  assert.deepEqual(asleep.running.map((row) => row.key), ["b-1"]);
 });
