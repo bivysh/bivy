@@ -15,7 +15,9 @@ done
 if [ "${BIVY_INSTALL_SMOKE_CACHE:-}" = 1 ]; then
   rm -f /etc/apt/apt.conf.d/docker-clean
   printf 'Binary::apt::APT::Keep-Downloaded-Packages "true";\n' > /etc/apt/apt.conf.d/keep-downloads
-  export npm_config_prefer_offline=true
+  # Revalidate package metadata (a restored cache can predate a just-bumped
+  # dependency); tarballs still come from the cache, verified by integrity.
+  export npm_config_prefer_online=true
 fi
 # Only bootstrap the prerequisites for curl itself. In particular, no Node,
 # timezone, or native build packages are preinstalled by the test harness.
