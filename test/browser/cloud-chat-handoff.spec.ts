@@ -52,7 +52,7 @@ for (const { outcome, currentModelKnown } of scenarios) {
         if (command.sessionId?.startsWith('starting-')) mainHandlers.onEvent({ type: 'session.error', sessionId: command.sessionId, error: 'Session not found' });
       } };
       globalThis.refreshAccountIndex = controller.refreshAccountSessions.bind(controller);
-      for (const name of ['refreshAccountSessions','syncAccountCredentialsWithNode','resyncScheduledFollowups','seedEphemeralNodeIfNeeded','maybePromptFirstRunModelAuth','refreshEphemeralCorrelations','refreshSessions','seedAndRequestHistory','observeActivationMilestones']) controller[name] = async () => {};
+      for (const name of ['refreshAccountSessions','syncAccountCredentialsWithNode','resyncScheduledFollowups','refreshEphemeralCorrelations','refreshSessions','seedAndRequestHistory','observeActivationMilestones']) controller[name] = async () => {};
       controller.pendingLaunchStore = { put: async task => globalThis.persisted.push(task.id), remove: async () => {}, list: async () => [] };
       controller.store.setNodes([{ id: 'cloud-node', name: 'Bivy Cloud', online: true }]);
       controller.ephemeralCorrelations = [{ sessionId: 'real-session', nodeId: 'cloud-node', computeSource: 'managed' }];
@@ -67,9 +67,6 @@ for (const { outcome, currentModelKnown } of scenarios) {
       globalThis.catalogReady = !['empty', 'hydrated'].includes(${JSON.stringify(outcome)});
       globalThis.catalogQueryError = ${JSON.stringify(outcome)} === 'empty';
       controller.pendingLaunches.set(task.id, task);
-      globalThis.earlyTeardowns = 0;
-      controller.ephemeralCoordinator.teardownFinishedSession = async () => { globalThis.earlyTeardowns++; };
-      controller.maybeTeardownFinishedEphemeral(task.id);
       // Same-node credential setup/reconnect must not read or control a local
       // placeholder. Nor may the regular connection consume a launch broadcast.
       controller.openSession(task.id);
@@ -157,7 +154,6 @@ for (const { outcome, currentModelKnown } of scenarios) {
     await page.goto(`${origin}${fixturePath}`);
     await expect.poll(() => polls).toBeGreaterThan(0);
     expect(await page.evaluate("globalThis.provisionalSafe")).toBe(true);
-    expect(await page.evaluate("globalThis.earlyTeardowns")).toBe(0);
     expect(await page.evaluate("globalThis.mainCommands.filter(command => command.sessionId?.startsWith('starting-') || command.kind === 'prompt')")).toEqual([]);
     await expect(page.getByText('Session not found', { exact: true })).toHaveCount(0);
     expect(await page.evaluate("globalThis.mainCommands.some(command => command.kind === 'history' && command.sessionId === 'established-session')")).toBe(true);

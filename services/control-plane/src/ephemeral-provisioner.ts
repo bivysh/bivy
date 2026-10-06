@@ -19,8 +19,6 @@ import {
   launchEphemeralMachine,
   destroyEphemeralMachine,
   ephemeralNodeLabel,
-  ephemeralCatalogEntry,
-  validateEphemeralProviderToken,
   ephemeralAdapter,
   type ExecFn,
   type ExecRequest,
@@ -151,12 +149,7 @@ export async function hostedExecutionReadiness(store: EphemeralProvisioningPort,
     if (!cred.token) return { ready: false, reason: cred.reason, configId: config.id };
     return { ready: true, reason: "hosted ephemeral execution is ready", configId: config.id };
   }
-  const token = hosted.providerTokens?.[config.provider];
-  if (!token) return { ready: false, reason: `no hosted ${config.provider} credential` };
-  if (hosted.validatedProviders?.[config.provider] !== providerCredentialFingerprint(token)) {
-    return { ready: false, reason: `${config.provider} credential is not validated` };
-  }
-  return { ready: true, reason: "hosted ephemeral execution is ready", configId: config.id };
+  return { ready: false, reason: "own cloud accounts are no longer supported", configId: config.id };
 }
 
 export const EPHEMERAL_MILESTONES = [
@@ -219,7 +212,6 @@ export async function markHostedMachineMilestone(
 
 const DEDUPE_WINDOW_MS = 60 * 60 * 1000; // don't stack hosted machines within an hour
 const MAX_PROVISIONS_PER_HOUR = Math.max(1, Number(process.env.HOSTED_PROVISION_MAX_PER_HOUR ?? 5));
-const READY_MIN_REMAINING_MS = 5 * 60 * 1000;
 const PROVISION_LEASE_SECONDS = 5 * 60;
 const BOOT_DEADLINE_MS = 15 * 60 * 1000;
 const TTL_GRACE_MS = 15 * 60 * 1000;
@@ -271,11 +263,6 @@ function startLeaseHeartbeat(store: EphemeralProvisioningPort, accountId: string
   return { stop: () => clearInterval(timer), isLost: () => lost };
 }
 
-function readyMachineUsable(machine: Record<string, unknown>, nowMs = Date.now()): boolean {
-  const createdAt = Date.parse(String(machine.createdAt || ""));
-  const ttlMs = (typeof machine.ttlMinutes === "number" ? machine.ttlMinutes : 60) * 60 * 1000;
-  return Number.isFinite(createdAt) && createdAt + ttlMs - nowMs > READY_MIN_REMAINING_MS;
-}
 
 /**
  * Deployment-level emergency kill switch. Product access is gated per account
@@ -371,8 +358,7 @@ export async function planAutoProvision(
   // Deployment emergency gate: exact `0` disables new launches; otherwise the
   // per-account hosted opt-in is authoritative. This is the single choke point
   // for ALL server-initiated auto-launches — both maybeAutoProvision
-  // call sites route through here. Mirrors the /api/ephemeral/exec relay guard
-  // (device-initiated launches) and the web EPHEMERAL_MACHINES_ENABLED flag.
+  // call sites route through here. Mirrors the web EPHEMERAL_MACHINES_ENABLED flag.
   if (!ephemeralMachinesEnabled()) {
     return { willProvision: false, targetConfigId: null, reason: "ephemeral machines disabled (EPHEMERAL_MACHINES_ENABLED)" };
   }
@@ -387,6 +373,11 @@ export async function planAutoProvision(
     return { willProvision: false, targetConfigId: target.id, reason: `provider ${target.provider} is no longer supported` };
   }
   const computeSource = normalizeComputeSource(target.computeSource);
+  // Machines launch only on deployment-provided compute. A profile left over from
+  // a user's own cloud account is never launched again (cleanup still runs).
+  if (computeSource !== "managed") {
+    return { willProvision: false, targetConfigId: target.id, reason: "own cloud accounts are no longer supported" };
+  }
   // Managed-lane kill switch: default OFF, gates NEW launches only. Cleanup /
   // reconcile / orphan sweeps intentionally do not consult it (mirroring
   // EPHEMERAL_MACHINES_ENABLED above), so flipping it off never strands a
@@ -442,8 +433,8 @@ export async function planAutoProvision(
   return { willProvision: true, targetConfigId: target.id, reason: "ready to provision" };
 }
 
-// Direct server-side provider-call exec (mirrors the /api/ephemeral/exec relay
-// handler). Core applies its host allowlist (assertAllowedUrl) before calling.
+// Direct server-side provider-call exec. Core applies its host allowlist
+// (assertAllowedUrl) before calling.
 function directExec(timeoutMs?: number): ExecFn {
   return async ({ method, url, headers, body }: ExecRequest) => {
     const res = await fetch(url, {
@@ -466,9 +457,6 @@ function directExec(timeoutMs?: number): ExecFn {
 
 /** Read-only hosted onboarding check. The credential is used transiently for a
  * provider-authenticated list/describe call and is not persisted by this helper. */
-export function validateHostedProviderToken(provider: string, token: string, region?: string): Promise<void> {
-  return validateEphemeralProviderToken(provider, token, directExec(), region);
-}
 
 function serverKeyStore(providerToken: string): EphemeralKeyStore {
   return {
@@ -710,60 +698,6 @@ async function routePendingWorkToMachine(store: EphemeralProvisioningPort, accou
     const assigned = await store.assignWorkItem(accountId, item.id, { label: targetLabel, runtimeId: item.runtimeId, model: item.model, ephemeral: true });
     if (assigned) await audit(store, accountId, { action: "work_routed", provider: target.provider, configId: target.id, nodeId: machine.nodeId, workItemId: item.id, detail: targetLabel });
   }
-}
-
-/** Maintain at most one account-owned, credential-empty ready runner per opted-in
- * stable BYO config. Calls are serialized with the same lease as work claims. */
-export async function ensureReadyCapacity(
-  store: EphemeralProvisioningPort,
-  accountId: string,
-  env: ProvisionEnv,
-  launcher = launchEphemeralMachine,
-): Promise<EphemeralMachine | null> {
-  const holder = `capacity:${randomUUID()}`;
-  if (!(await store.acquireHostedProvisionLease(accountId, holder, PROVISION_LEASE_SECONDS))) return null;
-  const heartbeat = startLeaseHeartbeat(store, accountId, holder);
-  try {
-    if (!ephemeralMachinesEnabled()) return null;
-    const hosted = await store.getHostedProvisioning(accountId);
-    if (!hosted.enabled) return null;
-    const configs = await store.getEphemeralConfigs(accountId);
-    let machines = await store.getHostedMachines(accountId);
-    // Ready capacity stays a BYO/user-lane feature: pre-warming operator-paid
-    // managed machines is idle spend on Bivy's bill, a call that belongs to the
-    // metering/caps workstream (see the CAP GATE in planAutoProvision).
-    const eligible = configs.filter((c) => (c.readyCapacity ?? 0) > 0
-      && ephemeralCatalogEntry(c.provider)?.computeClass === "byo-cloud"
-      && normalizeComputeSource(c.computeSource) === "user");
-    for (const candidate of eligible) {
-      const existing = machines.find((m) => m.setupId === candidate.id && m.purpose === "ready-capacity");
-      if (!existing || readyMachineUsable(existing)) continue;
-      if (typeof existing.nodeId === "string") await reapSettledHostedMachine(store, accountId, existing.nodeId, env);
-      machines = await store.getHostedMachines(accountId);
-    }
-    const config = eligible.find((c) => !machines.some((m) => m.setupId === c.id && m.purpose === "ready-capacity"));
-    if (!config) return null;
-    const token = hosted.providerTokens?.[config.provider];
-    if (!token || hosted.validatedProviders?.[config.provider] !== providerCredentialFingerprint(token)) return null;
-    const recentLaunches = (await store.listHostedAudit(accountId, 100)).filter((event) => event.action === "provision_launched" && withinMs(event.at, DEDUPE_WINDOW_MS, Date.now()));
-    if (recentLaunches.length >= MAX_PROVISIONS_PER_HOUR) return null;
-    const machine = await provisionEphemeralForAccount(store, accountId, config, env, launcher, Date.now(), "ready-capacity");
-    await audit(store, accountId, { action: "capacity_ready", provider: config.provider, configId: config.id, nodeId: machine.nodeId });
-    return machine;
-  } finally {
-    heartbeat.stop();
-    await store.releaseHostedProvisionLease(accountId, holder).catch(() => {});
-  }
-}
-
-export async function reconcileAllReadyCapacity(store: EphemeralProvisioningPort, env: ProvisionEnv): Promise<{ accounts: number; created: number; failed: number }> {
-  const accountIds = await store.listReadyCapacityAccountIds();
-  const result = { accounts: accountIds.length, created: 0, failed: 0 };
-  for (const accountId of accountIds) {
-    try { if (await ensureReadyCapacity(store, accountId, env)) result.created++; }
-    catch { result.failed++; }
-  }
-  return result;
 }
 
 /**
@@ -1403,12 +1337,13 @@ export async function reconcileAllHostedMachines(
   nowMs = Date.now(),
   destroy: DestroyFn = destroyEphemeralMachine,
   reportManagedSettlement?: ManagedSettlementReporter,
+  observe: ObserveFn = observeProviderMachine,
 ): Promise<ReconcileAllResult> {
   const accountIds = await store.listHostedMachineAccountIds();
   const result: ReconcileAllResult = { accounts: accountIds.length, reaped: 0, failed: 0 };
   for (const accountId of accountIds) {
     try {
-      result.reaped += await reconcileHostedMachines(store, accountId, nowMs, env, destroy, observeProviderMachine, reportManagedSettlement);
+      result.reaped += await reconcileHostedMachines(store, accountId, nowMs, env, destroy, observe, reportManagedSettlement);
     } catch (error) {
       result.failed++;
       await audit(store, accountId, {
@@ -1600,7 +1535,6 @@ export async function maybeAutoProvision(
   reportManagedSettlement?: ManagedSettlementReporter,
 ): Promise<EphemeralMachine | null> {
   const leaseHolder = randomUUID();
-  let replenish = false;
   let admittedManagedAttemptId: string | undefined;
   let heartbeat: { stop: () => void; isLost: () => boolean } | undefined;
   try {
@@ -1619,38 +1553,6 @@ export async function maybeAutoProvision(
     heartbeat = startLeaseHeartbeat(store, accountId, leaseHolder);
     const routing = await store.getQueueRouting(accountId);
     const configs = await store.getEphemeralConfigs(accountId);
-    const target = resolveAutoProvisionTarget(routing, configs);
-    if (target) {
-      const machines = await store.getHostedMachines(accountId);
-      const ready = machines.find((m) => m.setupId === target.id && m.purpose === "ready-capacity"
-        && readyMachineUsable(m)
-        && typeof (m.milestones as Record<string, unknown> | undefined)?.nodeReadyAt === "string");
-      const sourceLabel = routing.primary.kind === "node" ? `bivy/${routing.primary.node}` : "bivy";
-      const hasPending = (await store.listWorkItems(accountId, 100)).some((item) => item.status === "pending" && item.label === sourceLabel);
-      if (ready && hasPending) {
-        // Fence the claim: if our lease was already declared lost (renewal
-        // failed — a stalled DB, a long GC pause), a second replica may have
-        // since acquired it and be mid-claim itself. Refuse to commit a
-        // claim/route write neither replica can be sure is exclusive, rather
-        // than risk routing the same pending work twice.
-        if (heartbeat.isLost()) {
-          console.error(`[hosted-provision] lease lost before capacity claim — skipping account=${accountId}`);
-          return null;
-        }
-        const claimed = { ...ready, purpose: "queue-default", claimedAt: new Date().toISOString() };
-        // Route first. If the controller crashes afterward the work still reaches
-        // this unique runner; the inverse order strands paid claimed capacity.
-        await routePendingWorkToMachine(store, accountId, target, claimed as unknown as EphemeralMachine);
-        await store.setHostedMachines(accountId, machines.map((m) => m.id === ready.id ? claimed : m));
-        if (typeof ready.attemptId === "string") {
-          const attempt = await store.getHostedMachineAttempt(accountId, ready.attemptId).catch(() => undefined);
-          if (attempt) await store.putHostedMachineAttempt({ ...attempt, state: "claimed", machine: claimed, updatedAt: new Date().toISOString() }).catch(() => {});
-        }
-        await audit(store, accountId, { action: "capacity_claimed", provider: target.provider, configId: target.id, nodeId: typeof ready.nodeId === "string" ? ready.nodeId : undefined });
-        replenish = true;
-        return claimed as unknown as EphemeralMachine;
-      }
-    }
     const managedAttemptId = randomUUID();
     const plan = await planAutoProvision(store, accountId, Date.now(), admitManaged, managedAttemptId);
     if (!plan.willProvision || !plan.targetConfigId) return null;
@@ -1690,6 +1592,5 @@ export async function maybeAutoProvision(
   } finally {
     heartbeat?.stop();
     await store.releaseHostedProvisionLease(accountId, leaseHolder).catch(() => {});
-    if (replenish) void ensureReadyCapacity(store, accountId, env, launcher).catch(() => {});
   }
 }

@@ -242,14 +242,14 @@ WEB_PUSH_SUBJECT=mailto:admin@app.example.com
 
 ## Offline automations (encrypted credential storage)
 
-**Settings → Cloud machine profiles → open a profile → "Run automations while I'm
-offline"** lets the control plane start that cloud profile on a schedule or webhook
-when none of your devices are online. It reuses the credential the profile was
-connected with — there is nothing to paste a second time — but the server has to
-hold an encrypted copy of it, so it refuses to enable the feature until it has a
-key to encrypt that credential at rest. Until then the toggle is disabled and the
-profile shows *"Not available yet: this Bivy server has no encryption key for
-stored credentials"* — this is a **server-side setting, not something in the app**.
+Runs that start while none of your devices are online — automations on the
+deployment's cloud machines, and rebuilding a cloud session after its machine
+was retired — need the control plane to hold a few credentials encrypted: the
+model credential you allowed for unattended runs, a GitHub credential for
+hosted machines, and escrowed session room keys. The control plane refuses to
+store any of them until it has a key to encrypt them at rest; the request fails
+with *"Credential encryption is not configured (set HOSTED_CREDENTIAL_KEY)"*.
+This is a **server-side setting, not something in the app**.
 
 There is no UI for it. The default `env` keyring source uses one environment variable on the control plane:
 
@@ -264,10 +264,10 @@ HOSTED_CREDENTIAL_KEY=<the base64 output>
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d control-plane
 ```
 
-Reload the app; the toggle and **Save credential** unlock immediately.
+Reload the app and try again.
 
-What the key does: every hosted credential (provider token, GitHub App key,
-escrowed session room keys) is sealed with AES-256-GCM under a per-account subkey
+What the key does: every hosted credential (unattended model credential,
+GitHub App key or token, escrowed session room keys) is sealed with AES-256-GCM under a per-account subkey
 derived from this master key (`services/control-plane/src/hosted-crypto.ts`,
 design in [`hosted-provisioning-trust-model.md`](hosted-provisioning-trust-model.md)).
 No plaintext credential is ever written to Postgres, and with no key configured
@@ -277,16 +277,11 @@ the endpoints fail closed rather than storing anything.
 cannot be decrypted; the account has to re-enter them. Treat it like
 `RELAY_SECRET` — it lives in `deploy/.env` (mode `600`) and nowhere else.
 
-Set the single deployment flag `EPHEMERAL_MACHINES_ENABLED=1` to enable the
-UI and ephemeral launches. Managed compute is available when operator provider
-credentials are configured; BYO-only deployments do not need managed-guest
-attestation. There is no separate managed-compute or UI enable flag.
-For compatibility, leaving the flag unset preserves legacy BYO API behavior,
-but does not opt into the UI or managed compute. Set `0` to block all new launches.
-The former `MANAGED_COMPUTE_ENABLED` and `VITE_EPHEMERAL_MACHINES_ENABLED` flags
-are no longer read. When migrating, note that `1` now opts into managed compute
-as well if operator credentials are present; the old managed-disable flag does
-not override it. All managed production safety prerequisites still apply.
+Cloud machines are off unless the control plane sets
+`EPHEMERAL_MACHINES_ENABLED=1` and a deployment extension supplies compute
+(see [Deployment-supplied compute](#deployment-supplied-compute)). `0` blocks
+all new launches but never cleanup. The former `MANAGED_COMPUTE_ENABLED` and
+`VITE_EPHEMERAL_MACHINES_ENABLED` flags are no longer read.
 
 Use the standard `ghcr.io/bivysh/bivy-control-plane:<full-core-sha>` image and
 set `EPHEMERAL_MACHINES_ENABLED=1` on the **running control-plane container**
@@ -357,8 +352,7 @@ don't know.
 
 Setting `EPHEMERAL_MACHINES_ENABLED=0` blocks new launches in both lanes and
 hides their UI. It does **not** disable teardown, reconciliation,
-creation-attempt cleanup or orphan sweeps. User-token/BYO configurations are
-unaffected.
+creation-attempt cleanup or orphan sweeps.
 
 ## Using a managed/hosted Postgres
 

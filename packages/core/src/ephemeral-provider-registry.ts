@@ -3,15 +3,11 @@
 // Data-driven composition root for provider interpreters.
 
 import type { ExecFn, ProviderAdapter } from "./ephemeral-provider-ports.js";
-import { awsProvider } from "./ephemeral-providers/aws.js";
 import { flyProvider } from "./ephemeral-providers/fly.js";
-import { hetznerProvider } from "./ephemeral-providers/hetzner.js";
 
 /** Registration order is stable for consumers that enumerate interpreters. */
 export const EPHEMERAL_PROVIDER_ADAPTERS: readonly ProviderAdapter[] = [
-  hetznerProvider,
   flyProvider,
-  awsProvider,
 ];
 
 const adaptersById = new Map(EPHEMERAL_PROVIDER_ADAPTERS.map((adapter) => [adapter.id, adapter]));

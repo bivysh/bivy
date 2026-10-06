@@ -112,31 +112,12 @@ async function main() {
   const routing0 = await req(port, "GET", "/account/queue-routing", undefined, token);
   expect(routing0.json?.primary?.kind === "shared", "fresh account routes to the shared queue");
 
-  // Create a config; ttl below the floor clamps to 5.
-  const created = await req(port, "POST", "/account/ephemeral-configs", { name: "fly-small-iad", provider: "fly", region: "iad", size: "shared-1x", image: "ghcr.io/bivysh/bivy-ephemeral-runner:sha-test", ttlMinutes: 1, readyCapacity: 9, teardownOnAgentFinish: true }, token);
-  expect(created.status === 200 && typeof created.json?.id === "string" && created.json.id.startsWith("cfg-"), "create returns a config with a cfg- id");
-  expect(created.json?.ttlMinutes === 15, `ready capacity raises ttlMinutes 1 → 15 so it has claimable life (got ${created.json?.ttlMinutes})`);
-  expect(created.json?.provider === "fly" && created.json?.teardownOnAgentFinish === true, "create keeps provider + teardown");
-  expect(created.json?.image === "ghcr.io/bivysh/bivy-ephemeral-runner:sha-test", "create keeps curated runner image");
-  expect(created.json?.readyCapacity === 1, "create caps ready capacity at one runner");
-  const id = created.json.id;
-
-  // Create requires a name.
-  const bad = await req(port, "POST", "/account/ephemeral-configs", { provider: "fly" }, token);
-  expect(bad.status === 400, `create without a name is rejected (got ${bad.status})`);
-
-  // List reflects the new config.
-  const listed = await req(port, "GET", "/account/ephemeral-configs", undefined, token);
-  expect(listed.json?.length === 1 && listed.json[0].id === id, "list shows the created config");
-
-  // Update: change size + oversized ttl clamps to 1440.
-  const updated = await req(port, "PUT", `/account/ephemeral-configs/${id}`, { size: "shared-2x", ttlMinutes: 5000 }, token);
-  expect(updated.json?.size === "shared-2x", "update changes size");
-  expect(updated.json?.ttlMinutes === 1440, `update clamps ttlMinutes 5000 → 1440 (got ${updated.json?.ttlMinutes})`);
-
-  // Update of an unknown id is 404.
-  const missing = await req(port, "PUT", "/account/ephemeral-configs/cfg-nope", { size: "x" }, token);
-  expect(missing.status === 404, `update of unknown id is 404 (got ${missing.status})`);
+  // Profiles are deployment-provided: accounts can't create or edit them.
+  const created = await req(port, "POST", "/account/ephemeral-configs", { name: "fly-small-iad", provider: "fly" }, token);
+  expect(created.status === 404, `profiles can't be created by an account (got ${created.status})`);
+  const edited = await req(port, "PUT", "/account/ephemeral-configs/cfg-x", { size: "x" }, token);
+  expect(edited.status === 404, `profiles can't be edited by an account (got ${edited.status})`);
+  const id = "cfg-legacy";
 
   // Routing: a config primary keeps no fallback (fallback only valid for a node).
   const rConfig = await req(port, "PUT", "/account/queue-routing", { primary: { kind: "config", configId: id }, fallback: { kind: "config", configId: id } }, token);
@@ -165,19 +146,14 @@ async function main() {
   await req(port, "PUT", "/account/hosted-provisioning", { enabled: true }, token);
   await req(port, "PUT", "/account/queue-routing", { primary: { kind: "config", configId: id } }, token);
   const plan1 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
-  expect(plan1.json?.plan?.willProvision === false && /no hosted token/.test(plan1.json?.plan?.reason), "plan: config primary, no provider token → no provision");
+  expect(plan1.json?.plan?.willProvision === false && /does not point at an ephemeral config/.test(plan1.json?.plan?.reason), "plan: routing to a profile the account doesn't have → no provision");
 
   // Add credentials (encrypted at rest); verify they are never echoed back.
   const hpSet = await req(port, "PUT", "/account/hosted-provisioning", { githubToken: "ghp_secret_value", providerTokens: { fly: "fly_secret_value" } }, token);
-  expect(hpSet.json?.credential === "pat" && hpSet.json?.providers?.includes("fly"), "credentials saved (redacted: pat + fly)");
+  expect(hpSet.json?.credential === "pat" && hpSet.json?.providers?.length === 0, "the GitHub credential is saved; provider tokens are no longer accepted");
   expect(!/ghp_secret_value|fly_secret_value/.test(JSON.stringify(hpSet.json)), "PUT never leaks token values");
   const hpGet = await req(port, "GET", "/account/hosted-provisioning", undefined, token);
   expect(!/ghp_secret_value|fly_secret_value/.test(JSON.stringify(hpGet.json)), "GET never leaks token values");
-
-  // Stored is not the same as validated: unattended launch remains blocked until
-  // the read-only provider check binds this exact token fingerprint.
-  const plan2 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
-  expect(plan2.json?.plan?.willProvision === false && /has not been validated/.test(plan2.json?.plan?.reason), "plan: stored but unvalidated provider token → no provision");
 
   // Audit trail records credential updates and never contains a secret.
   const auditRows = await req(port, "GET", "/account/hosted-audit", undefined, token);
@@ -213,21 +189,10 @@ async function main() {
   const plan3 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
   expect(plan3.json?.plan?.willProvision === false && /does not point at an ephemeral config/.test(plan3.json?.plan?.reason), "plan: shared routing → no provision");
 
-  // Node primary + fallback still requires the provider credential validation.
-  await req(port, "PUT", "/account/queue-routing", { primary: { kind: "node", node: "laptop" }, fallback: { kind: "config", configId: id } }, token);
-  const plan4 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
-  expect(plan4.json?.plan?.willProvision === false && /has not been validated/.test(plan4.json?.plan?.reason), "plan: node offline + unvalidated fallback token → no provision");
-
-  // A profile turning offline automations off withdraws the server's copy of
-  // that provider's credential by sending an empty token; other providers stay.
-  await req(port, "PUT", "/account/hosted-provisioning", { providerTokens: { hetzner: "hz_secret_value" } }, token);
-  const withdrawn = await req(port, "PUT", "/account/hosted-provisioning", { providerTokens: { fly: "" } }, token);
-  expect(withdrawn.status === 200 && !withdrawn.json?.providers?.includes("fly") && withdrawn.json?.providers?.includes("hetzner"), `empty token withdraws only that provider's credential (got ${JSON.stringify(withdrawn.json?.providers)})`);
-
   // Fail closed: a control plane WITHOUT an encryption key refuses to store secrets.
   const port2 = await startControlPlane();
   const token2 = (await req(port2, "POST", "/auth/dev-login", { email: "nokey@example.com" })).json.token;
-  const refused = await req(port2, "PUT", "/account/hosted-provisioning", { providerTokens: { fly: "x" } }, token2);
+  const refused = await req(port2, "PUT", "/account/hosted-provisioning", { githubToken: "ghp_x" }, token2);
   expect(refused.status === 503, `no encryption key → secret writes refused (got ${refused.status})`);
   const enableOk = await req(port2, "PUT", "/account/hosted-provisioning", { enabled: true }, token2);
   expect(enableOk.status === 200 && enableOk.json?.encryptionReady === false, "the enable flag alone is still allowed without a key");
@@ -269,18 +234,13 @@ async function main() {
   const automationTargetAgain = await req(port3, "POST", "/account/managed-automation-target", undefined, token3);
   expect(automationTarget.status === 200 && automationTarget.json?.nodeId?.startsWith("eph-managed-auto-") && typeof automationTarget.json?.roomKey === "string", "managed automations receive a stable E2E target");
   expect(automationTargetAgain.json?.nodeId === automationTarget.json?.nodeId && automationTargetAgain.json?.roomKey === automationTarget.json?.roomKey, "managed automation identity is idempotent");
-  await req(port3, "PUT", `/account/ephemeral-configs/${adopted.id}`, { image: "stale-image", ttlMinutes: 999 }, token3);
   const managedConfigs = await req(port3, "GET", "/account/ephemeral-configs", undefined, token3);
   const reconciled = managedConfigs.json?.find((config: { computeSource?: string }) => config.computeSource === "managed");
-  expect(managedConfigs.json?.length === 1 && reconciled?.image === "ghcr.io/bivysh/bivy-ephemeral-runner:current-staging-sha" && reconciled?.ttlMinutes === 60, "managed config reads reconcile deployment-owned image and TTL");
+  expect(managedConfigs.json?.length === 1 && reconciled?.image === "ghcr.io/bivysh/bivy-ephemeral-runner:current-staging-sha" && reconciled?.ttlMinutes === 60, "managed config carries the deployment-owned image and TTL");
   const managedRouting = await req(port3, "GET", "/account/queue-routing", undefined, token3);
   expect(managedRouting.json?.primary?.kind === "shared", "interactive managed setup does not silently enable unattended queue routing");
   const forgedRestore = await req(port3, "POST", "/account/managed-machines/restore", { configId: managedDefault.json.config.id, nodeId: "eph-other", sessionId: "s-other" }, token3);
   expect(forgedRestore.status === 404, "managed restore requires an account-scoped durable session correlation");
-
-  // Delete removes the config.
-  const del = await req(port, "DELETE", `/account/ephemeral-configs/${id}`, undefined, token);
-  expect(del.status === 200 && Array.isArray(del.json?.configs) && del.json.configs.length === 0, "delete removes the config");
 
   console.log("\nAll ephemeral-configs + queue-routing + hosted-provisioning checks passed.");
 }

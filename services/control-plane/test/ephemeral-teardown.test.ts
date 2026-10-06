@@ -24,11 +24,11 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
 // hosted token — the key path for Hetzner (halts but keeps billing on exit).
 {
   const { store } = fakeStore(
-    [{ id: "srv1", provider: "hetzner", nodeId: "eph-1", createdAt: iso(0), ttlMinutes: 60 }],
-    { hetzner: "hz-token" },
+    [{ id: "srv1", provider: "fly", nodeId: "eph-1", createdAt: iso(0), ttlMinutes: 60 }],
+    { fly: "hz-token" },
   );
   const seen: Array<{ id: unknown; token: string | null }> = [];
-  const fakeDestroy: DestroyFn = async (machine, deps) => { seen.push({ id: machine.id, token: await deps.keys.getToken("hetzner") }); };
+  const fakeDestroy: DestroyFn = async (machine, deps) => { seen.push({ id: machine.id, token: await deps.keys.getToken("fly") }); };
   const found = await reapSettledHostedMachine(store, "acct", "eph-1", env, Date.now(), fakeDestroy, async () => "gone");
   assert.equal(found, true);
   assert.equal(seen.length, 1);
@@ -64,7 +64,7 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
 // A settled machine without a provider credential remains tracked; neither the
 // settled callback nor manual teardown may turn missing auth into false absence.
 {
-  const old = { id: "srv-no-token", provider: "hetzner", nodeId: "eph-no-token", createdAt: iso(0), ttlMinutes: 60 };
+  const old = { id: "srv-no-token", provider: "fly", nodeId: "eph-no-token", createdAt: iso(0), ttlMinutes: 60 };
   const { store, audits } = fakeStore([old], {});
   const found = await reapSettledHostedMachine(store, "acct", "eph-no-token", env);
   assert.equal(found, true);
@@ -75,8 +75,8 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
 // Reconcile actively destroys a machine past its TTL grace when env + token given.
 {
   const { store } = fakeStore(
-    [{ id: "srv2", provider: "hetzner", nodeId: "eph-2", createdAt: iso(200 * 60_000), ttlMinutes: 60 }],
-    { hetzner: "hz-token" },
+    [{ id: "srv2", provider: "fly", nodeId: "eph-2", createdAt: iso(200 * 60_000), ttlMinutes: 60 }],
+    { fly: "hz-token" },
   );
   let destroyed = 0;
   const n = await reconcileHostedMachines(store, "acct", Date.now(), env, async () => { destroyed++; }, async () => "gone");
@@ -111,8 +111,8 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
 // Without env, reconcile is bookkeeping-only (no active destroy) — back-compat.
 {
   const { store } = fakeStore(
-    [{ id: "srv3", provider: "hetzner", nodeId: "eph-3", createdAt: iso(200 * 60_000), ttlMinutes: 60 }],
-    { hetzner: "hz-token" },
+    [{ id: "srv3", provider: "fly", nodeId: "eph-3", createdAt: iso(200 * 60_000), ttlMinutes: 60 }],
+    { fly: "hz-token" },
   );
   let destroyed = 0;
   const n = await reconcileHostedMachines(store, "acct", Date.now(), undefined, async () => { destroyed++; });
@@ -123,8 +123,8 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
 // A machine still within its TTL grace is kept, not reaped.
 {
   const { store } = fakeStore(
-    [{ id: "srv4", provider: "hetzner", nodeId: "eph-4", createdAt: iso(5 * 60_000), ttlMinutes: 60 }],
-    { hetzner: "hz-token" },
+    [{ id: "srv4", provider: "fly", nodeId: "eph-4", createdAt: iso(5 * 60_000), ttlMinutes: 60 }],
+    { fly: "hz-token" },
   );
   let destroyed = 0;
   const n = await reconcileHostedMachines(store, "acct", Date.now(), env, async () => { destroyed++; });
@@ -135,7 +135,7 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
 // Fleet reconciliation scans accounts without requiring a new enqueue. One
 // broken account is audited and does not prevent another account being reaped.
 {
-  const old = { id: "srv5", provider: "hetzner", nodeId: "eph-5", createdAt: iso(200 * 60_000), ttlMinutes: 60 };
+  const old = { id: "srv5", provider: "fly", nodeId: "eph-5", createdAt: iso(200 * 60_000), ttlMinutes: 60 };
   const audits: Array<{ accountId: string; action?: string }> = [];
   const byAccount = new Map<string, Array<Record<string, unknown>>>([["good", [old]]]);
   const store = {
@@ -145,13 +145,13 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
       return byAccount.get(accountId) ?? [];
     },
     setHostedMachines: async (accountId: string, list: Array<Record<string, unknown>>) => { byAccount.set(accountId, list); return list; },
-    getHostedProvisioning: async () => ({ enabled: true, providerTokens: { hetzner: "hz-token" } }),
+    getHostedProvisioning: async () => ({ enabled: true, providerTokens: { fly: "hz-token" } }),
     createSession: async () => "sess-token",
     removeNode: async () => true,
     appendHostedAudit: async (accountId: string, event: { action?: string }) => { audits.push({ accountId, action: event.action }); },
   } as unknown as EphemeralProvisioningPort;
   let destroyed = 0;
-  const result = await reconcileAllHostedMachines(store, env, Date.now(), async () => { destroyed++; });
+  const result = await reconcileAllHostedMachines(store, env, Date.now(), async () => { destroyed++; }, undefined, async () => "gone");
   assert.deepEqual(result, { accounts: 2, reaped: 1, failed: 1 });
   assert.equal(destroyed, 1);
   assert.ok(audits.some((event) => event.accountId === "broken" && event.action === "reconcile_failed"));
@@ -160,8 +160,8 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
 // A provider DELETE failure must keep the resource tracked for the next sweep;
 // otherwise a still-billing VM becomes an invisible orphan.
 {
-  const old = { id: "srv6", provider: "hetzner", nodeId: "eph-6", createdAt: iso(200 * 60_000), ttlMinutes: 60 };
-  const { store, audits } = fakeStore([old], { hetzner: "hz-token" });
+  const old = { id: "srv6", provider: "fly", nodeId: "eph-6", createdAt: iso(200 * 60_000), ttlMinutes: 60 };
+  const { store, audits } = fakeStore([old], { fly: "hz-token" });
   const n = await reconcileHostedMachines(store, "acct", Date.now(), env, async () => { throw new Error("provider unavailable"); });
   assert.equal(n, 0);
   assert.deepEqual(await store.getHostedMachines("acct"), [old]);
@@ -171,7 +171,7 @@ const iso = (msAgo: number) => new Date(Date.now() - msAgo).toISOString();
 // Missing credentials are not proof of deletion. Keep tracking the machine so
 // rotating/re-adding the token lets a later sweep destroy it.
 {
-  const old = { id: "srv7", provider: "hetzner", nodeId: "eph-7", createdAt: iso(200 * 60_000), ttlMinutes: 60 };
+  const old = { id: "srv7", provider: "fly", nodeId: "eph-7", createdAt: iso(200 * 60_000), ttlMinutes: 60 };
   const { store, audits } = fakeStore([old], {});
   const n = await reconcileHostedMachines(store, "acct", Date.now(), env);
   assert.equal(n, 0);

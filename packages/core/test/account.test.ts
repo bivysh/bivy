@@ -16,8 +16,6 @@ import {
   disconnectGithubApp,
   fetchGithubApp,
   assignWorkItem,
-  fetchEphemeralQueueDefault,
-  setEphemeralQueueDefault,
   cancelAutomationRun,
   retryAutomationRun,
   fetchAutomationRun,
@@ -339,49 +337,6 @@ describe("assignWorkItem", () => {
     const fakeFetch = (async () =>
       ({ ok: false, status: 403, json: async () => ({ error: "Work item assignment is unavailable." }) }) as Response) as unknown as typeof fetch;
     await expect(assignWorkItem(store, "wi_3", {}, fakeFetch)).rejects.toThrow("unavailable");
-  });
-});
-
-describe("ephemeral queue default (issue #532)", () => {
-  it("fetchEphemeralQueueDefault GETs the account preference", async () => {
-    const store = createLocalStore(mem(), mem());
-    store.s = "tok";
-    store.cp = "https://app.bivy.sh";
-    let seenUrl = "";
-    const fakeFetch = (async (url: string) => {
-      seenUrl = String(url);
-      return { ok: true, json: async () => ({ enabled: true, provider: "hetzner", region: "nbg1" }) } as Response;
-    }) as unknown as typeof fetch;
-    const result = await fetchEphemeralQueueDefault(store, fakeFetch);
-    expect(seenUrl).toBe("https://app.bivy.sh/account/ephemeral-default");
-    expect(result).toEqual({ enabled: true, provider: "hetzner", region: "nbg1", size: undefined, ttlMinutes: undefined });
-  });
-
-  it("setEphemeralQueueDefault PUTs a partial patch and returns the merged value", async () => {
-    const store = createLocalStore(mem(), mem());
-    store.s = "tok";
-    store.cp = "https://app.bivy.sh";
-    let seenUrl = "";
-    let seenMethod = "";
-    let seenBody = "";
-    const fakeFetch = (async (url: string, init?: RequestInit) => {
-      seenUrl = String(url);
-      seenMethod = String(init?.method || "");
-      seenBody = String(init?.body || "");
-      return { ok: true, json: async () => ({ enabled: true, provider: "fly" }) } as Response;
-    }) as unknown as typeof fetch;
-    const result = await setEphemeralQueueDefault(store, { enabled: true, provider: "fly" }, fakeFetch);
-    expect(seenUrl).toBe("https://app.bivy.sh/account/ephemeral-default");
-    expect(seenMethod).toBe("PUT");
-    expect(JSON.parse(seenBody)).toEqual({ enabled: true, provider: "fly" });
-    expect(result).toEqual({ enabled: true, provider: "fly", region: undefined, size: undefined, ttlMinutes: undefined });
-  });
-
-  it("throws with the server's error message on a non-2xx response", async () => {
-    const store = createLocalStore(mem(), mem());
-    store.cp = "https://app.bivy.sh";
-    const fakeFetch = (async () => ({ ok: false, status: 401, json: async () => ({ error: "Unauthorized" }) }) as Response) as unknown as typeof fetch;
-    await expect(setEphemeralQueueDefault(store, { enabled: true }, fakeFetch)).rejects.toThrow("Unauthorized");
   });
 });
 

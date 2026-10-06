@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 
 - **`bivy suggest` and its "Suggested task" cards.** Agents now list next steps in their reply as plain text. The `suggest_task` MCP tool and the `/api/session/:id/suggest` route are gone. Suggestion cards in older sessions no longer render.
+- **Cloud machines on your own cloud account.** The control plane no longer stores or validates users' cloud provider tokens, and no longer lets an account create or edit machine profiles (`POST/PUT/DELETE /account/ephemeral-configs`) or set a queue default (`/account/ephemeral-default`). It never launches a profile that used a user's own token; cleanup of any such machine still runs. The browser provider proxy (`POST /api/ephemeral/exec`, and the node's `ephemeral.exec` command), per-account warm standby machines, and the Hetzner and AWS adapters are gone; Fly remains for deployment-supplied compute. `GET /account/ephemeral-configs` lists only deployment-provided profiles. Docs: [ephemeral-sessions.md](docs/ephemeral-sessions.md) now describes cloud machines as deployment-provided.
 
 ### Security
 

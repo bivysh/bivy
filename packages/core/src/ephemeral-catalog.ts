@@ -40,40 +40,6 @@ export const EPHEMERAL_PROVIDERS: readonly EphemeralProviderCatalog[] = [
       { label: "Fly Machines docs", url: "https://fly.io/docs/machines/" },
     ],
   },
-  {
-    id: "hetzner",
-    name: "Hetzner Cloud",
-    computeClass: "byo-cloud",
-    tokenLabel: "Hetzner Cloud API token",
-    blurb: "Bivy manages Hetzner servers from start to deletion so billing always stops, even when your devices are offline.",
-    steps: [
-      "Open the Hetzner Cloud Console and select or create a project for Bivy's runners.",
-      "Go to Security → API Tokens and click Generate API token.",
-      "Choose Read & Write, then copy the token and paste it below.",
-    ],
-    links: [
-      { label: "Hetzner Cloud Console", url: "https://console.hetzner.cloud/projects" },
-      { label: "API token docs", url: "https://docs.hetzner.com/cloud/api/getting-started/generating-api-token/" },
-    ],
-    hostedOnly: true,
-  },
-  {
-    id: "aws",
-    name: "AWS EC2",
-    computeClass: "byo-cloud",
-    tokenLabel: "Access key — paste as accessKeyId:secretAccessKey",
-    blurb: "Bivy launches a temporary EC2 instance, runs the session, then terminates it.",
-    steps: [
-      "Create (or reuse) an IAM user scoped to a minimal EC2 policy — see the Bivy docs link below for a copy-pasteable policy.",
-      "On that user, open Security credentials → Access keys → Create access key.",
-      "Paste both values below as accessKeyId:secretAccessKey (append :sessionToken if you're using temporary STS credentials).",
-    ],
-    links: [
-      { label: "IAM access keys", url: "https://console.aws.amazon.com/iam/home#/security_credentials" },
-      { label: "EC2 console", url: "https://console.aws.amazon.com/ec2/home" },
-      { label: "Minimal IAM policy (Bivy docs)", url: "https://github.com/bivysh/bivy/blob/main/docs/ephemeral-sessions.md#aws-ec2" },
-    ],
-  },
 ];
 
 export function ephemeralCatalogEntry(id: string): EphemeralProviderCatalog | null {

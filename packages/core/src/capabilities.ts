@@ -6,9 +6,8 @@
 // src/capabilities.ts (node-side) — the root node/CLI deliberately does not
 // depend on @bivy/core (see src/session/inline-image-fetch.ts's note), so
 // this file re-declares only the wire *shape* plus small, framework-agnostic
-// rendering helpers the PWA needs. Kept in lock-step by comment, the same
-// convention EPHEMERAL_ALLOWED_HOSTS uses for its cross-copy host allowlist:
-// if you change one file's shape, change the other's.
+// rendering helpers the PWA needs. Kept in lock-step by comment: if you change
+// one file's shape, change the other's.
 
 /** Honest tri-state for anything Bivy cannot always determine for certain: a
  *  probe can succeed (`available`), fail conclusively (`unavailable`), or be

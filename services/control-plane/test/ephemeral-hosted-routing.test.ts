@@ -2,23 +2,20 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import assert from "node:assert/strict";
 process.env.HOSTED_CREDENTIAL_KEY = Buffer.alloc(32, 7).toString("base64");
-delete process.env.EPHEMERAL_MACHINES_ENABLED;
+process.env.EPHEMERAL_MACHINES_ENABLED = "1";
 import { createPgMemStore } from "../src/pg-mem-store.js";
 import { maybeAutoProvision } from "../src/ephemeral-provisioner.js";
-import { providerCredentialFingerprint } from "../src/store.js";
+import { DeploymentCompute, setDeploymentCompute } from "../src/deployment-compute.js";
 import type { EphemeralMachine } from "@bivy/core";
 
 const store = createPgMemStore();
 await store.init();
 const account = await store.findOrCreateAccount("hosted-routing@example.com");
-const config = { id: "cfg1", name: "Hosted", provider: "fly", region: "iad", ttlMinutes: 15, createdAt: "", updatedAt: "" };
+const config = { id: "cfg1", name: "Hosted", provider: "fly", region: "iad", ttlMinutes: 15, computeSource: "managed" as const, createdAt: "", updatedAt: "" };
 await store.setEphemeralConfigs(account.id, [config]);
 await store.setQueueRouting(account.id, { primary: { kind: "config", configId: config.id } });
-await store.setHostedProvisioning(account.id, {
-  enabled: true,
-  providerTokens: { fly: "fly-token" },
-  validatedProviders: { fly: providerCredentialFingerprint("fly-token") },
-});
+await store.setHostedProvisioning(account.id, { enabled: true });
+setDeploymentCompute(new DeploymentCompute({ profile: async () => null, credential: async () => ({ token: "fly-token" }) }));
 const waiting = await store.enqueueWorkItem(account.id, { source: "manual", title: "run me" });
 const explicit = await store.enqueueWorkItem(account.id, { source: "manual", title: "leave me", label: "bivy/other-node" });
 

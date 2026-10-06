@@ -708,44 +708,6 @@ export async function setGithubAppTriggerAccess(
   return (data.triggerAccess as "everyone" | "contributor" | "collaborator" | undefined) ?? "everyone";
 }
 
-// The account's saved preference for auto-provisioning an ephemeral runner
-// when the GitHub work queue has pending items and no persistent node online
-// (issue #532). `provider`/`region`/`size`/`ttlMinutes` are non-secret
-// preferences only — the provider TOKEN itself always stays device-local
-// (EphemeralKeyStore); a device that wants to act on this setting needs its
-// own saved token for `provider` regardless of what the account has chosen.
-export interface EphemeralQueueDefault {
-  enabled: boolean;
-  provider?: string;
-  region?: string;
-  size?: string;
-  ttlMinutes?: number;
-}
-
-/** Read the account's ephemeral-queue-default preference. Disabled with no
- *  provider chosen when never set. */
-export async function fetchEphemeralQueueDefault(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<EphemeralQueueDefault> {
-  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-default`, { headers: authHeaders(store) });
-  if (!res.ok) throw new Error(`ephemeral-default request failed: ${res.status}`);
-  const data: any = await res.json().catch(() => ({}));
-  return { enabled: Boolean(data?.enabled), provider: data?.provider, region: data?.region, size: data?.size, ttlMinutes: data?.ttlMinutes };
-}
-
-/** Merge-update the account's ephemeral-queue-default preference; returns the effective value. */
-export async function setEphemeralQueueDefault(
-  store: LocalStore,
-  patch: Partial<EphemeralQueueDefault>,
-  fetchImpl: typeof fetch = fetch,
-): Promise<EphemeralQueueDefault> {
-  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-default`, {
-    method: "PUT",
-    headers: authHeaders(store),
-    body: JSON.stringify(patch),
-  });
-  const data: any = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.error || `set ephemeral default failed: ${res.status}`);
-  return { enabled: Boolean(data?.enabled), provider: data?.provider, region: data?.region, size: data?.size, ttlMinutes: data?.ttlMinutes };
-}
 
 // An account-level, reusable ephemeral node config — "a config = a selectable
 // node" in both the queue router and the new-session picker. Non-secret sizing
@@ -820,27 +782,6 @@ export async function fetchEphemeralConfigs(store: LocalStore, fetchImpl: typeof
   return Array.isArray(data) ? data.map(coerceConfig).filter((c) => c.id) : [];
 }
 
-export async function createEphemeralConfig(store: LocalStore, input: EphemeralConfigInput, fetchImpl: typeof fetch = fetch): Promise<EphemeralNodeConfig> {
-  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs`, { method: "POST", headers: authHeaders(store), body: JSON.stringify(input) });
-  const data: any = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.error || `create ephemeral config failed: ${res.status}`);
-  return coerceConfig(data);
-}
-
-export async function updateEphemeralConfig(store: LocalStore, id: string, patch: Partial<EphemeralConfigInput>, fetchImpl: typeof fetch = fetch): Promise<EphemeralNodeConfig> {
-  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs/${encodeURIComponent(id)}`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify(patch) });
-  const data: any = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.error || `update ephemeral config failed: ${res.status}`);
-  return coerceConfig(data);
-}
-
-export async function deleteEphemeralConfig(store: LocalStore, id: string, fetchImpl: typeof fetch = fetch): Promise<void> {
-  const res = await fetchImpl(`${cpBase(store)}/account/ephemeral-configs/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders(store) });
-  if (!res.ok) {
-    const data: any = await res.json().catch(() => ({}));
-    throw new Error(data?.error || `delete ephemeral config failed: ${res.status}`);
-  }
-}
 
 function coerceRouting(v: any): QueueRouting {
   const p = v?.primary;
@@ -939,21 +880,6 @@ export async function fetchHostedGithubBranches(
   return Array.isArray(data?.branches) ? data.branches : [];
 }
 
-export async function validateHostedProviderCredential(
-  store: LocalStore,
-  provider: string,
-  token: string,
-  region?: string,
-  fetchImpl: typeof fetch = fetch,
-): Promise<void> {
-  const res = await fetchImpl(`${cpBase(store)}/account/hosted-provisioning/validate-provider`, {
-    method: "POST",
-    headers: authHeaders(store),
-    body: JSON.stringify({ provider, token, region }),
-  });
-  const data: any = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data?.error || `provider credential validation failed: ${res.status}`);
-}
 
 export interface HostedAuditEvent {
   at: string;

@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 // provider token); read per-call. Mirrors hosted-room-key-escrow.test.ts.
 process.env.HOSTED_CREDENTIAL_KEY = Buffer.alloc(32, 7).toString("base64");
 import { createPgMemStore } from "../src/pg-mem-store.js";
-import { providerCredentialFingerprint } from "../src/store.js";
+import { DeploymentCompute, setDeploymentCompute } from "../src/deployment-compute.js";
 import { planAutoProvision, hostedExecutionReadiness, ephemeralMachinesEnabled } from "../src/ephemeral-provisioner.js";
 
 async function makeStore() {
@@ -25,14 +25,15 @@ async function test(name: string, fn: () => Promise<void>) {
   console.log(`✓ ${name}`);
 }
 
-const CONFIG = { id: "cfg1", name: "Hosted", provider: "fly", region: "iad", ttlMinutes: 60, createdAt: "", updatedAt: "" };
+const CONFIG = { id: "cfg1", name: "Hosted", provider: "fly", region: "iad", ttlMinutes: 60, computeSource: "managed" as const, createdAt: "", updatedAt: "" };
+setDeploymentCompute(new DeploymentCompute({ profile: async () => null, credential: async () => ({ token: "fly-token" }) }));
 
-// A hosted account whose routing points straight at an ephemeral config with a
-// provider token present — the exact state that otherwise yields willProvision.
+// A hosted account whose routing points straight at the deployment's cloud
+// profile, with a deployment credential — the state that otherwise provisions.
 async function readyAccount() {
   const store = await makeStore();
   const acct = await store.findOrCreateAccount("e@example.com");
-  await store.setHostedProvisioning(acct.id, { enabled: true, providerTokens: { fly: "fly-token" }, validatedProviders: { fly: providerCredentialFingerprint("fly-token") } });
+  await store.setHostedProvisioning(acct.id, { enabled: true });
   await store.setEphemeralConfigs(acct.id, [CONFIG]);
   await store.setQueueRouting(acct.id, { primary: { kind: "config", configId: "cfg1" } });
   return { store, acctId: acct.id };
@@ -62,12 +63,12 @@ try {
     assert.equal(plan.targetConfigId, null, "no target when disabled at the deployment level");
   });
 
-  await test("a ready opted-in hosted account provisions by default", async () => {
+  await test("a ready opted-in account provisions on deployment-provided compute", async () => {
     process.env.NODE_ENV = "production";
-    delete process.env.EPHEMERAL_MACHINES_ENABLED;
+    process.env.EPHEMERAL_MACHINES_ENABLED = "1";
     const { store, acctId } = await readyAccount();
     const plan = await planAutoProvision(store, acctId);
-    assert.equal(plan.willProvision, true, "per-account opt-in provisions without a deploy opt-in");
+    assert.equal(plan.willProvision, true);
     const readiness = await hostedExecutionReadiness(store, acctId);
     assert.deepEqual(readiness, { ready: true, reason: "hosted ephemeral execution is ready", configId: "cfg1" });
   });
@@ -76,12 +77,20 @@ try {
     delete process.env.EPHEMERAL_MACHINES_ENABLED;
     const store = await makeStore();
     const acct = await store.findOrCreateAccount("removed-provider@example.com");
-    const token = "legacy-token";
-    await store.setHostedProvisioning(acct.id, { enabled: true, providerTokens: { sprites: token }, validatedProviders: { sprites: providerCredentialFingerprint(token) } });
+    await store.setHostedProvisioning(acct.id, { enabled: true });
     await store.setEphemeralConfigs(acct.id, [{ ...CONFIG, provider: "sprites" }]);
     await store.setQueueRouting(acct.id, { primary: { kind: "config", configId: CONFIG.id } });
     assert.deepEqual(await hostedExecutionReadiness(store, acct.id), { ready: false, reason: "provider sprites is no longer supported", configId: CONFIG.id });
     assert.deepEqual(await planAutoProvision(store, acct.id), { willProvision: false, targetConfigId: CONFIG.id, reason: "provider sprites is no longer supported" });
+  });
+
+  await test("a profile on the user's own cloud account is never launched", async () => {
+    process.env.EPHEMERAL_MACHINES_ENABLED = "1";
+    const { store, acctId } = await readyAccount();
+    await store.setEphemeralConfigs(acctId, [{ ...CONFIG, computeSource: undefined }]);
+    const reason = "own cloud accounts are no longer supported";
+    assert.deepEqual(await planAutoProvision(store, acctId), { willProvision: false, targetConfigId: CONFIG.id, reason });
+    assert.deepEqual(await hostedExecutionReadiness(store, acctId), { ready: false, reason, configId: CONFIG.id });
   });
 
   await test("automation readiness explains missing execution setup", async () => {
@@ -97,6 +106,7 @@ try {
   else process.env.EPHEMERAL_MACHINES_ENABLED = PREV_ENABLED;
   if (PREV_NODE_ENV === undefined) delete process.env.NODE_ENV;
   else process.env.NODE_ENV = PREV_NODE_ENV;
+  setDeploymentCompute(new DeploymentCompute(undefined));
 }
 
 console.log(`ephemeral-provisioner-enable: ${passed} test(s) passed`);

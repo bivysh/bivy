@@ -18,8 +18,6 @@ export type {
 export { buildBootstrapUserData } from "./ephemeral-provider-bootstrap.js";
 export { ephemeralAdapter, validateEphemeralProviderToken } from "./ephemeral-provider-registry.js";
 export { ALLOWED_HOSTS, assertAllowedUrl, extractProviderMessage } from "./ephemeral-provider-utils.js";
-export { awsSign, parseAwsToken, parseXml, xmlChild, xmlChildren, xmlFind } from "./ephemeral-providers/aws.js";
-export type { AwsCreds, XmlEl } from "./ephemeral-providers/aws.js";
 
 /** Compatibility shell: callers may omit `nowMs` and read the clock here. */
 export function ephemeralCostEstimate(

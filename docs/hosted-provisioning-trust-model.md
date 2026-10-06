@@ -9,6 +9,12 @@ document describes the trust boundaries for the work-queue routing feature
 (ephemeral configs as routable nodes) and, in particular, the **trust-model
 change** introduced by control-plane-orchestrated ("hosted") provisioning.
 
+Users don't connect their own cloud accounts. Cloud machines run on compute the
+deployment supplies: the provider credential comes from the deployment extension
+at launch, is held in control-plane memory only, and is never stored, logged, or
+given to a machine (see [self-host.md](self-host.md#deployment-supplied-compute)).
+The control plane stores no user cloud credential.
+
 It complements `docs/security-model.md`, `docs/ephemeral-sessions.md`, and
 `docs/credential-sync.md`; read those for the baseline.
 
@@ -16,11 +22,11 @@ It complements `docs/security-model.md`, `docs/ephemeral-sessions.md`, and
 
 | Principal | What it is |
 |---|---|
-| **Device** | The signed-in browser/CLI. Holds the account session token and, historically, all launch secrets (cloud provider tokens, GitHub token) in local storage. |
-| **Control plane (CP)** | The hosted API. Front door for webhooks, enrollment, work-queue metadata, and the ephemeral-exec relay. |
+| **Device** | The signed-in browser/CLI. Holds the account session token and the room keys of the sessions it opened. |
+| **Control plane (CP)** | The hosted API. Front door for webhooks, enrollment, work-queue metadata, and cloud-machine orchestration. |
 | **Relay** | Message bus between CP/devices and nodes. Sees only per-connect tickets and E2E-sealed frames. |
 | **Node / machine** | A runner. A *persistent node* is long-lived and holds its own credentials in a local vault; an *ephemeral machine* is a disposable VM the system launches. |
-| **Cloud provider** | Fly/Hetzner/AWS. Holds the VM; authenticated by a provider token. |
+| **Cloud provider** | Fly Machines. Holds the VM; authenticated by the deployment's provider credential. |
 | **GitHub** | Source of webhooks and target of clone/push/PR. Authenticated by a fine-grained PAT or a GitHub App installation token. |
 
 ## Baseline invariant (unchanged for everything except hosted provisioning)
@@ -29,11 +35,9 @@ It complements `docs/security-model.md`, `docs/ephemeral-sessions.md`, and
 
 Concretely, in the pre-existing and device-driven paths:
 
-- **Cloud provider tokens** live in the device's local storage
-  (`provider-keys` IndexedDB) and are **never sent to the CP**. When a device
-  launches a machine, provider API calls are forwarded through the CP's
-  `/api/ephemeral/exec` relay, which is a **stateless, allowlisted, non-storing**
-  forwarder — the token rides in the request and is never persisted or logged.
+- **Cloud provider credentials** belong to the deployment, not to users. The
+  control plane asks the deployment extension for one when it launches or
+  cleans up a machine and keeps it in memory only.
 - **GitHub credentials**: a device-held fine-grained PAT
   (`BIVY_GITHUB_TOKEN`), injected into a machine at launch via provider
   user-data; or, on a persistent node, a GitHub **App private key** that stays
@@ -61,25 +65,24 @@ This is an information-theoretic wall, not an implementation gap.
 
 Hosted provisioning therefore makes a **deliberate, scoped exception**:
 
-> When an account **opts in**, the control plane stores that account's cloud
-> provider token(s) and a GitHub token, and uses them to launch and credential
-> ephemeral machines on the account's behalf.
+> When an account **opts in**, the control plane stores that account's GitHub
+> credential (or uses the central GitHub App) and launches and credentials
+> machines on the deployment's compute on the account's behalf.
 
 Gating and shape (`HostedProvisioning` in `services/control-plane/src/store.ts`):
 
 - **Off by default**, enabled per account.
 - Stored as JSONB on the account row (`hosted_provisioning`).
-- Reads are **redacted**: the API never returns token values, only
-  `{ enabled, hasGithubToken, providers[] }`.
-- The machine still never holds a *long-lived* cloud credential: the provider
-  token is used transiently at launch. The GitHub token is injected as
-  `BIVY_GITHUB_TOKEN` (same as the device path).
+- Reads are **redacted**: the API never returns token values.
+- The machine never holds a cloud credential: the provider credential is used
+  transiently at launch. The GitHub token is injected as `BIVY_GITHUB_TOKEN`,
+  or the machine mints short-lived installation tokens from the control plane.
 
 ### What each principal holds — before vs after
 
 | Secret | Baseline (device-driven) | Hosted provisioning (opt-in) |
 |---|---|---|
-| Cloud provider token | Device local storage only | **+ Control plane** (per account) |
+| Cloud provider credential | None (users hold none) | The deployment's, in control-plane memory only |
 | GitHub token | Device local storage only | **+ Control plane** (per account) |
 | E2E room key | Device-generated, device-held | CP generates it and **escrows it at rest** (`node_room_keys`, sealed with the per-account hosted key) so it can rebuild a torn-down session with no device online — injected into the new machine, never used to decrypt a snapshot CP-side |
 | Model credentials | Peer-wrapped account vault (CP-blind) | **Per-item opt-in.** Bivy creates a separate filtered ciphertext containing only credentials marked “Allow unattended runs”, encrypts it under a different key, and seals that key at rest in `hosted_model_auth_keys`. Escrowing the hosted key cannot decrypt the ordinary account vault. Non-hosted accounts stay fully peer-wrapped. |
@@ -98,7 +101,7 @@ GitHub webhook ─▶ CP enqueue ─▶ notifyRelaysWorkAvailable
                                       │  yes
                                       ▼
                    launchEphemeralMachine (server-side deps):
-                     • provider token  ← CP hosted vault
+                     • provider cred   ← deployment extension (memory only)
                      • enroll bearer    ← CP createSession(account)
                      • provider API     ← direct fetch (host-allowlisted)
                      • BIVY_GITHUB_TOKEN← CP hosted vault
@@ -110,8 +113,8 @@ GitHub webhook ─▶ CP enqueue ─▶ notifyRelaysWorkAvailable
 
 Decision logic (`planAutoProvision`): provision only when hosted provisioning is
 enabled **and** routing points at an ephemeral config (as a `config` primary, or
-as a `node` primary's fallback while that node is offline) **and** a provider
-token exists for the config's provider **and** no persistent node is online
+as a `node` primary's fallback while that node is offline) **and** the config is the
+deployment's cloud profile with a credential available **and** no persistent node is online
 **and** no recent hosted machine is already active (dedupe window). A `config`
 primary is the designated runner; a `node` primary only falls back to its config
 when nothing is online.
@@ -120,15 +123,15 @@ when nothing is online.
 
 | If compromised… | Baseline exposure | Hosted-provisioning exposure |
 |---|---|---|
-| **Control plane** | Webhook secrets, work-queue metadata, ciphertext. **No** repo/cloud creds. | **+ cloud provider tokens and GitHub tokens of opted-in accounts** — the single highest-value target. Attacker can launch VMs on the account's cloud and act on its repos. |
+| **Control plane** | Webhook secrets, work-queue metadata, ciphertext. **No** repo/cloud creds. | **+ GitHub credentials of opted-in accounts, and the deployment's provider credential in memory** — the single highest-value target. Attacker can launch VMs on the deployment's cloud and act on opted-in accounts' repos. |
 | **Relay** | Tickets + sealed frames only. | Unchanged. |
-| **Ephemeral machine** | The injected `BIVY_GITHUB_TOKEN` (scoped, and short-lived if an app installation token) + its enrollment token. Disposable. | Same. Never holds the cloud provider token or the app private key. |
+| **Ephemeral machine** | The injected `BIVY_GITHUB_TOKEN` (scoped, and short-lived if an app installation token) + its enrollment token. Disposable. | Same. Never holds the cloud provider credential or the app private key. |
 | **Device** | All of that device's launch secrets. | Same (a device may still hold its own copies). |
-| **Provider token leak** | Cloud account for that provider. | Same, but now also reachable via the CP. |
+| **Provider credential leak** | — | The deployment's cloud account. |
 
 The net change is concentrated in one place: **compromise of the control plane
-now exposes the cloud/GitHub credentials of accounts that opted into hosted
-provisioning.** Everything else is unchanged. This is why the feature is opt-in
+now exposes the GitHub credentials of accounts that opted into hosted
+provisioning, and the deployment's provider credential while it is in memory.** Everything else is unchanged. This is why the feature is opt-in
 and why the hardening below is mandatory for production.
 
 ## Hardening — implemented
@@ -210,8 +213,8 @@ than mass-leaked PATs.
 ### Still recommended before GA
 - Extend the keyring beyond the current env and **AWS KMS** sources (for example,
   an HSM) without changing callers.
-- **Scope** the GitHub App installation and cloud tokens to the minimum repos /
-  permissions needed (operational).
+- **Scope** the GitHub App installation and the deployment's provider credential
+  to the minimum repos / permissions needed (operational).
 - **Verify the installer's identity** in the central-app setup callback via
   GitHub user OAuth (`code` exchange → `GET /user/installations`). The state
   nonce already proves which Bivy account initiated the install; OAuth would
@@ -225,9 +228,9 @@ than mass-leaked PATs.
 
 - Hosted provisioning is **opt-in and reversible**; disabling it stops all
   server-side launches and the credentials can be cleared.
-- The **machine never holds a long-lived cloud credential**; provider tokens are
-  used only transiently at launch.
-- Every other trust boundary (relay blindness, E2E vaults, node-held app keys,
-  device-local secrets for the device path) is **unchanged**. The exception is
+- The **machine never holds a cloud credential**; the deployment's provider
+  credential is used only transiently by the control plane.
+- Every other trust boundary (relay blindness, E2E vaults, node-held app keys)
+  is **unchanged**. The exception is
   narrow, named, and gated — not a general relaxation of "the control plane holds
   no secrets."

@@ -21,9 +21,9 @@ describe("bootstrap ephemeral self-teardown env", () => {
   });
 
   it("omits the finish flag when teardownOnAgentFinish is unset (idle-teardown only)", () => {
-    const ud = buildBootstrapUserData({ ...base, provider: "hetzner" });
+    const ud = buildBootstrapUserData({ ...base, provider: "fly" });
     expect(ud).toContain("export BIVY_EPHEMERAL=1");
-    expect(ud).toContain("export BIVY_EPHEMERAL_PROVIDER='hetzner'");
+    expect(ud).toContain("export BIVY_EPHEMERAL_PROVIDER='fly'");
     expect(ud).not.toContain("BIVY_TEARDOWN_ON_FINISH");
   });
 
@@ -47,7 +47,7 @@ describe("bootstrap ephemeral self-teardown env", () => {
   });
 
   it("skips network installation when a runner image already has bivy", () => {
-    const userData = buildBootstrapUserData({ ...base, provider: "hetzner" });
+    const userData = buildBootstrapUserData({ ...base, provider: "fly" });
     expect(userData).toContain("command -v bivy >/dev/null 2>&1 || curl --connect-timeout 10 --max-time 120 -fsSL");
   });
 });
