@@ -12,6 +12,9 @@ interface Peer { control: WebSocket; streams: Set<Duplex>; pending: Set<string>;
 interface Pending { peer: Peer; resolve: (stream: Duplex) => void; reject: (error: Error) => void; timer: NodeJS.Timeout }
 /** Idle pooled streams close before the gateway's 5 s keep-alive timeout would. */
 const IDLE_STREAM_MS = 4_000;
+/** One wake request per sleeping node per window; reloads in between just wait. */
+const WAKE_WINDOW_MS = 20_000;
+const STARTING_PAGE = `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="refresh" content="4"><title>Starting…</title><style>body{font:16px/1.5 system-ui,sans-serif;display:grid;place-items:center;min-height:100vh;margin:0;color:#444;background:#fafafa}@media(prefers-color-scheme:dark){body{color:#ccc;background:#111}}</style><main role="status"><p>Starting this preview. The machine was asleep; this page reloads by itself.</p></main>`;
 const HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade"]);
 function headers(input: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
   const blocked = new Set([...HOP, ...(input.connection ?? "").toLowerCase().split(",").map((s) => s.trim())]);
@@ -26,12 +29,14 @@ export class PreviewRelay {
   private readonly suffix: string;
   private readonly peers = new Map<string, Peer>();
   private readonly pending = new Map<string, Pending>();
+  private readonly wakes = new Map<string, number>();
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024, perMessageDeflate: false });
   private active = 0;
   /** Operational counters for /metrics, never payloads. */
   readonly bytes: StreamBytes = { toNode: 0, fromNode: 0 };
   readonly counts = { requests: 0, streamsOpened: 0, rejectedCapacity: 0 };
-  constructor(readonly originTemplate: string, private readonly timeoutMs = 10_000) {
+  /** `wake` asks for a sleeping node to be started; true means it is starting. */
+  constructor(readonly originTemplate: string, private readonly timeoutMs = 10_000, private readonly wake?: (route: string) => Promise<boolean>) {
     if (!/^https:\/\/\{app\}\.[a-z0-9.-]+$/.test(originTemplate)) throw new Error("RELAY_PREVIEW_ORIGIN must be https://{app}.<dedicated-preview-domain>");
     this.suffix = new URL(originTemplate.replace("{app}", "a")).hostname.slice(1);
   }
@@ -120,12 +125,12 @@ export class PreviewRelay {
     return true;
   }
 
-  private route(req: IncomingMessage): { preview: boolean; peer?: Peer } {
+  private route(req: IncomingMessage): { preview: boolean; key?: string; peer?: Peer } {
     const host = (req.headers.host ?? "").toLowerCase().replace(/:\d+$/, "");
     if (host !== this.suffix.slice(1) && !host.endsWith(this.suffix)) return { preview: false };
     const label = host.slice(0, -this.suffix.length);
     const match = /^(?:view-)?[a-f0-9]{32}-([a-f0-9]{24})$/.exec(label);
-    return { preview: true, peer: match ? this.peers.get(match[1]) : undefined };
+    return { preview: true, key: match?.[1], peer: match ? this.peers.get(match[1]) : undefined };
   }
 
   handle(req: IncomingMessage, res: ServerResponse): boolean {
@@ -133,10 +138,7 @@ export class PreviewRelay {
     if (!route.preview) return false;
     // Fail closed for every path on preview hosts, including /metrics, /node,
     // /internal/* and unknown/offline routes. Never fall through to relay APIs.
-    if (!route.peer) {
-      res.writeHead(503, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" });
-      res.end("Preview machine is offline. Reconnect it and reload."); return true;
-    }
+    if (!route.peer) { void this.offline(route.key, res); return true; }
     this.counts.requests++;
     const peer = route.peer;
     const abort = new AbortController();
@@ -164,6 +166,27 @@ export class PreviewRelay {
     // Only a browser that left early cancels; a finished exchange keeps its stream pooled.
     res.once("close", () => { if (!res.writableFinished) { abort.abort(); upstream.destroy(); } });
     return true;
+  }
+
+  private async offline(key: string | undefined, res: ServerResponse): Promise<void> {
+    const starting = key ? await this.wakeOnce(key) : false;
+    if (starting) {
+      res.writeHead(503, { "content-type": "text/html; charset=utf-8", "retry-after": "4", "cache-control": "no-store", "x-content-type-options": "nosniff" });
+      res.end(STARTING_PAGE); return;
+    }
+    res.writeHead(503, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" });
+    res.end("Preview machine is offline. Reconnect it and reload.");
+  }
+
+  private async wakeOnce(key: string): Promise<boolean> {
+    if (!this.wake) return false;
+    const now = Date.now();
+    const last = this.wakes.get(key);
+    if (last !== undefined && now - last < WAKE_WINDOW_MS) return true;
+    const starting = await this.wake(key).catch(() => false);
+    if (this.wakes.size > 10_000) this.wakes.clear();
+    if (starting) this.wakes.set(key, now);
+    return starting;
   }
 
   upgrade(req: IncomingMessage, socket: Duplex, head: Buffer): boolean {

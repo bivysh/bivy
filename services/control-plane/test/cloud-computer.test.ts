@@ -131,6 +131,16 @@ async function main() {
   await waitFor(() => calls.some((c) => c.path === "/v1/compute/wake" && c.body.nodeId === nodeId), "wake on connect");
   console.log("✓ connecting to a sleeping cloud computer wakes it");
 
+  // Opening a preview link for it wakes it too (asked by the relay).
+  const wakesBefore = calls.filter((c) => c.path === "/v1/compute/wake").length;
+  const route = createHash("sha256").update(nodeId).digest("hex").slice(0, 24);
+  expect((await req(port, "POST", "/internal/preview-wake", { route })).status === 401, "only the relay may wake a node from a preview");
+  const previewWake = await req(port, "POST", "/internal/preview-wake", { route }, "test-secret-cc");
+  expect(previewWake.json?.waking === true, "a preview link for a sleeping cloud computer starts it");
+  await waitFor(() => calls.filter((c) => c.path === "/v1/compute/wake").length > wakesBefore, "wake on preview");
+  const unknown = await req(port, "POST", "/internal/preview-wake", { route: "0".repeat(24) }, "test-secret-cc");
+  expect(unknown.json?.waking === false, "a preview for any other node wakes nothing");
+
   // The node reports this boot's milestones; the launch reads them back.
   const reported = await req(port, "POST", "/node/ephemeral-milestone", { milestone: "credentialsReadyAt" }, relay.enrollmentToken);
   expect(reported.status === 200, "the cloud computer reports its milestones");

@@ -16,6 +16,9 @@ export class RemotePreview {
   constructor(private readonly registry: AppRegistry, private readonly returnOrigins: () => readonly string[], private readonly signIn?: ConstructorParameters<typeof AppGateway>[3], private readonly captureNote?: ConstructorParameters<typeof AppGateway>[4], private readonly badge?: ConstructorParameters<typeof AppGateway>[5]) {}
 
   get available(): boolean { return this.online && Boolean(this.gateway); }
+  /** Someone is loading or holding open a preview (pooled streams close after a
+   * few idle seconds; a dev server's live-reload socket stays open). */
+  get inUse(): boolean { return this.sockets.size > 0; }
   ready(origin: string | undefined, relayUrl: string): void {
     this.disconnect();
     if (!origin) return;
