@@ -10,7 +10,7 @@ import { compactCronSummary, formatAutomationMoment, formatNextAutomationRun } f
 import { buildChangeSetReviewPrompt, buildFileReviewPrompt, type ReviewPromptFile } from "../packages/web/src/changeReviewPrompt.js";
 import { captureChatScroll, restoredChatScrollTop } from "../packages/web/src/chatScroll.js";
 import { nativeSessionLink } from "../packages/web/src/native-session-link.js";
-import { runHistoryCategory } from "../packages/web/src/components/RunHistory.js";
+import { runGroup } from "../packages/web/src/components/RunHistory.js";
 import { sessionDateGroup } from "../packages/web/src/sessionPresentation.js";
 import { attentionRank, isUnseen, statusClass, statusLabel } from "../packages/web/src/sessionStatus.js";
 import { modelAccountChoice } from "../packages/web/src/modelAccounts.js";
@@ -103,13 +103,22 @@ test("automation list and dates: one-off schedules are hidden; nearby runs read 
   assert.equal(compactCronSummary("*/15 * * * *", "en-GB"), null);
 });
 
-test("run history separates active, parked, dead-letter and terminal runs", () => {
-  const run = (status: AccountAutomationRun["status"]): AccountAutomationRun => ({
-    id: `run-${status}`, triggerKind: "manual", status, title: status, createdAt: "2026-08-13T00:00:00Z",
+test("runs feed: attention first, in-flight next, then by day; a newer scheduled run clears an older failure", () => {
+  const now = new Date(2026, 7, 13, 15, 0);
+  const run = (id: string, status: AccountAutomationRun["status"], day: number, extra: Partial<AccountAutomationRun> = {}): AccountAutomationRun => ({
+    id, definitionId: "daily", triggerKind: "schedule", status, title: id, createdAt: new Date(2026, 7, day, 9, 0).toISOString(), ...extra,
   });
-  for (const [status, category] of [["pending", "active"], ["running", "active"], ["waiting", "parked"], ["needs_attention", "parked"], ["failed", "dead_letter"], ["succeeded", "all"], ["cancelled", "all"]] as const) {
-    assert.equal(runHistoryCategory(run(status)), category, status);
-  }
+  const oldFail = run("old-fail", "failed", 11);
+  const newFail = run("new-fail", "failed", 12);
+  const issueFail = run("issue-fail", "failed", 10, { triggerKind: "github", definitionId: "queue" });
+  const issueLater = run("issue-later", "succeeded", 13, { triggerKind: "github", definitionId: "queue" });
+  const running = run("running", "running", 13, { definitionId: "other" });
+  const runs = [oldFail, newFail, issueFail, issueLater, running];
+  assert.equal(runGroup(newFail, runs, now), "Needs attention");
+  assert.equal(runGroup(oldFail, runs, now), "Previous 7 days");
+  assert.equal(runGroup(issueFail, runs, now), "Needs attention");
+  assert.equal(runGroup(running, runs, now), "In progress");
+  assert.equal(runGroup(issueLater, runs, now), "Today");
 });
 
 test("session list: status, attention order and date groups", () => {

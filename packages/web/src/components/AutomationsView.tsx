@@ -60,7 +60,6 @@ import { RepositoryEventFilter } from "./RepositoryEventFilter.js";
 import { GithubQueuePanel } from "./GithubQueue.js";
 import { RulesetsPanel } from "./Rulesets.js";
 import { QueueRoutingSection } from "./QueueRouting.js";
-import { HostedMachinesPanel } from "./HostedMachines.js";
 import { takeAutomationsSetupFocus } from "../automationsRoute.js";
 import { requestSignIn } from "../signInRequest.js";
 import { openAccountAction, showAccountExtension } from "../packaged-client.js";
@@ -469,9 +468,6 @@ export function AutomationsView({
   const [sourceEdit, setSourceEdit] = useState<AccountAutomation | null>(null);
   const [rotated, setRotated] = useState<{ id: string; secret: string } | null>(null);
   const [setupFocus, setSetupFocus] = useState<SourceSetupFocus | null>(null);
-  const [cancelRun, setCancelRun] = useState<AccountAutomationRun | null>(null);
-  const [cancelBusyId, setCancelBusyId] = useState<string | null>(null);
-  const [cancelError, setCancelError] = useState<string | null>(null);
   const [pendingDelete, setPendingDelete] = useState<AccountAutomation | null>(null);
   /** Create chooser (scratch + templates). Opens from New automation. */
   const [chooserOpen, setChooserOpen] = useState(false);
@@ -778,23 +774,6 @@ export function AutomationsView({
     finally { dispatch.pending = false; setDispatchingId(null); }
   }
 
-  async function cancelConfirmedRun() {
-    const run = cancelRun;
-    if (!run) return;
-    setCancelRun(null);
-    setCancelError(null);
-    setCancelBusyId(run.id);
-    try {
-      const refreshed = await controller.cancelAutomationRun(run.id);
-      setRuns(refreshed.runs);
-      onRefreshGithubQueue?.();
-    } catch (e) {
-      setCancelError(String((e as Error)?.message || e));
-    } finally {
-      setCancelBusyId(null);
-    }
-  }
-
   async function rotate(item: AccountAutomation) {
     setError("");
     try {
@@ -828,7 +807,6 @@ export function AutomationsView({
     } catch (e) { setError(String((e as Error).message || e)); }
   }
 
-  const definitionRuns = runs;
   const cloudAutomationGate = useMemo(() => automationCloudGate(me), [me]);
   const invokeCloudGateAction = useCallback((actionId: string) => {
     controller.invokeAccountExtensionAction(actionId)
@@ -1115,14 +1093,10 @@ export function AutomationsView({
 
         {section === null && historyAutomationId && (
           <section className="autom-section automation-history-view">
-
-            {cancelError && <div className="banner" data-tone="danger" role="alert">{cancelError}</div>}
+            <h2 className="autom-section-label">History</h2>
             <RunHistory compact
               runs={runs.filter((run) => run.definitionId === historyAutomationId)}
               definitions={items}
-              cancelBusyId={cancelBusyId}
-              onRefresh={() => void refresh().catch((e) => setError(String((e as Error).message || e)))}
-              onCancel={(run) => { setCancelError(null); setCancelRun(run); }}
               onOpenRun={onOpenRun}
               onOpenSession={(sessionId) => { onOpenSession(sessionId); onClose(); }}
             />
@@ -1131,13 +1105,30 @@ export function AutomationsView({
 
         {section === "runs" && (
           <>
-            {cancelError && <div className="banner inline" data-tone="danger">Could not cancel run: {cancelError}</div>}
+            <RunHistory
+              runs={runs}
+              definitions={items}
+              onOpenRun={onOpenRun}
+              onOpenSession={(sessionId) => { onOpenSession(sessionId); onClose(); }}
+              waiting={(
+                // Renders only what needs a decision: an unserved GitHub App,
+                // or items still waiting for a machine.
+                <GithubQueuePanel
+                  queue={githubQueue ?? null}
+                  onRefresh={() => onRefreshGithubQueue?.()}
+                  onPick={(id) => { onOpenSession(id); onClose(); }}
+                  onOpenRun={onOpenRun}
+                  onOpenGithubSettings={() => openSetup("github")}
+                  showHistory={false}
+                />
+              )}
+            />
             {cloudMachinesEnabled && (
               <details className="runs-setup">
                 <summary>
                   <span>
-                    <strong>Run setup &amp; routing</strong>
-                    <small>Choose where unattended work runs</small>
+                    <strong>Where runs happen</strong>
+                    <small>Machines and routing for unattended work</small>
                   </span>
                   <span className="runs-setup-chevron" aria-hidden="true">›</span>
                 </summary>
@@ -1146,27 +1137,6 @@ export function AutomationsView({
                 </div>
               </details>
             )}
-            <RunHistory
-              runs={definitionRuns}
-              definitions={items}
-              cancelBusyId={cancelBusyId}
-              onRefresh={() => void refresh().catch((e) => setError(String((e as Error).message || e)))}
-              onCancel={(run) => { setCancelError(null); setCancelRun(run); }}
-              onOpenRun={onOpenRun}
-              onOpenSession={(sessionId) => { onOpenSession(sessionId); onClose(); }}
-            />
-            <section className="autom-section incoming-work">
-              <h2 className="autom-section-label">Incoming work</h2>
-              <GithubQueuePanel
-                queue={githubQueue ?? null}
-                onRefresh={() => onRefreshGithubQueue?.()}
-                onPick={(id) => { onOpenSession(id); onClose(); }}
-                onOpenRun={onOpenRun}
-                onOpenGithubSettings={() => openSetup("github")}
-                showHistory={false}
-              />
-            </section>
-            {cloudMachinesEnabled && <HostedMachinesPanel />}
           </>
         )}
 
@@ -1185,17 +1155,6 @@ export function AutomationsView({
           danger
           onCancel={() => setPendingDelete(null)}
           onConfirm={() => void deleteConfirmed()}
-        />
-      )}
-
-      {cancelRun && (
-        <ConfirmDialog
-          title="Cancel Run?"
-          message={`Request cancellation of “${cancelRun.title}”? The Run will remain active until its durable record reports a terminal result.`}
-          confirmLabel="Cancel Run"
-          danger
-          onCancel={() => setCancelRun(null)}
-          onConfirm={() => void cancelConfirmedRun()}
         />
       )}
 

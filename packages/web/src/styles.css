@@ -1855,21 +1855,8 @@ button.template-card.is-featured .template-card-icon {
 }
 .automation-row .row-menu-btn { opacity: 0.72; }
 .automation-row:hover .row-menu-btn { opacity: 1; }
-.run-row { align-items: center; }
-.run-row-open {
-  appearance: none; border: 0; background: transparent; color: inherit; font: inherit;
-  text-align: left; padding: 0; cursor: pointer;
-}
-.run-row-open:disabled { cursor: default; }
-.run-row-open:not(:disabled):hover .automation-row-title strong { color: var(--accent); }
-.run-row-chevron {
-  display: grid; place-items: center; flex: none; width: 40px; min-height: 40px;
-  border: 0; border-radius: var(--radius-md); padding: 0; background: transparent;
-  color: var(--muted); font: inherit; font-size: 24px; line-height: 1; cursor: pointer;
-}
-.run-row-chevron:hover { color: var(--ink); background: var(--surface-2); }
 .runs-setup {
-  margin-top: 8px; border: 1px solid var(--line); border-radius: var(--radius-md);
+  margin-top: var(--space-6); border: 1px solid var(--line); border-radius: var(--radius-md);
   background: var(--surface); overflow: hidden;
 }
 .runs-setup > summary {
@@ -1884,16 +1871,13 @@ button.template-card.is-featured .template-card-icon {
 .runs-setup[open] .runs-setup-chevron { transform: rotate(90deg); }
 .runs-setup-body { display: flex; flex-direction: column; gap: 12px; padding: 14px; border-top: 1px solid var(--line); }
 .runs-setup-body .picker-search { max-width: 100%; box-sizing: border-box; }
-.runs-overview { margin-top: 18px; }
-.runs-overview .autom-section-head > div { min-width: 0; }
-.runs-overview .autom-section-head .settings-hint { margin: 3px 0 0; }
-/* Keep a single refresh action compact; stretching it to half the sheet makes
-   the run controls look like a form instead of a feed toolbar. */
-.runs-overview .autom-section-actions { justify-content: flex-end; }
-.runs-overview .autom-section-actions .btn { min-width: 96px; }
-.incoming-work { margin-top: 22px; }
-.incoming-work > .autom-section-label { margin-bottom: 8px; }
-.incoming-work > .settings-form { gap: 14px; }
+/* Runs feed: grouped like the session list (attention, in progress, by day). */
+.run-history { margin-top: var(--space-2); }
+.run-history .session-group-label { margin: 0; padding-inline: 0; }
+.run-history > .settings-form { gap: var(--space-2); padding: 0 0 var(--space-3); border-bottom: 1px solid var(--line); }
+.run-history > .settings-form:empty { display: none; }
+.run-history-failure { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.automation-history-row:disabled { cursor: default; }
 
 /* A runner is a first-class requirement, not a tiny select hidden under the
    prompt. Pairing/key readiness is visible before Save can become disabled. */
@@ -1945,14 +1929,6 @@ button.template-card.is-featured .template-card-icon {
 .run-timeline li span { color: var(--muted); font-size: 12px; }
 .run-timeline p { grid-column: 1 / -1; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
 .run-timeline code { grid-column: 1 / -1; overflow-wrap: anywhere; font-size: 11px; }
-.run-history-filters {
-  display: flex; flex-wrap: wrap; gap: 6px; margin: 12px 0;
-}
-.run-history-filters .btn { white-space: nowrap; }
-@media (max-width: 479px) {
-  .run-history-filters { flex-wrap: nowrap; overflow-x: auto; margin-inline: -4px; padding-inline: 4px; scrollbar-width: none; }
-  .run-history-filters::-webkit-scrollbar { display: none; }
-}
 .run-details .run-sheet-failure { margin-top: 14px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line)); border-radius: var(--radius-md); }
 .run-details-receipt { margin-top: 18px !important; }
 .run-details-state {
@@ -2137,7 +2113,7 @@ button.template-card.is-featured .template-card-icon {
 .automation-detail-head .icon { flex-shrink: 0; }
 .automation-detail-head svg { width: var(--space-5); height: var(--space-5); }
 .automations-view.is-history .automations-view-body { flex: 1; padding: var(--space-5) var(--space-4); }
-.automation-history-view, .automation-history-view .runs-overview { margin-top: 0; }
+.automation-history-view { margin-top: 0; }
 .automation-history-row {
   display: flex; align-items: center; gap: var(--space-3); width: 100%;
   padding: var(--space-4) 0; border: 0; border-bottom: 1px solid var(--line);
@@ -2497,16 +2473,6 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .automation-row-actions { width: auto; justify-content: flex-end; border-top: 0; padding-top: 0; }
   .automation-row-actions .btn { min-height: 40px; }
   .automation-row .row-menu-btn { min-width: 40px; min-height: 40px; opacity: 1; }
-  .run-row { align-items: flex-start; flex-wrap: wrap; }
-  .run-row .automation-row-main { flex-basis: 100%; }
-  .run-row .automation-row-actions { width: 100%; padding-top: 6px; }
-  .run-row-chevron { margin-left: auto; }
-  .runs-overview .autom-section-head { align-items: stretch; flex-direction: column; }
-  .runs-overview .autom-section-actions { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
-  /* Keep two actions balanced when needed, but don't make a lone Refresh button
-     occupy half the screen. */
-  .runs-overview .autom-section-actions:has(> :only-child) { display: flex; justify-content: flex-start; }
-  .runs-overview .autom-section-actions .btn { min-width: 96px; width: auto; }
   .queue-head { align-items: flex-start; gap: 10px; }
   .queue-head-actions { justify-content: flex-end; gap: 8px; min-width: 0; text-align: right; }
   .queue-head-actions .btn.link { overflow-wrap: anywhere; }
@@ -3596,21 +3562,13 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
 
   /* Compact, thumb-friendly automation list: the row is the editor link. */
   .automation-list { gap: var(--space-2); border: 0; }
-  .automation-row:not(.run-row) {
+  .automation-row {
     min-height: 0; padding: var(--space-3); border: 1px solid var(--line);
     border-radius: var(--radius-lg); background: var(--surface-2);
     grid-template-columns: 36px minmax(0, 1fr) auto; gap: var(--space-3);
     align-items: center;
   }
-  .run-row {
-    display: flex; flex-wrap: wrap; align-items: flex-start;
-    gap: var(--space-3); padding: var(--space-4);
-  }
-  .run-row-open { flex: 1 1 100%; min-width: 0; }
-  .run-row .automation-row-main { width: 100%; }
-  .run-row .automation-row-actions { width: 100%; justify-content: flex-start; flex-wrap: wrap; }
-  .run-row .run-row-chevron { margin-left: auto; }
-  .automation-row:not(.run-row):hover { background: var(--surface-3); }
+  .automation-row:hover { background: var(--surface-3); }
   .automation-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .automation-row-icon { width: 36px; height: 36px; }
   .automation-row-icon svg { width: 18px; height: 18px; }
@@ -3637,8 +3595,6 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
   .automation-history-view .autom-section-head { margin-bottom: var(--space-3); }
   .automation-history-view .automation-list { gap: var(--space-2); }
   .automation-history-view .automation-row { padding: var(--space-3); }
-  .automation-history-view .run-history-filters { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: var(--space-1); }
-  .automation-history-view .run-history-filters::-webkit-scrollbar { display: none; }
   .automations-view.is-history .automations-view-head-actions > .btn.primary { display: none; }
   .automation-history-view .autom-section-head { align-items: flex-start; gap: var(--space-3); }
   .automation-history-view .autom-section-head > strong { min-width: 0; line-height: var(--lh-lg); }

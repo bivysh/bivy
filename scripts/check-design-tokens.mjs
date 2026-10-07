@@ -73,6 +73,8 @@ const RETIRED_CLASSES = [
   "node-dot", "session-dot", "run-dot", "attn-dot", "voice-listening-dot", "mark-badge",
   // → the single composer Send control
   "split-send", "split-send-toggle", "send-options-menu",
+  // → grouped Runs feed (.run-history + .automation-history-row)
+  "run-row", "run-row-open", "run-row-chevron", "runs-overview", "incoming-work", "run-history-filters",
 ];
 const retiredClassRe = new RegExp(`(?:\\.|className[^\\n]*[\\"'\\x60 {])(${RETIRED_CLASSES.join("|")})(?=[\\s.\\"'\\x60}:])`, "g");
 // Retired selector shapes that are not a single class name.
