@@ -83,6 +83,11 @@ export interface TerminalMeta {
    * PTY pid as the kill target.
    */
   sessionId?: string;
+  /**
+   * A program Bivy runs on something else's behalf (an app view's server or
+   * desktop app), not a session: no sidebar row, no saved run log, no idle push.
+   */
+  background?: boolean;
 }
 
 export interface TerminalOpenOptions {

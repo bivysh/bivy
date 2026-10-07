@@ -758,7 +758,9 @@ export class AppService {
       if (server.pending || !server.termId || this.terminals.has(server.termId)) return;
       const now = Date.now();
       server.restarts = server.restarts.filter((at) => now - at < RESTART_WINDOW);
-      if (server.restarts.length >= MAX_RESTARTS) return;
+      // A crash loop stays down until the view is opened again, rather than
+      // retrying every time the window rolls over.
+      if (server.restarts.length >= MAX_RESTARTS) { clearInterval(server.timer); server.timer = undefined; return; }
       server.restarts.push(now);
       server.termId = undefined;
       void this.ensureServer(current).catch(() => {});
