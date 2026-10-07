@@ -411,22 +411,28 @@ export function GithubQueuePanel({
 
         </>}
 
-        {canQuery && (
+        {/* Embedded in Runs (no history), an empty queue is not worth a section. */}
+        {canQuery && (showHistory || Boolean(waiting?.length)) && (
           <>
             <div className="queue-head">
-              <h4 className="settings-subhead">
-                Waiting to be picked up
-                {waiting && waiting.length > 0 && <span className="queue-count">{waiting.length}</span>}
-              </h4>
+              {/* In the Runs feed this is one more group, headed like the others. */}
+              {showHistory ? (
+                <h4 className="settings-subhead">
+                  Waiting to be picked up
+                  {waiting && waiting.length > 0 && <span className="queue-count">{waiting.length}</span>}
+                </h4>
+              ) : <h2 className="session-group-label">Waiting for a machine</h2>}
               <div className="queue-head-actions">
                 {waiting && waiting.length > 0 && (
-                  <button className="btn link danger" onClick={() => setConfirmClear(true)} disabled={clearing}>
+                  <button className={showHistory ? "btn link danger" : "btn sm"} onClick={() => setConfirmClear(true)} disabled={clearing}>
                     {clearing ? "Clearing…" : "Clear queue"}
                   </button>
                 )}
-                <button className="btn link" onClick={onRefresh}>
-                  Refresh
-                </button>
+                {showHistory && (
+                  <button className="btn link" onClick={onRefresh}>
+                    Refresh
+                  </button>
+                )}
               </div>
             </div>
 

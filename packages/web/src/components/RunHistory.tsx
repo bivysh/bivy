@@ -1,104 +1,102 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Feature-owned automation Run history: filtering, attention alerts, and rows.
-import { useMemo, useState } from "react";
+// Feature-owned automation Run history: one list, grouped the way the session
+// list is — what needs you first, then what's in flight, then by day.
+import { Fragment, useMemo, type ReactNode } from "react";
 import { runFromAutomationRun, type AccountAutomation, type AccountAutomationRun } from "@bivy/core";
 import { formatAutomationMoment } from "../automationPresentation.js";
 import { projectRunDetail } from "../runDetail.js";
+import { sessionDateGroup } from "../sessionPresentation.js";
 import { Badge, type BadgeTone } from "./Badge.js";
 
-export type RunHistoryFilter = "all" | "active" | "attention" | "parked" | "dead_letter";
+const ACTIVE_STATUSES = new Set<AccountAutomationRun["status"]>(["pending", "claimed", "running", "waiting"]);
+const ATTENTION_STATUSES = new Set<AccountAutomationRun["status"]>(["needs_attention", "failed"]);
+/** Triggers that re-run the same job: the next run of the definition answers
+ * whether it is still broken, so an older failure stops asking for attention.
+ * Event triggers (GitHub, Linear, webhook) carry a different subject each run. */
+const REPEATING_TRIGGERS = new Set(["schedule", "manual"]);
+const TONE: Record<string, BadgeTone | undefined> = { success: "ok", danger: "danger", warning: "warn" };
 
-export function runHistoryCategory(run: AccountAutomationRun): Exclude<RunHistoryFilter, "attention"> {
-  if (run.status === "needs_attention" || run.status === "waiting") return "parked";
-  if (run.status === "failed") return "dead_letter";
-  if (["pending", "claimed", "running"].includes(run.status)) return "active";
-  return "all";
+const createdMs = (run: AccountAutomationRun) => Date.parse(run.createdAt) || 0;
+
+/** The heading a Run sits under: "Needs attention", "In progress", or its day. */
+export function runGroup(run: AccountAutomationRun, runs: AccountAutomationRun[], now = new Date()): string {
+  if (ACTIVE_STATUSES.has(run.status)) return "In progress";
+  const flagged = ATTENTION_STATUSES.has(run.status) || Boolean(run.attention);
+  const superseded = REPEATING_TRIGGERS.has(run.triggerKind) && runs.some((other) =>
+    other.definitionId === run.definitionId && createdMs(other) > createdMs(run));
+  if (flagged && !superseded) return "Needs attention";
+  return sessionDateGroup(run.createdAt, now);
 }
 
-function needsAttention(run: AccountAutomationRun): boolean {
-  return Boolean(run.attention) || run.status === "needs_attention" || run.status === "failed" || run.notification?.status === "failed";
-}
+const GROUP_ORDER = ["Needs attention", "In progress", "Today", "Yesterday", "Previous 7 days", "Older"];
 
 export function RunHistory({
   runs,
   definitions,
-  cancelBusyId,
-  onRefresh,
-  onCancel,
   onOpenRun,
   onOpenSession,
+  waiting,
   compact = false,
 }: {
-  /** A definition's history, without the global feed's filters and summary. */
+  /** A definition's history: a flat list, no group headings or automation name. */
   compact?: boolean;
   runs: AccountAutomationRun[];
   definitions: AccountAutomation[];
-  cancelBusyId?: string | null;
-  onRefresh: () => void;
-  onCancel: (run: AccountAutomationRun) => void;
   onOpenRun?: (runId: string) => void;
   onOpenSession: (sessionId: string) => void;
+  /** Incoming work no machine has picked up yet; sits after what needs you. */
+  waiting?: ReactNode;
 }) {
-  const [filter, setFilter] = useState<RunHistoryFilter>("all");
-  const attentionCount = runs.filter(needsAttention).length;
-  const visible = useMemo(() => runs.filter((run) => {
-    if (filter === "all") return true;
-    if (filter === "attention") return needsAttention(run);
-    return runHistoryCategory(run) === filter;
-  }), [filter, runs]);
-  const countFor = (id: RunHistoryFilter): number => {
-    if (id === "all") return runs.length;
-    if (id === "attention") return attentionCount;
-    return runs.filter((run) => runHistoryCategory(run) === id).length;
-  };
-  const filters: Array<{ id: RunHistoryFilter; label: string }> = [
-    { id: "all", label: `All · ${countFor("all")}` },
-    { id: "active", label: `Active · ${countFor("active")}` },
-    { id: "attention", label: `Attention · ${attentionCount}` },
-    { id: "parked", label: `Parked · ${countFor("parked")}` },
-    { id: "dead_letter", label: `Dead letter · ${countFor("dead_letter")}` },
-  ];
+  const groups = useMemo(() => {
+    const sorted = [...runs].sort((a, b) => createdMs(b) - createdMs(a));
+    if (compact) return [{ label: "", runs: sorted }];
+    const byLabel = new Map<string, AccountAutomationRun[]>();
+    for (const run of sorted) {
+      const label = runGroup(run, sorted);
+      byLabel.set(label, [...(byLabel.get(label) ?? []), run]);
+    }
+    return GROUP_ORDER.filter((label) => byLabel.has(label)).map((label) => ({ label, runs: byLabel.get(label)! }));
+  }, [runs, compact]);
 
+  const waitingAt = groups[0]?.label === "Needs attention" ? 1 : 0;
   return (
-    <section className="autom-section runs-overview">
-      <div className="autom-section-head">
-        <div>
-          <h2 className="autom-section-label">{compact ? "History" : "Recent runs"}</h2>
-          {!compact && <p className="settings-hint">Live status and recent outcomes.</p>}
-        </div>
-        {!compact && <div className="autom-section-actions">
-          <button type="button" className="btn sm" onClick={onRefresh}>Refresh</button>
-        </div>}
-      </div>
-      {attentionCount > 0 && <div className="banner" data-tone="warn" role="alert"><div className="banner-text"><strong>{attentionCount} Run{attentionCount === 1 ? "" : "s"} need attention</strong><span>Review parked work, failed notification delivery, or terminal failures before retrying.</span></div></div>}
-      {!compact && <div className="run-history-filters" role="group" aria-label="Filter Runs">
-        {filters.map((item) => <button type="button" key={item.id} className={`btn sm${filter === item.id ? " primary" : ""}`} aria-pressed={filter === item.id} onClick={() => setFilter(item.id)}>{item.label}</button>)}
-      </div>}
-      {visible.length === 0 ? <p className="settings-hint autom-empty-hint">{compact ? "No runs yet. Run this automation now, or wait for its trigger." : "No Runs match this filter."}</p> : (
-        <div className="automation-list">
-          {visible.slice(0, 30).map((run) => {
-            const detail = projectRunDetail(run);
-            const canonical = runFromAutomationRun(run);
-            const tone: BadgeTone | undefined = detail.outcome.tone === "success" ? "ok" : detail.outcome.tone === "danger" ? "danger" : detail.outcome.tone === "warning" ? "warn" : undefined;
-            if (compact && onOpenRun) return <button type="button" className="automation-history-row" key={run.id} onClick={() => onOpenRun(run.id)}>
-              <span className="automation-history-row-copy"><strong>{run.title}</strong><span className="settings-hint">{formatAutomationMoment(run.createdAt)}</span></span>
-              <Badge tone={tone}>{detail.outcome.label}</Badge>
-              <span aria-hidden="true">›</span>
-            </button>;
-            const defName = definitions.find((item) => item.id === run.definitionId)?.name;
-            const rowMain = <><div className="automation-row-title"><strong>{run.title}</strong><Badge tone={tone}>{detail.outcome.label}</Badge>{canonical.operationalState === "parked" && <Badge tone="warn">Parked</Badge>}{canonical.operationalState === "dead_letter" && <Badge tone="danger">Dead letter</Badge>}</div><div className="settings-hint">{[compact ? null : defName, formatAutomationMoment(run.createdAt), compact ? null : run.triggerKind, detail.checksSummary, compact ? null : `attempt ${canonical.attempt}${canonical.maxAttempts ? `/${canonical.maxAttempts}` : ""}`].filter(Boolean).join(" · ")}</div>{canonical.attemptReason && <div className="settings-hint">{canonical.attemptReason}</div>}{detail.failure && <div className="settings-hint warn-text">{detail.failure}</div>}</>;
-            return <div className="automation-row run-row" key={run.id}>
-              {onOpenRun ? <button type="button" className="automation-row-main run-row-open" onClick={() => onOpenRun(run.id)}>{rowMain}</button> : <div className="automation-row-main">{rowMain}</div>}
-              <div className="automation-row-actions">
-                {canonical.actions.some((action) => action.kind === "cancel") && <button type="button" className="btn sm danger" disabled={cancelBusyId === run.id} onClick={() => onCancel(run)}>{cancelBusyId === run.id ? "Cancelling…" : "Cancel"}</button>}
-                {canonical.sessionId && <button type="button" className="btn sm primary" onClick={() => onOpenSession(canonical.sessionId!)}>Open session</button>}
-                {run.output?.prUrl && <a className="btn sm" href={run.output.prUrl} target="_blank" rel="noreferrer">View PR</a>}
-                {onOpenRun && <button type="button" className="run-row-chevron" aria-label={`Open Run details for ${run.title}`} onClick={() => onOpenRun(run.id)}>›</button>}
-              </div>
-            </div>;
-          })}
-        </div>
+    <div className="run-history">
+      {runs.length === 0 && !waiting && (
+        <p className="settings-hint autom-empty-hint">
+          {compact ? "No runs yet. Run this automation now, or wait for its trigger." : "No runs yet. Each time an automation fires, its run shows up here."}
+        </p>
       )}
-    </section>
+      {groups.map((group, index) => (
+        <Fragment key={group.label || "all"}>
+        {index === waitingAt && waiting}
+        <section aria-label={group.label || "Runs"}>
+          {group.label && <h2 className="session-group-label">{group.label}</h2>}
+          {group.runs.map((run) => {
+            const detail = projectRunDetail(run);
+            const automation = definitions.find((item) => item.id === run.definitionId)?.name;
+            const attention = group.label === "Needs attention";
+            const meta = [
+              !compact && automation !== run.title ? automation : null,
+              formatAutomationMoment(run.createdAt),
+            ].filter(Boolean).join(" · ");
+            const sessionId = runFromAutomationRun(run).sessionId;
+            const open = onOpenRun ? () => onOpenRun(run.id) : sessionId ? () => onOpenSession(sessionId) : undefined;
+            return (
+              <button type="button" className="automation-history-row" key={run.id} disabled={!open} onClick={open}>
+                <span className="automation-history-row-copy">
+                  <strong>{run.title}</strong>
+                  <span className="settings-hint">{meta}</span>
+                  {attention && detail.failure && <span className="settings-hint warn-text run-history-failure">{detail.failure}</span>}
+                </span>
+                <Badge tone={TONE[detail.outcome.tone]}>{detail.outcome.label}</Badge>
+                {open && <span aria-hidden="true">›</span>}
+              </button>
+            );
+          })}
+        </section>
+        </Fragment>
+      ))}
+      {groups.length <= waitingAt && waiting}
+    </div>
   );
 }
