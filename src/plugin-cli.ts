@@ -134,6 +134,31 @@ async function testPlugin(input: string): Promise<{ ok: boolean; file: string; c
           checks.push({ name: "conformance", agentId: agent.id, status: "pass", message: "Static process-adapter conformance passed" });
           continue;
         }
+        if (agent.adapter.kind === "pi") {
+          // Open a real Pi session with the packages (no prompt, so no model call)
+          // and confirm every preloaded skill was found in them.
+          let session: { dispose(): void; getCommands?(): Array<{ name: string }> } | undefined;
+          try {
+            const runtime = runtimeModule.makeRuntime({
+              runtime: agent.id,
+              credsDir: path.join(temp, "credentials"),
+              piDir: path.join(temp, "pi"),
+              sessionsDir: path.join(temp, "sessions"),
+            });
+            session = (await runtime.createSession({ workspace: path.dirname(file) })).session;
+            const commands = new Set((session.getCommands?.() ?? []).map((command) => command.name));
+            const missing = (agent.adapter.skills ?? []).filter((name) => !commands.has(`/skill:${name}`));
+            if (missing.length) throw new Error(`skills not found in the agent's packages: ${missing.join(", ")}`);
+            checks.push({ name: "conformance", agentId: agent.id, status: "pass", message: `Pi session opened with ${agent.adapter.packages.length} package(s)${agent.adapter.skills?.length ? ` and skills ${agent.adapter.skills.join(", ")}` : ""}` });
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            errors.push(`${agent.id}: ${message}`);
+            checks.push({ name: "conformance", agentId: agent.id, status: "fail", message });
+          } finally {
+            session?.dispose();
+          }
+          continue;
+        }
         let session: { dispose(): void } | undefined;
         let timer: NodeJS.Timeout | undefined;
         try {

@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 /** Node-local store for declarative Bivy plugins. */
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { currentBivyVersion } from "../app-version.js";
 import { defaultDataDir } from "../data-dir.js";
@@ -133,8 +134,25 @@ export function installedAgentContributions(dataDir = defaultDataDir(), bivyVers
   return { agents, errors };
 }
 
+/**
+ * Resolve Pi adapter package paths against the manifest's directory. The store
+ * keeps only the manifest, so relative paths would otherwise point nowhere.
+ */
+export function resolvePluginPackagePaths(manifest: PluginManifest, manifestDir: string): PluginManifest {
+  const resolve = (source: string) => path.resolve(manifestDir, source === "~" || source.startsWith("~/") ? path.join(os.homedir(), source.slice(1)) : source);
+  return {
+    ...manifest,
+    contributes: {
+      agents: manifest.contributes.agents.map((agent) => agent.adapter.kind !== "pi"
+        ? agent
+        : { ...agent, adapter: { ...agent.adapter, packages: agent.adapter.packages.map(resolve) } }),
+    },
+  };
+}
+
 export function installPlugin(input: string, opts: { dataDir?: string; force?: boolean; bivyVersion?: string } = {}): { manifest: PluginManifest; path: string; replaced: boolean } {
-  const { manifest } = readPluginManifest(input);
+  const read = readPluginManifest(input);
+  const manifest = resolvePluginPackagePaths(read.manifest, path.dirname(read.file));
   const compatibility = checkPluginCompatibility(manifest, opts.bivyVersion ?? currentBivyVersion());
   if (!compatibility.compatible) throw new Error(compatibility.message);
   const root = pluginStoreDir(opts.dataDir);

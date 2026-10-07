@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { createServer } from "node:http";
 import { installPlugin } from "../src/plugins/store.js";
 import { listRuntimes, makeRuntime, pluginAgentConflictDiagnostics, type RuntimeEvent } from "../src/runtime/index.js";
 
@@ -158,6 +159,88 @@ test("plugin agents cannot replace retained package or config-defined integratio
     else process.env.BIVY_PLUGIN_DIR = oldPluginDir;
     if (oldCustom === undefined) delete process.env.BIVY_CUSTOM_AGENTS;
     else process.env.BIVY_CUSTOM_AGENTS = oldCustom;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/** A Pi package with an extension (model provider + tool) and a skill. */
+function writePiPackage(dir: string): void {
+  fs.mkdirSync(path.join(dir, "skills", "fixture-guide"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "package.json"), JSON.stringify({
+    name: "fixture-pi-package", type: "module", keywords: ["pi-package"], pi: { extensions: ["./extension.js"], skills: ["./skills"] },
+  }));
+  fs.writeFileSync(path.join(dir, "extension.js"), `
+export default function (pi) {
+  pi.registerProvider("fixture", {
+    baseUrl: process.env.FIXTURE_PI_ENDPOINT, apiKey: "test-only", api: "openai-completions",
+    models: [{ id: "model", name: "Fixture", reasoning: false, input: ["text"], cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 32000, maxTokens: 1000 }],
+  });
+  pi.registerTool({ name: "fixture_tool", label: "Fixture", description: "Fixture tool from the plugin's package.", parameters: { type: "object", properties: {} },
+    async execute() { return { content: [{ type: "text", text: "ok" }], details: {} }; } });
+}
+`);
+  fs.writeFileSync(path.join(dir, "skills", "fixture-guide", "SKILL.md"), "---\nname: fixture-guide\ndescription: Fixture guidance. Use for fixtures.\n---\n\nFIXTURE GUIDE INSTRUCTIONS\n");
+}
+
+test("an installed Pi plugin agent is Pi with the plugin's packages and preloaded skills", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-plugin-pi-"));
+  const saved = { plugin: process.env.BIVY_PLUGIN_DIR, endpoint: process.env.FIXTURE_PI_ENDPOINT, command: process.env.BIVY_PI_COMMAND };
+  const bodies: Array<{ messages: Array<{ role: string; content: unknown }>; tools?: Array<{ function: { name: string } }> }> = [];
+  const server = createServer(async (request, response) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of request) chunks.push(chunk as Buffer);
+    bodies.push(JSON.parse(Buffer.concat(chunks).toString()));
+    response.writeHead(200, { "Content-Type": "text/event-stream" });
+    const chunk = (delta: unknown, finish: string | null) => `data: ${JSON.stringify({ id: "r", object: "chat.completion.chunk", created: 1, model: "model", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+    response.end(chunk({ role: "assistant", content: "Done." }, null) + chunk({}, "stop") + "data: [DONE]\n\n");
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  process.env.BIVY_PLUGIN_DIR = path.join(dir, "plugins");
+  process.env.FIXTURE_PI_ENDPOINT = `http://127.0.0.1:${address.port}/v1`;
+  process.env.BIVY_PI_COMMAND = process.execPath; // availability check only; the TUI is not launched
+  try {
+    const source = path.join(dir, "source");
+    writePiPackage(path.join(source, "pkg"));
+    fs.writeFileSync(path.join(source, "bivy.plugin.yaml"), manifest("fixture-pi", `        kind: pi
+        packages: [./pkg]
+        skills: [fixture-guide]
+`));
+    const installed = installPlugin(source, { dataDir: dir });
+    const adapter = installed.manifest.contributes.agents[0]?.adapter;
+    assert.deepEqual(adapter?.kind === "pi" && adapter.packages, [path.join(source, "pkg")], "relative package paths are stored resolved");
+
+    const row = listRuntimes().find((candidate) => candidate.id === "fixture-pi");
+    assert.equal(row?.executionMode, "protocol");
+    assert.equal(row?.supportTier, "experimental");
+    assert.equal(row?.capabilities.toolInterception, true);
+
+    const runtime = makeRuntime({ runtime: "fixture-pi", credsDir: path.join(dir, "credentials"), piDir: path.join(dir, "pi"), sessionsDir: path.join(dir, "sessions") });
+    assert.equal(runtime.id, "fixture-pi");
+    const workspace = fs.mkdtempSync(path.join(dir, "workspace-"));
+    const { session } = await runtime.createSession({ workspace });
+    try {
+      assert.ok(session.getCommands?.().some((command) => command.name === "/skill:fixture-guide"));
+      await session.setModel?.("fixture", "model");
+      await session.prompt("hello");
+      const system = JSON.stringify(bodies[0]?.messages.filter((message) => message.role === "system" || message.role === "developer"));
+      assert.match(system, /FIXTURE GUIDE INSTRUCTIONS/, "the preloaded skill is in the system prompt");
+      assert.doesNotMatch(system, /name: fixture-guide/, "without its frontmatter");
+      assert.doesNotMatch(system, /fixture-guide\/SKILL\.md/, "and not advertised again as an on-demand skill");
+      assert.ok(bodies[0]?.tools?.some((tool) => tool.function.name === "fixture_tool"), "the package's extension is loaded");
+      const tui = await session.interactiveTuiCommand?.();
+      assert.deepEqual(tui?.args.slice(0, 4), ["-e", path.join(source, "pkg"), "--append-system-prompt", "FIXTURE GUIDE INSTRUCTIONS"]);
+    } finally {
+      session.dispose();
+    }
+  } finally {
+    server.closeAllConnections();
+    server.close();
+    for (const [key, value] of [["BIVY_PLUGIN_DIR", saved.plugin], ["FIXTURE_PI_ENDPOINT", saved.endpoint], ["BIVY_PI_COMMAND", saved.command]] as const) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -47,6 +47,28 @@ export function resolvePluginCommand(command: string, opts: { cwd?: string; env?
   return undefined;
 }
 
+/** A Pi agent needs the operator's Pi and every local package it names. */
+function doctorPiAdapter(agentId: string, packages: string[], opts: { cwd?: string; env?: NodeJS.ProcessEnv }): PluginDoctorCheck[] {
+  const command = (opts.env ?? process.env).BIVY_PI_COMMAND?.trim() || "pi";
+  const resolved = resolvePluginCommand(command, { cwd: opts.cwd, env: opts.env });
+  const checks: PluginDoctorCheck[] = [{
+    name: "executable",
+    agentId,
+    status: resolved ? "pass" : "fail",
+    message: resolved ? `Pi (${command}) resolves to ${resolved}` : `Pi (${command}) was not found; install Pi on this node`,
+  }];
+  for (const source of packages) {
+    const file = path.resolve(opts.cwd ?? process.cwd(), source);
+    checks.push({
+      name: "package",
+      agentId,
+      status: fs.existsSync(file) ? "pass" : "fail",
+      message: fs.existsSync(file) ? `Pi package ${source} resolves to ${file}` : `Pi package ${source} was not found at ${file}`,
+    });
+  }
+  return checks;
+}
+
 /** Static compatibility and executable diagnostics shared by CLI and tooling. */
 export function doctorPluginManifest(
   manifest: PluginManifest,
@@ -61,6 +83,10 @@ export function doctorPluginManifest(
   });
 
   for (const agent of manifest.contributes.agents) {
+    if (agent.adapter.kind === "pi") {
+      checks.push(...doctorPiAdapter(agent.id, agent.adapter.packages, opts));
+      continue;
+    }
     const resolved = resolvePluginCommand(agent.adapter.command, { cwd: opts.cwd, env: opts.env });
     checks.push({
       name: "executable",

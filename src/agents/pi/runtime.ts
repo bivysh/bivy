@@ -98,12 +98,59 @@ function resolvePiCommand(): string {
 /** What PiSession.interactiveTuiCommand needs to relaunch this session's TUI. */
 interface PiTuiLaunch {
   credentialLabels?: Record<string, string>;
+  /** Extra Pi packages and the preloaded skill instructions of a preset agent. */
+  extensionPaths: string[];
+  preloadedSkills: Map<string, string>;
   credsDir: string;
   piDir: string;
   sessionsDir: string;
   piCommand: string;
   credentialOwner: "agent" | "bivy";
   allowModelNetwork: boolean;
+}
+
+/**
+ * A Pi agent contributed as data (a plugin's `adapter.kind: pi`): its own id and
+ * name, extra Pi packages loaded like packages in Pi's settings, and skills whose
+ * instructions are always in the system prompt instead of loading on demand.
+ */
+export interface PiAgentPreset {
+  id: string;
+  displayName: string;
+  packages: string[];
+  skills?: string[];
+}
+
+/** Skill instructions without their YAML frontmatter, as Pi loads them. */
+export function skillInstructions(markdown: string): string {
+  return markdown.replace(/^\uFEFF?---\r?\n[\s\S]*?\r?\n---\r?\n/, "").trim();
+}
+
+/** Puts the named skills' instructions into every system prompt, as a section per skill, instead of listing them as on-demand skills. */
+function preloadedSkillsFactory(names: string[], loaded: Map<string, string>): ExtensionFactory {
+  return function preloadedSkills(pi: ExtensionAPI) {
+    const missing = new Set<string>();
+    pi.on("before_agent_start", (event) => {
+      const options = event.systemPromptOptions;
+      for (const name of names) {
+        const skill = options.skills?.find((candidate) => candidate.name === name);
+        if (!skill) {
+          if (!missing.has(name)) console.warn(`[pi] preloaded skill ${name} was not found in the agent's packages`);
+          missing.add(name);
+          continue;
+        }
+        try {
+          const text = skillInstructions(fs.readFileSync(skill.filePath, "utf8"));
+          loaded.set(name, text);
+          (options.sections ??= {})[`skill_${name.replace(/-/g, "_")}`] = text;
+          // Already loaded: listing it as an on-demand skill would invite a redundant read.
+          options.skills = options.skills?.filter((candidate) => candidate.name !== name);
+        } catch (error) {
+          console.warn(`[pi] preloaded skill ${name} could not be read: ${(error as Error).message}`);
+        }
+      }
+    });
+  };
 }
 
 export interface PiRuntimeOptions {
@@ -117,6 +164,8 @@ export interface PiRuntimeOptions {
   credentialOwner?: "agent" | "bivy";
   /** Disable remote model-catalog refreshes for deterministic/offline callers. Defaults to true. */
   allowModelNetwork?: boolean;
+  /** Run as a preset agent instead of plain Pi. */
+  agent?: PiAgentPreset;
 }
 
 function toModelInfo(model: any, configured?: boolean): ModelInfo {
@@ -258,7 +307,11 @@ class PiSession implements RuntimeSession {
     }
     return {
       command: this.tui.piCommand,
-      args: ["--session", file, "--session-dir", this.tui.sessionsDir],
+      args: [
+        ...this.tui.extensionPaths.flatMap((source) => ["-e", source]),
+        ...[...this.tui.preloadedSkills.values()].flatMap((text) => ["--append-system-prompt", text]),
+        "--session", file, "--session-dir", this.tui.sessionsDir,
+      ],
       env: { PI_CODING_AGENT_DIR: this.tui.piDir, ...bivySessionEnv(this.id) },
     };
   }
@@ -498,13 +551,16 @@ class PiSession implements RuntimeSession {
 }
 
 export class PiRuntime implements AgentRuntime {
-  readonly id = "pi";
-  readonly displayName = "Pi";
+  readonly id: string;
+  readonly displayName: string;
   // Shared with LazyPiRuntime (the facade the registry actually hands out) —
   // see capabilities.ts for why the two must never drift.
   readonly capabilities: RuntimeCapabilities = PI_CAPABILITIES;
 
-  constructor(private readonly options: PiRuntimeOptions) {}
+  constructor(private readonly options: PiRuntimeOptions) {
+    this.id = options.agent?.id ?? "pi";
+    this.displayName = options.agent?.displayName ?? "Pi";
+  }
 
   private async build(sessionManager: SessionManager, options: OpenSessionOptions): Promise<OpenSessionResult> {
     const { credsDir, piDir } = this.options;
@@ -519,6 +575,9 @@ export class PiRuntime implements AgentRuntime {
         })
       : await createPiModelRuntime({ credsDir, piDir, allowModelNetwork, workspace: sessionManager.getCwd() || options.workspace, credentialLabels: options.credentialLabels });
     const backgroundShells = new BackgroundShellTracker();
+    const preset = this.options.agent;
+    const preloadedSkills = new Map<string, string>();
+    const presetFactories = preset?.skills?.length ? [preloadedSkillsFactory(preset.skills, preloadedSkills)] : [];
     const createRuntime: CreateAgentSessionRuntimeFactory = async ({ cwd, agentDir, sessionManager, sessionStartEvent }) => {
       const sessionId = sessionManager.getSessionId();
       const providedTools = options.toolProvider ? [toolProviderFactory(options.toolProvider)] : [];
@@ -527,7 +586,9 @@ export class PiRuntime implements AgentRuntime {
         agentDir,
         modelRuntime,
         resourceLoaderOptions: {
-          extensionFactories: [guardianFactory(sessionId, options.toolInterceptor), ...providedTools],
+          extensionFactories: [guardianFactory(sessionId, options.toolInterceptor), ...providedTools, ...presetFactories],
+          // A preset agent's packages load like packages in Pi's settings, for this agent only.
+          ...(preset ? { additionalExtensionPaths: preset.packages } : {}),
           // Additive: keep whatever Pi discovered itself, then the user's
           // account-wide instructions (see OpenSessionOptions.instructions).
           ...(options.instructions ? { appendSystemPromptOverride: (base: string[]) => [...base, options.instructions!.text] } : {}),
@@ -555,6 +616,8 @@ export class PiRuntime implements AgentRuntime {
       piDir,
       sessionsDir: this.options.sessionsDir,
       piCommand: resolvePiCommand(),
+      extensionPaths: preset?.packages ?? [],
+      preloadedSkills,
       credentialOwner: this.options.credentialOwner ?? "bivy",
       allowModelNetwork,
     };

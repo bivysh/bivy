@@ -3,9 +3,10 @@
 /**
  * Versioned, declarative Bivy plugin manifest.
  *
- * v1alpha1 intentionally supports only agent contributions. A manifest never
- * executes code inside the daemon: process agents are ordinary child processes;
- * ACP agents are launched through Bivy's existing out-of-process ACP bridge.
+ * v1alpha1 intentionally supports only agent contributions. Process agents are
+ * ordinary child processes; ACP agents are launched through Bivy's existing
+ * out-of-process ACP bridge; Pi agents are Pi sessions with extra Pi packages,
+ * loaded the same way as packages listed in Pi's own settings.
  */
 import { parse as parseSemver, satisfies, valid, validRange } from "semver";
 import { parse as parseYaml } from "yaml";
@@ -49,13 +50,23 @@ export interface AcpAgentAdapter {
   args?: string[];
 }
 
+export interface PiAgentAdapter {
+  kind: "pi";
+  /** Pi packages (local directories or files) to load into the agent's sessions. */
+  packages: string[];
+  /** Skills from those packages whose instructions are always in the system prompt. */
+  skills?: string[];
+}
+
+export type PluginAgentAdapter = ProcessAgentAdapter | AcpAgentAdapter | PiAgentAdapter;
+
 export interface PluginAgentContribution {
   id: string;
   name: string;
   description?: string;
   hidden?: boolean;
   authOwner?: PluginAuthOwner;
-  adapter: ProcessAgentAdapter | AcpAgentAdapter;
+  adapter: PluginAgentAdapter;
 }
 
 export interface PluginManifest {
@@ -90,6 +101,10 @@ export interface PluginCompatibilityResult {
 }
 
 const ID_RE = /^[a-z][a-z0-9-]{1,47}$/;
+/** Agent Skills names: lowercase letters, digits and single hyphens, at most 64 characters. */
+const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+/** Pi package sources that Pi would download. Plugin installation never downloads software. */
+const REMOTE_PACKAGE_RE = /^(?:npm:|git:|git\+|https?:\/\/|ssh:\/\/|git@)/i;
 const VERSION_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const PARSER_IDS = new Set([
   "bivy-protocol",
@@ -250,6 +265,20 @@ function parseAcpAdapter(raw: Record<string, unknown>, at: string, errors: strin
   return command ? { kind: "acp", command, ...(args ? { args } : {}) } : undefined;
 }
 
+function parsePiAdapter(raw: Record<string, unknown>, at: string, errors: string[]): PiAgentAdapter | undefined {
+  rejectUnknown(raw, ["kind", "packages", "skills"], at, errors);
+  const packages = stringList(raw.packages, `${at}.packages`, errors, { maxItems: 20, maxLength: 1000 });
+  if (!packages?.length) errors.push(`${at}.packages must list at least one Pi package`);
+  for (const source of packages ?? []) {
+    if (!source.trim()) errors.push(`${at}.packages entries must not be empty`);
+    else if (REMOTE_PACKAGE_RE.test(source)) errors.push(`${at}.packages entry ${source} is remote; install or clone the package first and reference its local path`);
+  }
+  const skills = stringList(raw.skills, `${at}.skills`, errors, { maxItems: 20, maxLength: 64 });
+  for (const name of skills ?? []) if (!SKILL_NAME_RE.test(name)) errors.push(`${at}.skills entry ${name} is not a valid skill name`);
+  if (!packages?.length) return undefined;
+  return { kind: "pi", packages, ...(skills?.length ? { skills } : {}) };
+}
+
 function parseAgent(value: unknown, index: number, errors: string[]): PluginAgentContribution | undefined {
   const at = `contributes.agents[${index}]`;
   const raw = object(value);
@@ -268,11 +297,12 @@ function parseAgent(value: unknown, index: number, errors: string[]): PluginAgen
     errors.push(`${at}.authOwner must be agent, bivy, or mixed`);
   }
   const adapterRaw = object(raw.adapter);
-  let adapter: ProcessAgentAdapter | AcpAgentAdapter | undefined;
+  let adapter: PluginAgentAdapter | undefined;
   if (!adapterRaw) errors.push(`${at}.adapter must be an object`);
   else if (adapterRaw.kind === "process") adapter = parseProcessAdapter(adapterRaw, `${at}.adapter`, errors);
   else if (adapterRaw.kind === "acp") adapter = parseAcpAdapter(adapterRaw, `${at}.adapter`, errors);
-  else errors.push(`${at}.adapter.kind must be process or acp`);
+  else if (adapterRaw.kind === "pi") adapter = parsePiAdapter(adapterRaw, `${at}.adapter`, errors);
+  else errors.push(`${at}.adapter.kind must be process, acp or pi`);
   if (!id || !name || !adapter) return undefined;
   return {
     id,
