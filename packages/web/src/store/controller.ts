@@ -24,6 +24,7 @@ import {
   fetchCentralGithubApp,
   createCentralGithubInstall,
   managedCredentialStatus,
+  createManagedAuthRunner,
   ensureManagedSessionDefaults,
   ensureManagedAutomationTarget,
   launchManagedSessionMachine,
@@ -943,6 +944,18 @@ export class AppController {
     await this.retryPendingLaunch(activeId);
   }
   ensureManagedSessionDefaults() { return ensureManagedSessionDefaults(this.local); }
+
+  /** Onboarding chose Bivy Cloud: start the account's cloud machine right away,
+   *  so the model sign-in runs on it while that is all the user waits for.
+   *  Sign-ins made there are kept for later cloud runs (maybeGrantManagedCredential). */
+  async startCloudOnboarding(): Promise<void> {
+    const { machine } = await createManagedAuthRunner(this.local);
+    if (!machine.nodeId) throw new Error("Bivy Cloud started without a machine id.");
+    this.managedCredentialSetupNodes.add(machine.nodeId);
+    this.store.setDraftEphemeralConfig(null);
+    void this.refreshNodes();
+    await this.connectToNode(machine.nodeId, 180_000);
+  }
   createNodeClaim() { return createAccountNodeClaim(this.local); }
   listNodeClaims() { return fetchAccountNodeClaims(this.local); }
   revokeNodeClaim(id: string) { return revokeAccountNodeClaim(this.local, id); }
@@ -3347,7 +3360,7 @@ export class AppController {
   saveApiKey(provider: string, key: string): Promise<void> { return this.credentialsModelsCoordinator.saveApiKey(provider, key); }
   removeProvider(provider: string): void { this.credentialsModelsCoordinator.removeProvider(provider); }
   resetOauth(provider: string): void { this.credentialsModelsCoordinator.resetOauth(provider); }
-  startOauth(provider: string, label?: string): void { this.credentialsModelsCoordinator.startOauth(provider, label); }
+  startOauth(provider: string, label?: string, sync?: "account" | "node"): void { this.credentialsModelsCoordinator.startOauth(provider, label, sync); }
   openOauthOnNode(id: string): Promise<{ opened: boolean; error?: string }> { return this.credentialsModelsCoordinator.openOauthOnNode(id); }
   submitOauthCode(id: string, code: string): void { this.credentialsModelsCoordinator.submitOauthCode(id, code); }
   listCredentialRecords(): void { this.credentialsModelsCoordinator.listCredentials(); }

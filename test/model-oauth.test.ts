@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createCredentialVault } from "../src/runtime/credential-store.js";
+import { exportSyncableRecords } from "../src/credentials/api.js";
 import {
   extractAuthCode,
   escapeOAuthHtml,
@@ -120,6 +121,14 @@ await check("Anthropic auth-code login persists a labeled OAuth account", async 
   assert.equal((cred as { access?: string }).access, "at-1");
   assert.equal((cred as { refresh?: string }).refresh, "rt-1");
   assert.equal(await createCredentialVault(dir).read("anthropic"), undefined, "a named OAuth account does not overwrite the default");
+});
+
+await check("a login kept on this machine never joins the account's synced vault", async () => {
+  const dir = tmpDir();
+  stubFetch(() => ({ json: { access_token: "at-1", refresh_token: "rt-1", expires_in: 3600 } }));
+  await loginModelOAuth(dir, "anthropic", pasteInteraction("acode#somestate"), "default", "node");
+  assert.equal((await createCredentialVault(dir).readRecord("anthropic", "default"))?.sync, "node");
+  assert.deepEqual(Object.keys(await exportSyncableRecords(dir)), []);
 });
 
 await check("OpenAI Codex device-code login extracts the account id from the JWT access token", async () => {

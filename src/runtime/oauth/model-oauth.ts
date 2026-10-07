@@ -14,7 +14,7 @@ import http from "node:http";
 import { randomBytes } from "node:crypto";
 import { createPkce } from "../../integrations/oauth.js";
 import { createCredentialVault, type OAuthCredential } from "../credential-store.js";
-import { DEFAULT_LABEL } from "../../credentials/records.js";
+import { DEFAULT_LABEL, type SyncPolicy } from "../../credentials/records.js";
 import { getModelOAuthProvider, type ModelOAuthProvider } from "./model-oauth-providers.js";
 
 // --- Bivy-owned login interaction (same shape Pi used, now ours) -------------
@@ -428,9 +428,10 @@ export { isNativeOAuthProvider, nativeOAuthProviderIds } from "./model-oauth-pro
 /**
  * Run a provider's OAuth login natively and persist the credential into Bivy's
  * store. The interaction (prompt/notify) is caller-supplied; the whole flow —
- * PKCE, callback server, token exchange — is Bivy's.
+ * PKCE, callback server, token exchange — is Bivy's. `sync: "node"` keeps the
+ * login on this machine: it is never part of the account's synced vault.
  */
-export async function loginModelOAuth(credsDir: string, providerId: string, interaction: AuthInteraction, label: string = DEFAULT_LABEL): Promise<void> {
+export async function loginModelOAuth(credsDir: string, providerId: string, interaction: AuthInteraction, label: string = DEFAULT_LABEL, sync?: SyncPolicy): Promise<void> {
   const provider = getModelOAuthProvider(providerId);
   if (!provider) throw new Error(`Provider "${providerId}" does not support subscription login`);
   const tokens =
@@ -438,7 +439,7 @@ export async function loginModelOAuth(credsDir: string, providerId: string, inte
     : provider.flow === "openai_codex_device_code" ? await loginOpenAICodexDeviceCode(provider, interaction)
     : await loginAuthCode(provider, interaction);
   const credential: OAuthCredential = { type: "oauth", access: tokens.access, refresh: tokens.refresh, expires: tokens.expires, refreshedAt: tokens.refreshedAt, ...(tokens.accountId ? { accountId: tokens.accountId } : {}) };
-  await createCredentialVault(credsDir).modifyRecord(providerId, label, async () => credential);
+  await createCredentialVault(credsDir).modifyRecord(providerId, label, async () => credential, sync);
 }
 
 /** Exchange the refresh token for a fresh credential (network call; throws on failure). */

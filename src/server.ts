@@ -3300,7 +3300,9 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   // `auth.oauth.progress|done|error` already mirror to the relay via broadcast.
   async "provider.oauth.start"(msg) {
     try {
-      const state = await startOAuthLogin(String(msg.provider ?? msg.id ?? ""), String(msg.label ?? "default"));
+      // `sync: "node"` keeps the login on this machine (never in the synced vault).
+      const sync = msg.sync === "node" || msg.sync === "account" ? msg.sync : undefined;
+      const state = await startOAuthLogin(String(msg.provider ?? msg.id ?? ""), String(msg.label ?? "default"), sync);
       relay?.sendEvent({
         type: "provider.oauth.started",
         id: state.id,
@@ -6233,7 +6235,7 @@ function chooseHeadlessOAuthOption(prompt: any) {
   );
 }
 
-async function startOAuthLogin(provider: string, label: string = "default") {
+async function startOAuthLogin(provider: string, label: string = "default", sync?: "account" | "node") {
   if (!isNativeOAuthProvider(provider)) {
     throw new Error(`Provider ${provider} does not support browser/subscription login`);
   }
@@ -6292,7 +6294,7 @@ async function startOAuthLogin(provider: string, label: string = "default") {
     throw new Error(`${input.message} Use terminal login for this provider step.`);
   };
 
-  loginModelOAuth(credsDir, provider, { signal: abort.signal, notify, prompt }, label)
+  loginModelOAuth(credsDir, provider, { signal: abort.signal, notify, prompt }, label, sync)
     .then(() => {
       state.status = "done";
       settleInitial();

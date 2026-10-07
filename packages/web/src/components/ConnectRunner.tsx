@@ -17,10 +17,13 @@ export function ConnectRunner({
   nodes,
   onPickNode,
   onRefresh,
+  onUseCloud,
 }: {
   nodes: AccountNode[];
   onPickNode: (nodeId: string) => void;
   onRefresh: () => void;
+  /** Offered when the deployment has a cloud: run there instead. */
+  onUseCloud?: () => void;
 }) {
   // Ephemeral machines (id `eph-…`) live in their own launcher, not the
   // persistent node list — mirror the node switcher so a booted ephemeral runner
@@ -91,7 +94,8 @@ export function ConnectRunner({
           <MachineInstallInstructions onEnrolled={setEnrolledNodeId} />
         </div>
       </div>
-      <p className="connect-sub">Next: choose a repository, send your first task, and review the result right here.</p>
+      <p className="connect-sub">Next: connect your AI, send your first task, and review the result right here.</p>
+      {onUseCloud && <button type="button" className="btn link connect-option-link" onClick={onUseCloud}>Use Bivy Cloud instead</button>}
     </section>
   );
 }
