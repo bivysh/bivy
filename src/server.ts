@@ -2429,7 +2429,7 @@ const notAgentServers = (offers: AppOffer[]) => offers.filter((offer) => !agentC
 const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   start: async (spec) => {
     let failure = "Could not start the app terminal.";
-    const id = await runTerms.openRunTerminal({ ...spec, agent: "app", label: spec.name }, (event) => {
+    const id = await runTerms.openRunTerminal({ ...spec, agent: "app", label: spec.name, background: true }, (event) => {
       const e = event as { type?: string; error?: string };
       if (e.type === "terminal.error" && e.error) failure = e.error;
     });
