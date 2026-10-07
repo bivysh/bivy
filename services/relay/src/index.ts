@@ -230,7 +230,10 @@ function authOk(req: { headers: Record<string, string | string[] | undefined> })
 
 // One domain per deployment/shard, advertised automatically to admitted nodes.
 // No user, agent, app manifest, or node needs DNS/TLS/port configuration.
-const previews = process.env.RELAY_PREVIEW_ORIGIN ? new PreviewRelay(process.env.RELAY_PREVIEW_ORIGIN) : undefined;
+const previews = process.env.RELAY_PREVIEW_ORIGIN
+  ? new PreviewRelay(process.env.RELAY_PREVIEW_ORIGIN, undefined,
+    async (route) => (await introspect("/internal/preview-wake", { route }))?.waking === true)
+  : undefined;
 // Metrics get their own listener (METRICS_PORT/METRICS_HOST, loopback by
 // default), never the public port: a reverse proxy in front (Caddy,
 // kamal-proxy) forwards every path. See docs/configuration.md.

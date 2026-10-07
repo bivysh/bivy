@@ -46,6 +46,12 @@ export interface NodeProviderSummary {
   expiresAt?: number;
 }
 
+/** The label the relay gives a node's preview hosts: `<app>-<route>.<domain>`.
+ * Must match services/relay/src/preview.ts. */
+export function previewRoute(nodeId: string): string {
+  return createHash("sha256").update(nodeId).digest("hex").slice(0, 24);
+}
+
 export interface NodeRecord {
   id: string; // the node's self-generated nodeId
   accountId: string;
@@ -1292,6 +1298,8 @@ export interface NodeRepository {
   setNodeMilestone(nodeId: string, milestone: string, at: string): Promise<void>;
   /** Forget the previous boot's milestones before the machine starts again. */
   resetNodeMilestones(nodeId: string): Promise<void>;
+  /** The node a relay preview host label belongs to (see previewRoute). */
+  nodeByPreviewRoute(route: string): Promise<NodeRecord | undefined>;
   // Owner-declared capability tags (see NodeRecord.capabilities) — overwritten
   // wholesale by the owning node on every config change, same trust tier as
   // setNodeProviders. Never verified; a stale/offline declaration is kept as-is.

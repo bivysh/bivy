@@ -78,8 +78,9 @@ export async function bootCloudComputer(
     e2eKeyB64: Buffer.from(roomKey, "base64url").toString("base64"),
     ttlMinutes: input.awakeCapMinutes,
     provider: "fly",
+    // Sleep after the idle window, not when a turn ends: previews, a reopened
+    // app and the next message should find it awake.
     sleepOnIdle: true,
-    teardownOnAgentFinish: true,
     // One machine serves the user's sessions and their automations.
     hostedTasks: true,
     nodeLabel: ephemeralNodeLabel(nodeId),

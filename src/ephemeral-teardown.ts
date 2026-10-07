@@ -55,7 +55,7 @@ export interface TeardownState {
   everBusy: boolean;
   /** Any session is currently running a turn. */
   anyWorking: boolean;
-  /** Any session has a remote client attached (a device is watching live). */
+  /** A device is watching a session live, or someone is using a preview. */
   anyRemoteActive: boolean;
   /** In-flight hosted queue work items. */
   inFlightWork: number;

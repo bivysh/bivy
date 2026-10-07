@@ -7812,7 +7812,7 @@ function evaluateEphemeralTeardown(): void {
   const records = new Set(openSessions.values());
   const anyWorking = [...records].some((r) => r.isWorking);
   const anyRemoteActive = clients.size > 0 || (relay?.clientCount ?? 0) > 0
-    || [...records].some((r) => r.remoteActive);
+    || [...records].some((r) => r.remoteActive) || remotePreview.inUse;
   const inFlightWork = controlPlanePoller?.inFlightCount() ?? 0;
   if (anyWorking || anyRemoteActive || inFlightWork > 0) {
     ephemeralEverBusy = true;

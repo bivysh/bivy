@@ -70,6 +70,7 @@ import {
   type RunEvidencePatch,
   hashToken,
   disambiguateNodeName,
+  previewRoute,
   cleanNodeName,
   normalizeWorkLabel,
   clampInstallCount,
@@ -330,6 +331,9 @@ export class PostgresStore implements ControlPlaneStore {
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS providers JSONB;
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS bootstrap_status JSONB;
       ALTER TABLE nodes ADD COLUMN IF NOT EXISTS milestones JSONB;
+      -- The relay's preview host label for this node (see previewRoute), so a
+      -- preview request for a sleeping node can find the node to wake.
+      ALTER TABLE nodes ADD COLUMN IF NOT EXISTS preview_route TEXT;
       -- Manually declared, owner-asserted capability tags (see NodeRecord.capabilities
       -- in store.ts) — same trust tier as providers: plaintext, self-reported, never
       -- verified. Overwritten wholesale by the owning node on every change.
@@ -793,6 +797,7 @@ export class PostgresStore implements ControlPlaneStore {
 
       CREATE INDEX IF NOT EXISTS idx_nodes_account ON nodes(account_id);
       CREATE INDEX IF NOT EXISTS idx_nodes_token ON nodes(enrollment_token_hash);
+      CREATE INDEX IF NOT EXISTS idx_nodes_preview_route ON nodes(preview_route);
       CREATE INDEX IF NOT EXISTS idx_sessions_account ON sessions(account_id);
       CREATE INDEX IF NOT EXISTS idx_paired_devices_account ON paired_devices(account_id);
       CREATE INDEX IF NOT EXISTS idx_session_index_account ON session_index(account_id);
@@ -1203,13 +1208,14 @@ export class PostgresStore implements ControlPlaneStore {
       }
 
       const { rows } = await client.query(
-        `INSERT INTO nodes (id, account_id, name, enrollment_token_hash)
-         VALUES ($1, $2, $3, $4)
+        `INSERT INTO nodes (id, account_id, name, enrollment_token_hash, preview_route)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (id) DO UPDATE
            SET name = EXCLUDED.name,
-               enrollment_token_hash = EXCLUDED.enrollment_token_hash
+               enrollment_token_hash = EXCLUDED.enrollment_token_hash,
+               preview_route = EXCLUDED.preview_route
          RETURNING *`,
-        [nodeId, accountId, safeName, tokenHash],
+        [nodeId, accountId, safeName, tokenHash, previewRoute(nodeId)],
       );
       await client.commit();
       const { enrollmentTokenHash: _h, ...node } = mapNode(rows[0]);
@@ -1293,6 +1299,11 @@ export class PostgresStore implements ControlPlaneStore {
 
   async resetNodeMilestones(nodeId: string): Promise<void> {
     await this.query(`UPDATE nodes SET milestones = NULL WHERE id = $1`, [nodeId]);
+  }
+
+  async nodeByPreviewRoute(route: string): Promise<NodeRecord | undefined> {
+    const { rows } = await this.query(`SELECT * FROM nodes WHERE preview_route = $1`, [route]);
+    return rows[0] ? mapNode(rows[0]) : undefined;
   }
 
   async setNodeName(nodeId: string, name: string): Promise<NodeRecord | undefined> {

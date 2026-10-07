@@ -5144,6 +5144,16 @@ app.post("/internal/introspect/session", requireRelay, asyncHandler(async (req, 
   res.json({ accountId: ticket.accountId, nodeId: ticket.nodeId });
 }));
 
+// A preview link was opened for a node that isn't connected. If it's a
+// sleeping cloud computer, start it; the relay shows a "starting" page.
+app.post("/internal/preview-wake", requireRelay, asyncHandler(async (req, res) => {
+  const route = String(req.body?.route ?? "");
+  const node = /^[a-f0-9]{24}$/.test(route) ? await store.nodeByPreviewRoute(route) : undefined;
+  const waking = Boolean(node && !node.online && isCloudComputerNode(node.accountId, node.id) && await accountMachineMode(node.accountId));
+  if (waking) void wakeCloudComputerIfAsleep(node!.accountId);
+  res.json({ waking });
+}));
+
 app.post("/internal/node-status", requireRelay, asyncHandler(async (req, res) => {
   const nodeId = String(req.body?.nodeId ?? "");
   await store.setNodeOnline(nodeId, Boolean(req.body?.online));

@@ -28,8 +28,8 @@ function request(port: number, host: string, url: string, options: { method?: st
     req.on("error", reject); req.end(options.body);
   });
 }
-async function fixture() {
-  const previews = new PreviewRelay("https://{app}.preview.example.net", 3000);
+async function fixture(wake?: (route: string) => Promise<boolean>) {
+  const previews = new PreviewRelay("https://{app}.preview.example.net", 3000, wake);
   const wss = new WebSocketServer({ noServer: true });
   const server = http.createServer((req, res) => { if (!previews.handle(req, res)) { res.writeHead(404); res.end(); } });
   server.on("upgrade", (req, socket, head) => {
@@ -130,6 +130,27 @@ test("host ownership, one-use stream tickets, offline routing and relay API isol
     const closed = once(a.control, "close"); a.control.close(); await closed;
     assert.equal(a.service.list("session").previewAvailable, false);
     assert.equal((await request(f.port, access.url.host, "/", { headers: { cookie: access.cookie } })).status, 503);
+  } finally { await f.close(); }
+});
+
+test("a preview for a sleeping node wakes it once and shows a page that reloads until it's back", async () => {
+  const woken: string[] = [];
+  const f = await fixture(async (route) => { woken.push(route); return true; });
+  try {
+    const a = await f.node("node-a");
+    const app = a.service.publish("session", f.dir, { version: 1, name: "Sleepy", views: [{ kind: "web", name: "Site", source: { kind: "static", directory: "." } }] });
+    const access = await grant(f.port, new URL(a.delivery.open(app.views[0].id)));
+    const closed = once(a.control, "close"); a.control.close(); await closed;
+    for (let i = 0; i < 3; i++) {
+      const page = await request(f.port, access.url.host, "/", { headers: { cookie: access.cookie } });
+      assert.equal(page.status, 503);
+      assert.match(page.body.toString(), /Starting this preview/);
+      assert.equal(page.headers["retry-after"], "4");
+    }
+    assert.equal(woken.length, 1, "reloads while it starts don't ask again");
+    assert.match(access.url.host, new RegExp(`-${woken[0]}\\.`), "the wake names the node's preview route");
+    assert.equal((await request(f.port, "unknown.preview.example.net", "/")).status, 503);
+    assert.equal(woken.length, 1, "a host without a node route wakes nothing");
   } finally { await f.close(); }
 });
 
