@@ -196,7 +196,10 @@ for (const theme of themes) {
       const { controller } = await import(module);
       const w = window as unknown as { oauth: unknown[][] };
       w.oauth = [];
-      controller.startOauth = (...args: unknown[]) => { w.oauth.push(args); };
+      controller.startOauth = (...args: unknown[]) => {
+        w.oauth.push(args);
+        controller.store.apply({ type: "provider.oauth.started", id: "login", provider: args[0], status: "waiting", authUrl: "https://example.invalid/authorize", usesCallbackServer: true });
+      };
       // The relay connection itself needs a live machine; the store sees it come online.
       controller.connectToNode = async (id: string) => {
         controller.store.setCurrentNode(id);
@@ -225,6 +228,11 @@ for (const theme of themes) {
     const [provider, , sync] = await page.evaluate(() => (window as unknown as { oauth: unknown[][] }).oauth[0]);
     expect([provider, sync ?? null]).toEqual(["openai-codex", null]);
     await expect(page.getByText("Bivy keeps a copy")).toBeVisible();
+    // The open sign-in form makes the card tall; it scrolls inside the space above
+    // the composer instead of running off the screen.
+    await expect(page.getByRole("button", { name: "Submit" })).toBeVisible();
+    await page.setViewportSize({ width: page.viewportSize()!.width, height: 600 });
+    expect(await page.locator(".readiness").evaluate((card) => card.getBoundingClientRect().bottom <= innerHeight)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`connect-ai-cloud-${theme}.png`), fullPage: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });

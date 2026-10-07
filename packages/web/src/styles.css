@@ -3412,6 +3412,9 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
 /* Setup checks and the ready-to-message confirmation. */
 /* Lines up with the composer below (the 800px chat column, less its padding). */
 .readiness { box-sizing: border-box; width: min(100% - 2 * var(--space-3), 800px - 2 * var(--space-3)); margin: var(--space-3) auto 0; }
+/* The page itself doesn't scroll: a tall first-run card (an open sign-in form)
+   shrinks to the space above the composer and scrolls on its own. */
+.readiness { flex-shrink: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .readiness-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .readiness-title { font-weight: 600; font-size: var(--text-base); letter-spacing: -0.01em; }
 .readiness-dismiss {
