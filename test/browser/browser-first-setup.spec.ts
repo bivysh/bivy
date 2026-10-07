@@ -180,6 +180,8 @@ for (const theme of themes) {
     for (const url of ["**/nodes", "**/account/**", "**/sessions", "**/devices"]) await page.route(url, route => route.fulfill({ json: [] }));
     await page.route("**/runtime-config.js", route => route.fulfill({ contentType: "application/javascript", body: "window.__BIVY_RUNTIME_CONFIG__ = { ephemeralMachinesEnabled: true };" }));
     await page.route("**/account/github/central-app", route => route.fulfill({ json: { configured: false, managedComputeAvailable: true, installations: [] } }));
+    let installCommands = 0;
+    await page.route("**/account/node-claims", route => { if (route.request().method() === "POST") installCommands++; return route.fulfill({ json: [] }); });
     let releaseMachine = () => {};
     const machineStarted = new Promise<void>((resolve) => { releaseMachine = resolve; });
     let runnerRequests = 0;
@@ -206,6 +208,8 @@ for (const theme of themes) {
       };
     });
     await expect(page.getByRole("heading", { name: "Where should your agents run?" })).toBeVisible({ timeout: 20_000 });
+    // The install screen never flashed before the choice (it would create an install command).
+    expect(installCommands).toBe(0);
     await page.screenshot({ path: testInfo.outputPath(`place-choice-${theme}.png`), fullPage: true });
     await page.getByRole("button", { name: /Bivy Cloud/ }).click();
     // The AI sign-in is on screen while the machine starts.

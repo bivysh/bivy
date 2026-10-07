@@ -781,14 +781,19 @@ export function App() {
   const firstRun = !state.activeSession.activeSessionId && state.sessionIndex.sessions.length === 0;
   const [runPlace, setRunPlace] = useState<RunPlace | null>(readRunPlace);
   const [aiDone, setAiDone] = useState(connectAiDone);
-  const [cloudAvailable, setCloudAvailable] = useState(false);
+  // null until the deployment says whether it offers a cloud, so the install
+  // screen (which creates an install command) never flashes before the choice.
+  const [cloudAvailable, setCloudAvailable] = useState<boolean | null>(null);
   // Non-null while the cloud machine is being started, with the error if it failed.
   const [cloudStart, setCloudStart] = useState<{ error?: string } | null>(null);
   const askCloud = EPHEMERAL_MACHINES_ENABLED && !controller.direct && state.connection.signedIn && firstRun;
   useEffect(() => {
     if (!askCloud) return;
     let live = true;
-    controller.centralGithubApp().then((view) => { if (live) setCloudAvailable(view.managedComputeAvailable === true); }, () => {});
+    controller.centralGithubApp().then(
+      (view) => { if (live) setCloudAvailable(view.managedComputeAvailable === true); },
+      () => { if (live) setCloudAvailable(false); },
+    );
     return () => { live = false; };
   }, [askCloud]);
   const startCloud = useCallback(() => {
@@ -800,7 +805,7 @@ export function App() {
       (error: unknown) => setCloudStart({ error: error instanceof Error ? error.message : String(error) }),
     );
   }, []);
-  const choosingPlace = needsNode && cloudAvailable && runPlace !== "own" && !state.connection.nodes.some((node) => !node.id.startsWith("eph-"));
+  const choosingPlace = needsNode && cloudAvailable === true && runPlace !== "own" && !state.connection.nodes.some((node) => !node.id.startsWith("eph-"));
   const needsNodeTitle = choosingPlace || cloudStart ? "Get started" : "Connect a Machine";
   const choosePlace = useCallback((place: RunPlace) => {
     if (place === "cloud") return startCloud();
@@ -1123,12 +1128,12 @@ export function App() {
               <ConnectAI state={state} place="cloud" startError={cloudStart.error} onRetry={startCloud} onDone={() => setAiDone(true)} />
             ) : choosingPlace ? (
               <PlaceChoice onChoose={choosePlace} />
-            ) : (
+            ) : askCloud && cloudAvailable === null ? null : (
               <ConnectRunner
                 nodes={state.connection.nodes}
                 onPickNode={(nodeId) => controller.switchNode(nodeId)}
                 onRefresh={() => controller.refreshNodes()}
-                onUseCloud={cloudAvailable ? startCloud : undefined}
+                onUseCloud={cloudAvailable === true ? startCloud : undefined}
               />
             )}
           </div>
