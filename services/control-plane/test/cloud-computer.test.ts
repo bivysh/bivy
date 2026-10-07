@@ -55,6 +55,7 @@ async function main() {
   // Fake extension: one machine per account; records what Core asked for.
   const calls: Array<{ path: string; body: any }> = [];
   let deny = false;
+  let acquireDelayMs = 0;
   const extension = http.createServer((request, response) => {
     let raw = "";
     request.on("data", (chunk) => { raw += chunk; });
@@ -73,7 +74,8 @@ async function main() {
         "/v1/account": { presentation: {} },
       };
       response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify(answers[request.url ?? ""] ?? {}));
+      const delay = request.url === "/v1/compute/acquire" ? acquireDelayMs : 0;
+      setTimeout(() => response.end(JSON.stringify(answers[request.url ?? ""] ?? {})), delay);
     });
   });
   await new Promise<void>((resolve) => extension.listen(0, "127.0.0.1", resolve));
@@ -114,6 +116,10 @@ async function main() {
   expect(first.status === 201 && first.json?.machine?.nodeId === nodeId && typeof first.json?.roomKey === "string", "launching asks the extension for the account's cloud computer");
   expect(second.json?.roomKey === first.json?.roomKey, "every launch gets the same node key");
   expect(calls.some((c) => c.path === "/v1/compute/acquire" && c.body.purpose === "interactive" && c.body.runtimeId === "claude-code-sdk"), "the extension learns the purpose and agent");
+  acquireDelayMs = 6_000;
+  const slow = await req(port, "POST", "/account/managed-machines", { configId: cloud.id, requestId: "r-slow" }, token);
+  expect(slow.status === 201, "a launch that takes the provider longer than a policy call still succeeds");
+  acquireDelayMs = 0;
   deny = true;
   const denied = await req(port, "POST", "/account/managed-machines", { configId: cloud.id, requestId: "r3" }, token);
   expect(denied.status === 403 && denied.json?.code === "trial_exhausted", "a refusal returns the deployment's decision");

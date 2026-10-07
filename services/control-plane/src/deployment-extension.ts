@@ -3,6 +3,10 @@
 
 import type { ComputeProfile, ComputePurpose, DeploymentComputeSource } from "./deployment-compute.js";
 
+/** Creating or starting a cloud computer takes provider round trips well past
+ * the 5 s policy-call budget. Kept under the usual 30 s reverse-proxy timeout. */
+const ACQUIRE_TIMEOUT_MS = 25_000;
+
 /**
  * Deployment-neutral hooks for operators that compose Core with an external
  * account or admission service. With no URL configured every operation is
@@ -183,7 +187,7 @@ export class DeploymentExtension {
    * A refusal comes back as a policy decision. */
   async computeAcquire(accountId: string, input: { purpose: string; requestId: string; runtimeId?: string; sessionId?: string }): Promise<CloudComputerAcquire> {
     if (!this.url) throw new Error("No deployment compute is configured");
-    const result = await this.request("/v1/compute/acquire", { subject: { accountId }, ...input }) as Partial<DeploymentDecision> & { nodeId?: unknown; state?: unknown };
+    const result = await this.request("/v1/compute/acquire", { subject: { accountId }, ...input }, ACQUIRE_TIMEOUT_MS) as Partial<DeploymentDecision> & { nodeId?: unknown; state?: unknown };
     if (result.allowed === false) return { allowed: false, decision: result as DeploymentDecision };
     if (typeof result.nodeId !== "string" || !result.nodeId) throw new Error("Deployment extension returned an invalid compute acquisition");
     return { allowed: true, nodeId: result.nodeId, state: typeof result.state === "string" ? result.state : "launching" };
@@ -209,12 +213,12 @@ export class DeploymentExtension {
     return result.released === true;
   }
 
-  private async request(path: string, body: unknown): Promise<unknown> {
+  private async request(path: string, body: unknown, timeoutMs = 5_000): Promise<unknown> {
     const response = await this.fetchImpl(`${this.url}${path}`, {
       method: "POST",
       headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(5_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const data = await response.json().catch(() => ({})) as { error?: string };
     if (!response.ok && response.status !== 429) throw new Error(data.error || `Deployment extension failed (${response.status})`);
