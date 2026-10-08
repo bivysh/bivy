@@ -81,6 +81,8 @@ jobs:
             --file deploy/Dockerfile.ephemeral-runner \
             --build-arg "GITHUB_SHA=$GITHUB_SHA" \
             --build-arg "BIVY_RUNNER_AGENT=$VARIANT" \
+            --build-arg "OS_PATCH_EPOCH=$(date -u +%G-W%V)" \
+            --pull \
             --push \
             "${tags[@]}" \
             --label "org.opencontainers.image.revision=$GITHUB_SHA" \

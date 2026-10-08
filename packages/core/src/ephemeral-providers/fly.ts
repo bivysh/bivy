@@ -211,7 +211,10 @@ export const flyProvider: ProviderAdapter = {
       method: "POST",
       url: "https://api.machines.dev/v1/apps",
       headers: { ...bearer(token), "content-type": "application/json" },
-      body: { app_name: app, org_slug: org },
+      // Apps in one Fly org share a private network by default. Each launch
+      // gets its own, so machines from different launches can't reach each
+      // other's ports or enumerate each other through `.internal` DNS.
+      body: { app_name: app, org_slug: org, network: app },
     });
     // Fly returns 422 (not only 409) for an existing app name. Accept only
     // that specific validation conflict; inventory below must still prove
