@@ -249,7 +249,13 @@ export function parseAttrs(source: string): Record<string, string | true> {
  * though `![](https://…)` accepts one.
  */
 export function parseComponentDirective(line: string): ComponentPlacement | null {
-  const m = /^::([a-z][\w-]{0,31})[ \t]*(\{[^}\n]{0,512}\})?[ \t]*$/i.exec(String(line || ""));
+  // Surrounding whitespace is trimmed rather than matched, leaving exactly ONE
+  // whitespace quantifier in the pattern. Two of them around an optional group
+  // (`::name[ \t]*{…}?[ \t]*$`) is ambiguous — a run of tabs can be split
+  // between them in as many ways as it is long, which is quadratic on a line
+  // like `::a` followed by whitespace, and this runs on agent-authored text.
+  // See imagePattern's note; the same rule applies to every pattern here.
+  const m = /^::([a-z][\w-]{0,31})[ \t]{0,32}(\{[^}\n]{0,512}\})?$/i.exec(String(line || "").trim());
   if (!m || !LEAF_NAMES.has((m[1] ?? "").toLowerCase())) return null;
   const { src, ...attrs } = parseAttrs(m[2] ?? "");
   const ref = typeof src === "string" ? unescapeComponentRef(src) : "";

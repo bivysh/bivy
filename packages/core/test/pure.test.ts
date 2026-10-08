@@ -253,6 +253,15 @@ describe("component directives", () => {
       attrs: { caption: "Last quarter", id: "fig-1" },
     });
   });
+  it("allows surrounding and internal whitespace, in bounded time", () => {
+    expect(parseComponentDirective("  ::view {src=a.csv}  ")?.ref).toBe("a.csv");
+    // The failing path is the quadratic one: with two whitespace runs around
+    // the optional brace group, a long run can be split between them in as many
+    // ways as it is long. Trailing junk forces that path.
+    const started = Date.now();
+    expect(parseComponentDirective(`::a${"\t".repeat(50_000)}x`)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
   it("refuses a directive written as prose, or pointing anywhere but the workspace", () => {
     // Block-level by construction: mid-sentence is prose, and a half-streamed
     // line cannot render until it is complete.
