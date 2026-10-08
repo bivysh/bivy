@@ -20,8 +20,9 @@ import type { EventLog } from "./event-log.js";
 import { mergeBases } from "./event-log.js";
 import type { AttachmentStore } from "./attachment-store.js";
 import { thinkingTextFromContent } from "./transcript-merge.js";
-import { extractInlineImageUrls, extractWorkspaceImagePaths, fetchInlineImage, isFetchImageError, inlineImageDisplayName, assistantTextForImageScan } from "./inline-image-fetch.js";
+import { extractInlineImageUrls, extractWorkspaceRefs, fetchInlineImage, isFetchImageError, inlineImageDisplayName, assistantTextForImageScan } from "./inline-image-fetch.js";
 import { planAttachment, isAttachPlanError } from "./attach-to-chat.js";
+import type { ReferenceSyntax } from "./message-components.js";
 import { historyDelta, type HistoryCursor } from "../history-sync.js";
 import { withToolDetails } from "../runtime/tool-call-map.js";
 import type { RuntimeMessage, RuntimeEvent } from "../runtime/index.js";
@@ -83,7 +84,7 @@ export interface TranscriptPersistence {
   resolveInlineImages(record: PersistSession): void;
   /** `workspaceDir` is the confinement root — the caller's resolved working
    *  directory for this session (worktree path, cwd, or workspace). */
-  resolveWorkspaceImages(record: PersistSession, workspaceDir: string): void;
+  resolveWorkspaceRefs(record: PersistSession, workspaceDir: string): void;
   conversationMessages(record: PersistSession): RuntimeMessage[];
   forkMessages(record: PersistSession): RuntimeMessage[];
   buildHistoryEvent(opts: BuildHistoryEventOptions): Record<string, unknown>;
@@ -144,12 +145,12 @@ function thinkingTextFromEvent(event: Record<string, unknown>): string {
 
 const INLINE_IMAGE_RETRY_COOLDOWN_MS = 10 * 60 * 1000;
 
-/** Ceiling for one workspace image copied into the transcript. Matches the
+/** Ceiling for one workspace file copied into the transcript. Matches the
  *  remote cap (MAX_INLINE_IMAGE_BYTES) rather than the larger explicit-attach
  *  one: a `![…](path)` is incidental illustration the agent spent no tool call
  *  on, and every byte is persisted in the event log and replicated to phones. An
  *  agent that means to send something big still has `bivy attach`. */
-const MAX_WORKSPACE_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_WORKSPACE_REF_BYTES = 8 * 1024 * 1024;
 
 export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): TranscriptPersistence {
   const { eventLog, attachmentStore } = deps;
@@ -184,11 +185,27 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
     return refs;
   }
 
+  /** The same, for workspace references, keeping which syntax asked for each.
+   *  First mention wins: a path written as an image and as a directive is one
+   *  file read, and the stricter image rule applies to it. */
+  function workspaceRefsInTranscript(record: PersistSession): Map<string, ReferenceSyntax> {
+    const refs = new Map<string, ReferenceSyntax>();
+    for (const m of record.session.getMessages()) {
+      if (m.role !== "assistant") continue;
+      for (const { ref, syntax } of extractWorkspaceRefs(assistantTextForImageScan(m.content))) {
+        if (!refs.has(ref)) refs.set(ref, syntax);
+      }
+    }
+    return refs;
+  }
+
   /** Store resolved bytes under `ref` and tell every client, durably and live.
    *  One place, so the remote and workspace resolvers below cannot drift in how
-   *  they record what they found. */
-  function recordResolvedImage(sessionId: string, ref: string, bytes: Buffer, meta: { name: string; mimeType: string }): void {
-    const stored = attachmentStore.put(bytes, { name: meta.name, mimeType: meta.mimeType, kind: "image" });
+   *  they record what they found. `kind` carries whether the bytes are an image,
+   *  which is what lets the view layer pick a renderer for a `::view` that
+   *  points at something other than a picture. */
+  function recordResolvedRef(sessionId: string, ref: string, bytes: Buffer, meta: { name: string; mimeType: string; kind?: "image" | "file" }): void {
+    const stored = attachmentStore.put(bytes, { name: meta.name, mimeType: meta.mimeType, kind: meta.kind ?? "image" });
     eventLog.appendInlineImage(sessionId, { url: ref, ref: stored });
     eventLog.flush(sessionId);
     deps.broadcast(deps.stampSessionEvent({ type: "session.event", sessionId, event: { type: "inlineImage", url: ref, ref: stored } }));
@@ -216,32 +233,34 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
    * Distinct paths are the workaround until componentRefs carry a per-message
    * anchor the way outbound attachments already do.
    */
-  function resolveWorkspaceImages(record: PersistSession, workspaceDir: string): void {
+  function resolveWorkspaceRefs(record: PersistSession, workspaceDir: string): void {
     if (!workspaceDir) return;
-    const paths = imageRefsInTranscript(record, extractWorkspaceImagePaths);
-    if (!paths.size) return;
+    const refs = workspaceRefsInTranscript(record);
+    if (!refs.size) return;
     const alreadyResolved = new Set(eventLog.readInlineImages(record.id).map(([ref]) => ref));
-    for (const rel of paths) {
+    for (const [rel, syntax] of refs) {
       if (alreadyResolved.has(rel)) continue;
       const failedAt = inlineImageFailedAt.get(rel);
       if (failedAt !== undefined && Date.now() - failedAt < INLINE_IMAGE_RETRY_COOLDOWN_MS) continue;
-      const plan = planAttachment({ workspaceDir, filePath: rel, maxBytes: MAX_WORKSPACE_IMAGE_BYTES });
+      const plan = planAttachment({ workspaceDir, filePath: rel, maxBytes: MAX_WORKSPACE_REF_BYTES });
       if (isAttachPlanError(plan)) {
-        console.warn(`[inline-image] ${rel}: ${plan.error}`);
+        console.warn(`[component] ${rel}: ${plan.error}`);
         inlineImageFailedAt.set(rel, Date.now());
         continue;
       }
-      // `![…](notes.md)` is a link the agent mistyped, not an image. Refusing
-      // non-image bytes keeps a stray one from becoming an unopenable chip.
-      if (plan.kind !== "image") {
-        console.warn(`[inline-image] ${rel}: not an image (${plan.mimeType})`);
+      // `![…](notes.md)` is a link the agent mistyped, not an image, so refusing
+      // non-image bytes keeps a stray one from becoming an unopenable chip. A
+      // `::view{src=notes.md}` asked for the file on purpose, so it is kept and
+      // the view layer picks a renderer from the mime type.
+      if (syntax === "image" && plan.kind !== "image") {
+        console.warn(`[component] ${rel}: not an image (${plan.mimeType})`);
         inlineImageFailedAt.set(rel, Date.now());
         continue;
       }
       try {
-        recordResolvedImage(record.id, rel, plan.bytes, { name: plan.name, mimeType: plan.mimeType });
+        recordResolvedRef(record.id, rel, plan.bytes, { name: plan.name, mimeType: plan.mimeType, kind: plan.kind });
       } catch (error) {
-        console.warn(`[inline-image] ${rel}:`, error instanceof Error ? error.message : String(error));
+        console.warn(`[component] ${rel}:`, error instanceof Error ? error.message : String(error));
         inlineImageFailedAt.set(rel, Date.now());
       }
     }
@@ -263,7 +282,7 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
             inlineImageFailedAt.set(url, Date.now());
             return;
           }
-          recordResolvedImage(record.id, url, result.bytes, { name: inlineImageDisplayName(url, result.mimeType), mimeType: result.mimeType });
+          recordResolvedRef(record.id, url, result.bytes, { name: inlineImageDisplayName(url, result.mimeType), mimeType: result.mimeType });
         } catch (error) {
           console.warn(`[inline-image] ${url}:`, error instanceof Error ? error.message : String(error));
           inlineImageFailedAt.set(url, Date.now());
@@ -419,7 +438,7 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
     persistToolActivityFromEvent,
     persistIntermediateFromEvent,
     resolveInlineImages,
-    resolveWorkspaceImages,
+    resolveWorkspaceRefs,
     conversationMessages,
     forkMessages,
     buildHistoryEvent,
