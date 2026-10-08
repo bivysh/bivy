@@ -32,6 +32,18 @@ for (const theme of themes) for (const width of [390, 1024]) {
       '{"type":"metric","value":"4 650 kWh","label":"Oslo, per year"}',
       "```",
       "",
+      "```bivy",
+      '{"mark":"bar","description":"Delivered heat per city",',
+      ' "data":{"values":[{"city":"Oslo","kwh":4650},{"city":"Tromsø","kwh":6730}]},',
+      ' "encoding":{"x":{"field":"city","type":"nominal"},"y":{"field":"kwh","type":"quantitative"}}}',
+      "```",
+      "",
+      "A chart that tries to fetch its own data:",
+      "",
+      "```bivy",
+      '{"mark":"line","data":{"url":"https://x.test/data.json"}}',
+      "```",
+      "",
       "A reference the node has not resolved yet:",
       "",
       "::view{src=out/pending.pdf}",
@@ -103,6 +115,22 @@ for (const theme of themes) for (const width of [390, 1024]) {
     await expect(page.getByText('4 650 kWh')).toBeVisible();
     await expect(page.getByText('Oslo, per year')).toBeVisible();
 
+    // A Vega-Lite spec is recognised by its shape — no `type` to remember — and
+    // drawn from the lazy chunk. The axis labels come from the spec's data.
+    const chart = page.locator('.md-component .chart-component').first();
+    await expect(chart.locator('svg')).toBeVisible({ timeout: 15_000 });
+    await expect(chart.getByText('Delivered heat per city')).toBeVisible();
+    await expect(chart.locator('svg').getByText('Oslo')).toBeVisible();
+    // Axis labels stay horizontal: Vega-Lite rotates a discrete x-axis 90° by
+    // default, which is hard to read in a message (see vega.ts).
+    const labelTransform = await chart.evaluate((el) =>
+      [...el.querySelectorAll('svg text')].find((t) => t.textContent === 'Oslo')?.getAttribute('transform') ?? '');
+    expect(labelTransform).not.toContain('rotate');
+
+    // A chart may not make the viewer's browser fetch a URL an agent chose —
+    // the same SSRF/privacy hole the node avoids for remote markdown images.
+    await expect(page.getByText('A chart has to carry its own data')).toBeVisible();
+
     // Both failure modes name what the agent meant. Neither is silent, and
     // neither is styled as the reader's error.
     await expect(page.getByText('out/pending.pdf')).toBeVisible();
@@ -122,7 +150,7 @@ for (const theme of themes) for (const width of [390, 1024]) {
     const order = await page.locator('.msg.assistant > *').evaluateAll(
       (nodes) => nodes.map((n) => (n.className || n.tagName).toString()),
     );
-    expect(order.filter((c) => c.includes('md-component'))).toHaveLength(5);
+    expect(order.filter((c) => c.includes('md-component'))).toHaveLength(7);
     expect(order[0]).toBe('P');
 
     await page.screenshot({ path: testInfo.outputPath('components.png'), fullPage: true });

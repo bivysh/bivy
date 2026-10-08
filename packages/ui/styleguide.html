@@ -633,6 +633,15 @@ section > .lede { color: var(--muted); font-size: var(--text-sm); margin: 0 0 va
       </div>
       <div class="consolidates">Reuses the wrapper a markdown pipe table already renders into, so a table reads the same however the agent produced it. Only the caption is new.</div>
     </div>
+    <div class="spec"><div class="spec-h"><b>Chart</b> <code>.chart-component</code> + <code>.chart-host</code></div>
+      <div class="demo col">
+        <figure class="chart-component" style="margin:0">
+          <div class="chart-host" style="display:grid;place-items:center;min-height:120px;color:var(--muted);font-size:var(--text-sm)">Vega-Lite draws the SVG here</div>
+          <figcaption class="card-sub">Delivered heat per city</figcaption>
+        </figure>
+      </div>
+      <div class="consolidates">Same bordered surface as <code>.mermaid-diagram</code>, because both are a drawn figure in a message and should not read as two different things. Vega owns everything inside <code>.chart-host</code>; its colours are read from the tokens at render time (<code>vega.ts</code>), which is how a chart tracks light/dark.</div>
+    </div>
     <div class="spec"><div class="spec-h"><b>Cannot be shown</b> <code>.card[data-tone="muted"]</code></div>
       <div class="demo col">
         <div class="card" data-tone="muted">

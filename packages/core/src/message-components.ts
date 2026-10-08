@@ -287,6 +287,17 @@ export function parseComponentSpec(body: string): Record<string, unknown> | null
 }
 
 /**
+ * A Vega-Lite spec, recognised by its own shape rather than by a `type` an
+ * agent would have to remember to add. A spec written for anywhere else works
+ * here unchanged, which is the point of using Vega-Lite instead of a dialect
+ * only Bivy reads.
+ */
+function isVegaLite(spec: Record<string, unknown>): boolean {
+  if (typeof spec.$schema === "string" && /vega-lite/i.test(spec.$schema)) return true;
+  return ["mark", "layer", "hconcat", "vconcat", "concat", "facet", "repeat"].some((key) => key in spec);
+}
+
+/**
  * How a component is rendered, from its spec's own `type` or from the file it
  * points at. One table, so a new kind is a row here plus a row in the view
  * layer's registry — never a branch in the parser.
@@ -297,7 +308,7 @@ export function parseComponentSpec(body: string): Record<string, unknown> | null
 export function componentKind(opts: { path?: string | null; mimeType?: string | null; spec?: Record<string, unknown> | null }): string {
   const declared = opts.spec?.type;
   if (typeof declared === "string" && declared.trim()) return declared.trim().toLowerCase();
-  if (opts.spec) return "unknown";
+  if (opts.spec) return isVegaLite(opts.spec) ? "chart" : "unknown";
   const mime = String(opts.mimeType || "").toLowerCase();
   if (mime.startsWith("image/")) return "image";
   const ext = String(opts.path || "").toLowerCase().split(".").pop() ?? "";
