@@ -8322,7 +8322,7 @@ function attachSessionListeners(record: SessionRecord) {
     // resolvers are internally deduped, so checking twice costs nothing.
     if (event.type === "message_end" || event.type === "turn_end") {
       transcripts.resolveInlineImages(record);
-      transcripts.resolveWorkspaceImages(record, harnessDirFor(record));
+      transcripts.resolveWorkspaceRefs(record, harnessDirFor(record));
     }
     // Durably persist the throttled sidecars at the turn boundary so a crash
     // loses at most the in-flight turn's UI detail, not the whole turn. A

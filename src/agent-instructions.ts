@@ -45,9 +45,11 @@ export const BIVY_AGENT_NOTE = [
   "- Show an IMAGE (screenshot, chart, diagram) inside your reply: write it as markdown, " +
     "`![short caption](relative/path.png)`, where you want it to appear. The path must be inside the session " +
     "workspace; a remote `https://` image works too. No tool call needed.",
-  "- Send a FILE, or an image on its own (a report, a download they asked for): run " +
-    '`bivy attach <path> [--caption "short note"]`, or call the `attach_to_chat` tool if you have it. Same ' +
-    "workspace-only rule; files arrive as downloads.",
+  "- Show a FILE (a report, a log, data they asked for) inside your reply: put " +
+    '`::view{src=relative/path.pdf caption="what it is"}` on its own line, where you want it. It arrives as a ' +
+    "download. Same workspace-only rule.",
+  "- Send a file WITHOUT writing a reply (or from a script): run " +
+    '`bivy attach <path> [--caption "short note"]`, or call the `attach_to_chat` tool if you have it.',
   "- Something with a UI: `bivy app publish <manifest.json>` (a web server's port, a static build, a terminal) or " +
     "`bivy app run -- <command>` (a desktop app) gives the user a live preview; `bivy app shot` screenshots it so you " +
     "can check your work; `bivy app present` tells the user a visible change is ready to look at, and " +

@@ -12,8 +12,14 @@ import {
   toHtml,
   inline,
   extractImageReferences,
+  extractMessageReferences,
   classifyImageTarget,
+  componentKind,
+  isComponentFence,
+  parseComponentDirective,
+  parseComponentSpec,
   MAX_COMPONENTS_PER_MESSAGE,
+  MAX_COMPONENT_SPEC_CHARS,
   eventKind,
   isToolUseBlock,
   isToolResultBlock,
@@ -199,6 +205,129 @@ describe("image pattern matching stays linear", () => {
   it("ignores an alt text or reference past its bound rather than matching slowly", () => {
     expect(extractImageReferences(`![${"a".repeat(600)}](out/x.png)`)).toEqual([]);
     expect(extractImageReferences(`![a](out/${"b".repeat(2100)}.png)`)).toEqual([]);
+  });
+});
+
+describe("rendering a placed component", () => {
+  it("renders a directive as an empty mount point carrying its reference and attributes", () => {
+    const html = toHtml('::view{src=data/sales.csv caption="Last quarter"}');
+    expect(html).toContain('class="md-component"');
+    expect(html).toContain('data-md-ref="data/sales.csv"');
+    expect(html).toContain("Last quarter");
+    // Empty: what fills it needs bytes the node resolved or a React renderer.
+    expect(html).toContain("></div>");
+  });
+  it("renders a bivy fence as a mount point carrying its spec", () => {
+    const html = toHtml(['```bivy', '{"type":"metric","value":42}', '```'].join("\n"));
+    expect(html).toContain('class="md-component"');
+    expect(html).toContain("data-md-spec=");
+    expect(html).not.toContain("<pre>");
+  });
+  it("leaves a malformed fence, and a directive written as prose, as readable source", () => {
+    const bad = toHtml(["```bivy", "{nope", "```"].join("\n"));
+    expect(bad).toContain("<pre>");
+    expect(bad).toContain("{nope");
+    expect(toHtml("talk about ::view{src=a.csv} inline")).not.toContain("md-component");
+  });
+  it("breaks a paragraph before a directive instead of swallowing it", () => {
+    const html = toHtml("Here is the data.\n::view{src=data/sales.csv}");
+    expect(html).toBe('<p>Here is the data.</p><div class="md-component" data-md-ref="data/sales.csv"></div>');
+  });
+  it("keeps a spec from breaking out of its attribute", () => {
+    // The payload stays present as inert TEXT — that is the point of putting a
+    // spec in an attribute rather than in markup. What must not survive is the
+    // ability to close the attribute or open an element: both `"` and `<` are
+    // escaped, so there is no second tag and no second attribute.
+    const html = toHtml(['```bivy', '{"type":"metric","label":"<img src=x onerror=alert(1)>"}', '```'].join("\n"));
+    expect(html).toContain("&lt;img");
+    expect(html).not.toContain("<img");
+    expect(html.match(/<[a-z]+/gi)).toEqual(["<div"]);
+  });
+});
+
+describe("component directives", () => {
+  it("accepts a directive that owns its line and keeps its other attributes", () => {
+    expect(parseComponentDirective('::view{src=data/sales.csv caption="Last quarter" #fig-1}')).toEqual({
+      ref: "data/sales.csv",
+      spec: null,
+      attrs: { caption: "Last quarter", id: "fig-1" },
+    });
+  });
+  it("allows surrounding and internal whitespace, in bounded time", () => {
+    expect(parseComponentDirective("  ::view {src=a.csv}  ")?.ref).toBe("a.csv");
+    // The failing path is the quadratic one: with two whitespace runs around
+    // the optional brace group, a long run can be split between them in as many
+    // ways as it is long. Trailing junk forces that path.
+    const started = Date.now();
+    expect(parseComponentDirective(`::a${"\t".repeat(50_000)}x`)).toBeNull();
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+  it("refuses a directive written as prose, or pointing anywhere but the workspace", () => {
+    // Block-level by construction: mid-sentence is prose, and a half-streamed
+    // line cannot render until it is complete.
+    expect(parseComponentDirective("see ::view{src=a.csv} there")).toBeNull();
+    expect(parseComponentDirective("::view{src=a.csv} trailing")).toBeNull();
+    // A directive names something to read, so a URL is refused even though
+    // image syntax accepts one.
+    expect(parseComponentDirective("::view{src=https://x.test/a.csv}")).toBeNull();
+    expect(parseComponentDirective("::view{src=/etc/passwd}")).toBeNull();
+    expect(parseComponentDirective("::view{src=../../secrets.csv}")).toBeNull();
+    expect(parseComponentDirective("::view{}")).toBeNull();
+    expect(parseComponentDirective("::nope{src=a.csv}")).toBeNull();
+  });
+});
+
+describe("component specs", () => {
+  it("reads a JSON object body and leaves anything else to the code block", () => {
+    expect(parseComponentSpec('{"type":"metric","value":3}')).toEqual({ type: "metric", value: 3 });
+    // Malformed, non-object, and oversized bodies all fall back to a code
+    // block, which keeps the source readable instead of showing an error.
+    expect(parseComponentSpec("{nope")).toBeNull();
+    expect(parseComponentSpec('["a"]')).toBeNull();
+    expect(parseComponentSpec("")).toBeNull();
+    expect(parseComponentSpec(`{"pad":"${"x".repeat(MAX_COMPONENT_SPEC_CHARS)}"}`)).toBeNull();
+  });
+  it("marks only the bivy info string as a component fence", () => {
+    expect(isComponentFence("bivy")).toBe(true);
+    expect(isComponentFence(" BIVY ")).toBe(true);
+    expect(isComponentFence("json")).toBe(false);
+    expect(isComponentFence("")).toBe(false);
+  });
+});
+
+describe("componentKind", () => {
+  it("prefers the spec's declared type, then the file's mime", () => {
+    expect(componentKind({ spec: { type: "Metric" } })).toBe("metric");
+    expect(componentKind({ path: "a/b.png", mimeType: "image/png" })).toBe("image");
+    expect(componentKind({ path: "a/b.pdf", mimeType: "application/pdf" })).toBe("file");
+    // No row yet for a richer reading of a file; a CSV is a download until the
+    // table renderer exists to draw it.
+    expect(componentKind({ path: "a/b.csv" })).toBe("file");
+  });
+  it("names an unreadable spec rather than guessing a kind for it", () => {
+    expect(componentKind({ spec: { value: 1 } })).toBe("unknown");
+  });
+});
+
+describe("extractMessageReferences", () => {
+  it("collects image and directive references in document order under one cap", () => {
+    const text = ["![a](out/a.png)", "::view{src=data/b.csv}", "![c](https://x.test/c.png)"].join("\n");
+    expect(extractMessageReferences(text)).toEqual([
+      { ref: "out/a.png", origin: "workspace", syntax: "image" },
+      { ref: "data/b.csv", origin: "workspace", syntax: "view" },
+      { ref: "https://x.test/c.png", origin: "remote", syntax: "image" },
+    ]);
+  });
+  it("finds an image whose alt text wraps across lines", () => {
+    // The renderer sees a paragraph with its lines already joined, so scanning
+    // line by line here would place a mount point nothing ever resolved.
+    expect(extractMessageReferences("![a long\ncaption](out/a.png)")).toEqual([
+      { ref: "out/a.png", origin: "workspace", syntax: "image" },
+    ]);
+  });
+  it("resolves a path written both ways once, keeping the stricter image rule", () => {
+    const both = "![a](out/a.png)\n::view{src=out/a.png}";
+    expect(extractMessageReferences(both)).toEqual([{ ref: "out/a.png", origin: "workspace", syntax: "image" }]);
   });
 });
 

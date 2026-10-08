@@ -190,7 +190,7 @@ test("buildReplayEvent returns events on replay and empty on reset", () => {
   assert.deepEqual(x.events, [], "reset carries no events");
 });
 
-// ---------------------------------------------------------------- workspace images
+// ---------------------------------------------------------------- workspace references
 // `![alt](out/chart.png)` — an agent illustrating a reply with a file it just
 // produced, with no tool call. planAttachment's confinement (including the
 // symlink-escape case) is covered at its own level in attach-to-chat.test.ts;
@@ -209,7 +209,7 @@ function workspace(files: Record<string, Buffer | string>): string {
   return dir;
 }
 
-test("resolveWorkspaceImages stores a workspace image and records it under the path as written", () => {
+test("resolveWorkspaceRefs stores a workspace image and records it under the path as written", () => {
   const dir = workspace({ "out/chart.png": PNG });
   const stored: Buffer[] = [];
   const h = harness();
@@ -217,7 +217,7 @@ test("resolveWorkspaceImages stores a workspace image and records it under the p
     stored.push(bytes);
     return { hash: "h1", name: meta.name, mimeType: meta.mimeType, size: bytes.length, kind: meta.kind };
   };
-  h.tp.resolveWorkspaceImages(sess([{ role: "assistant", content: "Here it is:\n\n![A chart](./out/chart.png)" }]), dir);
+  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: "Here it is:\n\n![A chart](./out/chart.png)" }]), dir);
 
   assert.equal(stored.length, 1, "the bytes are captured at emit time, not left in the workspace");
   assert.ok(stored[0].equals(PNG));
@@ -228,26 +228,56 @@ test("resolveWorkspaceImages stores a workspace image and records it under the p
   assert.equal((h.broadcasts[0] as any).event.type, "inlineImage");
 });
 
-test("resolveWorkspaceImages refuses a file that is not an image", () => {
+test("resolveWorkspaceRefs refuses a file that is not an image", () => {
   const dir = workspace({ "notes.md": "# not an image" });
   const h = harness();
-  h.tp.resolveWorkspaceImages(sess([{ role: "assistant", content: "![notes](notes.md)" }]), dir);
+  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: "![notes](notes.md)" }]), dir);
   assert.equal((h.eventLog as any).inlineImages.length, 0, "a mistyped link must not become an unopenable chip");
   assert.equal(h.broadcasts.length, 0);
 });
 
-test("resolveWorkspaceImages skips a reference the log already resolved", () => {
+test("resolveWorkspaceRefs skips a reference the log already resolved", () => {
   const dir = workspace({ "out/chart.png": PNG });
   const h = harness({ eventLog: { readInlineImages: () => [["out/chart.png", { hash: "old" }]] } });
-  h.tp.resolveWorkspaceImages(sess([{ role: "assistant", content: "![c](out/chart.png)" }]), dir);
+  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: "![c](out/chart.png)" }]), dir);
   assert.equal((h.eventLog as any).inlineImages.length, 0, "re-rendering history must not re-read the disk");
 });
 
-test("resolveWorkspaceImages ignores a message with no workspace reference", () => {
+test("resolveWorkspaceRefs ignores a message with no workspace reference", () => {
   const dir = workspace({ "out/chart.png": PNG });
   const h = harness();
   // A remote URL is the other resolver's job, and an absolute path is refused by
   // the grammar before anything touches the filesystem.
-  h.tp.resolveWorkspaceImages(sess([{ role: "assistant", content: "![a](https://x.test/a.png) ![b](/etc/passwd)" }]), dir);
+  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: "![a](https://x.test/a.png) ![b](/etc/passwd)" }]), dir);
   assert.equal((h.eventLog as any).inlineImages.length, 0);
+});
+
+test("resolveWorkspaceRefs keeps a non-image a ::view directive asked for, and names its kind", () => {
+  // `![…](notes.md)` is a mistyped link and stays refused (above). A directive
+  // asked for the file on purpose, so the bytes are kept and the stored kind is
+  // what lets the view layer pick the file chip rather than an image.
+  const dir = workspace({ "notes.md": "# a report" });
+  const stored: any[] = [];
+  const h = harness();
+  (h.deps.attachmentStore as any).put = (bytes: Buffer, meta: any) => {
+    stored.push(meta);
+    return { hash: "h2", name: meta.name, mimeType: meta.mimeType, size: bytes.length, kind: meta.kind };
+  };
+  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: "Here:\n\n::view{src=notes.md}" }]), dir);
+
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].kind, "file", "a directive's non-image bytes are stored as a file");
+  assert.equal((h.eventLog as any).inlineImages[0].url, "notes.md");
+});
+
+test("resolveWorkspaceRefs reads one file for a path written both as an image and a directive", () => {
+  const dir = workspace({ "out/chart.png": PNG });
+  let reads = 0;
+  const h = harness();
+  (h.deps.attachmentStore as any).put = (bytes: Buffer, meta: any) => {
+    reads++;
+    return { hash: "h3", name: meta.name, mimeType: meta.mimeType, size: bytes.length, kind: meta.kind };
+  };
+  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: "![c](out/chart.png)\n::view{src=out/chart.png}" }]), dir);
+  assert.equal(reads, 1, "one reference, one read, one stored copy");
 });

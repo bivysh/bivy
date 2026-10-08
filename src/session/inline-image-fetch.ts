@@ -21,7 +21,7 @@ import dns from "node:dns/promises";
 
 import { hostnameIsLocal } from "../auth.js";
 import { sanitizeAttachmentName, sniffMime } from "./attach-to-chat.js";
-import { extractImageReferences, MAX_COMPONENTS_PER_MESSAGE } from "./message-components.js";
+import { extractImageReferences, extractMessageReferences, MAX_COMPONENTS_PER_MESSAGE, type ReferenceSyntax } from "./message-components.js";
 
 /** Bound how many distinct images a single message can trigger a resolve for —
  *  a pathological/malicious message can't fan out into an unbounded number of
@@ -49,10 +49,13 @@ export function extractInlineImageUrls(text: string): string[] {
   return extractImageReferences(text).filter((i) => i.origin === "remote").map((i) => i.ref);
 }
 
-/** The distinct workspace-relative paths a message's raw markdown references,
- *  in first-seen order, under the same per-message cap. */
-export function extractWorkspaceImagePaths(text: string): string[] {
-  return extractImageReferences(text).filter((i) => i.origin === "workspace").map((i) => i.ref);
+/** The distinct workspace references a message makes — from image syntax or a
+ *  `::view{src=…}` directive — in first-seen order, under the same per-message
+ *  cap. `syntax` tells the resolver whether non-image bytes are acceptable. */
+export function extractWorkspaceRefs(text: string): Array<{ ref: string; syntax: ReferenceSyntax }> {
+  return extractMessageReferences(text)
+    .filter((r) => r.origin === "workspace")
+    .map(({ ref, syntax }) => ({ ref, syntax }));
 }
 
 /** Best-effort plain text for an assistant RuntimeMessage's `content`, which is
