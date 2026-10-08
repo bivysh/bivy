@@ -26,7 +26,7 @@ export interface TranscriptFoldEntry {
   delegation?: DelegationCard;
   id: string; role: "user" | "assistant" | "system" | "thinking" | "error"; text: string;
   html?: string; tool?: TranscriptFoldTool; streaming?: boolean; attachments?: PromptAttachment[];
-  imageRefs?: Record<string, unknown>;
+  toolOutput?: boolean; imageRefs?: Record<string, unknown>;
 }
 export interface TranscriptDraftValue {
   assistantId: string | null; thinkingId: string | null; finalized: boolean;
@@ -268,7 +268,7 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
   if (kind === "result" || kind === "message_end" || kind === "message_boundary") {
     const attachments = embeddedAttachments(event.result ?? event.message ?? event.output).filter(ref => !hasAttachment(value.transcript, ref.hash!));
     if (attachments.length) {
-      append(value, { role: "assistant", text: "", attachments });
+      append(value, { role: "assistant", text: "", attachments, toolOutput: true });
       commands.push({ kind: "remember-agent-attachments" });
     }
   }
