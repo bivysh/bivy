@@ -11,7 +11,9 @@ import {
   createFrameReassembler,
   toHtml,
   inline,
-  extractRemoteImageUrls,
+  extractImageReferences,
+  classifyImageTarget,
+  MAX_COMPONENTS_PER_MESSAGE,
   eventKind,
   isToolUseBlock,
   isToolResultBlock,
@@ -128,14 +130,32 @@ describe("markdown", () => {
   it("renders a remote markdown image as an unresolved placeholder, not a fetchable src", () => {
     // #293: the deployed app's CSP (img-src 'self' data: blob:) blocks a literal
     // remote src outright, so the element must never carry one — the node
-    // resolves data-remote-src to a blob: URL out of band (see ChatView).
+    // resolves data-md-ref to a blob: URL out of band (see ChatView).
     const html = inline("![a chart](https://example.com/chart.png)");
-    expect(html).toBe('<img class="md-image" data-remote-src="https://example.com/chart.png" alt="a chart" loading="lazy">');
+    expect(html).toBe('<img class="md-image" data-md-ref="https://example.com/chart.png" alt="a chart" loading="lazy">');
   });
-  it("does not treat a workspace-relative path as an image (no https scheme)", () => {
+  it("renders a workspace-relative image as a placeholder keyed by the path as written", () => {
     const html = inline("![a chart](./out/chart.png)");
-    expect(html).not.toContain("<img");
-    expect(html).toContain("![a chart]");
+    expect(html).toBe('<img class="md-image" data-md-ref="./out/chart.png" alt="a chart" loading="lazy">');
+  });
+  it("keys a reference by its raw text, not the escaped form the renderer sees", () => {
+    // inline() esc()s the whole message before the image rule runs, so an `&`
+    // in a reference arrives as `&amp;`. The node scans raw text, so a key
+    // derived from the escaped form would never match what it stored.
+    const html = inline("![c](https://example.com/c.png?a=1&b=2)");
+    expect(html).toContain('data-md-ref="https://example.com/c.png?a=1&amp;b=2"');
+    expect(html).not.toContain("&amp;amp;");
+  });
+  it("never renders a refused image target as an image", () => {
+    // A refused target is prose, not a component. `http://` still falls through
+    // to the link rule (unchanged behavior for non-https images); the rest have
+    // no rule to match and stay the literal text the agent wrote.
+    expect(inline("![a](http://x.test/a.png)")).not.toContain("<img");
+    for (const target of ["/etc/passwd", "../../secrets.png", "data:image/png;base64,AAAA", "~/.ssh/id_rsa"]) {
+      const html = inline(`![a](${target})`);
+      expect(html, target).not.toContain("<img");
+      expect(html, target).toContain("![a]");
+    }
   });
   it("escapes alt text and the URL so neither can break out of the attribute", () => {
     const html = inline('![" onerror="alert(1)](https://example.com/x.png?a="b)');
@@ -144,13 +164,43 @@ describe("markdown", () => {
   });
 });
 
-describe("extractRemoteImageUrls", () => {
-  it("finds every distinct https image URL in first-seen order", () => {
-    const text = "![a](https://x.test/a.png) some text ![b](https://x.test/b.png) ![a again](https://x.test/a.png)";
-    expect(extractRemoteImageUrls(text)).toEqual(["https://x.test/a.png", "https://x.test/b.png"]);
+describe("extractImageReferences", () => {
+  it("finds every distinct reference in first-seen order, with its origin", () => {
+    const text = "![a](https://x.test/a.png) text ![b](out/b.png) ![a again](https://x.test/a.png)";
+    expect(extractImageReferences(text)).toEqual([
+      { ref: "https://x.test/a.png", origin: "remote" },
+      { ref: "out/b.png", origin: "workspace" },
+    ]);
   });
-  it("ignores non-https and non-image markdown links", () => {
-    expect(extractRemoteImageUrls("![a](http://x.test/a.png) [link](https://x.test/page)")).toEqual([]);
+  it("ignores refused targets and plain links", () => {
+    expect(extractImageReferences("![a](http://x.test/a.png) [link](https://x.test/page)")).toEqual([]);
+  });
+  it("caps one message at MAX_COMPONENTS_PER_MESSAGE across both origins", () => {
+    const many = Array.from({ length: MAX_COMPONENTS_PER_MESSAGE + 4 }, (_, i) => `![i${i}](out/${i}.png)`).join(" ");
+    expect(extractImageReferences(many)).toHaveLength(MAX_COMPONENTS_PER_MESSAGE);
+  });
+});
+
+describe("classifyImageTarget", () => {
+  it("accepts https URLs and workspace-relative paths", () => {
+    expect(classifyImageTarget("https://x.test/a.png")).toBe("remote");
+    expect(classifyImageTarget("out/a.png")).toBe("workspace");
+    expect(classifyImageTarget("./out/a.png")).toBe("workspace");
+    expect(classifyImageTarget("a.png")).toBe("workspace");
+  });
+  it("refuses anything that is not one of those two", () => {
+    // Not the security boundary — planAttachment is (symlink-resolved
+    // confinement) — but a hostile target must never become a key or a read.
+    for (const target of [
+      "", "   ",
+      "http://x.test/a.png", "data:image/png;base64,AAAA", "javascript:alert(1)", "file:///etc/passwd",
+      "//x.test/a.png", "/etc/passwd", "~/.ssh/id_rsa", "#section",
+      "../../../etc/passwd", "out/../../etc/passwd", "out\\a.png",
+      "out/\u0000a.png",
+      `${"a".repeat(600)}.png`,
+    ]) {
+      expect(classifyImageTarget(target), target).toBeNull();
+    }
   });
 });
 

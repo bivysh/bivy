@@ -42,10 +42,12 @@ export interface AgentInstructions {
 export const BIVY_AGENT_NOTE = [
   "You are running inside Bivy. The user follows this session in a chat app (web or phone): they cannot see your " +
     "terminal or files you only write to disk. $BIVY_SESSION_ID identifies this session; the `bivy` commands below use it.",
-  "- Show a LOCAL file or image (report, screenshot, chart, a file they asked for): run " +
-    '`bivy attach <path> [--caption "short note"]`, or call the `attach_to_chat` tool if you have it. Images render ' +
-    "inline, other files as downloads; the path must be inside the session workspace. Markdown image syntax like " +
-    "![](path) does not render a local path. A REMOTE `https://` image in markdown does render.",
+  "- Show an IMAGE (screenshot, chart, diagram) inside your reply: write it as markdown, " +
+    "`![short caption](relative/path.png)`, where you want it to appear. The path must be inside the session " +
+    "workspace; a remote `https://` image works too. No tool call needed.",
+  "- Send a FILE, or an image on its own (a report, a download they asked for): run " +
+    '`bivy attach <path> [--caption "short note"]`, or call the `attach_to_chat` tool if you have it. Same ' +
+    "workspace-only rule; files arrive as downloads.",
   "- Something with a UI: `bivy app publish <manifest.json>` (a web server's port, a static build, a terminal) or " +
     "`bivy app run -- <command>` (a desktop app) gives the user a live preview; `bivy app shot` screenshots it so you " +
     "can check your work; `bivy app present` tells the user a visible change is ready to look at, and " +

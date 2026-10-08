@@ -401,8 +401,9 @@ const EntryView = memo(function EntryView({
     [entry.role, entry.streaming, entry.html, entry.text],
   );
   // Syntax-highlight fenced code blocks once the assistant HTML is in the DOM,
-  // and hydrate any remote markdown images this entry now has a resolved ref
-  // for (see TranscriptEntry.imageRefs / packages/core/src/markdown.ts). Re-runs
+  // and hydrate any markdown image this entry now has a resolved ref for —
+  // remote or workspace-relative, both keyed by the reference the markdown wrote
+  // (see TranscriptEntry.imageRefs / packages/core/src/markdown.ts). Re-runs
   // as streaming replaces the markup, AND when imageRefs grows live (a node
   // "inlineImage" event patches a new ref onto this entry with no text/html
   // change — see store.ts) so a just-resolved image hydrates without a reload.
@@ -418,9 +419,9 @@ const EntryView = memo(function EntryView({
     if (!container || !entry.imageRefs) return;
     let cancelled = false;
     const created: string[] = [];
-    const imgs = container.querySelectorAll<HTMLImageElement>("img.md-image[data-remote-src]");
+    const imgs = container.querySelectorAll<HTMLImageElement>("img.md-image[data-md-ref]");
     imgs.forEach((img) => {
-      const url = img.dataset.remoteSrc;
+      const url = img.dataset.mdRef;
       if (!url || img.dataset.hydrated === "1") return;
       const ref = entry.imageRefs?.[url];
       if (!ref) return; // not resolved yet — stays a placeholder until it is
