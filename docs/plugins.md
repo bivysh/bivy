@@ -2,8 +2,10 @@
 
 Bivy plugins add agents without requiring a Bivy source change. The first plugin
 API is deliberately narrow and safe: a plugin is a strict declarative manifest,
-and its agent runs out of process through Bivy's existing process or ACP adapter.
-Bivy does not import third-party JavaScript into the node.
+and its agent runs out of process through Bivy's existing process or ACP adapter,
+or as a Pi session with extra Pi packages. Bivy imports no plugin code itself; a
+Pi agent's packages are loaded by Pi, exactly as packages listed in Pi's own
+settings are.
 
 The API is alpha (`bivy.sh/v1alpha1`). Pin and review manifests like any other
 executable tool configuration; fields may evolve before a stable v1.
@@ -172,6 +174,48 @@ Prefer ACP when the agent supports it. A one-shot process can provide text,
 structured events, model flags, and native resume, but it cannot ask Bivy for a
 pre-execution decision on its built-in tools.
 
+## Pi package agent
+
+A Pi package (extensions, skills and prompt templates) can become its own agent.
+The agent is the operator's Pi with those packages loaded, so it has everything a
+Pi chat has: streaming text and thinking, per-tool approvals, the model picker,
+resume, forks and the terminal hand-off.
+
+```yaml
+apiVersion: bivy.sh/v1alpha1
+kind: Plugin
+metadata:
+  id: sci
+  name: Sci
+  version: 0.4.0
+contributes:
+  agents:
+    - id: sci
+      name: Sci
+      description: Research agent built on Pi.
+      adapter:
+        kind: pi
+        packages: [.]          # local Pi packages, relative to this manifest
+        skills: [sci-research] # optional: always in the system prompt
+```
+
+- `packages` lists 1–20 local package directories or files. Relative paths are
+  resolved against the manifest's directory when the plugin is installed, so
+  install from a checkout that stays in place. Remote sources (`npm:`, `git:`,
+  URLs) are refused: clone or install the package first.
+- `skills` names skills from those packages whose instructions (without
+  frontmatter) are added to every system prompt. Other skills still load on
+  demand. The terminal hand-off passes the same packages (`-e`) and instructions
+  (`--append-system-prompt`) to `pi`.
+- Packages load only for this agent. Plain Pi chats are unchanged.
+
+`bivy plugin doctor` checks that Pi and every package path exist. `bivy plugin
+test` opens a real Pi session with the packages, without prompting a model, and
+fails if a listed skill is not found.
+
+Review a Pi agent's packages like any Pi package: their extensions run inside
+Pi with Pi's permissions and Bivy's approvals.
+
 ## Manifest reference
 
 Top-level fields are strict; unknown fields fail validation.
@@ -197,7 +241,7 @@ An agent contribution supports:
 - `hidden: true` to keep it out of the normal picker while retaining explicit
   `BIVY_RUNTIME=<id>` access;
 - `authOwner: agent | bivy | mixed`;
-- `adapter.kind: process | acp`.
+- `adapter.kind: process | acp | pi`.
 
 Commands and arguments are bounded during validation. Resume arguments must contain an `{id}` placeholder. Process agents that accept
 an id on first launch may also declare `resume.newArgs` with `{id}`; Bivy then

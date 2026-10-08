@@ -14,7 +14,7 @@ import {
   codexAppServerRuntime,
   codexIntegration,
 } from "../agents/codex/integration.js";
-import { piAgentDir, piCommandAvailable, piIntegration, LazyPiRuntime } from "../agents/pi/integration.js";
+import { piAgentDir, piCommandAvailable, piIntegration, piPresetIntegration, LazyPiRuntime } from "../agents/pi/integration.js";
 import { deleteCodexSession, loadCodexTranscript } from "./codex-sessions.js";
 import { deleteOpenCodeSession, exportOpenCodeSession, importOpenCodeSession, loadOpenCodeTranscript, writeOpenCodeHistory } from "./opencode-sessions.js";
 import { discoverNativeGrokSessions, listGrokSessions, loadGrokTranscript } from "./grok-sessions.js";
@@ -72,6 +72,7 @@ import { ProtocolRuntime, protocolRuntimeFromEnv, protocolCommandsFromEnv, type 
 import { codexSlashCommands, opencodeSlashCommands, type SlashCommandProvider } from "./slash-commands.js";
 import { withExactCapabilitySurface, type AgentRuntime } from "./types.js";
 import { installedAgentContributions } from "../plugins/store.js";
+import type { AcpAgentAdapter, ProcessAgentAdapter } from "../plugin-sdk/index.js";
 import { forkCapsFromInfo, type AgentForkCaps } from "../session/fork-matrix.js";
 import { currentBivyVersion } from "../app-version.js";
 import type {
@@ -232,9 +233,12 @@ export function pluginAgentConflictDiagnostics(dataDir?: string): string[] {
 }
 
 type InstalledAgentContribution = ReturnType<typeof installedAgentContributions>["agents"][number];
+type CliAgentContribution = InstalledAgentContribution & {
+  agent: InstalledAgentContribution["agent"] & { adapter: ProcessAgentAdapter | AcpAgentAdapter };
+};
 
-/** Translate a public manifest contribution into the shared CLI adapter shape. */
-function pluginAgentSpec(contribution: InstalledAgentContribution): AgentProfile {
+/** Translate a public process/ACP contribution into the shared CLI adapter shape. */
+function pluginAgentSpec(contribution: CliAgentContribution): AgentProfile {
   const { agent } = contribution;
   const common = {
     displayName: agent.name,
@@ -1089,13 +1093,25 @@ function agentRegistry(pluginDataDir?: string): AgentRegistry<RuntimeInfo, Runti
   // Earlier registrations win, and every retained/rejected origin remains explicit.
   for (const [id, spec] of customAgentSpecs()) registry.register(cliRegistration(id, spec, { kind: "config" }));
   for (const contribution of installedAgentContributions(pluginDataDir).agents) {
-    registry.register(cliRegistration(contribution.agent.id, pluginAgentSpec(contribution), {
+    const origin: AgentIntegrationOrigin = {
       kind: "package",
       packageId: contribution.pluginId,
       packageVersion: contribution.pluginVersion,
       location: "installed",
       verified: false,
-    }));
+    };
+    const { agent } = contribution;
+    registry.register(agent.adapter.kind === "pi"
+      ? piPresetIntegration({
+          id: agent.id,
+          displayName: agent.name,
+          packages: agent.adapter.packages,
+          ...(agent.adapter.skills ? { skills: agent.adapter.skills } : {}),
+          ...(agent.description ? { description: agent.description } : {}),
+          ...(agent.hidden ? { hidden: true } : {}),
+          pluginName: contribution.pluginName,
+        }, origin)
+      : cliRegistration(agent.id, pluginAgentSpec(contribution as CliAgentContribution), origin));
   }
   return registry;
 }

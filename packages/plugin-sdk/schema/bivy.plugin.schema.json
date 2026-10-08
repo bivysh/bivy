@@ -136,6 +136,9 @@
             },
             {
               "$ref": "#/$defs/acpAdapter"
+            },
+            {
+              "$ref": "#/$defs/piAdapter"
             }
           ]
         }
@@ -253,6 +256,43 @@
         },
         "args": {
           "$ref": "#/$defs/stringArgs"
+        }
+      }
+    },
+    "piAdapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "packages"
+      ],
+      "properties": {
+        "kind": {
+          "const": "pi"
+        },
+        "packages": {
+          "description": "Local Pi package directories or files, resolved against the manifest's directory on install.",
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1000,
+            "not": {
+              "pattern": "^(?:npm:|git:|git\\+|https?://|ssh://|git@)"
+            }
+          }
+        },
+        "skills": {
+          "description": "Skills from those packages whose instructions are always in the system prompt.",
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+            "maxLength": 64
+          }
         }
       }
     },

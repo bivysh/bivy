@@ -75,6 +75,21 @@ test("packaged JSON Schema is generated from the SDK schema object", () => {
   assert.deepEqual(JSON.parse(fs.readFileSync(file, "utf8")), PLUGIN_MANIFEST_SCHEMA);
 });
 
+test("Pi package agents name local packages and valid skills only", () => {
+  const pi = (adapter: string) => parsePluginManifest(valid.replace(/ {6}adapter:[\s\S]*$/, `      adapter:\n${adapter}`));
+  const ok = pi("        kind: pi\n        packages: [./sci]\n        skills: [sci-research]\n");
+  assert.equal(ok.ok, true, ok.errors.join("\n"));
+  assert.deepEqual(ok.manifest?.contributes.agents[0]?.adapter, { kind: "pi", packages: ["./sci"], skills: ["sci-research"] });
+  const bad = pi("        kind: pi\n        packages: [\"git:github.com/example/pkg\", \"npm:pkg\"]\n        skills: [Bad_Name]\n        command: pi\n");
+  assert.equal(bad.ok, false);
+  const errors = bad.errors.join("\n");
+  assert.match(errors, /git:github\.com\/example\/pkg is remote/);
+  assert.match(errors, /npm:pkg is remote/);
+  assert.match(errors, /Bad_Name is not a valid skill name/);
+  assert.match(errors, /command is not supported/);
+  assert.match(pi("        kind: pi\n").errors.join("\n"), /at least one Pi package/);
+});
+
 test("plugin manifest fails closed on unknown fields and unsafe shapes", () => {
   const result = parsePluginManifest(`
 apiVersion: bivy.sh/v1alpha1

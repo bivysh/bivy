@@ -7,6 +7,7 @@ import { defineAgentIntegration, type AgentIntegrationOrigin } from "../definiti
 import type { AgentInfo, AgentInstallCommand, AgentSessionOptions } from "../types.js";
 import type { AgentRuntime, OpenSessionOptions, OpenSessionResult, SessionSummary, ForkNativePayload, ForkImportContext, ForkHistoryMessage, DiscoveredNativeSession, CatalogProvider } from "../../runtime/types.js";
 import { PI_CAPABILITIES } from "./capabilities.js";
+import type { PiAgentPreset } from "./runtime.js";
 import { bridgeInstalled, enableBridgeResolution } from "../../agent-bridges.mjs";
 
 export const PI_TESTED_VERSION = "1.0.4";
@@ -53,7 +54,7 @@ export function piBridgeInstalled(): boolean {
   return bridgeInstalled("@earendil-works/pi-coding-agent");
 }
 
-type PiRuntimeOptions = AgentSessionOptions & { piDir: string; credentialOwner: "agent" | "bivy" };
+type PiRuntimeOptions = AgentSessionOptions & { piDir: string; credentialOwner: "agent" | "bivy"; agent?: PiAgentPreset };
 
 function unsupportedNodeMessage(): string {
   return `Pi requires Node.js 22.19+ (found ${process.version}). Upgrade Node, or select another agent such as Claude Code/Codex/OpenCode.`;
@@ -65,12 +66,15 @@ function nodeSupportsPi(): boolean {
 }
 
 export class LazyPiRuntime implements AgentRuntime {
-  readonly id = "pi";
-  readonly displayName = "Pi";
+  readonly id: string;
+  readonly displayName: string;
   readonly capabilities = PI_CAPABILITIES;
   private inner?: Promise<AgentRuntime>;
 
-  constructor(private readonly options: PiRuntimeOptions) {}
+  constructor(private readonly options: PiRuntimeOptions) {
+    this.id = options.agent?.id ?? "pi";
+    this.displayName = options.agent?.displayName ?? "Pi";
+  }
 
   private async runtime(): Promise<AgentRuntime> {
     if (!nodeSupportsPi()) throw new Error(unsupportedNodeMessage());
@@ -147,5 +151,38 @@ export function piIntegration(origin: AgentIntegrationOrigin) {
       args: ["install", "--global", "--prefix", prefix, "@earendil-works/pi-coding-agent"],
       display: `npm install --global --prefix ${prefix} @earendil-works/pi-coding-agent`,
     }),
+  });
+}
+
+/**
+ * A Pi agent contributed as data: the operator's Pi with extra Pi packages and
+ * preloaded skills (a plugin's `adapter.kind: pi`). Everything else — streaming,
+ * approvals, models, resume, TUI hand-off — is the Pi integration above.
+ */
+export function piPresetIntegration(
+  preset: PiAgentPreset & { description?: string; hidden?: boolean; pluginName: string },
+  origin: AgentIntegrationOrigin,
+) {
+  const base = piIntegration(origin);
+  const { description, hidden, pluginName, ...agent } = preset;
+  return defineAgentIntegration<AgentInfo, AgentSessionOptions, AgentRuntime, AgentInstallCommand>({
+    id: agent.id,
+    visible: hidden !== true,
+    origin,
+    describe: () => ({
+      ...base.describe(),
+      id: agent.id,
+      displayName: agent.displayName,
+      description: description ?? `Pi with the ${pluginName} plugin's packages.`,
+      packageName: `${pluginName} plugin`,
+      supportTier: "experimental",
+      testedVersion: undefined,
+      install: undefined,
+    }),
+    create: (options) => {
+      if (!piCommandAvailable()) throw new Error(`Pi command not found on PATH: ${piCommand()}`);
+      if (!piBridgeInstalled()) throw new Error("Bivy's optional Pi bridge is not installed. Run 'bivy setup' and choose Pi, or run 'bivy agents:install'.");
+      return new LazyPiRuntime({ ...options, piDir: piAgentDir(), credentialOwner: "bivy", agent });
+    },
   });
 }

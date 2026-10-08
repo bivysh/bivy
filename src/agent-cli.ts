@@ -128,7 +128,7 @@ Adds an existing user-owned agent through the same declarative package contract 
           package: plugin.id,
           version: plugin.manifest!.metadata.version,
           transport: agent.adapter.kind,
-          command: agent.adapter.command,
+          command: agent.adapter.kind === "pi" ? `pi -e ${agent.adapter.packages.join(" -e ")}` : agent.adapter.command,
           status: plugin.errors.length ? "invalid" : "installed",
         })) ?? [],
       );
