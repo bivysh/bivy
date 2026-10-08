@@ -296,13 +296,11 @@ describe("component specs", () => {
 });
 
 describe("componentKind", () => {
-  it("prefers the spec's declared type, then the file's mime", () => {
+  it("prefers the spec's declared type, then the file's mime, then its extension", () => {
     expect(componentKind({ spec: { type: "Metric" } })).toBe("metric");
     expect(componentKind({ path: "a/b.png", mimeType: "image/png" })).toBe("image");
+    expect(componentKind({ path: "a/b.csv" })).toBe("table");
     expect(componentKind({ path: "a/b.pdf", mimeType: "application/pdf" })).toBe("file");
-    // No row yet for a richer reading of a file; a CSV is a download until the
-    // table renderer exists to draw it.
-    expect(componentKind({ path: "a/b.csv" })).toBe("file");
   });
   it("names an unreadable spec rather than guessing a kind for it", () => {
     expect(componentKind({ spec: { value: 1 } })).toBe("unknown");

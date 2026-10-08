@@ -83,3 +83,54 @@ export function useAttachmentUrl(attachment: PromptAttachment | null | undefined
 
   return inlineUrl ?? fetchedUrl;
 }
+
+/**
+ * The text of a stored attachment, for a component that has to read a file's
+ * contents rather than link to it (a CSV rendered as a table).
+ *
+ * Separate from useAttachmentUrl because the need is different: a blob URL is
+ * for the browser to load, this is for us to parse. Bounded, because the bytes
+ * become a rendered table in the message — a file past the cap reports its size
+ * instead of locking the tab up laying out a hundred thousand rows.
+ */
+export const MAX_COMPONENT_TEXT_BYTES = 512 * 1024;
+
+export type AttachmentText =
+  | { state: "loading" }
+  | { state: "ready"; text: string }
+  | { state: "error"; reason: string };
+
+export function useAttachmentText(attachment: PromptAttachment | null | undefined): AttachmentText {
+  const [result, setResult] = useState<AttachmentText>({ state: "loading" });
+  const hash = attachment?.hash;
+  const size = attachment?.size ?? 0;
+  useEffect(() => {
+    setResult({ state: "loading" });
+    if (!hash) return;
+    if (size > MAX_COMPONENT_TEXT_BYTES) {
+      setResult({ state: "error", reason: `This file is ${fmtBytes(size)} — too large to show here.` });
+      return;
+    }
+    let cancelled = false;
+    void controller.fetchAttachment(hash).then((res) => {
+      if (cancelled) return;
+      if (!res) {
+        setResult({ state: "error", reason: "This file could not be read." });
+        return;
+      }
+      try {
+        // atob gives latin1 bytes; decode them as UTF-8 so a non-ASCII cell
+        // ("Tromsø") survives the round trip.
+        const binary = atob(res.data);
+        const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+        setResult({ state: "ready", text: new TextDecoder().decode(bytes) });
+      } catch {
+        setResult({ state: "error", reason: "This file could not be read as text." });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [hash, size]);
+  return result;
+}

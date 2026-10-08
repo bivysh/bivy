@@ -654,6 +654,14 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    the prose around it. The fixed chip width belongs to the composer's wrapping
    attachment list, where several chips share a line. */
 .msg.assistant .md-component > * { width: 100%; }
+/* A single number the agent wants read at a glance. Inherits .card's shell;
+   only the value's type scale is its own. */
+.metric-component { text-align: center; }
+.metric-value { font-size: var(--text-3xl); line-height: var(--lh-3xl); font-weight: var(--weight-semibold); }
+/* A table from a CSV or a spec reuses .markdown-table-wrap, so it reads exactly
+   like a table the agent wrote as markdown. The caption is the only addition. */
+.table-component { margin: 0; }
+.table-component figcaption { margin-top: var(--space-2); }
 /* Syntax highlighting for fenced code blocks (highlight.js token classes).
    Colors use light-dark() so one rule set tracks the app's light/dark scheme
    (color-scheme is set on :root). A GitHub-flavored palette that sits well on
