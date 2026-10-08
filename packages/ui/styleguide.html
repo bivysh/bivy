@@ -387,7 +387,7 @@ section > .lede { color: var(--muted); font-size: var(--text-sm); margin: 0 0 va
   <nav class="nav">
     <a href="#color">Color</a><a href="#type">Type</a><a href="#space">Spacing &amp; radius</a>
     <a href="#buttons">Buttons</a><a href="#badges">Badges</a><a href="#meter">Meter</a><a href="#status">Status</a>
-    <a href="#source">Source marks</a><a href="#cards">Cards</a><a href="#messages">Messages</a>
+    <a href="#source">Source marks</a><a href="#cards">Cards</a><a href="#components">Components</a><a href="#messages">Messages</a>
     <a href="#feedback">Toasts &amp; banners</a><a href="#inputs">Inputs</a><a href="#menus">Menus</a>
     <a href="#segmented">Segmented</a><a href="#loading">Loading</a>
   </nav>
@@ -605,6 +605,46 @@ section > .lede { color: var(--muted); font-size: var(--text-sm); margin: 0 0 va
         </div>
       </div>
       <div class="consolidates"><b>Consolidates ~18 inlined recipes:</b> <code>.approval-card</code>, <code>.question-card</code>, <code>.changes-card</code>, <code>.followup-card</code>, <code>.queue-card</code>, <code>.settings-row</code>, <code>.setup-card</code>, <code>.tui-locked-card</code>, … — same bordered surface with inconsistent radius/background. The selected-option treatment is the <code>.selectable[aria-pressed]</code> utility (also <code>.seg-btn.active</code>, <code>.ruleset-chip.active</code>).</div>
+    </div>
+  </section>
+
+  <!-- PLACED COMPONENTS -------------------------------------------------- -->
+  <section id="components">
+    <h2>Components in a message</h2>
+    <p class="lede">What an agent places inside its reply with <code>::view{src=…}</code> or a <code>```bivy</code> spec. Each one fills the reading column, so a chip, a table and a number line up with each other and with the prose. Rendered by the kind table in <code>MessageComponent.tsx</code> — add a row there, not a new card.</p>
+    <div class="spec"><div class="spec-h"><b>Number</b> <code>.card.metric-component</code></div>
+      <div class="demo col">
+        <div class="card metric-component">
+          <div class="metric-value">4 650 kWh</div>
+          <div class="card-sub">Oslo, per year</div>
+        </div>
+      </div>
+      <div class="consolidates">The value is the content, so it takes <code>--text-3xl</code>; the label is an ordinary <code>.card-sub</code>. Not a <code>.badge</code> (which carries a state) and not a <code>.meter</code> (which carries a proportion).</div>
+    </div>
+    <div class="spec"><div class="spec-h"><b>Table</b> <code>.table-component</code> + <code>.markdown-table-wrap</code></div>
+      <div class="demo col">
+        <figure class="table-component" style="margin:0">
+          <div class="markdown-table-wrap"><table>
+            <thead><tr><th>City</th><th>kWh/yr</th></tr></thead>
+            <tbody><tr><td>Oslo</td><td>4650</td></tr><tr><td>Troms&oslash;</td><td>6730</td></tr></tbody>
+          </table></div>
+          <figcaption class="card-sub">Delivered heat, by city</figcaption>
+        </figure>
+      </div>
+      <div class="consolidates">Reuses the wrapper a markdown pipe table already renders into, so a table reads the same however the agent produced it. Only the caption is new.</div>
+    </div>
+    <div class="spec"><div class="spec-h"><b>Cannot be shown</b> <code>.card[data-tone="muted"]</code></div>
+      <div class="demo col">
+        <div class="card" data-tone="muted">
+          <div class="card-title">out/pending.pdf</div>
+          <div class="card-sub">This file is still being prepared, or could not be read.</div>
+        </div>
+        <div class="card" data-tone="muted">
+          <div class="card-title">Where the time went</div>
+          <div class="card-sub">This version of Bivy cannot show a &ldquo;sankey&rdquo; yet.</div>
+        </div>
+      </div>
+      <div class="consolidates">A component that has not resolved, or a kind this build does not know, says so by name. Muted, not <code>data-tone="danger"</code>: nothing the reader did caused it. Never render nothing &mdash; agents get the syntax wrong, and a message that silently loses part of itself is worse than one that says what is missing.</div>
     </div>
   </section>
 

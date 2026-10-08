@@ -300,11 +300,13 @@ export function componentKind(opts: { path?: string | null; mimeType?: string | 
   if (opts.spec) return "unknown";
   const mime = String(opts.mimeType || "").toLowerCase();
   if (mime.startsWith("image/")) return "image";
+  const ext = String(opts.path || "").toLowerCase().split(".").pop() ?? "";
+  if (ext === "csv" || ext === "tsv") return "table";
   // Everything else is a file the reader can open or download. Rows for richer
-  // readings of a file — a CSV as a table, a notebook, a diff — belong here
-  // alongside the renderer that can actually draw them. A row added early would
-  // promise a kind the view layer has to decline, turning a useful download into
-  // "this version cannot show that yet".
+  // readings of a file — a notebook, a diff — belong here alongside the renderer
+  // that can actually draw them. A row added early would promise a kind the view
+  // layer has to decline, turning a useful download into "this version cannot
+  // show that yet".
   return "file";
 }
 

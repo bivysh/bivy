@@ -26,6 +26,12 @@ for (const theme of themes) for (const width of [390, 1024]) {
       "",
       "::view{src=out/report.pdf caption=\"The quarterly summary\"}",
       "",
+      "::view{src=data/use.csv caption=\"Delivered heat, by city\"}",
+      "",
+      "```bivy",
+      '{"type":"metric","value":"4 650 kWh","label":"Oslo, per year"}',
+      "```",
+      "",
       "A reference the node has not resolved yet:",
       "",
       "::view{src=out/pending.pdf}",
@@ -48,13 +54,20 @@ for (const theme of themes) for (const width of [390, 1024]) {
       // The resolved chip fetches its bytes by hash from the node. There is no
       // node here, so stand in for that one call — everything else under test
       // (kind resolution, the registry, the portal, the layout) is real.
-      controller.fetchAttachment = async (hash) => hash === 'resolved-hash'
-        ? { data: btoa('quarter,total\\nQ1,12'), mimeType: 'application/pdf' }
+      const bytes = {
+        'resolved-hash': 'a report',
+        'csv-hash': 'City,kWh/yr,Notes\\nOslo,4650,\"Mild, coastal\"\\nTromsø,6730,Cold',
+      };
+      controller.fetchAttachment = async (hash) => hash in bytes
+        ? { data: btoa(unescape(encodeURIComponent(bytes[hash]))), mimeType: 'text/plain' }
         : null;
       createRoot(document.getElementById('root')).render(h(ChatView, {
         entries: [{
           id: 'reply', role: 'assistant', text: ${JSON.stringify(text)},
-          imageRefs: { 'out/report.pdf': { hash: 'resolved-hash', name: 'report.pdf', mimeType: 'application/pdf', size: 20, kind: 'file' } },
+          imageRefs: {
+            'out/report.pdf': { hash: 'resolved-hash', name: 'report.pdf', mimeType: 'application/pdf', size: 20, kind: 'file' },
+            'data/use.csv': { hash: 'csv-hash', name: 'use.csv', mimeType: 'text/csv', size: 60, kind: 'file' },
+          },
         }],
         working: false, draftRoute: false, sessionKey: 'test',
       }));
@@ -78,6 +91,18 @@ for (const theme of themes) for (const width of [390, 1024]) {
     await download.click();
     expect((await started).suggestedFilename()).toBe('report.pdf');
 
+    // A CSV renders as a table that reads like one the agent wrote as markdown,
+    // with quoted cells containing the delimiter kept whole and non-ASCII intact.
+    const table = page.locator('.md-component .table-component');
+    await expect(table.getByRole('columnheader', { name: 'kWh/yr' })).toBeVisible();
+    await expect(table.getByRole('cell', { name: 'Mild, coastal' })).toBeVisible();
+    await expect(table.getByRole('cell', { name: 'Tromsø' })).toBeVisible();
+    await expect(table.getByText('Delivered heat, by city')).toBeVisible();
+
+    // A spec needs no file at all: it renders straight from the message.
+    await expect(page.getByText('4 650 kWh')).toBeVisible();
+    await expect(page.getByText('Oslo, per year')).toBeVisible();
+
     // Both failure modes name what the agent meant. Neither is silent, and
     // neither is styled as the reader's error.
     await expect(page.getByText('out/pending.pdf')).toBeVisible();
@@ -97,7 +122,7 @@ for (const theme of themes) for (const width of [390, 1024]) {
     const order = await page.locator('.msg.assistant > *').evaluateAll(
       (nodes) => nodes.map((n) => (n.className || n.tagName).toString()),
     );
-    expect(order.filter((c) => c.includes('md-component'))).toHaveLength(3);
+    expect(order.filter((c) => c.includes('md-component'))).toHaveLength(5);
     expect(order[0]).toBe('P');
 
     await page.screenshot({ path: testInfo.outputPath('components.png'), fullPage: true });

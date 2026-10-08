@@ -22,6 +22,8 @@ import { useMemo } from "react";
 import { componentKind, type AttachmentRef, type PromptAttachment } from "@bivy/core";
 
 import { AttachmentChip } from "./AttachmentChip.js";
+import { useAttachmentText } from "../attachmentUrl.js";
+import { parseCsv } from "../csv.js";
 
 /** What the renderer put in the mount point's data attributes. */
 export interface Placement {
@@ -66,8 +68,77 @@ function Unavailable({ what, why }: { what: string; why: string }) {
   );
 }
 
+/** A value the agent wants read at a glance — "4 650 kWh", "12 failing". Not a
+ *  badge (which carries a state) and not a meter (which carries a proportion):
+ *  the number IS the content, so it gets the message's largest type and its
+ *  label sits under it in the muted voice every caption already uses. */
+function Metric({ spec }: { spec: Record<string, unknown> }) {
+  const value = spec.value;
+  const label = spec.label;
+  if (value === undefined || value === null || value === "") {
+    return <Unavailable what="A number" why="This component has no value to show." />;
+  }
+  return (
+    <div className="card metric-component">
+      <div className="metric-value">{String(value)}</div>
+      {label !== undefined && label !== null && label !== "" && <div className="card-sub">{String(label)}</div>}
+    </div>
+  );
+}
+
+/** Rows from a spec (`columns` + `rows`) or from a CSV file the node stored.
+ *  Renders into the SAME .markdown-table-wrap a markdown pipe table uses, so a
+ *  table reads identically however the agent produced it. */
+function Table({ placement, attachment }: RenderArgs) {
+  const spec = placement.spec;
+  const fromSpec = Array.isArray(spec?.columns) && Array.isArray(spec?.rows);
+  const file = attachment ? asAttachment(attachment) : null;
+  // Hooks run unconditionally; the fetch is skipped when there is no file.
+  const text = useAttachmentText(fromSpec ? null : file);
+  const parsed = useMemo(() => (text.state === "ready" ? parseCsv(text.text) : null), [text]);
+
+  if (fromSpec) {
+    const columns = (spec!.columns as unknown[]).map(String);
+    const rows = (spec!.rows as unknown[]).map((r) => (Array.isArray(r) ? r.map(String) : [String(r)]));
+    return <Grid caption={captionOf(placement) ?? (typeof spec!.title === "string" ? spec!.title : undefined)} header={columns} rows={rows} omitted={0} />;
+  }
+  if (!attachment) return <Unavailable what={placement.ref ?? "A table"} why="This table is still being prepared, or could not be read." />;
+  if (text.state === "error") return <Unavailable what={placement.ref ?? attachment.name} why={text.reason} />;
+  if (!parsed) return <Unavailable what={placement.ref ?? attachment.name} why="Reading this file…" />;
+  if (!parsed.header.length) return <Unavailable what={placement.ref ?? attachment.name} why="This file has no rows to show." />;
+  return <Grid caption={captionOf(placement) ?? attachment.name} header={parsed.header} rows={parsed.rows} omitted={parsed.omitted} />;
+}
+
+function Grid({ caption, header, rows, omitted }: { caption?: string; header: string[]; rows: string[][]; omitted: number }) {
+  return (
+    <figure className="table-component">
+      <div className="markdown-table-wrap">
+        <table>
+          <thead>
+            <tr>{header.map((cell, i) => <th key={i}>{cell}</th>)}</tr>
+          </thead>
+          <tbody>
+            {rows.map((row, r) => (
+              <tr key={r}>{header.map((_, c) => <td key={c}>{row[c] ?? ""}</td>)}</tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {(caption || omitted > 0) && (
+        <figcaption className="card-sub">
+          {caption}
+          {omitted > 0 && `${caption ? " · " : ""}${omitted} more row${omitted === 1 ? "" : "s"} not shown`}
+        </figcaption>
+      )}
+    </figure>
+  );
+}
+
 /** kind → renderer. The whole registry. */
 const REGISTRY: Record<string, (args: RenderArgs) => React.ReactNode> = {
+  metric: ({ placement }) =>
+    placement.spec ? <Metric spec={placement.spec} /> : <Unavailable what="A number" why="This component has no value to show." />,
+  table: (args) => <Table {...args} />,
   image: ({ placement, attachment }) =>
     attachment ? (
       <AttachmentChip attachment={asAttachment(attachment, captionOf(placement))} />
