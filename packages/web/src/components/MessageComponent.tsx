@@ -18,12 +18,13 @@
 //      reference, or a spec this build cannot read all render something that
 //      names what the agent meant. Agents get syntax wrong; a message that
 //      quietly loses a third of itself is worse than one that says so.
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { componentKind, type AttachmentRef, type PromptAttachment } from "@bivy/core";
 
 import { AttachmentChip } from "./AttachmentChip.js";
 import { useAttachmentText } from "../attachmentUrl.js";
 import { parseCsv } from "../csv.js";
+import { renderChart } from "../vega.js";
 
 /** What the renderer put in the mount point's data attributes. */
 export interface Placement {
@@ -134,8 +135,59 @@ function Grid({ caption, header, rows, omitted }: { caption?: string; header: st
   );
 }
 
+/**
+ * A Vega-Lite chart. Drawn imperatively into a host node because Vega owns the
+ * SVG it produces — React must not reconcile inside it — which is the same
+ * arrangement Mermaid already has with fenced diagrams.
+ *
+ * The renderer arrives in a lazy chunk, so `loading` is a real state here and
+ * not a formality. It stays silent (an empty box at the chart's height) rather
+ * than flashing a spinner for what is usually a few hundred milliseconds.
+ */
+function Chart({ placement }: RenderArgs) {
+  const host = useRef<HTMLDivElement>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  const spec = placement.spec;
+  const height = Number(placement.attrs.height) || 0;
+
+  // The spec arrives as a fresh object on every markdown render, so the effect
+  // keys on its SERIALIZED form — by identity, an unrelated re-render would tear
+  // the chart down and redraw it. The effect reads the spec back from this
+  // string rather than closing over the object, so its dependency is exactly
+  // what it uses.
+  const specJson = useMemo(() => (spec ? JSON.stringify(spec) : ""), [spec]);
+  useEffect(() => {
+    const node = host.current;
+    if (!node || !specJson) return;
+    let cancelled = false;
+    node.replaceChildren();
+    setFailed(null);
+    void renderChart(node, JSON.parse(specJson) as Record<string, unknown>).then((result) => {
+      if (cancelled || result.ok) return;
+      if (result.reason) setFailed(result.reason);
+    });
+    return () => {
+      cancelled = true;
+      node.replaceChildren();
+    };
+  }, [specJson]);
+
+  if (!spec) return <Unavailable what="A chart" why="This component has no chart to draw." />;
+  if (failed) {
+    return <Unavailable what={typeof spec.title === "string" ? spec.title : "A chart"} why={failed} />;
+  }
+  const caption = captionOf(placement) ?? (typeof spec.description === "string" ? spec.description : undefined);
+  return (
+    <figure className="chart-component">
+      <div ref={host} className="chart-host" style={height ? { minHeight: `${height}px` } : undefined} />
+      {caption && <figcaption className="card-sub">{caption}</figcaption>}
+    </figure>
+  );
+}
+
 /** kind → renderer. The whole registry. */
 const REGISTRY: Record<string, (args: RenderArgs) => React.ReactNode> = {
+  chart: (args) => <Chart {...args} />,
   metric: ({ placement }) =>
     placement.spec ? <Metric spec={placement.spec} /> : <Unavailable what="A number" why="This component has no value to show." />,
   table: (args) => <Table {...args} />,

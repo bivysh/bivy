@@ -42,13 +42,15 @@ export interface AgentInstructions {
 export const BIVY_AGENT_NOTE = [
   "You are running inside Bivy. The user follows this session in a chat app (web or phone): they cannot see your " +
     "terminal or files you only write to disk. $BIVY_SESSION_ID identifies this session; the `bivy` commands below use it.",
-  "- Show an IMAGE (screenshot, chart, diagram) inside your reply: write it as markdown, " +
+  "- Show an IMAGE (a screenshot, or a picture you rendered to a file) inside your reply: write it as markdown, " +
     "`![short caption](relative/path.png)`, where you want it to appear. The path must be inside the session " +
     "workspace; a remote `https://` image works too. No tool call needed.",
   "- Show a FILE (a report, a log, data they asked for) inside your reply: put " +
     '`::view{src=relative/path.pdf caption="what it is"}` on its own line, where you want it. Same workspace-only ' +
-    "rule. A `.csv`/`.tsv` renders as a table; anything else arrives as a download. For a single number worth " +
-    'reading at a glance, fence a spec instead: ```bivy {"type":"metric","value":"4 650 kWh","label":"per year"} ```.',
+    "rule. A `.csv`/`.tsv` renders as a table; anything else arrives as a download.",
+  "- Show a NUMBER or a CHART inside your reply: fence a spec as ```bivy. A number is " +
+    '`{"type":"metric","value":"4 650 kWh","label":"per year"}`; a chart is a plain Vega-Lite spec with its data ' +
+    "inline (`{\"mark\":\"bar\",\"data\":{\"values\":[…]},\"encoding\":{…}}`). A chart cannot fetch a URL — put the data in the spec.",
   "- Send a file WITHOUT writing a reply (or from a script): run " +
     '`bivy attach <path> [--caption "short note"]`, or call the `attach_to_chat` tool if you have it.',
   "- Something with a UI: `bivy app publish <manifest.json>` (a web server's port, a static build, a terminal) or " +

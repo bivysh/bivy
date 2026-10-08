@@ -3633,3 +3633,12 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
   font-family: var(--font-serif);
   font-weight: var(--weight-medium);
 }
+/* A Vega-Lite chart an agent placed in a message. Vega owns the SVG inside
+   .chart-host, so nothing here styles its internals — colors come from the
+   tokens read in vega.ts, which is how the chart tracks light/dark. */
+.chart-component { margin: 0; }
+.chart-component .chart-host {
+  width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 10px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface);
+}
+.chart-component figcaption { margin-top: var(--space-2); }

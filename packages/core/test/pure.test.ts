@@ -302,6 +302,15 @@ describe("componentKind", () => {
     expect(componentKind({ path: "a/b.csv" })).toBe("table");
     expect(componentKind({ path: "a/b.pdf", mimeType: "application/pdf" })).toBe("file");
   });
+  it("recognises a Vega-Lite spec by its shape, with no type to remember", () => {
+    // An agent's spec written for anywhere else has to work here unchanged;
+    // requiring a Bivy-specific `type` would make it a dialect.
+    expect(componentKind({ spec: { mark: "bar", encoding: {} } })).toBe("chart");
+    expect(componentKind({ spec: { $schema: "https://vega.github.io/schema/vega-lite/v6.json" } })).toBe("chart");
+    expect(componentKind({ spec: { layer: [] } })).toBe("chart");
+    // An explicit type still wins, so a future kind can use any of those words.
+    expect(componentKind({ spec: { type: "metric", mark: "bar" } })).toBe("metric");
+  });
   it("names an unreadable spec rather than guessing a kind for it", () => {
     expect(componentKind({ spec: { value: 1 } })).toBe("unknown");
   });
