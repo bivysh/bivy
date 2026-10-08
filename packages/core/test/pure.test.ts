@@ -181,6 +181,27 @@ describe("extractImageReferences", () => {
   });
 });
 
+describe("image pattern matching stays linear", () => {
+  it("scans an adversarial message in bounded time", () => {
+    // js/polynomial-redos: with unbounded `[^\]]*` / `[^)\s]+`, every `!` in
+    // `![![![…` starts an attempt that scans to the end of the string, so the
+    // whole scan is quadratic. This text is agent-authored and reaches the node
+    // at every message boundary, so a slow scan is reachable. Timing is a weak
+    // assertion, but a quadratic scan of this input takes many seconds while a
+    // linear one takes milliseconds — the two are orders of magnitude apart, so
+    // a generous ceiling still fails loudly if a bound is ever dropped.
+    const hostile = "![".repeat(60_000);
+    const started = Date.now();
+    expect(extractImageReferences(hostile)).toEqual([]);
+    expect(extractImageReferences(`${hostile}](x.png)`).length).toBeLessThanOrEqual(1);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+  it("ignores an alt text or reference past its bound rather than matching slowly", () => {
+    expect(extractImageReferences(`![${"a".repeat(600)}](out/x.png)`)).toEqual([]);
+    expect(extractImageReferences(`![a](out/${"b".repeat(2100)}.png)`)).toEqual([]);
+  });
+});
+
 describe("classifyImageTarget", () => {
   it("accepts https URLs and workspace-relative paths", () => {
     expect(classifyImageTarget("https://x.test/a.png")).toBe("remote");
@@ -197,7 +218,7 @@ describe("classifyImageTarget", () => {
       "//x.test/a.png", "/etc/passwd", "~/.ssh/id_rsa", "#section",
       "../../../etc/passwd", "out/../../etc/passwd", "out\\a.png",
       "out/\u0000a.png",
-      `${"a".repeat(600)}.png`,
+      `${"a".repeat(2100)}.png`,
     ]) {
       expect(classifyImageTarget(target), target).toBeNull();
     }

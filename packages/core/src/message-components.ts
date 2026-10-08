@@ -28,8 +28,14 @@
  *  fetches, nor bloat the event log that replicates to a phone. */
 export const MAX_COMPONENTS_PER_MESSAGE = 6;
 
-/** Longest workspace-relative reference we will even look at. */
-const MAX_WORKSPACE_REF_LENGTH = 512;
+/** Longest reference we will even look at. Generous enough for a signed CDN URL
+ *  and far past any real workspace path, but a hard bound — it is also the
+ *  repetition limit in the pattern below, which is what keeps matching linear. */
+const MAX_REF_LENGTH = 2048;
+
+/** Longest alt text we will match. Bounded for the same reason, not because a
+ *  caption that long means anything. */
+const MAX_ALT_LENGTH = 500;
 
 /** Where a reference's bytes come from. */
 export type ComponentOrigin = "remote" | "workspace";
@@ -54,9 +60,18 @@ export interface ImageReference {
  * Returned fresh per call: a shared `g`-flagged regex carries `lastIndex`
  * between calls, which is exactly the kind of cross-call state that makes two
  * consumers of one module disagree.
+ *
+ * Both repetitions are BOUNDED, and must stay that way. Unbounded `[^\]]*` and
+ * `[^)\s]+` make matching quadratic in the message length: on input like
+ * `![![![…` every `!` starts a match attempt that scans to the end of the
+ * string. This runs on assistant message text — which a prompt injection or a
+ * tool result echoed into a reply can shape — on the node, at every message
+ * boundary. With fixed upper bounds each attempt costs at most a constant, so
+ * the whole scan is linear. (CodeQL js/polynomial-redos flags the unbounded
+ * form; it was flagging the shape this module inherited.)
  */
 function imagePattern(): RegExp {
-  return /!\[([^\]]*)\]\(([^)\s]+)\)/g;
+  return new RegExp(`!\\[([^\\]]{0,${MAX_ALT_LENGTH}})\\]\\(([^)\\s]{1,${MAX_REF_LENGTH}})\\)`, "g");
 }
 
 /**
@@ -94,7 +109,7 @@ export function unescapeComponentRef(target: string): string {
  */
 export function classifyImageTarget(target: string): ComponentOrigin | null {
   const t = String(target || "").trim();
-  if (!t || t.length > MAX_WORKSPACE_REF_LENGTH) return null;
+  if (!t || t.length > MAX_REF_LENGTH) return null;
   if (t.startsWith("https://")) return "remote";
   // Every other scheme is refused. `http:` would be an unencrypted fetch,
   // `data:`/`blob:` smuggle bytes past the size and mime checks, `file:` reads
