@@ -10,29 +10,24 @@
 // otherwise get the *viewer's* browser/IP to hit an arbitrary URL by embedding
 // it in a reply).
 //
-// This is the PURE-ish, testable half — URL extraction, host/SSRF validation,
-// and the guarded fetch itself — all dependency-injectable so tests never hit
-// the real network or DNS. The server half (src/server.ts) owns the AttachmentStore
+// This is the PURE-ish, testable half — host/SSRF validation and the guarded
+// fetch itself — all dependency-injectable so tests never hit the real network
+// or DNS. Which references a message makes at all is the renderer's and this
+// module's shared concern, so it lives in ./message-components.js (the same file
+// @bivy/core compiles). The server half (src/server.ts) owns the AttachmentStore
 // write, the durable event-log ref, and the live broadcast; see resolveInlineImages.
 
 import dns from "node:dns/promises";
 
 import { hostnameIsLocal } from "../auth.js";
 import { sanitizeAttachmentName, sniffMime } from "./attach-to-chat.js";
+import { extractImageReferences, MAX_COMPONENTS_PER_MESSAGE } from "./message-components.js";
 
-/**
- * The image-markdown pattern, `![alt](https://…)` — MUST match the image regex
- * in `inline()` in packages/core/src/markdown.ts exactly. Not a shared import: the
- * node (src/) intentionally does not depend on @bivy/core (a browser/client
- * package — see packages/core's own description). Kept in lock-step by comment
- * instead: if you change one, change the other.
- */
-const INLINE_IMAGE_MD_RE = /!\[[^\]]*\]\((https:\/\/[^)\s]+)\)/g;
-
-/** Bound how many distinct remote images a single message can trigger a fetch
- *  for — a pathological/malicious message can't fan out into an unbounded
- *  number of outbound requests. */
-export const MAX_INLINE_IMAGES_PER_MESSAGE = 6;
+/** Bound how many distinct images a single message can trigger a resolve for —
+ *  a pathological/malicious message can't fan out into an unbounded number of
+ *  outbound requests or file reads. Re-exported from the shared grammar, which
+ *  the renderer applies the same cap from. */
+export const MAX_INLINE_IMAGES_PER_MESSAGE = MAX_COMPONENTS_PER_MESSAGE;
 
 /** Ceiling for a single fetched inline image. Smaller than
  *  MAX_AGENT_ATTACHMENT_BYTES (attach-to-chat.ts) because these bytes come from
@@ -46,20 +41,18 @@ const FETCH_TIMEOUT_MS = 10_000;
 /** Hard cap on redirect hops, mirroring execEphemeralRequest's guard. */
 const MAX_REDIRECTS = 5;
 
-/** Extract the distinct `https://` URLs a message's raw markdown references via
- *  `![alt](url)`, in first-seen order, capped at MAX_INLINE_IMAGES_PER_MESSAGE. */
+/** The distinct `https://` URLs a message's raw markdown references via
+ *  `![alt](url)`, in first-seen order, capped at MAX_INLINE_IMAGES_PER_MESSAGE.
+ *  Workspace-relative references are a different resolver's job (they are read,
+ *  not fetched) — see resolveWorkspaceImageRefs in transcript-persistence.ts. */
 export function extractInlineImageUrls(text: string): string[] {
-  if (!text) return [];
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const match of text.matchAll(INLINE_IMAGE_MD_RE)) {
-    const url = match[1];
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    out.push(url);
-    if (out.length >= MAX_INLINE_IMAGES_PER_MESSAGE) break;
-  }
-  return out;
+  return extractImageReferences(text).filter((i) => i.origin === "remote").map((i) => i.ref);
+}
+
+/** The distinct workspace-relative paths a message's raw markdown references,
+ *  in first-seen order, under the same per-message cap. */
+export function extractWorkspaceImagePaths(text: string): string[] {
+  return extractImageReferences(text).filter((i) => i.origin === "workspace").map((i) => i.ref);
 }
 
 /** Best-effort plain text for an assistant RuntimeMessage's `content`, which is

@@ -1,0 +1,1 @@
+../../packages/core/src/message-components.ts
