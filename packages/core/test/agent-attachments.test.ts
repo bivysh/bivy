@@ -149,6 +149,22 @@ describe("agent attachment — sticky across a lossy reconcile (append-only)", (
     ]);
   });
 
+  it("does not re-add a tool's screenshot once its call is gone (e.g. after compaction)", () => {
+    const withScreenshot = [
+      { role: "user", content: "check the layout" },
+      { role: "assistant", content: [{ type: "toolCall", id: "t1", name: "read", arguments: { path: "shot.png" } }] },
+      { role: "toolResult", toolCallId: "t1", toolName: "read", content: [{ type: "text", text: "Read image file" }, { type: "bivy_attachment", ref: imageRef }] },
+      { role: "assistant", content: [{ type: "text", text: "Looks right." }] },
+    ];
+    const compacted = [{ role: "user", content: "Status?" }, { role: "assistant", content: [{ type: "text", text: "Done." }] }];
+    const s = new SessionStore();
+    s.beginOpen("s1");
+    s.apply(historyEvent(withScreenshot, 4, "h4", "r1") as never);
+    expect(attCount(s)).toBe(1);
+    s.apply(historyEvent(compacted, 2, "hC") as never);
+    expect(attCount(s)).toBe(0);
+  });
+
   it("a re-broadcast live attachment already in history is not duplicated", () => {
     const s = new SessionStore();
     s.beginOpen("s1");

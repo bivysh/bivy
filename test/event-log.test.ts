@@ -421,26 +421,31 @@ test("appendBaseSnapshot: an identical snapshot appends nothing", () => {
   }
 });
 
-test("appendBaseSnapshot: compaction (shrink) and mid-prefix mutation force a full reset", () => {
+test("appendBaseSnapshot: a changed first message resets; a later change records only the tail", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-eventlog-"));
   try {
     const pathFor = (id: string) => path.join(dir, `${encodeURIComponent(id)}.jsonl`);
     const log = new EventLog(dir, pathFor, (t) => t, 0);
-    // A realistic turn-by-turn sequence: grow, grow, COMPACT (shrink), grow, then an
-    // in-place rewrite of an existing message (prefix changed at equal-or-greater len).
+    // A realistic turn-by-turn sequence: grow, grow, COMPACT (shrink), grow, a
+    // retry replacing the trailing error, then an in-place rewrite of msg[0].
     const snaps = [
       [baseMsg("user", "q1", 100)],
       [baseMsg("user", "q1", 100), baseMsg("assistant", "a1", 200)],
       [baseMsg("user", "summary", 250)], // compaction: shorter, different prefix
-      [baseMsg("user", "summary", 250), baseMsg("assistant", "a2", 300)],
-      [baseMsg("user", "summary-edited", 250), baseMsg("assistant", "a2", 300)], // msg[0] mutated
+      [baseMsg("user", "summary", 250), baseMsg("assistant", "a2", 300), baseMsg("assistant", "Overloaded", 310)],
+      [baseMsg("user", "summary", 250), baseMsg("assistant", "a2", 300), baseMsg("assistant", "a3", 320)], // retried
+      [baseMsg("user", "summary-edited", 250), baseMsg("assistant", "a2", 300), baseMsg("assistant", "a3", 320)], // msg[0] mutated
     ];
-    for (const s of snaps) log.appendBaseSnapshot("s1", s);
+    for (const s of snaps.slice(0, 5)) log.appendBaseSnapshot("s1", s);
+    log.flush("s1");
+    const retried = log.entries("s1").filter((r) => r.bivyKind === "base").at(-1) as { reset: boolean; keep?: number; messages: unknown[] };
+    assert.deepEqual([retried.reset, retried.keep, retried.messages], [false, 2, [baseMsg("assistant", "a3", 320)]], "only the replaced tail");
+    assert.deepEqual(new EventLog(dir, pathFor).readBase("s1"), snaps[4], "a reopened log replays the truncate");
+    log.appendBaseSnapshot("s1", snaps[5]!);
     log.flush("s1");
     const resets = log.entries("s1").filter((r) => r.bivyKind === "base" && (r as { reset: boolean }).reset).length;
-    assert.equal(resets, 3, "seed + compaction + mid-prefix mutation each reset");
-    // The invariant that matters: replay reproduces the last snapshot exactly.
-    assert.deepEqual(log.readBase("s1"), snaps[snaps.length - 1]);
+    assert.equal(resets, 3, "seed + compaction + first-message mutation each reset");
+    assert.deepEqual(log.readBase("s1"), snaps[5]);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

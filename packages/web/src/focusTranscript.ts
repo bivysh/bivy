@@ -34,7 +34,8 @@ export function focusEntries(entries: TranscriptEntry[], working: boolean): Tran
     apps = [];
   };
   for (const entry of entries) {
-    if (entry.tool || entry.role === "thinking") continue;
+    // A tool's screenshots are its output, hidden with its card.
+    if (entry.tool || entry.toolOutput || entry.role === "thinking") continue;
     if (entry.role === "assistant") {
       lastAssistant = entry;
       if (entry.app || entry.review || entry.notice) apps.push(entry);

@@ -17,10 +17,12 @@
 //     text). The base is a SNAPSHOT that is overwritten each turn and SHRINKS on
 //     compaction, so it cannot be appended naively. Instead each snapshot is stored
 //     as a bounded DELTA against the previous one: a `reset:false` record carrying
-//     only the new tail when the snapshot merely extends the last (the common case),
-//     or a `reset:true` record carrying the full snapshot when it shrinks or a
-//     prefix message changed (compaction / in-place mutation). `baseReplay` folds
-//     these back — reset replaces, non-reset extends — reproducing the last snapshot
+//     only the new tail when the snapshot merely extends the last (the common case)
+//     or changes after a shared prefix (`keep` = how much of the prefix survives;
+//     a retried turn replacing its trailing error), or a `reset:true` record
+//     carrying the full snapshot when its first message changed (compaction).
+//     `baseReplay` folds these back — reset replaces, non-reset truncates to `keep`
+//     and extends — reproducing the last snapshot
 //     exactly, so the fold is behaviour-preserving while keeping the file bounded
 //     (~O(total messages)) instead of O(turns × transcript size).
 //
@@ -268,6 +270,10 @@ export interface BaseLogEntry {
   reset: boolean;
   createdAt: number;
   messages: RuntimeMessage[];
+  /** On a non-reset record: keep only this many messages of the base before
+   *  appending `messages` (the snapshot changed after a shared prefix, e.g. a
+   *  retried turn replaced its trailing error). Absent = plain extend. */
+  keep?: number;
 }
 
 /**
@@ -406,7 +412,9 @@ function isOverlay(value: unknown): value is EventLogEntry {
 function isBase(value: unknown): value is BaseLogEntry {
   if (!value || typeof value !== "object") return false;
   const record = value as { bivyKind?: unknown; messages?: unknown; reset?: unknown };
-  return record.bivyKind === "base" && Array.isArray(record.messages) && typeof record.reset === "boolean";
+  const keep = (value as { keep?: unknown }).keep;
+  return record.bivyKind === "base" && Array.isArray(record.messages) && typeof record.reset === "boolean"
+    && (keep === undefined || (Number.isInteger(keep) && (keep as number) >= 0));
 }
 
 function isForkDisplay(value: unknown): value is ForkDisplayLogEntry {
@@ -647,7 +655,7 @@ export function baseReplay(entries: readonly LogRecord[]): RuntimeMessage[] {
   for (const entry of entries) {
     if (entry.bivyKind !== "base") continue;
     if (entry.reset) base = [...entry.messages];
-    else base = base.concat(entry.messages);
+    else base = (entry.keep === undefined ? base : base.slice(0, entry.keep)).concat(entry.messages);
   }
   return base;
 }
@@ -659,27 +667,61 @@ export interface EventLogIssue {
   at: number;
 }
 
-function parseLogDetailed(body: string, keep: (line: string) => boolean = () => true): { records: LogRecord[]; malformedLines: number } {
-  const records: LogRecord[] = [];
+function parseLogDetailed(lines: Iterable<string>, keep: (line: string) => boolean = () => true): { records: LogRecord[]; malformedLines: number; superseded: number } {
+  let records: LogRecord[] = [];
   let malformedLines = 0;
-  for (const line of body.split("\n")) {
+  let superseded = 0;
+  for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || !keep(trimmed)) continue;
     try {
       const value = JSON.parse(trimmed);
-      if (isRecord(value)) records.push(value);
-      else malformedLines += 1;
+      if (!isRecord(value)) { malformedLines += 1; continue; }
+      // A full reset replaces every earlier base record (baseReplay discards
+      // them), so don't hold old snapshots and their images in memory.
+      if (isBase(value) && value.reset) {
+        const before = records.length;
+        records = records.filter((record) => record.bivyKind !== "base");
+        superseded += before - records.length;
+      }
+      records.push(value);
     } catch {
       malformedLines += 1;
     }
   }
-  return { records, malformedLines };
+  return { records, malformedLines, superseded };
+}
+
+/** A log this large that carries replaced base snapshots is rewritten without
+ *  them when it's next read. */
+const COMPACT_LOG_BYTES = 32 * 1024 * 1024;
+
+/** A file's lines, read in chunks: a log can outgrow the longest string V8
+ *  allows (~512 MB), which made the whole session unreadable. */
+function* fileLines(file: string): Generator<string> {
+  const fd = fs.openSync(file, "r");
+  try {
+    const chunk = Buffer.allocUnsafe(4 * 1024 * 1024);
+    let partial: Buffer[] = [];
+    for (let n = fs.readSync(fd, chunk); n > 0; n = fs.readSync(fd, chunk)) {
+      let start = 0;
+      for (let nl = chunk.indexOf(10, start); nl !== -1 && nl < n; nl = chunk.indexOf(10, start)) {
+        yield Buffer.concat([...partial, chunk.subarray(start, nl)]).toString("utf8");
+        partial = [];
+        start = nl + 1;
+      }
+      if (start < n) partial.push(Buffer.from(chunk.subarray(start, n)));
+    }
+    if (partial.length) yield Buffer.concat(partial).toString("utf8");
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 /** Parse a JSONL log body into valid records. Callers that need corruption
  * diagnostics use EventLog.load, which reports malformed lines via onIssue. */
 export function parseLog(body: string): LogRecord[] {
-  return parseLogDetailed(body).records;
+  return parseLogDetailed(body.split("\n")).records;
 }
 
 /**
@@ -755,13 +797,38 @@ export class EventLog {
   /** Read + parse a session's log file (lines passing `keep`), reporting problems. */
   private readLog(id: string, keep?: (line: string) => boolean): { records: LogRecord[]; bytes: number } {
     try {
-      const body = fs.readFileSync(this.pathFor(id), "utf8");
-      const parsed = parseLogDetailed(body, keep);
+      const file = this.pathFor(id);
+      const bytes = fs.statSync(file).size;
+      const parsed = parseLogDetailed(fileLines(file), keep);
       if (parsed.malformedLines > 0) this.report(id, "parse", new Error(`${parsed.malformedLines} malformed record(s); valid history was recovered`));
-      return { records: parsed.records, bytes: body.length };
+      if (!keep && parsed.superseded > 0 && bytes > COMPACT_LOG_BYTES) return { records: parsed.records, bytes: this.compact(id, parsed.records) ?? bytes };
+      return { records: parsed.records, bytes };
     } catch (error) {
       if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") this.report(id, "read", error);
       return { records: [], bytes: 0 };
+    }
+  }
+
+  /** Rewrite a log without the base snapshots a later reset replaced (logs
+   *  written before truncate-and-extend records repeated the whole transcript on
+   *  every retry). Atomic; returns the new size, or undefined if it failed. */
+  private compact(id: string, records: readonly LogRecord[]): number | undefined {
+    const file = this.pathFor(id);
+    const tmp = `${file}.compact-${process.pid}`;
+    try {
+      const fd = fs.openSync(tmp, "w");
+      let bytes = 0;
+      try {
+        for (const record of records) bytes += fs.writeSync(fd, `${JSON.stringify(record)}\n`);
+      } finally {
+        fs.closeSync(fd);
+      }
+      fs.renameSync(tmp, file);
+      return bytes;
+    } catch (error) {
+      fs.rmSync(tmp, { force: true });
+      this.report(id, "rewrite", error);
+      return undefined;
     }
   }
 
@@ -859,15 +926,18 @@ export class EventLog {
     const nextKeys = messages.map((m) => JSON.stringify(m));
     // Identical snapshot → nothing to record.
     if (nextKeys.length === prevKeys.length && prevKeys.every((k, i) => k === nextKeys[i])) return;
-    // A prefix-EXTEND (strictly longer, every prior message unchanged) appends only
-    // the new tail; anything else — a shrink (compaction), a changed prefix message
-    // (in-place mutation), or the first snapshot (empty prev, nothing to extend) —
+    // Record only what follows the prefix both snapshots share: a plain extend, or
+    // a truncate-and-extend (`keep`) when a later message changed — a retried turn
+    // replacing its trailing error rewrote the whole transcript, images and all,
+    // on every retry. A changed first message (compaction) or the first snapshot
     // appends a full reset. Rebuild the recorded messages from the serialized form:
     // a free deep copy that also matches exactly what will land on disk.
-    const extend = prevKeys.length > 0 && nextKeys.length > prevKeys.length && prevKeys.every((k, i) => k === nextKeys[i]);
-    const record: BaseLogEntry = extend
-      ? { bivyKind: "base", reset: false, createdAt: Date.now(), messages: nextKeys.slice(prevKeys.length).map((s) => JSON.parse(s) as RuntimeMessage) }
-      : { bivyKind: "base", reset: true, createdAt: Date.now(), messages: nextKeys.map((s) => JSON.parse(s) as RuntimeMessage) };
+    let shared = 0;
+    while (shared < prevKeys.length && shared < nextKeys.length && prevKeys[shared] === nextKeys[shared]) shared++;
+    const tail = nextKeys.slice(shared).map((s) => JSON.parse(s) as RuntimeMessage);
+    const record: BaseLogEntry = shared === 0
+      ? { bivyKind: "base", reset: true, createdAt: Date.now(), messages: tail }
+      : { bivyKind: "base", reset: false, createdAt: Date.now(), messages: tail, ...(shared < prevKeys.length ? { keep: shared } : {}) };
     this.baseKeys.set(id, nextKeys);
     this.enqueue(id, this.syntheticKey(id), record);
   }

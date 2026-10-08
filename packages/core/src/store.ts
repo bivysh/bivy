@@ -295,6 +295,9 @@ export interface TranscriptEntry {
    *  attachmentsByText below), so this is populated from the client's own
    *  send-time cache, not from history data. */
   attachments?: PromptAttachment[];
+  /** These attachments are images a tool returned (a screenshot the agent read),
+   *  shown beside its card — part of the tool's output, not files the agent sent. */
+  toolOutput?: boolean;
   /** Actions the node suggested for this notice (e.g. "/new", "fork"), rendered
    *  as inline buttons on a system/error entry so the suggestion is tappable
    *  instead of just describing something the user would have to do. */
@@ -997,8 +1000,10 @@ interface KnownAgentAttachment {
 
 /** An agent-sent attachment's own entry — the only assistant entries carrying
  *  `attachments` (user uploads sit on user entries). */
+/** A file the agent sent. Tool screenshots don't count: they belong to their
+ *  tool call, so a snapshot without the call must not re-add them elsewhere. */
 function isAgentAttachmentEntry(e: TranscriptEntry): boolean {
-  return e.role === "assistant" && !e.tool && !!e.attachments?.length;
+  return e.role === "assistant" && !e.tool && !e.toolOutput && !!e.attachments?.length;
 }
 
 /** A key that names the same entry across history renders (whose ids are not
