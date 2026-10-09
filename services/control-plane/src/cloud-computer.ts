@@ -10,12 +10,27 @@ import { createHash, randomBytes } from "node:crypto";
 import { ephemeralNodeLabel, flyMachineBoot, type BootstrapOpts } from "@bivy/core";
 import { centralGithubAppConfig, resolveGithubIdentity } from "./central-github-app.js";
 import { decryptSecret, encryptSecret } from "./hosted-crypto.js";
-import type { CentralGithubAppRepository, EphemeralConfigurationRepository, HostedMachineRepository, NodeRepository, SessionStateRepository, WorkQueueRepository } from "./store.js";
+import type { CentralGithubAppRepository, EphemeralConfigurationRepository, HostedMachineRepository, NodeRepository, QueueRouting, SessionStateRepository, WorkQueueRepository } from "./store.js";
 
 /** Stable for the life of the account. Automation instructions are already
  * encrypted to this node's escrowed key, so it is also the automation target. */
 export function cloudComputerNodeId(accountId: string): string {
   return `eph-managed-auto-${createHash("sha256").update(accountId).digest("hex").slice(0, 16)}`;
+}
+
+/** Boot milestones a cloud computer reports for its current awake period. */
+export const EPHEMERAL_MILESTONES = [
+  "nodeReadyAt",
+  "credentialsReadyAt",
+  "repositoryReadyAt",
+  "snapshotReadyAt",
+  "firstAgentEventAt",
+  "firstTokenAt",
+] as const;
+export type EphemeralMilestone = (typeof EPHEMERAL_MILESTONES)[number];
+
+export function isEphemeralMilestone(value: string): value is EphemeralMilestone {
+  return (EPHEMERAL_MILESTONES as readonly string[]).includes(value);
 }
 
 export function isCloudComputerNode(accountId: string, nodeId: string | null | undefined): boolean {
@@ -91,6 +106,35 @@ export async function bootCloudComputer(
     restoreSessionId: input.restoreSessionId,
   };
   return { nodeId, ...flyMachineBoot(bootstrap) };
+}
+
+export interface CloudComputerReadiness { ready: boolean; reason: string; configId?: string }
+
+/** The managed config the account's automation routing sends work to: a config
+ * primary, or a node primary's fallback config. */
+function routedManagedConfigId(routing: QueueRouting, managedIds: Set<string>): string | undefined {
+  const configId = routing.primary.kind === "config" ? routing.primary.configId
+    : routing.primary.kind === "node" ? routing.fallback?.configId
+    : undefined;
+  return configId && managedIds.has(configId) ? configId : undefined;
+}
+
+/**
+ * Static automation capability for the settings UI: whether unattended work
+ * routed to the deployment's cloud can run. It does not inspect pending work or
+ * node liveness. `offered` is whether the deployment supplies compute here.
+ */
+export async function cloudComputerReadiness(
+  store: Pick<EphemeralConfigurationRepository, "getQueueRouting" | "getEphemeralConfigs"> & Pick<HostedMachineRepository, "getHostedProvisioning">,
+  accountId: string,
+  offered: boolean,
+): Promise<CloudComputerReadiness> {
+  if (!offered) return { ready: false, reason: "the deployment supplies no cloud compute" };
+  if (!(await store.getHostedProvisioning(accountId)).enabled) return { ready: false, reason: "unattended provisioning is disabled" };
+  const managed = new Set((await store.getEphemeralConfigs(accountId)).filter((c) => c.computeSource === "managed").map((c) => c.id));
+  const configId = routedManagedConfigId(await store.getQueueRouting(accountId), managed);
+  if (!configId) return { ready: false, reason: "automation routing has no cloud destination" };
+  return { ready: true, reason: "cloud computer execution is ready", configId };
 }
 
 /**

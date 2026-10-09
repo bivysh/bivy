@@ -193,31 +193,12 @@ test("session coordinator owns draft creation ordering and first prompt framing"
   assert.deepEqual(events, ["message", "launch"]);
 });
 
-test("ephemeral coordinator restores managed sessions without a device cloud token or room key", async () => {
-  const events: string[] = [];
-  const coordinator = new EphemeralCoordinator({
-    currentNodeId: () => "eph-managed",
-    nodes: () => [],
-    correlations: () => [{ sessionId: "s1", nodeId: "eph-managed", provider: "fly", setupId: "managed-default", computeSource: "managed" }],
-    restoreManagedMachine: async (input: unknown) => { events.push(`restore:${JSON.stringify(input)}`); return { nodeId: "eph-managed" } as any; },
-    connectToNode: async (nodeId: string) => { events.push(`connect:${nodeId}`); },
-    direct: () => false,
-    reportError: (error: Error) => { throw error; },
-  } as any);
-  assert.equal(coordinator.isCurrentNodeResumable(), true, "hosted escrow makes a managed correlation rebuildable on a fresh device");
-  await coordinator.reprovision("eph-managed", "s1");
-  assert.deepEqual(events, [
-    'restore:{"configId":"managed-default","nodeId":"eph-managed","sessionId":"s1","requestId":"restore:s1:eph-managed:legacy"}',
-    "connect:eph-managed",
-  ]);
-});
-
-test("a sleeping cloud computer is woken by sending, without a correlation", async () => {
+test("a sleeping cloud computer is woken by sending", async () => {
   const events: string[] = [];
   const nodes = [{ id: "eph-managed-auto-0123456789abcdef", online: false }];
   const coordinator = new EphemeralCoordinator({
     currentNodeId: () => "eph-managed-auto-0123456789abcdef", direct: () => false,
-    nodes: () => nodes, correlations: () => [],
+    nodes: () => nodes,
     restoreManagedMachine: async (input: { nodeId: string }) => { events.push(`wake:${input.nodeId}`); return { nodeId: input.nodeId } as any; },
     connectToNode: async (nodeId: string) => { events.push(`connect:${nodeId}`); },
     reportError: (error: Error) => { throw error; },
@@ -229,15 +210,19 @@ test("a sleeping cloud computer is woken by sending, without a correlation", asy
   assert.equal(coordinator.isCurrentNodeResumable(), false, "awake: an ordinary connection");
 });
 
-test("enrolled managed nodes reconnect instead of being restored, even while offline", () => {
+test("any other machine reconnects on its own and is never rebuilt", async () => {
+  const errors: string[] = [];
   for (const online of [true, false]) {
     const coordinator = new EphemeralCoordinator({
-      currentNodeId: () => "eph-managed", direct: () => false,
-      nodes: () => [{ id: "eph-managed", online }],
-      correlations: () => [{ nodeId: "eph-managed", computeSource: "managed" }],
+      currentNodeId: () => "eph-0123456789abcdef", direct: () => false,
+      nodes: () => [{ id: "eph-0123456789abcdef", online }],
+      restoreManagedMachine: async () => { throw new Error("must not restore"); },
+      reportError: (error: Error) => { errors.push(error.message); },
     } as any);
     assert.equal(coordinator.isCurrentNodeResumable(), false);
+    await coordinator.reprovision("eph-0123456789abcdef", "s1");
   }
+  assert.deepEqual(errors, ["This session's machine can't be rebuilt.", "This session's machine can't be rebuilt."]);
 });
 
 test("account coordinator refreshes both automation projections after cancellation", async () => {

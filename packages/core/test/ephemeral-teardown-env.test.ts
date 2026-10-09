@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+// The runtime env `/etc/bivy/start.sh` gives a booted node: what it serves,
+// which credentials it may hold, and how it sleeps.
 import { describe, expect, it } from "vitest";
-import { buildBootstrapUserData, type BootstrapOpts } from "../src/index.js";
+import { bivyStartScript } from "../src/ephemeral-provider-bootstrap.js";
+import type { BootstrapOpts } from "../src/index.js";
 
 const base: BootstrapOpts = {
   relayUrl: "wss://relay.bivy.sh",
@@ -10,44 +13,49 @@ const base: BootstrapOpts = {
   e2eKeyB64: "e2e-key-b64",
   ttlMinutes: 90,
 };
+const start = (opts: Partial<BootstrapOpts> = {}) => bivyStartScript({ ...base, ...opts });
 
-describe("bootstrap ephemeral self-teardown env", () => {
-  it("emits BIVY_EPHEMERAL awareness for a destroy-lane provider + finish flag", () => {
-    const ud = buildBootstrapUserData({ ...base, provider: "fly", teardownOnAgentFinish: true });
-    expect(ud).toContain("export BIVY_EPHEMERAL=1");
-    expect(ud).toContain("export BIVY_EPHEMERAL_PROVIDER='fly'");
-    expect(ud).toContain("export BIVY_EPHEMERAL_TTL_MIN=90");
-    expect(ud).toContain("export BIVY_TEARDOWN_ON_FINISH=1");
+describe("bootstrap start.sh env", () => {
+  it("runs the daemon in the foreground with Bivy's package-local tools on PATH", () => {
+    const script = start();
+    expect(script).toContain('BIVY_CLI="$(readlink -f "$(command -v bivy)")"');
+    expect(script).toContain('export PATH="$BIVY_PACKAGE_DIR/node_modules/.bin:$PATH"');
+    expect(script.trimEnd().endsWith("exec bivy start")).toBe(true);
+    expect(script).not.toContain("BIVY_EPHEMERAL");
   });
 
-  it("omits the finish flag when teardownOnAgentFinish is unset (idle-teardown only)", () => {
-    const ud = buildBootstrapUserData({ ...base, provider: "fly" });
-    expect(ud).toContain("export BIVY_EPHEMERAL=1");
-    expect(ud).toContain("export BIVY_EPHEMERAL_PROVIDER='fly'");
-    expect(ud).not.toContain("BIVY_TEARDOWN_ON_FINISH");
-  });
-
-
-  it("emits nothing when no provider is set (older/unaware bootstrap)", () => {
-    expect(buildBootstrapUserData(base)).not.toContain("BIVY_EPHEMERAL");
-  });
-
-  it("emits BIVY_RESTORE for a rebuild-resume boot (Gap B), else omits it", () => {
-    const restore = buildBootstrapUserData({ ...base, provider: "fly", restoreSessionId: "sess-xyz" });
-    expect(restore).toContain("export BIVY_RESTORE='sess-xyz'");
-    expect(buildBootstrapUserData({ ...base, provider: "fly" })).not.toContain("BIVY_RESTORE");
+  it("marks an ephemeral node and its awake bound", () => {
+    const script = start({ provider: "fly", teardownOnAgentFinish: true, restoreSessionId: "sess-xyz" });
+    expect(script).toContain("export BIVY_EPHEMERAL=1");
+    expect(script).toContain("export BIVY_EPHEMERAL_PROVIDER='fly'");
+    expect(script).toContain("export BIVY_EPHEMERAL_TTL_MIN=90");
+    expect(script).toContain("export BIVY_TEARDOWN_ON_FINISH=1");
+    expect(script).toContain("export BIVY_RESTORE='sess-xyz'");
+    expect(start({ provider: "fly" })).not.toMatch(/BIVY_TEARDOWN_ON_FINISH|BIVY_RESTORE/);
   });
 
   it("puts a sleeping machine's data, workspace and HOME on its persistent disk", () => {
-    const ud = buildBootstrapUserData({ ...base, provider: "fly", sleepOnIdle: true });
-    expect(ud).toContain("export BIVY_EPHEMERAL_SLEEP=1");
-    expect(ud).toContain("export BIVY_DATA_DIR=/data/bivy");
-    expect(ud).toContain("export HOME=/data/home");
-    expect(buildBootstrapUserData({ ...base, provider: "fly" })).toContain("export BIVY_DATA_DIR=/etc/bivy");
+    const script = start({ provider: "fly", sleepOnIdle: true });
+    expect(script).toContain("export BIVY_EPHEMERAL_SLEEP=1");
+    expect(script).toContain("export BIVY_DATA_DIR=/data/bivy");
+    expect(script).toContain("export BIVY_WORKSPACE=/data/workspace");
+    expect(script).toContain("export HOME=/data/home");
+    expect(start({ provider: "fly" })).toContain("export BIVY_DATA_DIR=/etc/bivy");
   });
 
-  it("skips network installation when a runner image already has bivy", () => {
-    const userData = buildBootstrapUserData({ ...base, provider: "fly" });
-    expect(userData).toContain("command -v bivy >/dev/null 2>&1 || curl --connect-timeout 10 --max-time 120 -fsSL");
+  it("opts into hosted work and credential custody only when asked", () => {
+    expect(start()).not.toMatch(/BIVY_GITHUB_HOSTED_TASKS|BIVY_NODE_LABEL|BIVY_GITHUB_TOKEN|BIVY_HOSTED_CREDENTIAL/);
+    const script = start({ repo: "owner/repo", hostedTasks: true, nodeLabel: "ab12cd34", hostedCredentialCustody: true, hostedCredentialPublisher: true, hostedMint: true });
+    expect(script).toContain("export BIVY_REPO='owner/repo'");
+    expect(script).toContain("export BIVY_GITHUB_HOSTED_TASKS=1");
+    expect(script).toContain("export BIVY_NODE_LABEL='ab12cd34'");
+    expect(script).toContain("export BIVY_HOSTED_CREDENTIAL_CUSTODY=1");
+    expect(script).toContain("export BIVY_HOSTED_CREDENTIAL_PUBLISH=1");
+    expect(script).toContain("export BIVY_HOSTED_MINT=1");
+    expect(start({ hostedCredentialCustody: true })).not.toContain("BIVY_GITHUB_HOSTED_TASKS");
+  });
+
+  it("single-quotes a token so shell metacharacters can't break out of the export", () => {
+    expect(start({ githubToken: "a'b$(rm -rf /)" })).toContain(String.raw`export BIVY_GITHUB_TOKEN='a'\''b$(rm -rf /)'`);
   });
 });

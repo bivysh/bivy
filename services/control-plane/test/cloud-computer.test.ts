@@ -65,7 +65,6 @@ async function main() {
       const nodeId = body.subject?.accountId ? `eph-managed-auto-${createHash("sha256").update(body.subject.accountId).digest("hex").slice(0, 16)}` : "";
       const answers: Record<string, unknown> = {
         "/v1/compute/profile": { profile: { provider: "fly", image: "runner:test", ttlMinutes: 60, accountMachine: true } },
-        "/v1/compute/credential": { token: "operator-token" },
         "/v1/compute/acquire": deny ? { allowed: false, code: "trial_exhausted", reason: "Trial used up." } : { nodeId, state: "launching" },
         "/v1/compute/wake": { state: "waking" },
         "/v1/compute/machines": { machines: [{ id: "fly-1", nodeId, provider: "fly", region: "iad", state: "asleep", createdAt: "2026-10-06T00:00:00Z" }] },

@@ -1,148 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Gap 3: a HOSTED (device-offline) rebuild needs the session room key server-side.
-// The control plane escrows it — sealed at rest with the per-account hosted key —
-// keyed by the reusable node id, surviving teardown, and hands it back to the
-// machine it re-launches (never decrypting the snapshot itself).
+// The cloud computer's session room key is escrowed server-side (sealed at rest
+// with the per-account hosted key), keyed by its stable node id. It must survive
+// the node being unenrolled so sessions and their snapshots stay readable, and
+// the first identity written must win over later concurrent writers.
 import assert from "node:assert/strict";
-// Must be set before any hosted-crypto encrypt/decrypt runs (read per-call).
-process.env.HOSTED_CREDENTIAL_KEY = Buffer.alloc(32, 7).toString("base64");
 import { createPgMemStore } from "../src/pg-mem-store.js";
-import { DeploymentCompute, setDeploymentCompute } from "../src/deployment-compute.js";
-import { provisionEphemeralForAccount, provisionEphemeralRestore, type ProvisionEnv } from "../src/ephemeral-provisioner.js";
-import { decryptSecret } from "../src/hosted-crypto.js";
-import type { EphemeralMachine, launchEphemeralMachine } from "@bivy/core";
 
-async function makeStore() {
-  const store = createPgMemStore();
-  await store.init();
-  return store;
-}
-
-let passed = 0;
-async function test(name: string, fn: () => Promise<void>) {
-  await fn();
-  passed += 1;
-  console.log(`✓ ${name}`);
-}
-
-const ENV: ProvisionEnv = { cpBaseUrl: "https://cp.example", relayUrl: "wss://relay.example" };
-const CONFIG = { id: "cfg1", name: "Hosted", provider: "fly", region: "iad", ttlMinutes: 60, createdAt: "", updatedAt: "" };
-const ROOM_KEY = Buffer.alloc(32, 9).toString("base64");
-
-await test("store escrow round-trips and SURVIVES node unenroll", async () => {
-  const store = await makeStore();
-  const acct = await store.findOrCreateAccount("a@example.com");
-  await store.enrollNode(acct.id, "eph-1", "Ephemeral");
-  await store.setNodeRoomKeyEnc(acct.id, "eph-1", { v: 1, kid: "k1", iv: "aa", ct: "bb", tag: "cc" });
-  await store.removeNode(acct.id, "eph-1"); // teardown unenrolls the node
-  const got = await store.getNodeRoomKeyEnc(acct.id, "eph-1");
-  assert.ok(got, "escrowed room key must survive node removal");
-  assert.equal(got?.kid, "k1");
-});
-
-await test("provisionEphemeralForAccount escrows the generated room key (hosted)", async () => {
-  const store = await makeStore();
-  const acct = await store.findOrCreateAccount("b@example.com");
-  await store.setHostedProvisioning(acct.id, { enabled: true, providerTokens: { fly: "fly-token" } });
-  const launcher = async (opts: Record<string, unknown>, deps: { store: { addKey: (id: string, key: string) => void } }): Promise<EphemeralMachine> => {
-    const nodeId = (opts.reuseNodeId as string) || "eph-new";
-    deps.store.addKey(nodeId, ROOM_KEY); // what the real launcher does on room-key mint
-    return { id: "m1", provider: "fly", name: "x", region: "iad", status: "running", ip: null, createdAt: "", nodeId } as EphemeralMachine;
-  };
-  const machine = await provisionEphemeralForAccount(store, acct.id, CONFIG, ENV, launcher as never);
-  const enc = await store.getNodeRoomKeyEnc(acct.id, machine.nodeId!);
-  assert.ok(enc, "room key must be escrowed after a hosted launch");
-  assert.equal(decryptSecret(acct.id, enc!), ROOM_KEY, "escrow must decrypt back to the generated key");
-});
-
-await test("provisionEphemeralRestore hands the escrowed key back to the rebuilt machine", async () => {
-  const store = await makeStore();
-  const acct = await store.findOrCreateAccount("c@example.com");
-  await store.setHostedProvisioning(acct.id, { enabled: true, providerTokens: { fly: "fly-token" } });
-  // Simulate a prior hosted launch that escrowed the room key for eph-42.
-  const launch = async (opts: Record<string, unknown>, deps: { store: { addKey: (id: string, key: string) => void } }): Promise<EphemeralMachine> => {
-    deps.store.addKey("eph-42", ROOM_KEY);
-    return { id: "m0", provider: "fly", name: "x", region: "iad", status: "running", ip: null, createdAt: "", nodeId: "eph-42" } as EphemeralMachine;
-  };
-  await provisionEphemeralForAccount(store, acct.id, CONFIG, ENV, launch as never);
-
-  // Now rebuild that session server-side; the launcher must receive the reused
-  // node id, the decrypted room key, and the restore session id.
-  let captured: Record<string, unknown> | undefined;
-  const rebuildLauncher = async (opts: Record<string, unknown>): Promise<EphemeralMachine> => {
-    captured = opts;
-    return { id: "m1", provider: "fly", name: "x", region: "iad", status: "running", ip: null, createdAt: "", nodeId: "eph-42" } as EphemeralMachine;
-  };
-  await provisionEphemeralRestore(store, acct.id, CONFIG, ENV, { reuseNodeId: "eph-42", restoreSessionId: "sess-7", purpose: "interactive" }, rebuildLauncher as never);
-  assert.equal(captured?.reuseNodeId, "eph-42");
-  assert.equal(captured?.reuseRoomKeyB64, ROOM_KEY, "must inject the decrypted escrowed key");
-  assert.equal(captured?.restoreSessionId, "sess-7");
-  assert.equal(captured?.purpose, "interactive");
-  assert.equal(captured?.hostedTasks, false, "interactive restore must not poll unattended queues");
-});
-
-for (const computeSource of ["user", "managed"] as const) {
-  for (const purpose of ["interactive", "auth-runner", "queue-default"] as const) {
-    await test(`${computeSource} ${purpose} rebuild preserves fresh-launch credential privileges`, async () => {
-      setDeploymentCompute(new DeploymentCompute({ profile: async () => null, credential: async () => ({ token: "managed-test-token" }) }));
-      try {
-        const store = await makeStore();
-        const acct = await store.findOrCreateAccount(`${computeSource}-${purpose}@example.com`);
-        await store.setHostedProvisioning(acct.id, { enabled: true, providerTokens: { fly: "user-test-token" } });
-        const calls: Array<Parameters<typeof launchEphemeralMachine>[0]> = [];
-        const launch: typeof launchEphemeralMachine = async (opts, deps) => {
-          calls.push(opts);
-          deps.store.addKey("eph-grant", ROOM_KEY);
-          return { id: "machine", provider: "fly", name: "test", region: "iad", status: "running", ip: null, createdAt: "", nodeId: "eph-grant" };
-        };
-        const config = { ...CONFIG, computeSource };
-        await provisionEphemeralForAccount(store, acct.id, config, ENV, launch, Date.now(), purpose);
-        await provisionEphemeralRestore(store, acct.id, config, ENV, { reuseNodeId: "eph-grant", restoreSessionId: "session", purpose }, launch);
-        assert.equal(calls.length, 2);
-        for (const opts of calls) {
-          assert.equal(opts.hostedCredentialCustody, computeSource === "managed");
-          assert.equal(opts.hostedCredentialPublisher, computeSource === "managed" && purpose !== "queue-default");
-          assert.equal(opts.hostedTasks, purpose === "queue-default");
-        }
-      } finally {
-        setDeploymentCompute(new DeploymentCompute(undefined));
-      }
-    });
-  }
-}
-
-await test("restore fails cleanly when no room key was escrowed", async () => {
-  const store = await makeStore();
-  const acct = await store.findOrCreateAccount("d@example.com");
-  await store.setHostedProvisioning(acct.id, { enabled: true, providerTokens: { fly: "fly-token" } });
-  await assert.rejects(
-    () => provisionEphemeralRestore(store, acct.id, CONFIG, ENV, { reuseNodeId: "eph-unknown", restoreSessionId: "s1" }, (async () => ({}) as EphemeralMachine) as never),
-    /No escrowed room key/,
-  );
-});
-
-await test("lost provider response preserves escrow and retries with the original room key", async () => {
-  const store = await makeStore();
-  const acct = await store.findOrCreateAccount("lost-response@example.com");
-  await store.setHostedProvisioning(acct.id, { enabled: true, providerTokens: { fly: "fly-token" } });
-  const launcher: typeof launchEphemeralMachine = async (opts, deps) => {
-    await opts.onLifecycle?.({ attemptId: opts.attemptId!, nodeId: "eph-retry", phase: "requested" });
-    deps.store.addKey("eph-retry", ROOM_KEY);
-    assert.ok(deps.persistRoomKey, "durable escrow must be supplied to the launcher");
-    await deps.persistRoomKey("eph-retry", ROOM_KEY);
-    const saved = await store.getNodeRoomKeyEnc(acct.id, "eph-retry");
-    assert.equal(decryptSecret(acct.id, saved!), ROOM_KEY, "key must already be durable before the provider call");
-    throw new Error("provider response lost");
-  };
-  await assert.rejects(provisionEphemeralForAccount(store, acct.id, CONFIG, ENV, launcher, Date.now(), "interactive", { attemptId: "retry-key", retryCount: 0 }), /provider response lost/);
-  const retry: typeof launchEphemeralMachine = async (opts) => {
-    assert.equal(opts.reuseNodeId, "eph-retry");
-    assert.equal(opts.reuseRoomKeyB64, ROOM_KEY, "retry must not mint a replacement key");
-    return { id: "m-retry", provider: "fly", nodeId: "eph-retry", name: "retry", region: "iad", status: "running", ip: null, createdAt: new Date().toISOString() };
-  };
-  await provisionEphemeralForAccount(store, acct.id, CONFIG, ENV, retry, Date.now(), "interactive", { attemptId: "retry-key", nodeId: "eph-retry", retryCount: 1 });
-});
-
-console.log(`hosted-room-key-escrow: ${passed} test(s) passed`);
+const store = createPgMemStore();
+await store.init();
+const acct = await store.findOrCreateAccount("a@example.com");
+await store.enrollNode(acct.id, "eph-1", "Ephemeral");
+const first = { v: 1, kid: "k1", iv: "aa", ct: "bb", tag: "cc" } as const;
+assert.deepEqual(await store.setNodeRoomKeyEncIfAbsent(acct.id, "eph-1", first), first);
+assert.equal((await store.setNodeRoomKeyEncIfAbsent(acct.id, "eph-1", { ...first, kid: "k2" })).kid, "k1", "the first escrowed key wins");
+await store.removeNode(acct.id, "eph-1");
+assert.equal((await store.getNodeRoomKeyEnc(acct.id, "eph-1"))?.kid, "k1", "escrowed room key must survive node removal");
+console.log("✓ store escrow keeps the first key and survives node unenroll");

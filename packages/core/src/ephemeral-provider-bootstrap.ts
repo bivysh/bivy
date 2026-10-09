@@ -6,11 +6,6 @@ import { clampTtlMinutes } from "./ephemeral-lifecycle.js";
 import { PERSISTENT_ROOT, type BootstrapOpts } from "./ephemeral-provider-ports.js";
 import { shq } from "./ephemeral-provider-utils.js";
 
-function indentJson(json: string, pad: string): string {
-  return json.split("\n").map((line) => pad + line).join("\n");
-}
-
-
 /** The relay enrollment blob written to `/etc/bivy/relay.json`. The daemon reads
  *  it on boot (`startRelayIfConfigured` in src/server.ts) and dials the relay
  *  with no interactive `bivy setup` — the node was already enrolled by the
@@ -27,9 +22,7 @@ export function bivyRelayJson(opts: BootstrapOpts): string {
 
 /** The `export`s the daemon needs in its runtime env. `BIVY_DATA_DIR` points at
  *  the pre-baked `/etc/bivy` (relay.json + state); the rest are independently
- *  optional (repo, hosted-queue opt-in, routing label, GitHub token). Shared by
- *  the cloud-init (Hetzner/EC2) and Fly bootstraps so a node's env is identical
- *  however it was launched. */
+ *  optional (repo, hosted-queue opt-in, routing label, GitHub token). */
 function bivyBootstrapExports(opts: BootstrapOpts): string[] {
   // Every supported ephemeral provider is a destroy lane. The daemon learns
   // that it is disposable so it can snapshot and end the machine once idle.
@@ -58,11 +51,10 @@ function bivyBootstrapExports(opts: BootstrapOpts): string[] {
 /** `/etc/bivy/start.sh` — exports the runtime env then runs the daemon in the
  *  FOREGROUND (`exec bivy start`). This is the piece that was missing: the
  *  installer only *installs* Bivy, it never starts the node when there's no TTY
- *  (a headless, pre-enrolled machine). cloud-init runs this under `systemd-run`
- *  (a VM stays up on its own); Fly runs it as the machine's init process (a
- *  container needs a blocking foreground process or it exits and is destroyed).
- *  PATH is set explicitly because a non-login `systemd-run`/container shell
- *  doesn't source the rc file the installer appends BIN_DIR to. */
+ *  (a headless, pre-enrolled machine). Fly runs it as the machine's init
+ *  process (a container needs a blocking foreground process or it exits).
+ *  PATH is set explicitly because a non-login container shell doesn't source
+ *  the rc file the installer appends BIN_DIR to. */
 export function bivyStartScript(opts: BootstrapOpts): string {
   const exports = bivyBootstrapExports(opts)
     .map((line) => `${line}\n`)
@@ -83,43 +75,7 @@ export function bivyStartScript(opts: BootstrapOpts): string {
 }
 
 /** Best-effort telemetry must never block boot or expose bootstrap material in
- * logs. This is shared by container and cloud-init startup. */
+ * logs. */
 export function bivyBootstrapStatusCommand(opts: BootstrapOpts, phase: "booting" | "installing" | "starting" | "failed"): string {
   return `curl --connect-timeout 2 --max-time 3 -fsS -X POST -H 'content-type: application/json' -H ${shq(`authorization: Bearer ${opts.enrollmentToken}`)} --data ${shq(JSON.stringify({ phase }))} ${shq(`${opts.controlPlaneUrl.replace(/\/$/, "")}/node/bootstrap-status`)} >/dev/null 2>&1 || true`;
-}
-
-export function buildBootstrapUserData(opts: BootstrapOpts): string {
-  const relay = bivyRelayJson(opts);
-  const ttl = clampTtlMinutes(opts.ttlMinutes);
-  const installUrl = opts.installUrl || "https://bivy.sh/install.sh";
-  const startScript = bivyStartScript(opts);
-  const status = (phase: Parameters<typeof bivyBootstrapStatusCommand>[1]) => bivyBootstrapStatusCommand(opts, phase);
-  // Arm cost protection BEFORE any network/install operation can hang.
-  const ttlCommand = `systemd-run --on-active=${ttl}m --timer-property=AccuracySec=1s --unit=bivy-ttl shutdown -h now || (echo 'shutdown -h now' | at now + ${ttl} minutes) || setsid bash -c 'sleep ${ttl * 60}; shutdown -h now' </dev/null >/var/log/bivy-ttl.log 2>&1 &`;
-  return (
-    [
-      "#cloud-config",
-      "write_files:",
-      "  - path: /etc/bivy/relay.json",
-      "    permissions: '0600'",
-      "    content: |",
-      indentJson(relay, "      "),
-      "  - path: /etc/bivy/start.sh",
-      "    permissions: '0755'",
-      "    content: |",
-      indentJson(startScript, "      "),
-      "runcmd:",
-      `  - [ bash, -lc, ${JSON.stringify(ttlCommand)} ]`,
-      `  - [ bash, -lc, ${JSON.stringify(status("booting"))} ]`,
-      // 1. Install Bivy (state lands in /etc/bivy via BIVY_DATA_DIR).
-      `  - [ bash, -lc, ${JSON.stringify(`set -euo pipefail; ${status("installing")}; mkdir -p /etc/bivy && export BIVY_DATA_DIR=/etc/bivy && (command -v bivy >/dev/null 2>&1 || curl --connect-timeout 10 --max-time 120 -fsSL ${shq(installUrl)} | bash) || { ${status("failed")}; exit 1; }`)} ]`,
-      // 2. Start the daemon. On a systemd VM a transient system unit keeps it
-      `  - [ bash, -lc, ${JSON.stringify(status("starting"))} ]`,
-      //    running after cloud-init's own unit exits (a bare backgrounded process
-      //    would be cleaned up with cloud-final's cgroup); the setsid fallback
-      //    covers a rare image without systemd-run.
-      `  - [ bash, -lc, "systemd-run --unit=bivy --collect --property=Restart=on-failure /etc/bivy/start.sh || setsid bash /etc/bivy/start.sh </dev/null >/var/log/bivy.log 2>&1 &" ]`,
-
-    ].join("\n") + "\n"
-  );
 }

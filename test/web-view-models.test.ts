@@ -177,26 +177,24 @@ test("a standby copy offers Continue here only while its owner is offline", () =
   assert.equal(standbyCopyOf("repo:acme/app", nodes), undefined);
 });
 
-test("a managed cloud profile is one destination that reuses its newest online Machine", () => {
+test("a managed cloud profile is one destination that reuses the account's cloud computer", () => {
   const at = (minute: number) => `2026-10-06T10:${String(minute).padStart(2, "0")}:00Z`;
   const config = { id: "managed", name: "Bivy Cloud", provider: "fly", computeSource: "managed" as const, createdAt: at(0), updatedAt: at(0) };
-  const machine = (id: string, nodeId: string, minute: number) => ({ id, setupId: "managed", nodeId, provider: "fly", purpose: "interactive" as const, createdAt: at(minute) });
-  const machines = [machine("m-old", "eph-old", 1), machine("m-new", "eph-new", 2)];
+  const nodeId = "eph-managed-auto-0123456789abcdef";
+  const machines = [
+    { id: "other", nodeId: "eph-other", provider: "fly", purpose: "interactive" as const, createdAt: at(2) },
+    { id: "cc", nodeId, provider: "fly", purpose: "interactive" as const, createdAt: at(1) },
+  ];
 
-  const up = cloudDestinations([config], machines, [{ id: "eph-old", online: true }, { id: "eph-new", online: true }]);
-  assert.deepEqual(up.map((row) => [row.label, row.nodeId]), [["Bivy Cloud", "eph-new"]]);
+  const up = cloudDestinations([config], machines, [{ id: "eph-other", online: true }, { id: nodeId, online: true }]);
+  assert.deepEqual(up.map((row) => [row.label, row.nodeId]), [["Bivy Cloud", nodeId]], "only the cloud computer is reused, by its node id");
 
-  const asleep = cloudDestinations([config], machines, [{ id: "eph-old", online: false }, { id: "eph-new", online: false }]);
-  assert.deepEqual(asleep.map((row) => [row.nodeId, row.config.id]), [[undefined, "managed"]], "no online Machine → starts on send");
-
-  const account = { id: "cc", setupId: undefined, nodeId: "eph-managed-auto-0123456789abcdef", provider: "fly", purpose: "interactive" as const, createdAt: at(3) };
-  const reused = cloudDestinations([config], [account], [{ id: "eph-managed-auto-0123456789abcdef", online: true }]);
-  assert.equal(reused[0]?.nodeId, "eph-managed-auto-0123456789abcdef", "the account's cloud computer is reused by its node id");
-  const sleeping = cloudDestinations([config], [account], [{ id: "eph-managed-auto-0123456789abcdef", online: false }]);
+  const sleeping = cloudDestinations([config], machines, [{ id: nodeId, online: false }]);
   assert.deepEqual(sleeping.map((row) => [row.nodeId, row.asleep]), [[undefined, true]], "a sleeping cloud computer wakes on send");
-  assert.equal(asleep[0]?.asleep, false, "no cloud computer yet: one starts on send");
+  const none = cloudDestinations([config], [], []);
+  assert.deepEqual(none.map((row) => [row.nodeId, row.asleep]), [[undefined, false]], "no cloud computer yet: one starts on send");
   assert.deepEqual(
-    [{ id: "eph-managed-auto-0123456789abcdef", online: false }, { id: "laptop", online: false }, { id: "laptop", online: true }].map(nodePresence),
+    [{ id: nodeId, online: false }, { id: "laptop", online: false }, { id: "laptop", online: true }].map(nodePresence),
     ["asleep", "offline", "online"],
     "only the cloud computer sleeps; any other machine that isn't connected is offline",
   );

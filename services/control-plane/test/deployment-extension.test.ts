@@ -6,7 +6,6 @@ test("deployment extension defaults to unrestricted with no service", async () =
   const extension = new DeploymentExtension(undefined, undefined, async () => { throw new Error("must not fetch"); });
   assert.deepEqual(await extension.authorize("account", "automation.run", "run"), { allowed: true });
   assert.deepEqual([...await extension.filterSessions("account", ["s1", "s2"])], ["s1", "s2"]);
-  await extension.record("account", { type: "ephemeral.first-agent-event", attemptId: "a1", at: new Date(0).toISOString() });
   assert.equal(await extension.account("account"), undefined);
 });
 
@@ -20,7 +19,7 @@ test("configured policy forwards opaque operations and fails closed", async () =
       actions: [{ id: "upgrade", label: "Upgrade", kind: "primary" }],
     }), { status: 429, headers: { "content-type": "application/json" } });
   });
-  assert.deepEqual(await extension.authorize("a", "automation.run", "r1", { computeSource: "managed", sizeId: "large", memoryMiB: 16384 }), {
+  assert.deepEqual(await extension.authorize("a", "automation.run", "r1"), {
     allowed: false,
     code: "quota_exhausted",
     actions: [{ id: "upgrade", label: "Upgrade", kind: "primary" }],
@@ -33,20 +32,17 @@ test("configured policy forwards opaque operations and fails closed", async () =
   assert.equal(requests[0]?.url, "https://policy.example/v1/policy/check");
   assert.deepEqual(JSON.parse(String(requests[0]?.init?.body)), {
     subject: { accountId: "a" }, operation: "automation.run", idempotencyKey: "r1",
-    context: { computeSource: "managed", sizeId: "large", memoryMiB: 16384 },
+    context: {},
   });
   assert.equal(requests[0]?.init?.headers && (requests[0].init.headers as Record<string, string>).authorization, "Bearer secret");
 });
 
-test("lifecycle events use the authenticated neutral extension contract", async () => {
+test("account events use the authenticated neutral extension contract", async () => {
   let request: { url: string; body: unknown } | undefined;
   const extension = new DeploymentExtension("https://policy.example", "secret", async (url, init) => {
     request = { url: String(url), body: JSON.parse(String(init?.body)) };
     return new Response(JSON.stringify({ ok: true }), { status: 200 });
   });
-  const event = { type: "ephemeral.settled" as const, attemptId: "a1", at: new Date(0).toISOString(), machineSeconds: 12, activeAgentSeconds: 5 };
-  await extension.record("a", event);
-  assert.deepEqual(request, { url: "https://policy.example/v1/events", body: { subject: { accountId: "a" }, event } });
   const signIn = { type: "account.signed-in" as const, at: new Date(1).toISOString(), accountCreatedAt: new Date(0).toISOString() };
   await extension.recordAccount("a", "a@example.com", signIn);
   assert.deepEqual(request, { url: "https://policy.example/v1/events", body: { subject: { accountId: "a", email: "a@example.com" }, event: signIn } });
@@ -86,19 +82,14 @@ test("deployment compute is absent without a service and asks the configured one
   assert.equal(new DeploymentExtension(undefined, undefined, async () => { throw new Error("must not fetch"); }).computeSource(), undefined);
   const requests: Array<{ url: string; body: unknown }> = [];
   const replies: Record<string, unknown> = {
-    "https://policy.example/v1/compute/profile": { profile: { provider: "fly", image: "runner:claude" } },
-    "https://policy.example/v1/compute/credential": { token: "op", expiresAt: "2026-10-06T12:00:00.000Z" },
+    "https://policy.example/v1/compute/profile": { profile: { provider: "fly", accountMachine: true } },
   };
   const source = new DeploymentExtension("https://policy.example", "secret", async (url, init) => {
     requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
     return new Response(JSON.stringify(replies[String(url)]), { headers: { "content-type": "application/json" } });
   }).computeSource()!;
-  assert.deepEqual(await source.profile("interactive", "a", "claude"), { provider: "fly", image: "runner:claude" });
-  assert.deepEqual(await source.credential("fly"), { token: "op", expiresAt: "2026-10-06T12:00:00.000Z" });
+  assert.deepEqual(await source.profile("interactive", "a", "claude"), { provider: "fly", accountMachine: true });
   assert.deepEqual(requests.map((request) => request.body), [
     { subject: { accountId: "a" }, purpose: "interactive", runtimeId: "claude" },
-    { provider: "fly" },
   ]);
-  replies["https://policy.example/v1/compute/credential"] = {};
-  assert.equal(await source.credential("fly"), null, "no token means no managed credential");
 });
