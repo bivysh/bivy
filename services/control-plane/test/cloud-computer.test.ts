@@ -97,23 +97,32 @@ async function main() {
 
   // Boot payload: only the extension may ask; it re-enrolls the stable node.
   expect((await req(port, "POST", "/internal/compute/bootstrap", { accountId })).status === 401, "the boot payload requires the extension's token");
-  const boot = await req(port, "POST", "/internal/compute/bootstrap", { accountId, awakeCapMinutes: 360 }, EXTENSION_TOKEN);
+  // An older extension may still ask for a rebuild; a new disk can't open the
+  // old key's snapshots, so the request is ignored.
+  const boot = await req(port, "POST", "/internal/compute/bootstrap", { accountId, awakeCapMinutes: 360, restoreSessionId: "s-old" }, EXTENSION_TOKEN);
   expect(boot.status === 200 && boot.json?.nodeId === nodeId, "the cloud computer boots as the account's stable node");
   const relay = JSON.parse(Buffer.from(boot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/relay.json").raw_value, "base64").toString("utf8"));
   const start = Buffer.from(boot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/start.sh").raw_value, "base64").toString("utf8");
   expect(typeof relay.enrollmentToken === "string" && relay.enrollmentToken.startsWith("enr_"), "the payload carries a fresh enrollment token");
+  expect(!("e2eKey" in relay), "the payload carries no room key: the machine generates its own");
+  expect(!/BIVY_HOSTED_CREDENTIAL|BIVY_RESTORE/.test(start), "the machine is no credential-custody guest and rebuilds nothing from snapshots");
   expect(/BIVY_EPHEMERAL_SLEEP=1/.test(start) && /BIVY_DATA_DIR=\/data\/bivy/.test(start), "the node sleeps instead of being destroyed, with its state on the volume");
   expect(boot.json.init.exec.includes("21600"), "each awake period is bounded by the awake cap");
   const enrolled = await req(port, "GET", "/nodes", undefined, token);
   expect((enrolled.json ?? []).some((n: { id: string; online: boolean }) => n.id === nodeId && !n.online), "the enrolled node is listed, asleep");
 
-  // Launch returns the cloud computer and the same escrowed key every time.
+  // Launch returns the cloud computer and no key: devices pair with it.
   const configs = await req(port, "GET", "/account/ephemeral-configs", undefined, token);
   const cloud = configs.json?.find((c: { computeSource?: string }) => c.computeSource === "managed");
   const first = await req(port, "POST", "/account/managed-machines", { configId: cloud.id, runtimeId: "claude-code-sdk", requestId: "r1" }, token);
   const second = await req(port, "POST", "/account/managed-machines", { configId: cloud.id, requestId: "r2" }, token);
-  expect(first.status === 201 && first.json?.machine?.nodeId === nodeId && typeof first.json?.roomKey === "string", "launching asks the extension for the account's cloud computer");
-  expect(second.json?.roomKey === first.json?.roomKey, "every launch gets the same node key");
+  expect(first.status === 201 && first.json?.machine?.nodeId === nodeId && second.json?.machine?.nodeId === nodeId, "launching asks the extension for the account's cloud computer");
+  expect(!("roomKey" in first.json) && !("roomKey" in second.json), "a launch hands out no room key");
+  const target = await req(port, "POST", "/account/managed-automation-target", undefined, token);
+  expect(target.json?.nodeId === nodeId && !("roomKey" in target.json), "the automation target names the node and hands out no key");
+  for (const [method, path] of [["GET", "/node/model-auth-hosted-vault"], ["PUT", "/node/model-auth-hosted-vault"], ["PUT", "/node/model-auth-key/hosted-escrow"]] as const) {
+    expect((await req(port, method, path, method === "PUT" ? { vaultKeyB64: Buffer.alloc(32).toString("base64"), ciphertext: "x", expectedGeneration: 0, revision: 0 } : undefined, relay.enrollmentToken)).status === 404, `${method} ${path} no longer exists: the control plane holds no credential key`);
+  }
   expect(calls.some((c) => c.path === "/v1/compute/acquire" && c.body.purpose === "interactive" && c.body.runtimeId === "claude-code-sdk"), "the extension learns the purpose and agent");
   acquireDelayMs = 6_000;
   const slow = await req(port, "POST", "/account/managed-machines", { configId: cloud.id, requestId: "r-slow" }, token);
@@ -166,6 +175,15 @@ async function routing() {
   const store = createPgMemStore();
   await store.init();
   const account = await store.findOrCreateAccount("routing@example.com");
+
+  // Escrow left by an earlier version is deleted when the control plane starts
+  // (`init` runs this purge).
+  const query = (store as unknown as { query(text: string, params?: unknown[]): Promise<{ rows: unknown[] }> }).query.bind(store);
+  await query(`INSERT INTO node_room_keys (account_id, node_id, room_key_enc) VALUES ($1, $2, '{}')`, [account.id, cloudComputerNodeId(account.id)]);
+  await query(`INSERT INTO hosted_model_auth_keys (account_id, key_enc, ciphertext) VALUES ($1, '{}', 'x')`, [account.id]);
+  await store.purgeRetiredKeyEscrow();
+  expect((await query(`SELECT 1 FROM node_room_keys`)).rows.length === 0, "startup deletes room keys the control plane minted");
+  expect((await query(`SELECT 1 FROM hosted_model_auth_keys`)).rows.length === 0, "startup deletes escrowed credential vault keys");
   const cloud = { id: "managed-default", name: "Bivy Cloud", provider: "fly", computeSource: "managed" as const, createdAt: "", updatedAt: "" };
   await store.setEphemeralConfigs(account.id, [cloud]);
   const label = `bivy/${cloudComputerNodeId(account.id).replace(/^eph-/, "")}`;

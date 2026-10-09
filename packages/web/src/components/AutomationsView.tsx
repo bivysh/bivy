@@ -72,6 +72,7 @@ import { AutomationSourcesPanel } from "./AutomationSourcesPanel.js";
 import { RunHistory } from "./RunHistory.js";
 import { compactCronSummary, formatAutomationMoment, formatNextAutomationRun } from "../automationPresentation.js";
 import { isListedAutomation } from "../automationList.js";
+import { Spinner } from "./Spinner.js";
 import { Badge } from "./Badge.js";
 import { NewAutomationChooser } from "./NewAutomationChooser.js";
 import { AutomationPreflightPanel, useAutomationPreflight } from "./AutomationPreflight.js";
@@ -1740,6 +1741,10 @@ function AutomationEditor({
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [managedTarget, setManagedTarget] = useState<Awaited<ReturnType<typeof controller.managedAutomationTarget>> | null>(null);
+  // Bivy Cloud holds its own key: before instructions can be sealed to it, the
+  // machine is woken and this device pairs with it.
+  const [cloudPairing, setCloudPairing] = useState<{ state: "idle" | "waking" | "failed"; error?: string }>({ state: "idle" });
+  const cloudPairingRun = useRef<Promise<boolean> | null>(null);
   const [created, setCreated] = useState<{ url: string; secret: string; name: string; updated?: boolean } | null>(null);
   const [allowDangerous, setAllowDangerous] = useState(existing?.allowDangerous ?? false);
   const [pairMachineOpen, setPairMachineOpen] = useState(false);
@@ -1765,10 +1770,7 @@ function AutomationEditor({
   useEffect(() => { setD(initial); }, [initial]);
   useEffect(() => {
     if (!EPHEMERAL_MACHINES_ENABLED || controller.direct || !controller.signedIn) return;
-    controller.managedAutomationTarget().then((target) => {
-      controller.local.addKey(target.nodeId, target.roomKey);
-      setManagedTarget(target);
-    }).catch(() => {});
+    controller.managedAutomationTarget().then(setManagedTarget).catch(() => {});
   }, []);
   useEffect(() => {
     setAllowDangerous(existing?.allowDangerous ?? false);
@@ -1784,9 +1786,32 @@ function AutomationEditor({
     return () => document.removeEventListener("mousedown", onDoc);
   }, [pickerOpen]);
 
+  /** Wake Bivy Cloud and pair this device with it. Resolves false (with the
+   *  reason shown in the runner card) when it can't be reached. */
+  function pairCloudComputer(): Promise<boolean> {
+    if (!managedTarget || controller.local.keys()[managedTarget.nodeId]) return Promise.resolve(true);
+    const target = managedTarget;
+    cloudPairingRun.current ??= (async () => {
+      setCloudPairing({ state: "waking" });
+      try {
+        await controller.connectCloudComputer(target.config.id);
+        setCloudPairing({ state: "idle" });
+        return true;
+      } catch (cause) {
+        const reason = String((cause as Error)?.message || cause);
+        setCloudPairing({ state: "failed", error: `Couldn't reach Bivy Cloud to set up encryption: ${reason}` });
+        return false;
+      } finally {
+        cloudPairingRun.current = null;
+      }
+    })();
+    return cloudPairingRun.current;
+  }
+
   async function chooseRunner(nodeId: string) {
     set("nodeId", nodeId);
     if (!managedTarget || nodeId !== managedTarget.nodeId) return;
+    void pairCloudComputer();
     try {
       await controller.setQueueRouting({ primary: { kind: "config", configId: managedTarget.config.id } });
     } catch (cause) {
@@ -1844,7 +1869,8 @@ function AutomationEditor({
   if (d.hasTrigger && webhookFilter.error) missing.push("a valid filter script");
   if (!d.instructions.trim()) missing.push("instructions");
   if (!d.nodeId) missing.push("a machine");
-  else if (!controller.local.keys()[d.nodeId]) missing.push("a paired machine (encryption key missing)");
+  // Bivy Cloud is paired on save (it wakes first); any other machine must be already.
+  else if (!controller.local.keys()[d.nodeId] && !selectedManaged) missing.push("a paired machine (encryption key missing)");
   const canSave = missing.length === 0;
   const unsafeCombo = d.approvalMode === "autonomous" && d.sandbox === "danger-full-access";
 
@@ -1888,6 +1914,11 @@ function AutomationEditor({
     if (!canSave) return;
     setBusy(true);
     setError("");
+    // The runner card shows why pairing failed; don't repeat it here.
+    if (selectedManaged && !(await pairCloudComputer())) {
+      setBusy(false);
+      return;
+    }
     try {
       const roomKey = d.nodeId ? controller.local.keys()[d.nodeId] : undefined;
       if (!d.nodeId || !roomKey) throw new Error("Connect to the assigned machine before saving encrypted instructions.");
@@ -2350,7 +2381,7 @@ function AutomationEditor({
                       <strong>{selectedManaged ? "Bivy Cloud" : selectedNode ? String(selectedNode.name || selectedNode.id) : "Choose a paired machine"}</strong>
                       <span>
                         {selectedManaged
-                          ? "Starts an isolated managed Machine when this automation fires · encryption ready"
+                          ? `Wakes when this automation fires${selectedNodeHasKey ? " · encryption ready" : ""}`
                           : selectedNode
                             ? `${selectedNode.online ? "Online" : "Offline — the run will wait or use your configured fallback"}${selectedNodeHasKey ? " · encryption ready" : " · key missing on this device"}`
                             : "The instructions are encrypted before they leave this device."}
@@ -2366,12 +2397,26 @@ function AutomationEditor({
                       {d.nodeId && !selectedManaged && !state.connection.nodes.some((n) => n.id === d.nodeId) && <option value={d.nodeId}>{d.nodeId} · unavailable</option>}
                     </select>
                   </label>
-                  {!selectedNodeHasKey && pairedNodes.length === 0 && (
+                  {selectedManaged && !selectedNodeHasKey && (
+                    cloudPairing.state === "failed" ? (
+                      <div className="autom-runner-help" role="alert">
+                        <span>{cloudPairing.error}</span>
+                        <button type="button" className="btn sm" onClick={() => void pairCloudComputer()}>Try again</button>
+                      </div>
+                    ) : (
+                      <div className="autom-runner-help" role="status">
+                        {cloudPairing.state === "waking"
+                          ? <><Spinner size="xs" /><span>Waking Bivy Cloud so this device can pair with it…</span></>
+                          : <span>Bivy Cloud keeps its own encryption key. Saving wakes it so this device can pair with it and encrypt the instructions.</span>}
+                      </div>
+                    )
+                  )}
+                  {!selectedManaged && !selectedNodeHasKey && pairedNodes.length === 0 && (
                     <div className="autom-runner-help" role="status">
                       <button type="button" className="btn primary" onClick={() => setPairMachineOpen(true)}>Pair this machine</button>
                     </div>
                   )}
-                  {!selectedNodeHasKey && pairedNodes.length > 0 && (
+                  {!selectedManaged && !selectedNodeHasKey && pairedNodes.length > 0 && (
                     <div className="autom-runner-help" role="status">Choose a machine without “key unavailable”. Offline machines can still own the encrypted job.</div>
                   )}
                 </div>
@@ -2379,7 +2424,7 @@ function AutomationEditor({
                   <summary className="settings-disclosure-summary">How pairing protects instructions</summary>
                   <div className="settings-disclosure-body settings-hint">
                     {selectedManaged
-                      ? "Bivy Cloud starts on demand for this account's queued work and adopts this automation's E2E encryption identity. Model and GitHub credentials are injected only when the managed runner starts."
+                      ? "Instructions are encrypted for the key Bivy Cloud generated on its own disk; the control plane never holds it. Bivy Cloud starts on demand for this account's queued work and gets model credentials by end-to-end sync from your machines or a sign-in on it."
                       : "Instructions are encrypted for the paired machine. Account sign-in alone cannot decrypt them. Configure isolated fallback routing from Runs when needed."}
                   </div>
                 </details>
@@ -2457,7 +2502,7 @@ function AutomationEditor({
                 onClick={() => void save()}
                 disabled={busy || !canSave}
               >
-                {busy ? "Saving…" : d.id ? "Save changes" : "Turn on"}
+                {cloudPairing.state === "waking" && busy ? "Waking Bivy Cloud…" : busy ? "Saving…" : d.id ? "Save changes" : "Turn on"}
               </button>
             </div>
           </>

@@ -109,14 +109,13 @@ confused with machine isolation.
 
 Interactive traffic and workspace content remain encrypted across the relay.
 However, unattended hosted provisioning can require the control plane to store
-encrypted cloud, repository, or key-escrow material that the service can
-technically access. Third-party sources such as Slack and generic webhooks also
+encrypted repository credentials that the service can technically access. Third-party sources such as Slack and generic webhooks also
 send their bounded instructions to the control plane in plaintext. These are
 explicit trust modes, not cryptographic blindness.
 
 You can self-host the relay and control plane, keep relevant keys on your own
-devices, or explicitly opt into hosted custody where unattended launch requires
-it. See the [security model](security-model.md) and
+devices, or explicitly opt into hosted provisioning where unattended launch
+requires it. See the [security model](security-model.md) and
 [hosted-provisioning trust model](hosted-provisioning-trust-model.md) for the
 current implementation boundaries.
 

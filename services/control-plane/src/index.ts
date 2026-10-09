@@ -16,14 +16,13 @@ import { validateCapabilityTags } from "@bivy/core";
 import { notificationLink } from "./notification-link.js";
 import { type Account, type NodeRecord, type NotificationKind, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity, mintHostedInstallationToken } from "./central-github-app.js";
-import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
-import { hostedVaultWriteRejection, legacyEscrowWriteRejection } from "./hosted-vault-policy.js";
+import { hostedEncryptionAvailable, hostedPrimaryKid, initializeHostedKeyring } from "./hosted-crypto.js";
 import { webRuntimeConfigScript } from "./web-runtime-config.js";
 import { publicManagedLaunchError } from "./managed-launch-error.js";
 import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation, mintInstallationToken } from "./hosted-github-auth.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { DeploymentCompute, deploymentCompute, managedComputeEnabled, setDeploymentCompute } from "./deployment-compute.js";
-import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, cloudComputerRoomKey, isCloudComputerNode, isEphemeralMilestone, routeWorkToCloudComputer } from "./cloud-computer.js";
+import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, isCloudComputerNode, isEphemeralMilestone, routeWorkToCloudComputer } from "./cloud-computer.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
 import { configureProxyTrust } from "./proxy-trust.js";
@@ -1277,7 +1276,7 @@ async function accountMachineMode(accountId: string): Promise<boolean> {
 }
 
 /** Ask the deployment for the account's cloud computer and answer with the
- * same shape as a per-session launch: the node to connect to and its key. */
+ * node to connect to. No key: the device pairs with the machine itself. */
 async function respondCloudComputer(
   res: Response,
   accountId: string,
@@ -1293,11 +1292,9 @@ async function respondCloudComputer(
     // A starting machine reports this boot's milestones afresh; an earlier
     // boot's "credentials ready" must not let a prompt in early.
     if (acquired.state !== "awake") await store.resetNodeMilestones(acquired.nodeId);
-    const roomKey = await cloudComputerRoomKey(store, accountId);
     res.status(201).json({
       ok: true,
       duplicate: false,
-      roomKey,
       machine: {
         id: acquired.nodeId, nodeId: acquired.nodeId, provider: "fly", name: "Bivy Cloud", region: "",
         status: acquired.state, ip: null, createdAt: new Date().toISOString(), computeSource: "managed", purpose: input.purpose,
@@ -1396,10 +1393,9 @@ app.post("/account/onboarding/managed-defaults", managedOnboardingRateLimit, req
   res.json({ ok: true, config: await ensureManagedDefaultForAccount(account.id) });
 }));
 
-// Stable E2E identity for unattended managed automations. The browser encrypts
-// instructions to this room key; a future Bivy Cloud queue Machine adopts the
-// same node id + key at launch. This is account-authenticated, no-store, and
-// separate from interactive session keys.
+// The account's cloud computer as an automation destination: its stable node id
+// and the managed profile. No key: the browser seals instructions to the key
+// the machine generated for itself, which it gets by pairing with the machine.
 app.post("/account/managed-automation-target", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   res.setHeader("cache-control", "no-store");
@@ -1407,31 +1403,13 @@ app.post("/account/managed-automation-target", requireUser, asyncHandler(async (
     return res.status(503).json({ error: "Bivy Cloud automations are not available." });
   }
   const config = await ensureManagedDefaultForAccount(account.id);
-  const nodeId = cloudComputerNodeId(account.id);
-  let encrypted = await store.getNodeRoomKeyEnc(account.id, nodeId);
-  if (!encrypted) {
-    encrypted = await store.setNodeRoomKeyEncIfAbsent(
-      account.id,
-      nodeId,
-      encryptSecret(account.id, randomBytes(32).toString("base64url")),
-    );
-  }
-  res.json({ ok: true, nodeId, roomKey: decryptSecret(account.id, encrypted), config });
-}));
-
-// Browser-visible readiness contains no credential material: it only confirms
-// whether the separately encrypted Cloud snapshot has been published. Onboarding
-// waits for this authoritative edge instead of trusting a node-local toggle.
-app.get("/account/managed-credential-status", requireUser, asyncHandler(async (req, res) => {
-  const account = (req as Request & { account: Account }).account;
-  const vault = await store.getHostedModelAuthVault(account.id);
-  res.json({ ready: Boolean(vault?.ciphertext), generation: vault?.generation ?? 0 });
+  res.json({ ok: true, nodeId: cloudComputerNodeId(account.id), config });
 }));
 
 // Interactive managed session. The account chooses only a server-authored
 // managed profile; the deployment acquires (creates or wakes) the account's
-// cloud computer. The room key is returned once over the authenticated
-// no-store response so this browser can establish the E2E channel.
+// cloud computer. The browser then connects and pairs with the machine for
+// its room key, exactly as with a user-owned node.
 app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   res.setHeader("cache-control", "no-store");
@@ -1447,8 +1425,9 @@ app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res)
 }));
 
 // Bring a managed session back. The account's cloud computer keeps its
-// sessions on its own disk: this is a wake (or, if its disk was lost, a
-// rebuild of the session onto the same node from its sealed snapshot).
+// sessions on its own disk, so this is a wake. A lost disk is not rebuilt from
+// snapshots: they are sealed under the old disk's room key, which no one else
+// holds.
 app.post("/account/managed-machines/restore", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   res.setHeader("cache-control", "no-store");
@@ -1667,8 +1646,7 @@ app.delete("/node/session-snapshot/:sessionId", requireNode, asyncHandler(async 
 // Non-secret routing/identity (reusable eph-* node id + launch params) that lets
 // a device rebuild a torn-down destroy-lane session after its node has dropped
 // from the registry. `requireUser` (the device that launched it, or any account
-// device). Never carries a credential — the escrowed room key for hosted rebuild
-// lives in node_room_keys (Gap 3) and is never exposed here.
+// device). Never carries a credential.
 app.get("/session-correlation", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   res.json({ ok: true, correlations: await store.listSessionCorrelations(account.id) });
@@ -1975,75 +1953,17 @@ app.put("/api/push/preferences", asyncHandler(async (req, res) => {
   res.json({ preferences });
 }));
 
-// E2E model-provider auth vault. Ordinary account sync stores only ciphertext
-// and per-node wrapped keys. Hosted custody is a separate, filtered ciphertext
-// whose distinct key is escrowed only after an explicit per-item grant.
+// E2E model-provider auth vault. The control plane stores only ciphertext and
+// per-node wrapped keys; vault keys are wrapped node-to-node, so no route here
+// can decrypt a user's model credentials.
 app.get("/node/model-auth-vault", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
-  // Keep this legacy response peer-vault-only. Older nodes interpret any
-  // `hostedKey` here as the key for `vault`, so mixing the distinct filtered
-  // custody key into this shape would break rolling upgrades.
   res.json({
     ok: true,
     vault: await store.getModelAuthVault(node.accountId) ?? null,
     wrappedKey: await store.getModelAuthWrappedKey(node.accountId, node.id) ?? null,
     requests: await store.listModelAuthKeyRequests(node.accountId, node.id),
   });
-}));
-
-app.put("/node/model-auth-key/hosted-escrow", requireNode, asyncHandler(async (req, res) => {
-  const node = (req as Request & { node: NodeRecord }).node;
-  const vaultKeyB64 = String(req.body?.vaultKeyB64 ?? "").trim();
-  if (!vaultKeyB64 || Buffer.from(vaultKeyB64, "base64").length !== 32) {
-    return res.status(400).json({ error: "Missing/invalid vaultKeyB64" });
-  }
-  // Legacy endpoint retained only so pre-vault nodes fail safely during a rolling
-  // upgrade. Once a filtered hosted snapshot exists, an old node must not replace
-  // its distinct key with the ordinary account-vault key.
-  const provisioningEnabled = (await store.getHostedProvisioning(node.accountId)).enabled;
-  const legacyRejection = legacyEscrowWriteRejection({ provisioningEnabled, vaultActive: provisioningEnabled && Boolean(await store.getHostedModelAuthVault(node.accountId)) });
-  if (legacyRejection) return res.status(legacyRejection.status).json({ error: legacyRejection.error });
-  await store.setHostedModelAuthVaultKey(node.accountId, encryptSecret(node.accountId, vaultKeyB64));
-  res.json({ ok: true });
-}));
-
-app.get("/node/model-auth-hosted-vault", requireNode, asyncHandler(async (req, res) => {
-  const node = (req as Request & { node: NodeRecord }).node;
-  if (!(await store.getHostedProvisioning(node.accountId)).enabled) {
-    return res.status(403).json({ error: "hosted provisioning not enabled for this account" });
-  }
-  const [enc, vault] = await Promise.all([
-    store.getHostedModelAuthVaultKey(node.accountId),
-    store.getHostedModelAuthVault(node.accountId),
-  ]);
-  res.json({
-    ok: true,
-    hostedVault: vault ? { ciphertext: vault.ciphertext, generation: vault.generation, revision: vault.revision } : null,
-    hostedKey: enc && vault ? decryptSecret(node.accountId, enc) : null,
-  });
-}));
-
-app.put("/node/model-auth-hosted-vault", requireNode, asyncHandler(async (req, res) => {
-  const node = (req as Request & { node: NodeRecord }).node;
-  const vaultKeyB64 = String(req.body?.vaultKeyB64 ?? "").trim();
-  const ciphertext = String(req.body?.ciphertext ?? "").trim();
-  const expectedGeneration = Number(req.body?.expectedGeneration);
-  const revision = Number(req.body?.revision);
-  if (!ciphertext || !vaultKeyB64 || Buffer.from(vaultKeyB64, "base64").length !== 32 || !Number.isSafeInteger(expectedGeneration) || expectedGeneration < 0 || !Number.isSafeInteger(revision) || revision < 0) {
-    return res.status(400).json({ error: "Missing/invalid hosted vault" });
-  }
-  const provisioningEnabled = (await store.getHostedProvisioning(node.accountId)).enabled;
-  const currentVault = provisioningEnabled ? await store.getHostedModelAuthVault(node.accountId) : undefined;
-  const managedGuest = provisioningEnabled && (await store.listHostedMachineAttempts(node.accountId, false)).some((attempt) => attempt.nodeId === node.id);
-  const rejection = hostedVaultWriteRejection({ provisioningEnabled, managedGuest, vaultActive: Boolean(currentVault) });
-  if (rejection) return res.status(rejection.status).json({ error: rejection.error });
-  const generation = await store.setHostedModelAuthVault(node.accountId, ciphertext, encryptSecret(node.accountId, vaultKeyB64), expectedGeneration, revision);
-  if (generation === undefined) {
-    const current = await store.getHostedModelAuthVault(node.accountId);
-    return res.status(409).json({ error: "hosted credential vault changed", generation: current?.generation ?? 0, revision: current?.revision ?? 0 });
-  }
-  await store.appendHostedAudit(node.accountId, { at: new Date().toISOString(), action: "model_credential_escrowed", nodeId: node.id });
-  res.json({ ok: true, generation, revision });
 }));
 
 app.put("/node/model-auth-vault", requireNode, asyncHandler(async (req, res) => {
@@ -4862,16 +4782,17 @@ function requireDeploymentExtension(req: Request, res: Response, next: NextFunct
 }
 
 // Boot payload for the account's cloud computer: re-enrolls its node and
-// returns the Fly files + init that start it with the escrowed room key.
+// returns the Fly files + init that start it. It carries no room key (the node
+// generates and keeps its own); a `restoreSessionId` from older extensions is
+// ignored, since a new disk cannot open snapshots sealed under the old key.
 app.post("/internal/compute/bootstrap", requireDeploymentExtension, asyncHandler(async (req, res) => {
   const accountId = typeof req.body?.accountId === "string" ? req.body.accountId : "";
   if (!accountId || !(await store.getAccount(accountId))) return res.status(404).json({ error: "Account not found" });
   const awakeCapMinutes = Math.max(5, Math.min(24 * 60, Number(req.body?.awakeCapMinutes) || 360));
-  const restoreSessionId = typeof req.body?.restoreSessionId === "string" && req.body.restoreSessionId ? req.body.restoreSessionId : undefined;
   res.setHeader("cache-control", "no-store");
   await store.resetNodeMilestones(cloudComputerNodeId(accountId));
   res.json(await bootCloudComputer(store, {
-    accountId, awakeCapMinutes, restoreSessionId,
+    accountId, awakeCapMinutes,
     relayUrl: provisionEnv().relayUrl, controlPlaneUrl: provisionEnv().cpBaseUrl,
   }));
 }));

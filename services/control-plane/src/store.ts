@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { createHash } from "node:crypto";
-import type { SecretEnvelope } from "./hosted-crypto.js";
 
 /**
  * Control plane data store.
@@ -408,54 +407,6 @@ export function redactHostedProvisioning(h: HostedProvisioning): HostedProvision
   };
 }
 
-/** A machine launch recorded by the retired in-core per-session provisioner.
- * Nothing writes these any more; existing rows are read only so a guest they
- * name keeps its restricted hosted-vault write rights. */
-export type HostedMachineAttemptState =
-  | "requested" | "enrolled" | "provider-accepted" | "tracked"
-  | "ready" | "claimed" | "working" | "deleting" | "deleted" | "failed";
-
-/** What the controller wants for this attempt, independent of `state` (what has
- * actually been observed). "deleted" is set by TTL/boot-deadline expiry, a user
- * force-destroy, or the reconciler abandoning a hopeless create — and, once set,
- * is never reverted; the reconciler's only remaining job for that attempt is to
- * drive `state` to "deleted" and stop retrying creation. */
-export type HostedMachineAttemptDesiredState = "active" | "deleted";
-
-export interface HostedMachineAttempt {
-  accountId: string;
-  attemptId: string;
-  provider: string;
-  configId?: string;
-  nodeId: string;
-  state: HostedMachineAttemptState;
-  /** Controller intent — see `HostedMachineAttemptDesiredState`. Optional on
-   * write (defaults to "active"); always present on read. */
-  desiredState?: HostedMachineAttemptDesiredState;
-  /** Last raw status string the provider reported for this resource (e.g.
-   * Hetzner "running"/"off"), distinct from the coarse controller `state`. */
-  observedState?: string;
-  /** Next moment the reconciler should force a transition for this attempt
-   * (boot timeout, TTL+grace, etc.) — persisted so it survives a controller
-   * restart and can be shown verbatim in the UI/audit trail. */
-  deadlineAt?: string;
-  /** Opaque per-account tag applied to every provider resource this attempt
-   * creates (see `ownershipTagFor`), so an orphan sweep can discover resources
-   * belonging to this account without ever tagging providers with a raw id. */
-  ownershipTag?: string;
-  desired: Record<string, unknown>;
-  machine?: Record<string, unknown>;
-  lastError?: string;
-  retryCount: number;
-  /** Optimistic-concurrency counter. Incremented by the store on every write
-   * (the input value is ignored — always read back from the row); callers
-   * that read-modify-write under contention (the reconciler) may pass
-   * `expectedVersion` to `putHostedMachineAttempt` to fence a stale write. */
-  version?: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
 /** An audit event recording a use of hosted credentials (never contains a secret). */
 export interface HostedAuditEvent {
   at: string;
@@ -535,8 +486,7 @@ export interface SessionSnapshotRecord {
 // and drops from the node registry: it records the reusable eph-* node id plus
 // the launch params needed to re-provision the same machine. Keyed by session
 // and NOT FK-cascaded off nodes, so it outlives teardown (like session_snapshots).
-// Same trust tier as nodeId — never holds a credential (the escrowed room key for
-// hosted rebuild lives separately in node_room_keys, Gap 3).
+// Same trust tier as nodeId — never holds a credential.
 export interface SessionCorrelation {
   sessionId: string;
   nodeId: string;
@@ -1360,13 +1310,11 @@ export interface EphemeralConfigurationRepository {
 }
 
 export interface HostedMachineRepository {
-  // Hosted provisioning: per-account credentials + enable flag. Legacy launch
-  // attempts from the retired in-core provisioner are listed read-only.
+  // Hosted provisioning: per-account credentials + enable flag.
   getHostedProvisioning(accountId: string): Promise<HostedProvisioning>;
   /** Non-decrypting presence view for the settings UI (no master key needed). */
   getHostedProvisioningStatus(accountId: string): Promise<HostedProvisioningStatus>;
   setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning>;
-  listHostedMachineAttempts(accountId: string, activeOnly?: boolean): Promise<HostedMachineAttempt[]>;
   // Append-only audit trail of hosted-credential use (capped, newest-first read).
   appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void>;
   listHostedAudit(accountId: string, limit?: number): Promise<HostedAuditEvent[]>;
@@ -1383,18 +1331,6 @@ export interface VaultRepository {
   requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string, rejectedWrappedKey?: string): Promise<boolean>;
   listModelAuthKeyRequests(accountId: string, exceptNodeId: string): Promise<ModelAuthKeyRequest[]>;
   setModelAuthWrappedKey(accountId: string, targetNodeId: string, wrappedByNodeId: string, wrappedByPublicKey: string, wrappedKey: string): Promise<ModelAuthWrappedKey>;
-
-  // Node-less inheritance (hosted): escrow the model-auth vault KEY, sealed at rest
-  // with the per-account hosted key, so a LONE hosted ephemeral can decrypt the
-  // synced vault (incl. subscription OAuth) with no peer to wrap the key. Hosted-
-  // provisioning accounts ONLY (enforced at the endpoint) — CP-readable by design,
-  // the same posture as provider tokens / room-key escrow. Non-hosted accounts stay
-  // fully peer-wrapped (E2E, CP-blind).
-  getHostedModelAuthVaultKey(accountId: string): Promise<SecretEnvelope | undefined>;
-  setHostedModelAuthVaultKey(accountId: string, enc: SecretEnvelope): Promise<void>;
-  /** Separately encrypted snapshot containing only explicitly granted records. */
-  getHostedModelAuthVault(accountId: string): Promise<{ ciphertext: string; generation: number; revision: number } | undefined>;
-  setHostedModelAuthVault(accountId: string, ciphertext: string, enc: SecretEnvelope, expectedGeneration: number, revision: number): Promise<number | undefined>;
 
   // Device→device provider-token vault (P2 / Gap A) — recipients are paired devices.
   getDeviceVault(accountId: string): Promise<DeviceVault | undefined>;
@@ -1433,16 +1369,6 @@ export interface SessionStateRepository {
   // session_index.source ("linear:<externalId>"), the source the node advertises for
   // a Linear-issue session.
   findSessionByExternalId(accountId: string, externalId: string): Promise<{ sessionId: string; nodeId: string } | undefined>;
-
-  // Gap 3: escrowed session ROOM KEY for HOSTED (device-offline) rebuild. Sealed
-  // at rest with the per-account hosted-provisioning key (hosted-crypto), keyed by
-  // the reusable eph-* node id, NOT FK-cascaded off nodes so it survives teardown.
-  // Written ONLY for hosted-provisioning accounts (the control plane already holds
-  // their provider/GitHub creds); device-launched sessions keep the room key
-  // device-only and never escrow. Never exposed to any client.
-  getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined>;
-  /** Atomically preserve the first E2E identity created by concurrent devices. */
-  setNodeRoomKeyEncIfAbsent(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<SecretEnvelope>;
 
 }
 

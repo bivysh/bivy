@@ -9,7 +9,7 @@ const CHECKPOINTS: ReadonlyArray<{ id: SessionLaunchCheckpointId; label: string;
   { id: "capacity", label: "Reserving Bivy Cloud capacity" },
   { id: "machine", label: "Creating the isolated Machine" },
   { id: "service", label: "Starting the secure Bivy service" },
-  { id: "credentials", label: "Loading encrypted credentials" },
+  { id: "credentials", label: "Checking model credentials" },
   { id: "repository", label: "Preparing the repository", skippedLabel: "No repository selected" },
   { id: "agent", label: "Starting the agent and session" },
   { id: "message", label: "Delivering your first message" },

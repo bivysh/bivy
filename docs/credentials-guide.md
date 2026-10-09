@@ -183,9 +183,6 @@ others (e.g. Gemini CLI) remain per-node native logins.
 - **Point a project at a specific key:** open the credential in the vault, choose
   the repository under **Assign for project**, then select **Use for …**.
 - **Keep a key on one machine:** set **Available on** to “Only this machine”.
-- **Allow unattended runs:** explicitly enable it on that credential. Bivy writes
-  a separately encrypted hosted snapshot containing only granted credentials;
-  account sync alone never grants hosted custody.
 - **Rotate a key:** re-save it at the same label. OAuth refresh happens
   automatically and touches only that specific account.
 

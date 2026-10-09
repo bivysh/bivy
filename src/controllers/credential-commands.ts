@@ -22,7 +22,6 @@ import {
   setProviderApiKeyLabeled,
   setProviderReferenceLabeled,
   setCredentialSync,
-  setCredentialUnattended,
   getCredentialPresets,
   setActiveCredentialPreset,
   setCredentialPresetMapping,
@@ -42,10 +41,8 @@ export interface CredentialCommandDeps {
   /** Emit to every connected device (server's `broadcast`). */
   broadcast(event: unknown): void;
   /** Push model-auth to the account vault after a credential change.
-   *  `throwOnFailure` rejects instead of best-effort logging; `allowEmptyHostedEscrow`
-   *  marks an EXPLICIT revoke/delete, the only callers allowed to publish an
-   *  empty unattended-custody snapshot (which removes the encrypted cloud copy). */
-  pushModelAuthToControlPlane(opts?: { throwOnFailure?: boolean; allowEmptyHostedEscrow?: boolean }): Promise<void>;
+   *  `throwOnFailure` rejects instead of best-effort logging. */
+  pushModelAuthToControlPlane(opts?: { throwOnFailure?: boolean }): Promise<void>;
   /** Re-resolve the active session's credentials after an auth change. */
   refreshSessionAfterAuth(): Promise<void>;
   /** The unified provider list broadcast after a credential add/remove. */
@@ -129,8 +126,7 @@ export function createCredentialCommands(deps: CredentialCommandDeps): CommandEn
     async "credential.remove"(msg, ctx) {
       try {
         await removeProviderCredential(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""));
-        // Deleting a granted credential must also remove its escrowed cloud copy.
-        await deps.pushModelAuthToControlPlane({ allowEmptyHostedEscrow: true });
+        await deps.pushModelAuthToControlPlane();
         await deps.refreshSessionAfterAuth();
         deps.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
         deps.broadcast({ type: "providers.list", providers: await deps.listProvidersUnified() });
@@ -145,35 +141,13 @@ export function createCredentialCommands(deps: CredentialCommandDeps): CommandEn
       try {
         const sync = msg.sync === "node" ? "node" : "account";
         await setCredentialSync(credsDir, String(msg.provider ?? ""), String(msg.label ?? ""), sync);
-        // Demoting to machine-only revokes any custody grant; let it clear the escrow.
-        await deps.pushModelAuthToControlPlane({ allowEmptyHostedEscrow: sync === "node" });
+        await deps.pushModelAuthToControlPlane();
         deps.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
         ctx.reply({ type: "credential.sync.set.ok", requestId: msg.requestId });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         deps.sendEvent({ type: "session.error", error: message });
         ctx.reply({ type: "credential.sync.set.error", requestId: msg.requestId, error: message });
-      }
-    },
-    async "credential.unattended.set"(msg, ctx) {
-      const provider = String(msg.provider ?? "");
-      const label = String(msg.label ?? "");
-      const previous = (await listCredentialRecords(credsDir)).find((record) => record.provider === provider.trim().toLowerCase() && record.label === label)?.unattended === true;
-      try {
-        await setCredentialUnattended(credsDir, provider, label, msg.unattended === true);
-        // Fail loud: the grant reply must reflect whether the encrypted cloud
-        // copy actually reached the control plane. An explicit disable is the
-        // one caller allowed to publish an empty escrow snapshot.
-        await deps.pushModelAuthToControlPlane({ throwOnFailure: true, allowEmptyHostedEscrow: msg.unattended !== true });
-        deps.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
-        ctx.reply({ type: "credential.unattended.set.ok", requestId: msg.requestId });
-      } catch (error) {
-        // The UI must never claim an encrypted Cloud copy exists when custody
-        // publication failed. Restore the prior local grant before rejecting.
-        await setCredentialUnattended(credsDir, provider, label, previous).catch(() => {});
-        deps.sendEvent({ type: "credentials.records", records: await listCredentialRecords(credsDir) });
-        const message = error instanceof Error ? error.message : String(error);
-        ctx.reply({ type: "credential.unattended.set.error", requestId: msg.requestId, error: message });
       }
     },
     // "Test connection": a bounded, non-secret liveness probe for one credential

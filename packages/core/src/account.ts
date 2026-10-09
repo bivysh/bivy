@@ -330,9 +330,11 @@ export interface ManagedMachineLaunch {
   duplicate?: boolean;
 }
 
+/** The account's cloud computer as an automation destination. No key comes
+ * with it: the machine generates its own room key, and a device gets it by
+ * pairing with the machine (see `RelayTransport`'s account pairing). */
 export interface ManagedAutomationTarget {
   nodeId: string;
-  roomKey: string;
   config: EphemeralNodeConfig;
 }
 
@@ -345,20 +347,10 @@ export async function ensureManagedAutomationTarget(
     headers: authHeaders(store),
   });
   const data = await res.json().catch(() => ({})) as Partial<ManagedAutomationTarget> & { error?: string };
-  if (!res.ok || !data.nodeId || !data.roomKey || !data.config) {
+  if (!res.ok || !data.nodeId || !data.config) {
     throw new Error(data.error || `managed automation setup failed: ${res.status}`);
   }
-  return data as ManagedAutomationTarget;
-}
-
-export async function managedCredentialStatus(
-  store: LocalStore,
-  fetchImpl: typeof fetch = fetch,
-): Promise<{ ready: boolean; generation: number }> {
-  const res = await fetchImpl(`${cpBase(store)}/account/managed-credential-status`, { headers: authHeaders(store) });
-  const value = await res.json().catch(() => ({})) as { ready?: boolean; generation?: number; error?: string };
-  if (!res.ok) throw new Error(value.error || `managed credential status failed: ${res.status}`);
-  return { ready: value.ready === true, generation: Number(value.generation) || 0 };
+  return { nodeId: data.nodeId, config: data.config };
 }
 
 export interface ManagedLaunchAction {
@@ -397,17 +389,12 @@ function managedLaunchError(
   return new ManagedLaunchError(value.reason || value.error || fallback, status, value.code, actions);
 }
 
-function adoptManagedMachineKey(store: LocalStore, value: { machine?: EphemeralMachine; roomKey?: string }): void {
-  if (value.machine?.nodeId && value.roomKey) store.addKey(value.machine.nodeId, value.roomKey);
-}
-
 export async function createManagedAuthRunner(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<ManagedMachineLaunch> {
   const res = await fetchImpl(`${cpBase(store)}/account/onboarding/auth-runner`, {
     method: "POST", headers: { authorization: `Bearer ${store.s}` },
   });
-  const value = await res.json().catch(() => ({})) as ManagedMachineLaunch & { roomKey?: string; error?: string; reason?: string; code?: string; actions?: unknown };
+  const value = await res.json().catch(() => ({})) as ManagedMachineLaunch & { error?: string; reason?: string; code?: string; actions?: unknown };
   if (!res.ok || !value.machine) throw managedLaunchError(value, res.status, `managed authentication Machine request failed: ${res.status}`);
-  adoptManagedMachineKey(store, value);
   return { machine: value.machine, ...(value.duplicate ? { duplicate: true } : {}) };
 }
 
@@ -421,7 +408,8 @@ export async function ensureManagedSessionDefaults(store: LocalStore, fetchImpl:
   return coerceConfig(value.config);
 }
 
-/** Launch one interactive operator-owned Machine and adopt its one-time room key. */
+/** Acquire (create or wake) the account's cloud computer. The device pairs
+ * with it on connect; no key comes back from the control plane. */
 export async function launchManagedSessionMachine(
   store: LocalStore,
   configId: string,
@@ -433,13 +421,12 @@ export async function launchManagedSessionMachine(
   const res = await fetchImpl(`${cpBase(store)}/account/managed-machines`, {
     method: "POST", headers: authHeaders(store), body: JSON.stringify({ configId, ...(runtimeId ? { runtimeId } : {}), ...(requestId ? { requestId } : {}) }),
   });
-  const value = await res.json().catch(() => ({})) as { machine?: EphemeralMachine; roomKey?: string; error?: string; reason?: string; code?: string; actions?: unknown };
+  const value = await res.json().catch(() => ({})) as { machine?: EphemeralMachine; error?: string; reason?: string; code?: string; actions?: unknown };
   if (!res.ok || !value.machine) throw managedLaunchError(value, res.status, `managed Machine launch failed: ${res.status}`);
-  adoptManagedMachineKey(store, value);
   return value.machine;
 }
 
-/** Rebuild a torn-down managed session and adopt its escrowed room key. */
+/** Bring back the cloud computer a managed session lives on (a wake). */
 export async function restoreManagedSessionMachine(
   store: LocalStore,
   input: { configId: string; nodeId: string; sessionId: string; requestId?: string },
@@ -448,9 +435,8 @@ export async function restoreManagedSessionMachine(
   const res = await fetchImpl(`${cpBase(store)}/account/managed-machines/restore`, {
     method: "POST", headers: authHeaders(store), body: JSON.stringify(input),
   });
-  const value = await res.json().catch(() => ({})) as { machine?: EphemeralMachine; roomKey?: string; error?: string; reason?: string; code?: string; actions?: unknown };
+  const value = await res.json().catch(() => ({})) as { machine?: EphemeralMachine; error?: string; reason?: string; code?: string; actions?: unknown };
   if (!res.ok || !value.machine) throw managedLaunchError(value, res.status, `managed Machine restore failed: ${res.status}`);
-  adoptManagedMachineKey(store, value);
   return value.machine;
 }
 

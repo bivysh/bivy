@@ -82,8 +82,8 @@ Gating and shape (`HostedProvisioning` in `services/control-plane/src/store.ts`)
 |---|---|---|
 | Cloud provider credential | None (users hold none) | None — the deployment extension holds it and runs the machine |
 | GitHub token | Device local storage only | **+ Control plane** (per account) |
-| E2E room key | Device-generated, device-held | CP generates the cloud computer's key once and **escrows it at rest** (`node_room_keys`, sealed with the per-account hosted key) so it can boot the machine with no device online — injected into its boot payload, never used to decrypt a snapshot CP-side |
-| Model credentials | Peer-wrapped account vault (CP-blind) | **Per-item opt-in.** Bivy creates a separate filtered ciphertext containing only credentials marked “Allow unattended runs”, encrypts it under a different key, and seals that key at rest in `hosted_model_auth_keys`. Escrowing the hosted key cannot decrypt the ordinary account vault. Non-hosted accounts stay fully peer-wrapped. |
+| E2E room key | Node-generated, node-held; devices get it by pairing | Unchanged. The cloud computer generates its own key on its persistent disk and devices get it by account pairing; the boot payload carries no key and the CP never holds one |
+| Model credentials | Peer-wrapped account vault (CP-blind) | Unchanged. The cloud computer gets the vault key wrapped by one of the account's online nodes, or the user signs in to a provider on the machine; the CP has no route that can decrypt a model credential |
 | Node enrollment token | Device | CP re-enrolls the cloud computer's node on each boot and puts the fresh token in its boot payload |
 | GitHub App private key | Node vault only | Unchanged (not used by this path) |
 
@@ -103,8 +103,8 @@ GitHub webhook ─▶ CP enqueue ─▶ notifyRelaysWorkAvailable
                    deployment starts the account's machine and calls
                    /internal/compute/bootstrap:
                      • enroll bearer    ← CP re-enrolls the stable node
-                     • room key         ← CP escrow
-                     • GitHub identity  ← mint-on-demand, or CP hosted vault
+                     • GitHub identity  ← mint-on-demand, or the stored PAT
+                     (no room key: the machine keeps its own)
                                       ▼
                    the cloud computer boots, claims the work item, does
                    clone/push/PR, then sleeps when quiet.
@@ -120,7 +120,7 @@ the designated runner; a `node` primary only falls back when it is offline.
 
 | If compromised… | Baseline exposure | Hosted-provisioning exposure |
 |---|---|---|
-| **Control plane** | Webhook secrets, work-queue metadata, ciphertext. **No** repo/cloud creds. | **+ GitHub credentials of opted-in accounts and the escrowed cloud computer room keys** — the single highest-value target. Attacker can ask the deployment extension for machines and act on opted-in accounts' repos. |
+| **Control plane** | Webhook secrets, work-queue metadata, ciphertext. **No** repo/cloud creds. | **+ GitHub credentials of opted-in accounts** — the single highest-value target. Attacker can ask the deployment extension for machines and act on opted-in accounts' repos, and (as with any account pairing) authorize a device of its own to pair with a cloud computer. It cannot decrypt past traffic, snapshots or model credentials from what it stores. |
 | **Relay** | Tickets + sealed frames only. | Unchanged. |
 | **Ephemeral machine** | The injected `BIVY_GITHUB_TOKEN` (scoped, and short-lived if an app installation token) + its enrollment token. Disposable. | Same. Never holds the cloud provider credential or the app private key. |
 | **Device** | All of that device's launch secrets. | Same (a device may still hold its own copies). |
@@ -128,8 +128,32 @@ the designated runner; a `node` primary only falls back when it is offline.
 
 The net change is concentrated in one place: **compromise of the control plane
 now exposes the GitHub credentials of accounts that opted into hosted
-provisioning, and the escrowed room keys of their cloud computers.** Everything else is unchanged. This is why the feature is opt-in
+provisioning.** Everything else is unchanged. This is why the feature is opt-in
 and why the hardening below is mandatory for production.
+
+### What the cloud computer's own keys guarantee, and what they don't
+
+The cloud computer holds its keys the way a user-owned node does. Its room key
+is generated on its persistent disk (`pairing.json`) and reaches devices only by
+pairing; its model credentials arrive end to end (a vault key wrapped node to
+node) or through a provider sign-in on the machine. The control plane stores
+neither, and deletes room keys and credential vault keys that earlier versions
+escrowed when it starts (`purgeRetiredKeyEscrow`). Limits that remain:
+
+- **The deployment operator controls the host.** It runs the machine, its disk
+  and memory, and executes the boot payload the control plane writes. Someone
+  who controls the host can read what the machine reads.
+- **Device authorization trusts the control plane**, as for every account
+  pairing (security model, limitation 15).
+- **Earlier machines keep their earlier key.** A cloud computer first booted by
+  an earlier version keeps the room key that version generated (and escrowed)
+  until its disk is replaced; the escrowed copy is deleted, but a database
+  backup taken before the upgrade still holds it.
+- **A lost disk loses session history.** Snapshots are sealed with the disk's
+  room key, which no one else holds, so a new disk cannot restore them.
+- **A first boot with no online peer has no model credentials** until one of
+  the account's nodes comes online to wrap the vault key or the user signs in
+  on the machine.
 
 ## Hardening — implemented
 
@@ -220,7 +244,7 @@ than mass-leaked PATs.
   server-side launches and the credentials can be cleared.
 - The **machine never holds a cloud credential**; the deployment's provider
   credential is used only transiently by the control plane.
-- Every other trust boundary (relay blindness, E2E vaults, node-held app keys)
-  is **unchanged**. The exception is
+- Every other trust boundary (relay blindness, E2E vaults and room keys, node-held
+  app keys) is **unchanged**, including on the cloud computer. The exception is
   narrow, named, and gated — not a general relaxation of "the control plane holds
   no secrets."

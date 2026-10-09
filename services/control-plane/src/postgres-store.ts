@@ -3,7 +3,7 @@
 import { randomUUID, randomBytes } from "node:crypto";
 import pg from "pg";
 import { anyNodeEligible } from "@bivy/core";
-import { encryptSecret, decryptSecret, isSecretEnvelope, type SecretEnvelope } from "./hosted-crypto.js";
+import { encryptSecret, decryptSecret, isSecretEnvelope } from "./hosted-crypto.js";
 import { PostgresDatabaseContext, type PostgresTransactionContext } from "./postgres-database.js";
 import {
   type Account,
@@ -39,7 +39,6 @@ import {
   type CentralGithubInstallation,
   type CentralGithubInstallationInput,
   type HostedAuditEvent,
-  type HostedMachineAttempt,
   type ModelAuthVault,
   type ModelAuthWrappedKey,
   type ModelAuthKeyRequest,
@@ -419,9 +418,9 @@ export class PostgresStore implements ControlPlaneStore {
       );
       ALTER TABLE model_auth_wrapped_keys ADD COLUMN IF NOT EXISTS wrapped_by_public_key TEXT NOT NULL DEFAULT '';
 
-      -- Explicit hosted custody uses a filtered ciphertext and a distinct sealed
-      -- key. Generation provides compare-and-swap; revision rejects stale logical
-      -- snapshots during concurrent grant/revoke updates.
+      -- Retired: hosted credential custody (a filtered vault copy whose key the
+      -- control plane could decrypt). Nothing reads or writes it now; startup
+      -- deletes any rows left behind (see purgeRetiredKeyEscrow below).
       CREATE TABLE IF NOT EXISTS hosted_model_auth_keys (
         account_id  TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
         key_enc     JSONB NOT NULL,
@@ -548,12 +547,8 @@ export class PostgresStore implements ControlPlaneStore {
       ALTER TABLE session_correlation ADD COLUMN IF NOT EXISTS compute_source TEXT;
       ALTER TABLE session_correlation ADD COLUMN IF NOT EXISTS deleted BOOLEAN NOT NULL DEFAULT false;
 
-      -- Escrowed session ROOM KEY for HOSTED (device-offline) rebuild (Gap 3).
-      -- Sealed at rest with the per-account hosted-provisioning key (hosted-crypto),
-      -- keyed by the reusable eph-* node id and deliberately NOT FK-cascaded off
-      -- nodes so it survives teardown/unenroll. Only written for hosted-provisioning
-      -- accounts (whose provider/GitHub creds the control plane already holds); a
-      -- device-launched session keeps its room key device-only and never escrows.
+      -- Retired: room keys the control plane minted for cloud machines. Machines
+      -- now generate and keep their own; startup deletes any rows left behind.
       CREATE TABLE IF NOT EXISTS node_room_keys (
         account_id   TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         node_id      TEXT NOT NULL,
@@ -813,6 +808,17 @@ export class PostgresStore implements ControlPlaneStore {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_admission_collapse ON work_items(account_id, collapse_key)
         WHERE collapse_key IS NOT NULL AND (status = 'pending' OR (status = 'needs_attention' AND policy_blocked = true));
     `);
+    await this.purgeRetiredKeyEscrow();
+  }
+
+  /**
+   * Delete key material the control plane could decrypt and no longer uses:
+   * room keys it minted for cloud machines, and hosted-custody credential vault
+   * keys and their ciphertext. Idempotent; runs at every startup so an upgraded
+   * deployment stops holding them on its first boot.
+   */
+  async purgeRetiredKeyEscrow(): Promise<void> {
+    await this.query(`DELETE FROM node_room_keys; DELETE FROM hosted_model_auth_keys;`);
   }
 
   async close() {
@@ -1926,31 +1932,6 @@ export class PostgresStore implements ControlPlaneStore {
     return (rowCount ?? 0) > 0;
   }
 
-  private hostedAttemptFromRow(row: Record<string, any>): HostedMachineAttempt {
-    return {
-      accountId: String(row.account_id), attemptId: String(row.attempt_id),
-      provider: String(row.provider), configId: row.config_id || undefined,
-      nodeId: String(row.node_id), state: row.state,
-      desiredState: row.desired_state === "deleted" ? "deleted" : "active",
-      observedState: row.observed_state || undefined,
-      deadlineAt: row.deadline_at ? new Date(row.deadline_at).toISOString() : undefined,
-      ownershipTag: row.ownership_tag || undefined,
-      desired: row.desired && typeof row.desired === "object" ? row.desired : {},
-      machine: row.machine && typeof row.machine === "object" ? row.machine : undefined,
-      lastError: row.last_error || undefined, retryCount: Number(row.retry_count) || 0,
-      version: Number(row.version) || 0,
-      createdAt: new Date(row.created_at).toISOString(), updatedAt: new Date(row.updated_at).toISOString(),
-    };
-  }
-
-  async listHostedMachineAttempts(accountId: string, activeOnly = false): Promise<HostedMachineAttempt[]> {
-    const { rows } = await this.query(
-      `SELECT * FROM hosted_machine_attempts WHERE account_id=$1${activeOnly ? " AND state <> 'deleted'" : ""} ORDER BY created_at`,
-      [accountId],
-    );
-    return rows.map((row) => this.hostedAttemptFromRow(row));
-  }
-
   async appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void> {
     const { rows } = await this.query(`SELECT hosted_audit FROM accounts WHERE id = $1`, [accountId]);
     const cur = Array.isArray(rows[0]?.hosted_audit) ? (rows[0].hosted_audit as HostedAuditEvent[]) : [];
@@ -1969,68 +1950,6 @@ export class PostgresStore implements ControlPlaneStore {
     const row = rows[0];
     if (!row) return undefined;
     return { ciphertext: row.ciphertext, updatedAt: new Date(row.updated_at).toISOString(), updatedByNodeId: row.updated_by_node_id, needsRotation: Boolean(row.needs_rotation) };
-  }
-
-  async getHostedModelAuthVaultKey(accountId: string): Promise<SecretEnvelope | undefined> {
-    const { rows } = await this.query(`SELECT key_enc FROM hosted_model_auth_keys WHERE account_id = $1`, [accountId]);
-    if (!rows[0]) return undefined;
-    const raw = rows[0].key_enc;
-    return (typeof raw === "string" ? JSON.parse(raw) : raw) as SecretEnvelope;
-  }
-
-  async setHostedModelAuthVaultKey(accountId: string, enc: SecretEnvelope): Promise<void> {
-    await this.query(
-      `INSERT INTO hosted_model_auth_keys (account_id, key_enc, updated_at)
-       VALUES ($1, $2, now())
-       ON CONFLICT (account_id) DO UPDATE SET key_enc = EXCLUDED.key_enc, updated_at = now()`,
-      [accountId, JSON.stringify(enc)],
-    );
-  }
-
-  async getHostedModelAuthVault(accountId: string): Promise<{ ciphertext: string; generation: number; revision: number } | undefined> {
-    const { rows } = await this.query(`SELECT ciphertext, generation, revision FROM hosted_model_auth_keys WHERE account_id = $1`, [accountId]);
-    return typeof rows[0]?.ciphertext === "string" && rows[0].ciphertext
-      ? { ciphertext: rows[0].ciphertext, generation: Number(rows[0].generation) || 0, revision: Number(rows[0].revision) || 0 }
-      : undefined;
-  }
-
-  async setHostedModelAuthVault(accountId: string, ciphertext: string, enc: SecretEnvelope, expectedGeneration: number, revision: number): Promise<number | undefined> {
-    const transaction = await this.database.beginTransaction();
-    try {
-      const current = await transaction.query(
-        `SELECT generation, revision FROM hosted_model_auth_keys WHERE account_id = $1 FOR UPDATE`,
-        [accountId],
-      );
-      const row = current.rows[0];
-      if (!row) {
-        if (expectedGeneration !== 0) { await transaction.rollback(); return undefined; }
-        await transaction.query(
-          `INSERT INTO hosted_model_auth_keys (account_id, key_enc, ciphertext, generation, revision, updated_at)
-           VALUES ($1, $2, $3, 1, $4, now())`,
-          [accountId, JSON.stringify(enc), ciphertext, revision],
-        );
-        await transaction.commit();
-        return 1;
-      }
-      const generation = Number(row.generation) || 0;
-      const currentRevision = Number(row.revision) || 0;
-      if (generation !== expectedGeneration || revision < currentRevision) {
-        await transaction.rollback();
-        return undefined;
-      }
-      const next = generation + 1;
-      await transaction.query(
-        `UPDATE hosted_model_auth_keys SET key_enc=$2, ciphertext=$3, generation=$4, revision=$5, updated_at=now() WHERE account_id=$1`,
-        [accountId, JSON.stringify(enc), ciphertext, next, revision],
-      );
-      await transaction.commit();
-      return next;
-    } catch (error) {
-      await transaction.rollback();
-      throw error;
-    } finally {
-      transaction.release();
-    }
   }
 
   async setModelAuthVault(accountId: string, nodeId: string, ciphertext: string, rotated = false): Promise<ModelAuthVault> {
@@ -2419,25 +2338,6 @@ export class PostgresStore implements ControlPlaneStore {
       await client.commit();
     } catch (error) { await client.rollback(); throw error; }
     finally { client.release(); }
-  }
-
-  async getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined> {
-    const { rows } = await this.query(`SELECT room_key_enc FROM node_room_keys WHERE account_id = $1 AND node_id = $2`, [accountId, nodeId]);
-    if (!rows[0]) return undefined;
-    const raw = rows[0].room_key_enc;
-    return (typeof raw === "string" ? JSON.parse(raw) : raw) as SecretEnvelope;
-  }
-
-  async setNodeRoomKeyEncIfAbsent(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<SecretEnvelope> {
-    const { rows } = await this.query(
-      `INSERT INTO node_room_keys (account_id, node_id, room_key_enc, updated_at)
-       VALUES ($1, $2, $3, now())
-       ON CONFLICT (account_id, node_id) DO UPDATE SET node_id = EXCLUDED.node_id
-       RETURNING room_key_enc`,
-      [accountId, nodeId, JSON.stringify(enc)],
-    );
-    const raw = rows[0]?.room_key_enc;
-    return (typeof raw === "string" ? JSON.parse(raw) : raw) as SecretEnvelope;
   }
 
   async findSessionByIssue(accountId: string, repo: string, issueNumber: number): Promise<{ sessionId: string; nodeId: string } | undefined> {

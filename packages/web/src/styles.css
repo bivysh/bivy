@@ -1517,7 +1517,6 @@ button.sheet-action:last-child { border-bottom: 0; }
 .vault-detail-grid { display: grid; grid-template-columns: minmax(110px, auto) 1fr; gap: 10px 18px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-2); }
 .vault-detail-grid strong { min-width: 0; overflow-wrap: anywhere; }
 .vault-detail-grid code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.vault-custody-note { padding: 12px 14px; border-left: 3px solid var(--accent); border-radius: var(--radius-sm) var(--radius-md) var(--radius-md) var(--radius-sm); background: var(--surface-2); line-height: 1.5; }
 .vault-advanced { padding: 10px 0; border-top: 1px solid var(--line); }
 .vault-advanced summary { cursor: pointer; color: var(--ink); font-weight: 600; }
 .vault-advanced[open] summary { margin-bottom: 10px; }
@@ -1916,6 +1915,7 @@ button.template-card.is-featured .template-card-icon {
 .autom-runner-select-copy span { color: var(--muted); font-size: 12px; line-height: 1.35; }
 .autom-runner-select-row .autom-inline-select { flex: none; width: min(42%, 190px); }
 .autom-runner-help {
+  display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2);
   padding: 10px 12px; border-top: 1px solid var(--line);
   color: var(--ink); background: color-mix(in srgb, var(--warn) 9%, var(--surface));
   font-size: 12px; line-height: 1.45;

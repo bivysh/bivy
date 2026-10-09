@@ -35,11 +35,10 @@ Current model:
 - The same envelope also carries your account-wide
   [agent instructions](agent-instructions.md) (last writer wins), so they reach
   every machine without a separate store.
-- Bivy Cloud never receives plaintext model credentials in ordinary account sync.
-  **Allow unattended runs** is a separate per-item custody grant: Bivy encrypts
-  only granted stored credentials into a second snapshot under a different key,
-  then seals that key with the hosted account key. The hosted key cannot decrypt
-  the ordinary account vault; password-manager references are never escrowed.
+- The account's cloud computer (Bivy Cloud) is an ordinary node here: it gets
+  the vault key wrapped by one of your online nodes, or you sign in to a
+  provider on it and that login syncs to your other nodes. The control plane
+  never holds a key that can decrypt a model credential.
 
 If you lose every node and device that can unwrap the vault, the stored
 ciphertext can no longer be decrypted — sign in to each provider again on a new
@@ -133,8 +132,8 @@ use the automatic `credentials ingest` merge/separate policy.
 Interactive imports default to node-only storage. Non-interactive imports require
 both `--yes` and `--sync node|account`; `--dry-run` does not import anything.
 Account scope makes the encrypted credential eligible for the existing E2E sync
-when the enrolled daemon runs; it does not confirm delivery to other nodes or
-grant hosted unattended custody. Node-only imports can later be promoted with
+when the enrolled daemon runs; it does not confirm delivery to other nodes.
+Node-only imports can later be promoted with
 `bivy credentials sync <provider> <label> account`.
 
 Source logins are left untouched. Subscription OAuth credentials are not universal

@@ -228,8 +228,7 @@ bivy secrets ref github.repo-token op://Bivy/GitHub/repo-token
 
 **Not every CLI login syncs.** Native agent logins may still be per-machine;
 GitHub App private-key sync is separately opt-in. If you lose every node and
-device able to unwrap a vault, you must sign in to providers again. Explicit
-hosted-provisioning custody grants are separate from ordinary encrypted sync.
+device able to unwrap a vault, you must sign in to providers again.
 
 [Credential sync and runtime coverage →](docs/credential-sync.md) ·
 [Credentials guide →](docs/credentials-guide.md) ·
