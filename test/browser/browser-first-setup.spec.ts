@@ -74,8 +74,34 @@ for (const theme of themes) {
     await expect(page.getByRole("heading", { name: "Run this on your machine" })).toBeVisible();
     await page.route("**/nodes", route => route.fulfill({ json: [{ id: "first-machine", name: "My laptop", online: true }] }));
     await page.clock.runFor(5000);
-    await expect(page.getByRole("status", { name: "Setup readiness" })).toContainText("Validating the model credential", { timeout: 10_000 });
+    // Connected: sign in with the AI plans the user already pays for, on that machine.
+    await expect(page.getByRole("heading", { name: "Connect your AI" })).toBeVisible({ timeout: 10_000 });
     await expect(page.getByRole("heading", { name: "Run this on your machine" })).toHaveCount(0);
+    await expect(page.locator(".ai-account")).toHaveCount(2);
+    await page.evaluate(async () => {
+      const module = "/src/store/useStore.ts";
+      const { controller } = await import(module);
+      const w = window as unknown as { oauth: unknown[][] };
+      w.oauth = [];
+      controller.startOauth = (...args: unknown[]) => { w.oauth.push(args); };
+    });
+    await page.getByRole("button", { name: "Sign in with Claude" }).click();
+    // No cloud chosen: the sign-in stays on this machine, out of the synced vault.
+    const [provider, , sync] = await page.evaluate(() => (window as unknown as { oauth: unknown[][] }).oauth[0]);
+    expect([provider, sync]).toEqual(["anthropic", "node"]);
+    await page.evaluate(async () => {
+      const module = "/src/store/useStore.ts";
+      const { controller } = await import(module);
+      controller.store.apply({ type: "providers.list", providers: [
+        { id: "anthropic", name: "Anthropic", configured: true, oauth: true },
+        { id: "openai-codex", name: "OpenAI Codex", oauth: true },
+      ] });
+    });
+    await expect(page.locator(".ai-account-ok")).toHaveText("✓ Connected");
+    await page.screenshot({ path: testInfo.outputPath(`connect-ai-${theme}.png`), fullPage: true });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.getByRole("button", { name: "Continue" }).click();
+    await expect(page.getByRole("status", { name: "Setup readiness" })).toContainText("Validating the model credential", { timeout: 10_000 });
     await expect(page.getByRole("status", { name: "Setup readiness" })).not.toContainText("invalid");
     await page.evaluate(async () => {
       const module = "/src/store/useStore.ts";
@@ -140,5 +166,74 @@ for (const theme of themes) {
     const [text, , start] = await page.evaluate(() => (window as unknown as { sent: unknown[][] }).sent[1]) as [string, unknown, Record<string, unknown>];
     expect(text).toContain("port 5173");
     expect(start).toMatchObject({ workspace: "/home/me/code/shop" });
+  });
+}
+
+for (const theme of themes) {
+  test(`choosing Bivy Cloud starts the cloud machine and signs in there (${theme})`, async ({ page }, testInfo) => {
+    page.on("pageerror", error => console.error(error.message));
+    await page.addInitScript((theme) => {
+      localStorage.setItem("bivy_session", "sess_private_never_in_command");
+      localStorage.setItem("bivy_cp", location.origin);
+      localStorage.setItem("bivy_theme", theme);
+    }, theme);
+    for (const url of ["**/nodes", "**/account/**", "**/sessions", "**/devices"]) await page.route(url, route => route.fulfill({ json: [] }));
+    await page.route("**/runtime-config.js", route => route.fulfill({ contentType: "application/javascript", body: "window.__BIVY_RUNTIME_CONFIG__ = { ephemeralMachinesEnabled: true };" }));
+    await page.route("**/account/github/central-app", route => route.fulfill({ json: { configured: false, managedComputeAvailable: true, installations: [] } }));
+    let installCommands = 0;
+    await page.route("**/account/node-claims", route => { if (route.request().method() === "POST") installCommands++; return route.fulfill({ json: [] }); });
+    let releaseMachine = () => {};
+    const machineStarted = new Promise<void>((resolve) => { releaseMachine = resolve; });
+    let runnerRequests = 0;
+    await page.route("**/account/onboarding/auth-runner", async route => {
+      runnerRequests++;
+      await machineStarted;
+      await route.fulfill({ status: 201, json: { ok: true, roomKey: "a".repeat(43), machine: { id: "eph-managed-auto-1", nodeId: "eph-managed-auto-1", provider: "fly", name: "Bivy Cloud", status: "launching", createdAt: new Date().toISOString(), computeSource: "managed", purpose: "auth-runner" } } });
+    });
+    await page.goto(origin);
+    await page.evaluate(async () => {
+      const module = "/src/store/useStore.ts";
+      const { controller } = await import(module);
+      const w = window as unknown as { oauth: unknown[][] };
+      w.oauth = [];
+      controller.startOauth = (...args: unknown[]) => {
+        w.oauth.push(args);
+        controller.store.apply({ type: "provider.oauth.started", id: "login", provider: args[0], status: "waiting", authUrl: "https://example.invalid/authorize", usesCallbackServer: true });
+      };
+      // The relay connection itself needs a live machine; the store sees it come online.
+      controller.connectToNode = async (id: string) => {
+        controller.store.setCurrentNode(id);
+        controller.store.setStatus("online");
+        controller.store.apply({ type: "providers.list", providers: [
+          { id: "anthropic", name: "Anthropic", oauth: true },
+          { id: "openai-codex", name: "OpenAI Codex", oauth: true },
+        ] });
+      };
+    });
+    await expect(page.getByRole("heading", { name: "Where should your agents run?" })).toBeVisible({ timeout: 20_000 });
+    // The install screen never flashed before the choice (it would create an install command).
+    expect(installCommands).toBe(0);
+    await page.screenshot({ path: testInfo.outputPath(`place-choice-${theme}.png`), fullPage: true });
+    await page.getByRole("button", { name: /Bivy Cloud/ }).click();
+    // The AI sign-in is on screen while the machine starts.
+    await expect(page.getByRole("heading", { name: "Connect your AI" })).toBeVisible();
+    await expect(page.getByRole("status")).toContainText("Starting your cloud computer");
+    await expect(page.getByRole("button", { name: "Sign in with Claude" })).toBeDisabled();
+    await page.screenshot({ path: testInfo.outputPath(`connect-ai-starting-${theme}.png`), fullPage: true });
+    releaseMachine();
+    await expect(page.getByRole("button", { name: "Sign in with ChatGPT" })).toBeEnabled({ timeout: 10_000 });
+    expect(runnerRequests).toBe(1);
+    await page.getByRole("button", { name: "Sign in with ChatGPT" }).click();
+    // On the cloud machine the sign-in uses the account default, which cloud runs need.
+    const [provider, , sync] = await page.evaluate(() => (window as unknown as { oauth: unknown[][] }).oauth[0]);
+    expect([provider, sync ?? null]).toEqual(["openai-codex", null]);
+    await expect(page.getByText("Bivy keeps a copy")).toBeVisible();
+    // The open sign-in form makes the card tall; it scrolls inside the space above
+    // the composer instead of running off the screen.
+    await expect(page.getByRole("button", { name: "Submit" })).toBeVisible();
+    await page.setViewportSize({ width: page.viewportSize()!.width, height: 600 });
+    expect(await page.locator(".readiness").evaluate((card) => card.getBoundingClientRect().bottom <= innerHeight)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`connect-ai-cloud-${theme}.png`), fullPage: true });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
 }

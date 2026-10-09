@@ -10,6 +10,7 @@ import { StatusDot } from "./StatusDot.js";
 import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { EphemeralNodeConfig, HostedMachineSummary } from "@bivy/core";
+import { rememberRunPlace } from "../onboarding.js";
 import { cloudDestinations, nodePresence, PRESENCE, type CloudDestination } from "../cloudDestinations.js";
 import type { TailnetMachine } from "../access.js";
 
@@ -75,6 +76,8 @@ export function NodeSwitcher() {
     : Boolean(row.nodeId) && row.nodeId === currentNodeId;
   const pickCloud = (row: CloudDestination) => {
     setOpen(false);
+    // Someone who runs on Bivy Cloud keeps their sign-ins with the account.
+    rememberRunPlace("cloud");
     // A running Machine is reused as-is; otherwise the profile launches one
     // when the first message is sent.
     if (row.nodeId) controller.switchNode(row.nodeId);

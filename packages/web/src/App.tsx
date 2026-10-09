@@ -52,6 +52,10 @@ import { GetStarted, FIRST_CHANGE_PROMPT, openAppPrompt } from "./components/Get
 import { NotifyOffer } from "./components/NotifyOffer.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
+import { ConnectAI } from "./components/ConnectAI.js";
+import { PlaceChoice } from "./components/PlaceChoice.js";
+import { connectAiDone, readRunPlace, rememberRunPlace, type RunPlace } from "./onboarding.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
 import { PwaLifecycleNotice } from "./components/PwaLifecycleNotice.js";
 import { clearQueuedPrompts, markPromptQueued, setFollowupQueuedPrompts, setTurnActive } from "./pwaLifecycle.js";
 // The terminal pulls in xterm + its GPU/search/link addons (~a third of the JS
@@ -772,6 +776,43 @@ export function App() {
   // the repo picker can authorize GitHub only when the user requests it.
   const needsNode = !controller.direct && state.connection.signedIn && !state.connection.currentNodeId;
 
+  // First run: where agents run (when the deployment offers a cloud), then the
+  // AI accounts they use. Both are asked once, before the first session.
+  const firstRun = !state.activeSession.activeSessionId && state.sessionIndex.sessions.length === 0;
+  const [runPlace, setRunPlace] = useState<RunPlace | null>(readRunPlace);
+  const [aiDone, setAiDone] = useState(connectAiDone);
+  // null until the deployment says whether it offers a cloud, so the install
+  // screen (which creates an install command) never flashes before the choice.
+  const [cloudAvailable, setCloudAvailable] = useState<boolean | null>(null);
+  // Non-null while the cloud machine is being started, with the error if it failed.
+  const [cloudStart, setCloudStart] = useState<{ error?: string } | null>(null);
+  const askCloud = EPHEMERAL_MACHINES_ENABLED && !controller.direct && state.connection.signedIn && firstRun;
+  useEffect(() => {
+    if (!askCloud) return;
+    let live = true;
+    controller.centralGithubApp().then(
+      (view) => { if (live) setCloudAvailable(view.managedComputeAvailable === true); },
+      () => { if (live) setCloudAvailable(false); },
+    );
+    return () => { live = false; };
+  }, [askCloud]);
+  const startCloud = useCallback(() => {
+    rememberRunPlace("cloud");
+    setRunPlace("cloud");
+    setCloudStart({});
+    controller.startCloudOnboarding().then(
+      () => setCloudStart(null),
+      (error: unknown) => setCloudStart({ error: error instanceof Error ? error.message : String(error) }),
+    );
+  }, []);
+  const choosingPlace = needsNode && cloudAvailable === true && runPlace !== "own" && !state.connection.nodes.some((node) => !node.id.startsWith("eph-"));
+  const needsNodeTitle = choosingPlace || cloudStart ? "Get started" : "Connect a Machine";
+  const choosePlace = useCallback((place: RunPlace) => {
+    if (place === "cloud") return startCloud();
+    rememberRunPlace("own");
+    setRunPlace("own");
+  }, [startCloud]);
+
   // Hosted control plane, not signed in yet: show the sign-in screen instead of a
   // dead shell. Once signed in we always render the normal app — a node is picked
   // in-place from the header NodeSwitcher, not behind a separate full-screen gate,
@@ -948,8 +989,8 @@ export function App() {
             <div className="topbar-title-row">
               {/* No status dot here: the run pill above the composer states the
                   live status in words, one place, not twice. */}
-              <h1 className="title" title={needsNode ? "Connect a Machine" : state.activeSession.activeTitle}>
-                {needsNode ? "Connect a Machine" : state.activeSession.activeTitle}
+              <h1 className="title" title={needsNode ? needsNodeTitle : state.activeSession.activeTitle}>
+                {needsNode ? needsNodeTitle : state.activeSession.activeTitle}
               </h1>
             </div>
             {/* Node stays below the title as a plain subtitle line — but it's
@@ -1053,7 +1094,9 @@ export function App() {
 
         {!needsNode && !state.draft.ephemeralConfig && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
           <Suspense fallback={null}>
-            {activation.activated ? (
+            {!aiDone ? (
+              <ConnectAI state={state} place={runPlace} startError={cloudStart?.error} onRetry={startCloud} onDone={() => setAiDone(true)} />
+            ) : activation.activated ? (
               <GetStarted
                 machineName={state.connection.nodes.find((n) => n.id === state.connection.currentNodeId)?.name || undefined}
                 onOpenApp={(app) => {
@@ -1081,11 +1124,18 @@ export function App() {
 
         {needsNode && (
           <div className="connect-runner-scroll">
-            <ConnectRunner
-              nodes={state.connection.nodes}
-              onPickNode={(nodeId) => controller.switchNode(nodeId)}
-              onRefresh={() => controller.refreshNodes()}
-            />
+            {cloudStart ? (
+              <ConnectAI state={state} place="cloud" startError={cloudStart.error} onRetry={startCloud} onDone={() => setAiDone(true)} />
+            ) : choosingPlace ? (
+              <PlaceChoice onChoose={choosePlace} />
+            ) : askCloud && cloudAvailable === null ? null : (
+              <ConnectRunner
+                nodes={state.connection.nodes}
+                onPickNode={(nodeId) => controller.switchNode(nodeId)}
+                onRefresh={() => controller.refreshNodes()}
+                onUseCloud={cloudAvailable === true ? startCloud : undefined}
+              />
+            )}
           </div>
         )}
 
