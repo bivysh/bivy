@@ -199,13 +199,36 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
     return refs;
   }
 
+  /** References made by the NEWEST assistant message. These are re-read even
+   *  when the log already has them, which is what lets an agent overwrite a
+   *  file and reference it again; see resolveWorkspaceRefs. */
+  function refsInLatestMessage(record: PersistSession): Set<string> {
+    const messages = record.session.getMessages();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]!;
+      if (m.role !== "assistant") continue;
+      return new Set(extractWorkspaceRefs(assistantTextForImageScan(m.content)).map(({ ref }) => ref));
+    }
+    return new Set();
+  }
+
   /** Store resolved bytes under `ref` and tell every client, durably and live.
    *  One place, so the remote and workspace resolvers below cannot drift in how
    *  they record what they found. `kind` carries whether the bytes are an image,
    *  which is what lets the view layer pick a renderer for a `::view` that
    *  points at something other than a picture. */
-  function recordResolvedRef(sessionId: string, ref: string, bytes: Buffer, meta: { name: string; mimeType: string; kind?: "image" | "file" }): void {
+  function recordResolvedRef(
+    sessionId: string,
+    ref: string,
+    bytes: Buffer,
+    meta: { name: string; mimeType: string; kind?: "image" | "file" },
+    previousHash?: string,
+  ): void {
     const stored = attachmentStore.put(bytes, { name: meta.name, mimeType: meta.mimeType, kind: meta.kind ?? "image" });
+    // Content-addressed, so re-reading an unchanged file yields the hash
+    // already recorded. Appending that again would grow the log and wake every
+    // device for a picture none of them would redraw.
+    if (previousHash && stored.hash === previousHash) return;
     eventLog.appendInlineImage(sessionId, { url: ref, ref: stored });
     eventLog.flush(sessionId);
     deps.broadcast(deps.stampSessionEvent({ type: "session.event", sessionId, event: { type: "inlineImage", url: ref, ref: stored } }));
@@ -237,11 +260,23 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
     if (!workspaceDir) return;
     const refs = workspaceRefsInTranscript(record);
     if (!refs.size) return;
-    const alreadyResolved = new Set(eventLog.readInlineImages(record.id).map(([ref]) => ref));
+    const resolved = new Map(eventLog.readInlineImages(record.id));
+    // References the agent just made are re-read even when the log already has
+    // them. An agent that regenerates out/chart.png and shows it again means
+    // the new one; without this it would say "here is the updated chart" above
+    // the old picture. Bounded to the newest message, so this costs at most the
+    // per-message reference budget in reads per turn rather than re-reading
+    // every file the whole session ever mentioned.
+    const fresh = refsInLatestMessage(record);
     for (const [rel, syntax] of refs) {
-      if (alreadyResolved.has(rel)) continue;
+      const previous = resolved.get(rel);
+      const isFresh = fresh.has(rel);
+      if (previous && !isFresh) continue;
       const failedAt = inlineImageFailedAt.get(rel);
-      if (failedAt !== undefined && Date.now() - failedAt < INLINE_IMAGE_RETRY_COOLDOWN_MS) continue;
+      // A fresh reference ignores the cooldown: the likeliest reason it failed
+      // before is that the agent had not written the file yet, and waiting ten
+      // minutes to show a file that now exists is worse than one extra read.
+      if (!isFresh && failedAt !== undefined && Date.now() - failedAt < INLINE_IMAGE_RETRY_COOLDOWN_MS) continue;
       const plan = planAttachment({ workspaceDir, filePath: rel, maxBytes: MAX_WORKSPACE_REF_BYTES });
       if (isAttachPlanError(plan)) {
         console.warn(`[component] ${rel}: ${plan.error}`);
@@ -258,7 +293,7 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
         continue;
       }
       try {
-        recordResolvedRef(record.id, rel, plan.bytes, { name: plan.name, mimeType: plan.mimeType, kind: plan.kind });
+        recordResolvedRef(record.id, rel, plan.bytes, { name: plan.name, mimeType: plan.mimeType, kind: plan.kind }, previous?.hash);
       } catch (error) {
         console.warn(`[component] ${rel}:`, error instanceof Error ? error.message : String(error));
         inlineImageFailedAt.set(rel, Date.now());

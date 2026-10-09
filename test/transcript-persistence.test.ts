@@ -236,13 +236,6 @@ test("resolveWorkspaceRefs refuses a file that is not an image", () => {
   assert.equal(h.broadcasts.length, 0);
 });
 
-test("resolveWorkspaceRefs skips a reference the log already resolved", () => {
-  const dir = workspace({ "out/chart.png": PNG });
-  const h = harness({ eventLog: { readInlineImages: () => [["out/chart.png", { hash: "old" }]] } });
-  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: "![c](out/chart.png)" }]), dir);
-  assert.equal((h.eventLog as any).inlineImages.length, 0, "re-rendering history must not re-read the disk");
-});
-
 test("resolveWorkspaceRefs ignores a message with no workspace reference", () => {
   const dir = workspace({ "out/chart.png": PNG });
   const h = harness();
@@ -307,4 +300,66 @@ test("resolveWorkspaceRefs ignores a remote url in a spec", () => {
   const text = ["```bivy", '{"mark":"bar","data":{"url":"https://x.test/d.csv"}}', "```"].join("\n");
   h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: text }]), dir);
   assert.equal((h.eventLog as any).inlineImages.length, 0, "a remote dataset is refused, not fetched");
+});
+
+test("resolveWorkspaceRefs re-reads a reference the newest message makes, so an overwritten file updates", () => {
+  // The case this exists for: an agent regenerates a chart and shows it again.
+  // Without the re-read the reply says "here is the updated chart" above the
+  // old picture.
+  const dir = workspace({ "out/chart.png": PNG });
+  const logged: Array<[string, any]> = [];
+  const stored: Buffer[] = [];
+  const h = harness({ eventLog: { readInlineImages: () => logged } });
+  (h.deps.attachmentStore as any).put = (bytes: Buffer, meta: any) => {
+    stored.push(Buffer.from(bytes));
+    return { hash: `h-${bytes.length}`, name: meta.name, mimeType: meta.mimeType, size: bytes.length, kind: meta.kind };
+  };
+  const msg = { role: "assistant", content: "![c](out/chart.png)" };
+
+  h.tp.resolveWorkspaceRefs(sess([msg]), dir);
+  assert.equal((h.eventLog as any).inlineImages.length, 1, "first resolve");
+  logged.push(["out/chart.png", (h.eventLog as any).inlineImages[0].ref]);
+
+  // The agent overwrites the file and references it again in a new message.
+  fs.writeFileSync(path.join(dir, "out/chart.png"), Buffer.concat([PNG, Buffer.alloc(16, 9)]));
+  h.tp.resolveWorkspaceRefs(sess([msg, { role: "assistant", content: "Updated:\n\n![c](out/chart.png)" }]), dir);
+
+  assert.equal((h.eventLog as any).inlineImages.length, 2, "the newest message's reference is re-read");
+  assert.notEqual(
+    (h.eventLog as any).inlineImages[1].ref.hash,
+    (h.eventLog as any).inlineImages[0].ref.hash,
+    "the new bytes win",
+  );
+});
+
+test("resolveWorkspaceRefs does not re-record an unchanged file", () => {
+  const dir = workspace({ "out/chart.png": PNG });
+  const logged: Array<[string, any]> = [];
+  const h = harness({ eventLog: { readInlineImages: () => logged } });
+  (h.deps.attachmentStore as any).put = (bytes: Buffer, meta: any) =>
+    ({ hash: `h-${bytes.length}`, name: meta.name, mimeType: meta.mimeType, size: bytes.length, kind: meta.kind });
+  const msg = { role: "assistant", content: "![c](out/chart.png)" };
+
+  h.tp.resolveWorkspaceRefs(sess([msg]), dir);
+  logged.push(["out/chart.png", (h.eventLog as any).inlineImages[0].ref]);
+  // Same message, same bytes: re-read, but nothing new to say about it.
+  h.tp.resolveWorkspaceRefs(sess([msg]), dir);
+  assert.equal((h.eventLog as any).inlineImages.length, 1, "an unchanged file must not grow the log or wake devices");
+  assert.equal(h.broadcasts.length, 1);
+});
+
+test("resolveWorkspaceRefs leaves an older message's reference alone", () => {
+  const dir = workspace({ "out/old.png": PNG, "out/new.png": PNG });
+  const logged: Array<[string, any]> = [["out/old.png", { hash: "existing" }]];
+  const read: string[] = [];
+  const h = harness({ eventLog: { readInlineImages: () => logged } });
+  (h.deps.attachmentStore as any).put = (bytes: Buffer, meta: any) => {
+    read.push(meta.name);
+    return { hash: "h", name: meta.name, mimeType: meta.mimeType, size: bytes.length, kind: meta.kind };
+  };
+  h.tp.resolveWorkspaceRefs(
+    sess([{ role: "assistant", content: "![a](out/old.png)" }, { role: "assistant", content: "![b](out/new.png)" }]),
+    dir,
+  );
+  assert.deepEqual(read, ["new.png"], "only the newest message's references are re-read");
 });
