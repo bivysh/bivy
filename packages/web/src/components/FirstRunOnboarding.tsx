@@ -10,7 +10,6 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
   const [githubError, setGithubError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [verifiedCredential, setVerifiedCredential] = useState<string | null>(null);
-  const [managedCredentialReady, setManagedCredentialReady] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const configuredProviders = useMemo(() => state.catalogs.providers.filter((provider) => provider.configured), [state.catalogs.providers]);
   const [providerId, setProviderId] = useState("anthropic");
@@ -53,10 +52,6 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
 
   const refreshGithub = () => controller.centralGithubApp().then(setGithub).catch((error) => setGithubError(String((error as Error)?.message || error)));
   useEffect(() => {
-    if (!managedAvailable) return;
-    void controller.managedCredentialReady().then(setManagedCredentialReady).catch(() => setManagedCredentialReady(false));
-  }, [managedAvailable]);
-  useEffect(() => {
     void refreshGithub();
     const onFocus = () => void refreshGithub();
     window.addEventListener("focus", onFocus);
@@ -79,8 +74,7 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
   }, [configuredProviders, providerId, state.catalogs.providers]);
   const step = !github ? "loading" : github.configured && !hasGithub ? "github"
     : machineOnline && !selectedProviderConfigured ? "provider"
-      : machineOnline && managedAvailable && (!activeCredential?.unattended || !managedCredentialReady) ? "custody"
-        : machineOnline && !credentialVerified ? "verify" : "ready";
+      : machineOnline && !credentialVerified ? "verify" : "ready";
   const startGithubInstall = useCallback(async () => {
     setBusy(true); setGithubError(null);
     try {
@@ -91,20 +85,6 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
       setBusy(false);
     }
   }, []);
-  const enableManagedCredential = useCallback(async () => {
-    if (!activeCredential) return;
-    setBusy(true); setGithubError(null);
-    try {
-      await controller.setCredentialUnattended(activeCredential.provider, activeCredential.label, true);
-      await controller.waitForManagedCredential();
-      setManagedCredentialReady(true);
-      controller.listCredentialRecords();
-    } catch (error) {
-      setGithubError(String((error as Error)?.message || error));
-    } finally {
-      setBusy(false);
-    }
-  }, [activeCredential]);
   const verifyActiveCredential = useCallback(async () => {
     if (!activeCredential || !activeCredential.testable) return;
     setBusy(true); setGithubError(null);
@@ -127,11 +107,6 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
     sessionStorage.setItem("bivy:github-install-attempted", "1");
     void startGithubInstall();
   }, [step, startGithubInstall]);
-  useEffect(() => {
-    if (step !== "custody" || !activeCredentialKey || sessionStorage.getItem(`bivy:managed-credential:${activeCredentialKey}`)) return;
-    sessionStorage.setItem(`bivy:managed-credential:${activeCredentialKey}`, "attempted");
-    void enableManagedCredential();
-  }, [step, activeCredentialKey, enableManagedCredential]);
   useEffect(() => {
     if (step !== "verify" || !activeCredentialKey || sessionStorage.getItem(`bivy:credential-verified:${activeCredentialKey}`)) return;
     sessionStorage.setItem(`bivy:credential-verified:${activeCredentialKey}`, "attempted");
@@ -179,7 +154,7 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
       {step === "provider" && (
         <section className="settings-section">
           <h3>Sign in with a model provider</h3>
-          <p className="muted">Sign in or add an API key. Bivy encrypts the credential for your account and makes it available only when your Bivy Cloud Machine starts.</p>
+          <p className="muted">Sign in or add an API key. The credential is encrypted end to end and syncs only between your own machines, Bivy Cloud included.</p>
           <label className="field-label" htmlFor="onboarding-agent">Agent</label>
           <select id="onboarding-agent" className="picker-search" value={selectedAgentId} onChange={(event) => {
             const runtime = availableAgents.find((candidate) => candidate.id === event.target.value);
@@ -192,13 +167,6 @@ export function FirstRunOnboarding({ state, onDone }: { state: AppState; onDone:
             {providerOptions.map((provider) => <option key={provider.id} value={provider.id}>{provider.name || provider.id}</option>)}
           </select>
           <ProviderConnectForm state={state} providerId={providerId} apiKeyProvider={apiKeyProvider !== providerId ? apiKeyProvider : undefined} />
-        </section>
-      )}
-      {step === "custody" && (
-        <section className="settings-section">
-          <h3>Securing your provider login</h3>
-          <p className="muted" role="status">Encrypting this credential for Bivy Cloud. It remains isolated from GitHub and other users, and can be revoked in Providers &amp; credentials.</p>
-          {githubError && <button type="button" className="btn" disabled={busy || !activeCredential} onClick={() => void enableManagedCredential()}>{busy ? "Encrypting…" : "Try again"}</button>}
         </section>
       )}
       {step === "verify" && (

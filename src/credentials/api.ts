@@ -191,22 +191,6 @@ export async function importCredentialRecords(
   return createCredentialVault(credsDir).importRecords(list, tombstones);
 }
 
-/** Apply a hosted custody snapshot as an authoritative filtered set. */
-export async function reconcileHostedCredentialRecords(
-  credsDir: string,
-  records: Record<string, unknown>,
-  previous: readonly { provider: string; label: string }[],
-): Promise<Array<{ provider: string; label: string }>> {
-  const current = Object.values(records ?? {}).filter((record): record is CredentialRecord => Boolean(record) && typeof record === "object" && typeof (record as CredentialRecord).provider === "string" && typeof (record as CredentialRecord).label === "string");
-  const currentIds = new Set(current.map((record) => `${record.provider}\u0000${record.label}`));
-  const store = createCredentialVault(credsDir);
-  for (const prior of previous) {
-    if (!currentIds.has(`${prior.provider}\u0000${prior.label}`)) await store.deleteRecord(prior.provider, prior.label);
-  }
-  await importCredentialRecords(credsDir, records);
-  return current.map((record) => ({ provider: record.provider, label: record.label }));
-}
-
 /** Export provider revocations for cross-node convergence. */
 export async function exportProviderAuthTombstones(credsDir: string): Promise<Record<string, number>> {
   return createCredentialVault(credsDir).exportTombstones();
@@ -302,8 +286,6 @@ export interface CredentialRecordSummary {
   expiresAt?: number;
   /** The non-secret pointer, when `kind === "reference"`. */
   ref?: string;
-  /** Explicitly allowed in the separately escrowed unattended-run vault. */
-  unattended: boolean;
   /** Whether "Test connection" (see `testCredential`) supports this provider/kind. */
   testable: boolean;
   /** The most recent "Test connection" result for this record, if any run. */
@@ -320,7 +302,7 @@ export async function listCredentialRecords(credsDir: string): Promise<Credentia
     const verification = await vault.readVerification(record.provider, record.label).catch(() => undefined);
     const verified = verification ? { lastVerifiedAt: verification.at, lastVerifiedOk: verification.ok } : {};
     if (source.kind === "reference") {
-      return { provider: record.provider, label: record.label, kind: "reference", sync: record.sync, origin: record.origin, unattended: record.unattended === true, ref: source.ref, testable: false, ...verified };
+      return { provider: record.provider, label: record.label, kind: "reference", sync: record.sync, origin: record.origin, ref: source.ref, testable: false, ...verified };
     }
     const cred = source.cred;
     const summary: CredentialRecordSummary = {
@@ -329,7 +311,6 @@ export async function listCredentialRecords(credsDir: string): Promise<Credentia
       kind: cred.type,
       sync: record.sync,
       origin: record.origin,
-      unattended: record.unattended === true,
       testable: isTestableProvider(record.provider),
       ...verified,
     };
@@ -343,12 +324,11 @@ export async function listCredentialRecords(credsDir: string): Promise<Credentia
  * a credential the user opted node-local must not silently re-enable sync), else
  * default to a Bivy-first, opt-out-sync credential.
  */
-async function labeledMeta(credsDir: string, provider: string, label: string): Promise<Pick<CredentialRecord, "sync" | "origin" | "unattended">> {
+async function labeledMeta(credsDir: string, provider: string, label: string): Promise<Pick<CredentialRecord, "sync" | "origin">> {
   const existing = await createCredentialVault(credsDir).readRecord(provider, label);
   return {
     sync: existing?.sync ?? defaultSyncFor("bivy"),
     origin: existing?.origin ?? "bivy",
-    ...(existing?.unattended === true ? { unattended: true } : {}),
   };
 }
 
@@ -507,32 +487,6 @@ export function setCredentialIngestPolicy(credsDir: string, policy: IngestPolicy
   setIngestPolicyFile(defaultPresetsPath(credsDir), policy);
 }
 
-/** Explicitly grant/revoke use by separately escrowed unattended runners. */
-export async function setCredentialUnattended(credsDir: string, provider: string, label: string, unattended: boolean): Promise<void> {
-  const id = provider.trim().toLowerCase();
-  if (!id) throw new Error("Provider is required");
-  const store = createCredentialVault(credsDir);
-  const existing = await store.readRecord(id, label);
-  if (!existing) throw new Error(`No credential for ${id}:${normalizeLabel(label)}`);
-  if (existing.sync !== "account" && unattended) throw new Error("A machine-only credential cannot be granted to unattended runners");
-  if (existing.source.kind === "reference" && unattended) throw new Error("Password-manager references cannot be resolved by unattended runners");
-  await store.putRecord({ ...existing, unattended });
-}
-
-/** Credentials included in the explicit hosted custody snapshot. */
-export async function exportUnattendedRecords(credsDir: string): Promise<Record<string, CredentialRecord>> {
-  const records = await createCredentialVault(credsDir).exportSyncableRecords();
-  return Object.fromEntries(Object.entries(records).filter(([, record]) => record.unattended === true && record.source.kind === "stored"));
-}
-
-/** Monotonic logical revision for the filtered custody projection. */
-export async function unattendedCredentialRevision(credsDir: string): Promise<number> {
-  const store = createCredentialVault(credsDir);
-  const records = await store.listRecords();
-  const deletedAt = await store.exportRecordTombstones();
-  return Math.max(0, ...records.map((record) => Number(record.updatedAt) || 0), ...Object.values(deletedAt).map((stamp) => Number(stamp) || 0));
-}
-
 /** Set a labeled credential's sync tier — the per-credential opt-out toggle. */
 export async function setCredentialSync(
   credsDir: string,
@@ -550,5 +504,5 @@ export async function setCredentialSync(
   if (existing.source.kind === "reference" && existing.source.backend === "command" && sync === "account") {
     throw new Error("A cmd:// reference is node-local (it runs a command on this machine) and cannot be synced.");
   }
-  await store.putRecord({ ...existing, sync, ...(sync === "node" ? { unattended: false } : {}) });
+  await store.putRecord({ ...existing, sync });
 }

@@ -10,11 +10,10 @@ import { ProviderConnectForm } from "./ProviderConnect.js";
  * First-run "sign in to your model" prompt for a freshly-launched ephemeral
  * runner that came online with no model credentials (`state.presentation.needsModelAuth`).
  *
- * This is the one case the vault-sync paths can't cover — a phone-only account
- * whose very first runner has nothing to inherit (no device key, no peer, no
- * hosted escrow). The user signs in once here, over the ordinary
- * `provider.oauth.start` paste-back that runs ON this runner; the node then
- * escrows the login so every future runner inherits it with no prompt.
+ * This is the one case the vault-sync paths can't cover — an account whose
+ * runner has nothing to inherit (no device key, no online peer). The user signs
+ * in once here, over the ordinary `provider.oauth.start` paste-back that runs ON
+ * this runner; the login then syncs end to end to the account's other nodes.
  *
  * We reuse `ProviderConnectForm` verbatim — it already renders "Sign in with
  * {provider}" plus the manual-code paste step (`OauthStep`) and an API-key
@@ -40,7 +39,7 @@ export function FirstRunModelAuthSheet({ state }: { state: AppState }) {
         <p className="muted settings-intro">
           {reauth
             ? `Your agent couldn't reach ${name} — its credential is missing or expired. Sign in again to keep going.`
-            : `This temporary Machine needs a model before it can run your task. Sign in once with ${name}. The credential is encrypted for reuse by future isolated Machines; on Bivy Cloud this optional unattended path uses hosted credential custody.`}
+            : `This Machine needs a model before it can run your task. Sign in once with ${name}. The login runs on this Machine and stays encrypted end to end; it syncs to your other machines like any other credential.`}
         </p>
         <ProviderConnectForm state={state} providerId={req.provider} apiKeyProvider={modelAuthApiKeyProvider(req.provider)} />
       </div>

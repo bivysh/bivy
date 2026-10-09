@@ -9,7 +9,10 @@ export interface BootstrapOpts {
   relayUrl: string;
   controlPlaneUrl: string;
   enrollmentToken: string;
-  e2eKeyB64: string;
+  /** Seed for the node's room key, used only when its data dir has no
+   *  pairing.json yet. Omit it and the node generates its own key, which never
+   *  leaves the machine; devices then get it by pairing. */
+  e2eKeyB64?: string;
   ttlMinutes?: number;
   repo?: string;
   installUrl?: string;
@@ -19,14 +22,6 @@ export interface BootstrapOpts {
    *  src/control-plane-tasks.ts. Lets the machine serve queue items with no
    *  persistent node required (issue #532). */
   hostedTasks?: boolean;
-  /** Consume only the separately encrypted, explicitly granted hosted credential
-   * snapshot. Interactive managed Machines need this even though they must not
-   * poll the unattended hosted task queue. */
-  hostedCredentialCustody?: boolean;
-  /** Allow a credential-setup guest to publish the account's initial filtered
-   * hosted snapshot. The control plane accepts this from managed guests only
-   * while no snapshot exists, so an agent-bearing guest cannot replace one. */
-  hostedCredentialPublisher?: boolean;
   /** The routing-label suffix this node should additionally serve, e.g.
    *  "ab12cd34" so it also polls `bivy/ab12cd34` (see `BIVY_NODE_LABEL` in
    *  src/control-plane-tasks.ts). Lets a queue item be targeted at THIS

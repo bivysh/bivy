@@ -14,7 +14,7 @@ export function bivyRelayJson(opts: BootstrapOpts): string {
   return JSON.stringify({
     url: opts.relayUrl,
     enrollmentToken: opts.enrollmentToken,
-    e2eKey: opts.e2eKeyB64,
+    ...(opts.e2eKeyB64 ? { e2eKey: opts.e2eKeyB64 } : {}),
     controlPlaneUrl: opts.controlPlaneUrl,
     clientBaseUrl: opts.controlPlaneUrl,
   });
@@ -34,8 +34,6 @@ function bivyBootstrapExports(opts: BootstrapOpts): string[] {
     persistent ? `export HOME=${PERSISTENT_ROOT}/home` : "",
     opts.repo ? `export BIVY_REPO=${shq(opts.repo)}` : "",
     opts.hostedTasks ? `export BIVY_GITHUB_HOSTED_TASKS=1` : "",
-    opts.hostedCredentialCustody ? `export BIVY_HOSTED_CREDENTIAL_CUSTODY=1` : "",
-    opts.hostedCredentialPublisher ? `export BIVY_HOSTED_CREDENTIAL_PUBLISH=1` : "",
     opts.nodeLabel ? `export BIVY_NODE_LABEL=${shq(opts.nodeLabel)}` : "",
     opts.githubToken ? `export BIVY_GITHUB_TOKEN=${shq(opts.githubToken)}` : "",
     opts.hostedMint ? `export BIVY_HOSTED_MINT=1` : "",

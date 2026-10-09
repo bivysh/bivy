@@ -219,8 +219,8 @@ async function main() {
   expect(managedDefault.status === 200 && managedDefault.json?.config?.id === adopted.id, "explicit managed onboarding remains idempotent");
   const automationTarget = await req(port3, "POST", "/account/managed-automation-target", undefined, token3);
   const automationTargetAgain = await req(port3, "POST", "/account/managed-automation-target", undefined, token3);
-  expect(automationTarget.status === 200 && automationTarget.json?.nodeId?.startsWith("eph-managed-auto-") && typeof automationTarget.json?.roomKey === "string", "managed automations receive a stable E2E target");
-  expect(automationTargetAgain.json?.nodeId === automationTarget.json?.nodeId && automationTargetAgain.json?.roomKey === automationTarget.json?.roomKey, "managed automation identity is idempotent");
+  expect(automationTarget.status === 200 && automationTarget.json?.nodeId?.startsWith("eph-managed-auto-"), "managed automations receive a stable target");
+  expect(automationTargetAgain.json?.nodeId === automationTarget.json?.nodeId, "managed automation identity is idempotent");
   const managedConfigs = await req(port3, "GET", "/account/ephemeral-configs", undefined, token3);
   const reconciled = managedConfigs.json?.find((config: { computeSource?: string }) => config.computeSource === "managed");
   expect(managedConfigs.json?.length === 1 && reconciled?.image === "ghcr.io/bivysh/bivy-ephemeral-runner:current-staging-sha" && reconciled?.ttlMinutes === 60, "managed config carries the deployment-owned image and TTL");

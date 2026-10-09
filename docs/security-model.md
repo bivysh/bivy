@@ -27,7 +27,7 @@ The short version, before the detail:
 | --- | --- | --- | --- |
 | QR / `bivy link` pairing (hosted or self-hosted control plane) | **Never** | **Never** | The node — the QR carries the node's public key and a single-use secret out of band |
 | Account pairing (a signed-in browser links a node from the app) | **Never** | **Never** for session content | The **control plane** — the node wraps the room key for any device key the control plane authorizes |
-| Hosted cloud computer (the deployment runs the machine; the control plane boots it) | **Never** | It **holds the room key** (escrowed) | The control plane — this is an explicit hosted-custody mode |
+| Hosted cloud computer (the deployment runs the machine; the control plane boots it) | **Never** | **Never** for session content — the machine generates and keeps its own room key | The control plane, as for account pairing — and the deployment operator controls the machine's host |
 | Terminal CLI on the node (`bivy run`, `bivy attach`) | n/a — nothing leaves the machine | n/a | Nobody |
 
 "Never" for the relay is unconditional: there is no plaintext or downgrade mode
@@ -508,8 +508,7 @@ sensitive.
    are file-based.
 8. **No recovery story for the model-auth vault.** If you lose every node and
    device that can unwrap it, the ciphertext on the control plane is
-   unrecoverable by design. There is no escrow of the account vault (the
-   separate, opt-in hosted-custody set in item 16 is the only exception).
+   unrecoverable by design. There is no escrow of the account vault.
 9. **Relay hardening is incomplete.** TLS termination is expected to be provided
    in front of the relay by the operator. Frame-size and per-socket
    message-rate limits exist, but per-account connection caps and quotas do not
@@ -541,17 +540,25 @@ sensitive.
     not depend on the control plane for that decision, and self-hosting the
     control plane puts the decision under your own control. See
     [Account pairing](#account-pairing-the-control-plane-vouches-for-the-device).
-16. **Hosted ephemeral provisioning is an explicit hosted-custody mode.** When
-    the deployment runs your account's cloud computer, the control plane
-    generates its room key and **escrows it** (encrypted at rest,
-    `setNodeRoomKeyEncIfAbsent`, `services/control-plane/src/cloud-computer.ts`)
-    so it can boot the machine again later; the same mode may hold a filtered
-    set of credentials you have explicitly granted for unattended runs. For
-    those machines the control plane can decrypt session traffic — this is a
-    deliberate trade of end-to-end privacy for device-offline provisioning,
-    off by default and opt-in per account. Device-driven ephemeral launches
-    (the browser mints the room key and bakes it into the machine) keep the
-    control plane blind. See
+16. **The hosted cloud computer runs on a host you don't control.** When the
+    deployment runs your account's cloud computer, the machine holds its own
+    keys like your own computer: it generates its room key on its persistent
+    disk and your devices get it by account pairing (item 15); model
+    credentials reach it only through the end-to-end account vault (a vault
+    key wrapped for it by one of your nodes) or a provider sign-in on the
+    machine itself. The control plane stores neither, cannot decrypt the
+    machine's session traffic or snapshots, and at startup deletes room keys
+    and credential vault keys that earlier versions escrowed
+    (`purgeRetiredKeyEscrow`, `services/control-plane/src/postgres-store.ts`).
+    What remains: the deployment operator runs the host (disk, memory, and the
+    boot payload the control plane writes), so a malicious operator could read
+    what the machine reads; device authorization trusts the control plane as
+    in item 15; the boot payload still carries a GitHub token when the account
+    uses a stored PAT rather than a GitHub App; a cloud computer first booted
+    by an earlier version keeps the room key that version generated until its
+    disk is replaced, so a database backup taken before the upgrade could still
+    decrypt its traffic; and because snapshots are sealed with the disk's key,
+    losing the disk loses the machine's session history. See
     [`hosted-provisioning-trust-model.md`](hosted-provisioning-trust-model.md),
     [`key-management.md`](key-management.md), and
     [`ephemeral-sessions.md`](ephemeral-sessions.md).

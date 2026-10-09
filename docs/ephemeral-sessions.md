@@ -25,7 +25,9 @@ no machines itself and holds no provider credential.
 
 The control plane (`services/control-plane/src/cloud-computer.ts` and the
 `/account/managed-machines` routes) asks the deployment extension for the
-machine and answers the client with the node to connect to and its room key.
+machine and answers the client with the node to connect to. It hands out no
+key: the machine holds its own keys like a user-owned node, and the client
+gets the room key by account pairing when it connects.
 
 1. **Offer.** `/v1/compute/profile` says whether this account gets managed
    compute (`accountMachine: true`).
@@ -34,9 +36,9 @@ machine and answers the client with the node to connect to and its room key.
 3. **Boot.** The deployment calls `/internal/compute/bootstrap`. Core
    re-enrolls the account's stable node id (`eph-managed-auto-<hash>`) with a
    fresh enrollment token and returns the Fly `files` + `init.exec` that write
-   `relay.json` and `start.sh` and run the daemon in the foreground. The room
-   key is the escrowed one (sealed with the account's hosted key), so existing
-   sessions and snapshots stay readable.
+   `relay.json` and `start.sh` and run the daemon in the foreground. The
+   payload carries no room key: the node keeps the one it generated in its
+   data dir on the volume, or generates one on a new disk.
 4. **Milestones.** The node reports `nodeReadyAt`, `credentialsReadyAt`,
    `repositoryReadyAt` and the first agent event for the current boot; the web
    app shows them as launch progress.
@@ -48,8 +50,9 @@ Connecting to the sleeping node, or opening one of its preview links, calls
 
 `deploy/Dockerfile.ephemeral-runner` is the build context for a
 credential-free runner image (Node, Bivy, git, agent dependencies). The
-deployment builds and publishes the image it boots. Enrollment, room keys,
-credentials, repository and restore state are injected at boot. Every
+deployment builds and publishes the image it boots. Enrollment and the
+GitHub identity are injected at boot; the node generates its own room key, and
+model credentials arrive through end-to-end vault sync or a sign-in on it. Every
 bootstrap checks `command -v bivy` first and only falls back to the installer
 on a generic image.
 
@@ -65,17 +68,17 @@ exiting it flushes a sealed snapshot of every open session, then exits; the
 deployment keeps the stopped machine and its volume. The init `timeout` bounds
 each awake period.
 
-## Sessions outlive the disk
+## Snapshots and a lost disk
 
 - **Snapshot.** `src/session/snapshot.ts` seals `{records, checkpointCommit,
   bundle, runtimeSessionRef}` under the node's room key and stores it as an
   opaque blob in `session_snapshots`. The control plane sees ciphertext only.
 - **Lost volume.** If the deployment destroys the machine and its volume it
   calls `/internal/compute/retired`; the node stays enrolled. Reopening a
-  session calls `/account/managed-machines/restore`, the deployment acquires a
-  new machine for the same node, and the bootstrap carries
-  `BIVY_RESTORE=<sessionId>`. The daemon restores the transcript and git
-  checkpoint before the buffered prompt is delivered.
+  session calls `/account/managed-machines/restore`, which acquires a machine
+  for the same node. A new disk generates a new room key and cannot open
+  snapshots sealed under the old one, so the lost disk's session history is
+  not restored; the bootstrap ignores a `restoreSessionId`.
 
 ## Automations
 
@@ -84,5 +87,8 @@ the primary target or as the fallback when a chosen machine is offline. The
 control plane moves the waiting work to the cloud computer's label
 (`routeWorkToCloudComputer`) and acquires the machine with purpose
 `"automation"`; the machine picks the work up through the hosted work queue.
-Unattended runs use the separately encrypted credential copy the user opted
-into ("Allow unattended runs"); see [credential-sync.md](credential-sync.md).
+Automation instructions are sealed to the machine's own room key, so saving an
+automation that runs on the cloud computer first wakes it and pairs the device
+with it. Runs use the model credentials the machine already holds from
+end-to-end vault sync or a sign-in on it; see
+[credential-sync.md](credential-sync.md).

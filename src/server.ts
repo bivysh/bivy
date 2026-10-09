@@ -86,7 +86,7 @@ import { deriveSessionState, type SessionState } from "./session/session-state.j
 import type { SessionRecord, PromptOptions, StreamingBehavior, PromptImage } from "./session/record.js";
 import { resolveStreamingBehavior } from "./session/record.js";
 import { createSessionEngine } from "./session/engine.js";
-import { exportProviderAuth, exportAccountApiKeys, exportAccountOAuthCredentials, importAccountOAuthCredentials, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, setCredentialUnattended, exportUnattendedRecords, unattendedCredentialRevision, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords, reconcileHostedCredentialRecords } from "./credentials/api.js";
+import { exportProviderAuth, exportAccountApiKeys, exportAccountOAuthCredentials, importAccountOAuthCredentials, exportSyncableProviderAuth, exportProviderAuthTombstones, importProviderAuth, removeProvider, setProviderApiKey, listCredentialRecords, setProviderApiKeyLabeled, setProviderReferenceLabeled, removeProviderCredential, setCredentialSync, getCredentialPresets, setActiveCredentialPreset, setCredentialPresetMapping, exportSyncableRecords, exportRecordTombstones, importCredentialRecords } from "./credentials/api.js";
 import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
 import { sessionLikeFields } from "./session/start-like.js";
@@ -118,7 +118,6 @@ import { forceAbortTurn } from "./session/abort-recovery.js";
 import { runRequiredAutomationChecks } from "./automation-checks.js";
 import { configToLegacySettings, mergeLegacyIntoNodeConfig, readNodeConfig, writeNodeConfig, type NodeConfig } from "./node-config.js";
 import { loadProjectPolicy, resolveProjectSafety } from "./project-policy.js";
-import { hostedCustodyNode } from "./hosted-custody.js";
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { SessionAllowRules } from "./policy/session-allow.js";
@@ -2607,7 +2606,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     credsDir,
     sendEvent: (event) => relay?.sendEvent(event),
     broadcast,
-    pushModelAuthToControlPlane: (opts) => pushModelAuthToControlPlane(false, opts?.throwOnFailure === true, opts?.allowEmptyHostedEscrow === true),
+    pushModelAuthToControlPlane: (opts) => pushModelAuthToControlPlane(false, opts?.throwOnFailure === true),
     refreshSessionAfterAuth,
     listProvidersUnified,
   }),
@@ -3196,8 +3195,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
         }
       }
       await removeProvider(credsDir, id);
-      // Deleting a granted credential must also remove its escrowed cloud copy.
-      await pushModelAuthToControlPlane(false, false, true);
+      await pushModelAuthToControlPlane();
       await refreshSessionAfterAuth();
       broadcast({ type: "provider.oauth.reset", provider: id, ok: true, providers: await listProvidersUnified() });
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
@@ -3208,8 +3206,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   async "provider.remove"(msg) {
     try {
       await removeProvider(credsDir, String(msg.provider ?? msg.id ?? ""));
-      // Deleting a granted credential must also remove its escrowed cloud copy.
-      await pushModelAuthToControlPlane(false, false, true);
+      await pushModelAuthToControlPlane();
       await refreshSessionAfterAuth();
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
     } catch (error) {
@@ -3692,21 +3689,14 @@ type ModelAuthVaultResponse = {
   wrappedKey?: { nodeId: string; wrappedKey: string; wrappedByNodeId: string; wrappedByPublicKey: string } | null;
   requests?: Array<{ nodeId: string; publicKey: string }>;
 };
-type HostedModelAuthVaultResponse = {
-  hostedKey?: string | null;
-  hostedVault?: { ciphertext: string; generation: number; revision: number } | null;
-};
 const modelAuthVaultKeyPath = path.join(appDir, "model-auth-vault.json");
-const hostedModelAuthVaultKeyPath = path.join(appDir, "model-auth-hosted-vault.json");
-const hostedImportedRecordsPath = path.join(appDir, "model-auth-hosted-records.json");
 let lastPushedModelAuthCiphertext = "";
-let lastPushedHostedModelAuthCiphertext = "";
-let lastPushedHostedModelAuthRevision = -1;
-// Custody semantics are keyed on the dedicated flag (plus an ephemeral
-// back-compat case) — see src/hosted-custody.ts. A persistent personal node
-// that polls the hosted GitHub queue is NOT a custody guest: it owns its
-// logins and must keep account sync and unattended-escrow publishing.
-const isHostedCustodyNode = () => hostedCustodyNode();
+// Every node, the account's cloud computer included, owns its vault key and
+// gets it wrapped node-to-node. Remove state left by the retired hosted
+// custody mode, whose key the control plane could also decrypt.
+for (const retired of ["model-auth-hosted-vault.json", "model-auth-hosted-records.json"]) {
+  try { fs.rmSync(path.join(appDir, retired), { force: true }); } catch { /* best effort */ }
+}
 
 function readLocalModelAuthVaultKey(): string | undefined {
   try {
@@ -3726,36 +3716,6 @@ function writeLocalModelAuthVaultKey(vaultKeyB64: string) {
 
 function forgetLocalModelAuthVaultKey() {
   try { fs.rmSync(modelAuthVaultKeyPath, { force: true }); } catch { /* best effort */ }
-}
-
-function readHostedModelAuthVaultKey(): string | undefined {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(hostedModelAuthVaultKeyPath, "utf8")) as { vaultKeyB64?: string };
-    if (parsed.vaultKeyB64 && Buffer.from(parsed.vaultKeyB64, "base64").length === 32) return parsed.vaultKeyB64;
-  } catch { /* no hosted key */ }
-  return undefined;
-}
-function writeHostedModelAuthVaultKey(vaultKeyB64: string) {
-  fs.writeFileSync(hostedModelAuthVaultKeyPath, `${JSON.stringify({ vaultKeyB64, createdAt: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
-}
-function readHostedImportedRecords(): Array<{ provider: string; label: string }> {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(hostedImportedRecordsPath, "utf8"));
-    return Array.isArray(parsed?.records)
-      ? parsed.records.filter((record: unknown): record is { provider: string; label: string } => Boolean(record) && typeof record === "object" && typeof (record as any).provider === "string" && typeof (record as any).label === "string")
-      : [];
-  } catch { return []; }
-}
-function writeHostedImportedRecords(records: Array<{ provider: string; label: string }>) {
-  fs.writeFileSync(hostedImportedRecordsPath, `${JSON.stringify({ records }, null, 2)}\n`, { mode: 0o600 });
-}
-
-function ensureHostedModelAuthVaultKey(): string {
-  const existing = readHostedModelAuthVaultKey();
-  if (existing) return existing;
-  const created = randomBytes(32).toString("base64");
-  writeHostedModelAuthVaultKey(created);
-  return created;
 }
 
 function ensureLocalModelAuthVaultKey(): string {
@@ -3932,6 +3892,10 @@ function ensureModelAuthColdStart() {
     if (!modelAuthColdStartActive) return;
     // A concurrent sync may have already landed the key — stop as soon as we have it.
     if (readLocalModelAuthVaultKey() || modelAuthColdStartAttempts >= MODEL_AUTH_COLDSTART_MAX_ATTEMPTS) {
+      // No online peer answered: credential sync has settled without the
+      // vault. A launch waiting on this milestone proceeds and asks the user
+      // to sign in on this machine instead of waiting forever.
+      if (!readLocalModelAuthVaultKey()) void reportEphemeralMilestone("credentialsReadyAt");
       stopModelAuthColdStart();
       return;
     }
@@ -3951,55 +3915,33 @@ async function syncModelAuthFromControlPlane() {
     const res = await modelAuthFetch("/node/model-auth-vault");
     if (!res?.ok) return;
     const data = (await res.json().catch(() => ({}))) as ModelAuthVaultResponse;
-    const hostedCustody = isHostedCustodyNode();
-    let hostedData: HostedModelAuthVaultResponse = {};
-    if (hostedCustody) {
-      const hostedResponse = await modelAuthFetch("/node/model-auth-hosted-vault");
-      if (hostedResponse?.ok) hostedData = (await hostedResponse.json().catch(() => ({}))) as HostedModelAuthVaultResponse;
-    }
-    const targetVault = hostedCustody ? hostedData.hostedVault : data.vault;
-    let vaultKeyB64 = hostedCustody ? readHostedModelAuthVaultKey() : readLocalModelAuthVaultKey();
+    const targetVault = data.vault;
+    let vaultKeyB64 = readLocalModelAuthVaultKey();
 
-    // Hosted runners may decrypt ONLY the separately encrypted snapshot of
-    // records that the user explicitly granted to unattended execution.
-    if (hostedCustody && !vaultKeyB64 && hostedData.hostedKey && hostedData.hostedVault && Buffer.from(hostedData.hostedKey, "base64").length === 32) {
-      vaultKeyB64 = hostedData.hostedKey;
-      writeHostedModelAuthVaultKey(vaultKeyB64);
-    }
-
-    if (targetVault?.ciphertext && (vaultKeyB64 || (!hostedCustody && data.wrappedKey))) {
+    if (targetVault?.ciphertext && (vaultKeyB64 || data.wrappedKey)) {
       let decrypted;
       try {
-        if (hostedCustody) {
-          decrypted = decryptModelAuthEnvelope(targetVault.ciphertext, vaultKeyB64!);
-        } else {
-          const wrapped = data.wrappedKey;
-          const recovered = recoverModelAuthKey({
-            localKey: vaultKeyB64,
-            unwrap: wrapped ? () => pairingStore.unwrapFromNodePublicKey(wrapped.wrappedByPublicKey, wrapped.wrappedKey) : undefined,
-            decrypt: (key) => decryptModelAuthEnvelope(targetVault.ciphertext, key),
-          });
-          if (!recovered) throw new Error("No available key can decrypt the account vault");
-          vaultKeyB64 = recovered.key;
-          decrypted = recovered.value;
-          writeLocalModelAuthVaultKey(vaultKeyB64);
-        }
+        const wrapped = data.wrappedKey;
+        const recovered = recoverModelAuthKey({
+          localKey: vaultKeyB64,
+          unwrap: wrapped ? () => pairingStore.unwrapFromNodePublicKey(wrapped.wrappedByPublicKey, wrapped.wrappedKey) : undefined,
+          decrypt: (key) => decryptModelAuthEnvelope(targetVault.ciphertext, key),
+        });
+        if (!recovered) throw new Error("No available key can decrypt the account vault");
+        vaultKeyB64 = recovered.key;
+        decrypted = recovered.value;
+        writeLocalModelAuthVaultKey(vaultKeyB64);
       } catch (error) {
         // Most commonly this node cached the previous generation while another
         // survivor completed a revoke-triggered re-key. Forget it and request a
         // wrap of the current key; retaining it would make every poll fail forever.
-        if (hostedCustody) {
-          try { fs.rmSync(hostedModelAuthVaultKeyPath, { force: true }); } catch { /* best effort */ }
-          lastPushedHostedModelAuthCiphertext = "";
-        } else {
-          forgetLocalModelAuthVaultKey();
-          lastPushedModelAuthCiphertext = "";
-          await modelAuthFetch("/node/model-auth-key/request", {
-            method: "POST",
-            body: JSON.stringify({ publicKey: pairingStore.nodePublicKeyB64(), rejectedWrappedKey: data.wrappedKey?.wrappedKey }),
-          });
-          ensureModelAuthColdStart();
-        }
+        forgetLocalModelAuthVaultKey();
+        lastPushedModelAuthCiphertext = "";
+        await modelAuthFetch("/node/model-auth-key/request", {
+          method: "POST",
+          body: JSON.stringify({ publicKey: pairingStore.nodePublicKeyB64(), rejectedWrappedKey: data.wrappedKey?.wrappedKey }),
+        });
+        ensureModelAuthColdStart();
         console.warn("[auth-sync] cached vault key is stale; requested the rotated key:", (error as Error).message);
         return;
       }
@@ -4009,37 +3951,26 @@ async function syncModelAuthFromControlPlane() {
       // so importing records alone (plus its record-keyed tombstones) is complete.
       // Fall back to the provider-keyed fields for a v2 peer.
       if (v >= 3) {
-        if (hostedCustody) {
-          // Hosted snapshots are authoritative filtered sets, not additive peer
-          // merges. Remove custody-derived records omitted by a later snapshot
-          // so a revoke takes effect on already-running hosted nodes.
-          const current = await reconcileHostedCredentialRecords(credsDir, records, readHostedImportedRecords());
-          writeHostedImportedRecords(current);
-        } else {
-          await importCredentialRecords(credsDir, records, recordsDeletedAt as Record<string, unknown>);
-        }
+        await importCredentialRecords(credsDir, records, recordsDeletedAt as Record<string, unknown>);
       } else {
         await importProviderAuth(credsDir, providers, deletedAt);
       }
       importLocalModels(localModelsDir, localModels);
-      // Account-wide agent instructions reconcile last-writer-wins. Hosted
-      // runners hold only the filtered credential snapshot, which never carries
-      // them, so they neither import nor republish.
-      const instructionsSync = hostedCustody ? "unchanged" : mergeSyncedAgentInstructions(appDir, decrypted.agentInstructions);
+      // Account-wide agent instructions reconcile last-writer-wins.
+      const instructionsSync = mergeSyncedAgentInstructions(appDir, decrypted.agentInstructions);
       if (instructionsSync === "imported") broadcast({ type: "node.settings", settings: nodeSettingsSnapshot() });
       // A synced key or config change can both alter the projection, so always
       // regenerate it (and refresh the panel) after importing the vault.
       await writePiModelsProjection();
       await broadcastLocalModels();
-      if (hostedCustody) lastPushedHostedModelAuthCiphertext = targetVault.ciphertext;
-      else lastPushedModelAuthCiphertext = targetVault.ciphertext;
+      lastPushedModelAuthCiphertext = targetVault.ciphertext;
       // Got the key and imported the vault (incl. any subscription-OAuth logins) —
       // the cold-start race is over.
       stopModelAuthColdStart();
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
-      if (!hostedCustody && data.vault?.needsRotation) await pushModelAuthToControlPlane(true);
+      if (data.vault?.needsRotation) await pushModelAuthToControlPlane(true);
       else if (instructionsSync === "local-newer") await pushModelAuthToControlPlane();
-    } else if (targetVault?.ciphertext && !vaultKeyB64 && !hostedCustody) {
+    } else if (targetVault?.ciphertext && !vaultKeyB64) {
       await modelAuthFetch("/node/model-auth-key/request", { method: "POST", body: JSON.stringify({ publicKey: pairingStore.nodePublicKeyB64() }) });
       // No peer has wrapped our key yet. Fast-retry (bounded) so a short-lived
       // ephemeral runner picks up the key within seconds of a peer answering,
@@ -4054,13 +3985,10 @@ async function syncModelAuthFromControlPlane() {
     }
 
     await processModelAuthKeyRequests(data.requests ?? []);
-    // A personal node with no vault has nothing to hydrate and is ready. A
-    // hosted-custody guest is different: an absent filtered snapshot means it
-    // has no model credential at all, not that hydration succeeded.
-    const credentialsReady = hostedCustody
-      ? Boolean(targetVault?.ciphertext && readHostedModelAuthVaultKey())
-      : Boolean(!targetVault?.ciphertext || readLocalModelAuthVaultKey());
-    if (credentialsReady) void reportEphemeralMilestone("credentialsReadyAt");
+    // With no account vault there is nothing to hydrate; with one, ready once
+    // this node holds its key. (The cold-start retry reports it too when no
+    // peer answers, so a waiting launch can move on.)
+    if (!targetVault?.ciphertext || readLocalModelAuthVaultKey()) void reportEphemeralMilestone("credentialsReadyAt");
   } catch (error) {
     console.warn("[auth-sync] model auth sync failed:", (error as Error).message);
   }
@@ -4079,47 +4007,7 @@ async function processModelAuthKeyRequests(requests: Array<{ nodeId: string; pub
   }
 }
 
-async function pushHostedModelAuthToControlPlane(allowEmpty = false) {
-  const [records, revision] = await Promise.all([exportUnattendedRecords(credsDir), unattendedCredentialRevision(credsDir)]);
-  // A setup guest must not establish an empty snapshot when the credential is
-  // first saved (before the explicit grant command follows). Otherwise its
-  // one allowed initial write would be consumed by an unusable vault.
-  //
-  // And an IMPLICIT empty push must never revoke the escrow: an empty snapshot
-  // is how "disable unattended runs" removes the cloud copy, but every vault
-  // change funnels through here — so a node whose copy simply lacks the grant
-  // (not yet synced, or granted elsewhere) would otherwise wipe the encrypted
-  // cloud copy the user's other machines just published. Only an explicit
-  // local revoke/delete (allowEmpty) may publish an empty snapshot.
-  if (Object.keys(records).length === 0 && (!allowEmpty || isHostedCustodyNode())) return;
-  if (revision === lastPushedHostedModelAuthRevision) return;
-  const key = ensureHostedModelAuthVaultKey();
-  const ciphertext = encryptModelAuthProviders({}, {}, {}, key, records, {});
-  const publish = async (expectedGeneration: number) => modelAuthFetch("/node/model-auth-hosted-vault", {
-    method: "PUT",
-    body: JSON.stringify({ ciphertext, vaultKeyB64: key, expectedGeneration, revision }),
-  });
-  const currentResponse = await modelAuthFetch("/node/model-auth-hosted-vault");
-  if (currentResponse?.status === 403) throw new Error("hosted credential custody is not enabled for this account");
-  const current = currentResponse?.ok
-    ? (await currentResponse.json().catch(() => ({}))) as HostedModelAuthVaultResponse
-    : {};
-  let response = await publish(current.hostedVault?.generation ?? 0);
-  if (response?.status === 409) {
-    const conflict = await response.json().catch(() => ({})) as { generation?: number; revision?: number };
-    // Retry only when our logical state is at least as new; the store also
-    // enforces this revision check atomically with the generation CAS.
-    if (revision >= Number(conflict.revision ?? 0)) response = await publish(Number(conflict.generation ?? 0));
-  }
-  if (response?.ok) {
-    lastPushedHostedModelAuthCiphertext = ciphertext;
-    lastPushedHostedModelAuthRevision = revision;
-  } else {
-    throw new Error(`hosted model-auth push failed (${response?.status ?? "offline"})`);
-  }
-}
-
-async function pushModelAuthToControlPlane(rotateKey = false, throwOnFailure = false, allowEmptyHostedEscrow = false) {
+async function pushModelAuthToControlPlane(rotateKey = false, throwOnFailure = false) {
   if (!sessionAdvertiseTarget) return;
   // Piggyback the (plaintext, non-secret) provider status summary on every
   // trigger that already pushes the encrypted model-auth vault — one "creds
@@ -4128,15 +4016,6 @@ async function pushModelAuthToControlPlane(rotateKey = false, throwOnFailure = f
   // versa.
   await pushProviderSummaryToControlPlane();
   try {
-    // A hosted runner holds only the explicitly granted snapshot and must never
-    // overwrite the peer-to-peer account vault with that filtered subset.
-    if (isHostedCustodyNode()) {
-      // A credential-setup guest may establish the initial filtered snapshot.
-      // The control plane refuses managed-guest replacement after that first
-      // write, so normal hosted runners remain recipients rather than authorities.
-      if (process.env.BIVY_HOSTED_CREDENTIAL_PUBLISH === "1" && !lastPushedHostedModelAuthCiphertext) await pushHostedModelAuthToControlPlane();
-      return;
-    }
     // Only push credentials on the account-sync tier; a `sync: "node"` credential
     // stays local (per-credential opt-out). Tombstones still converge for all.
     const providers = await exportSyncableProviderAuth(credsDir);
@@ -4151,10 +4030,7 @@ async function pushModelAuthToControlPlane(rotateKey = false, throwOnFailure = f
     if (rotateKey) writeLocalModelAuthVaultKey(vaultKeyB64);
     const instructions = readAgentInstructions(appDir);
     const ciphertext = encryptModelAuthProviders(providers, deletedAt, localModels, vaultKeyB64, records, recordsDeletedAt, instructions.updatedAt > 0 ? instructions : undefined);
-    if (!rotateKey && ciphertext === lastPushedModelAuthCiphertext) {
-      await pushHostedModelAuthToControlPlane(allowEmptyHostedEscrow);
-      return;
-    }
+    if (!rotateKey && ciphertext === lastPushedModelAuthCiphertext) return;
     const push = await modelAuthFetch("/node/model-auth-vault", { method: "PUT", body: JSON.stringify({ ciphertext, rotated: rotateKey }) });
     if (!push?.ok) {
       if (rotateKey) {
@@ -4168,10 +4044,6 @@ async function pushModelAuthToControlPlane(rotateKey = false, throwOnFailure = f
       body: JSON.stringify({ targetNodeId: identity.nodeId, wrappedByPublicKey: pairingStore.nodePublicKeyB64(), wrappedKey: pairingStore.wrapForNodePublicKey(pairingStore.nodePublicKeyB64(), vaultKeyB64) }),
     });
     lastPushedModelAuthCiphertext = ciphertext;
-    // Publish a DIFFERENT ciphertext under a DIFFERENT key containing only
-    // records with `unattended:true`. Escrowing this key cannot decrypt the E2E
-    // account vault, which is the critical custody separation.
-    await pushHostedModelAuthToControlPlane(allowEmptyHostedEscrow);
   } catch (error) {
     console.warn("[auth-sync] could not push model auth:", (error as Error).message);
     if (throwOnFailure) throw error;
@@ -8172,9 +8044,7 @@ function actionableAgentError(runtimeId: string, error: unknown): string {
   if (isModelAuthError(raw) || /reading ['"]provider['"]|no api key found/i.test(raw)) {
     if (id.includes("claude")) return "Claude Code is not signed in. Run `claude` once, complete sign-in, then retry; the same login works from Bivy and the PWA.";
     if (id.startsWith("codex")) return "Codex is not signed in. Run `codex login`, then retry; the same login works from Bivy and the PWA.";
-    if (id === "pi" || id === "aider") return isHostedCustodyNode()
-      ? "No model credential is available to this Bivy Cloud Machine. Connect a provider and enable it for Bivy Cloud, then retry."
-      : "No model credential is configured. Run `bivy provider login`, then retry. This is only required once and compatible credentials sync E2E-encrypted to your other Bivy nodes.";
+    if (id === "pi" || id === "aider") return "No model credential is configured. Run `bivy provider login`, then retry. This is only required once and compatible credentials sync E2E-encrypted to your other Bivy nodes.";
     return "The selected agent needs model authentication. Sign in through its native CLI, then retry.";
   }
   return raw;
@@ -10680,8 +10550,7 @@ app.post("/api/auth/credentials", async (req, res, next) => {
 app.delete("/api/auth/credentials/:provider/:label", async (req, res, next) => {
   try {
     await removeProviderCredential(credsDir, String(req.params.provider), String(req.params.label));
-    // Deleting a granted credential must also remove its escrowed cloud copy.
-    await pushModelAuthToControlPlane(false, false, true);
+    await pushModelAuthToControlPlane();
     await refreshSessionAfterAuth();
     res.json({ ok: true, records: await listCredentialRecords(credsDir), providers: await listProvidersUnified() });
   } catch (error) {
@@ -10693,29 +10562,9 @@ app.post("/api/auth/credentials/:provider/:label/availability", async (req, res,
   try {
     const sync = req.body?.sync === "node" ? "node" : "account";
     await setCredentialSync(credsDir, String(req.params.provider), String(req.params.label), sync);
-    // Demoting to machine-only revokes any custody grant; let that clear the escrow.
-    await pushModelAuthToControlPlane(false, false, sync === "node");
+    await pushModelAuthToControlPlane();
     res.json({ ok: true, records: await listCredentialRecords(credsDir) });
   } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/api/auth/credentials/:provider/:label/unattended", async (req, res, next) => {
-  const provider = String(req.params.provider);
-  const label = String(req.params.label);
-  const enable = req.body?.unattended === true;
-  const previous = (await listCredentialRecords(credsDir).catch(() => []))
-    .find((record) => record.provider === provider.trim().toLowerCase() && record.label === label)?.unattended === true;
-  try {
-    await setCredentialUnattended(credsDir, provider, label, enable);
-    // Fail loud (mirrors the relay command): the UI must never claim an
-    // encrypted cloud copy exists when custody publication failed. An explicit
-    // disable is the one caller allowed to publish an empty escrow snapshot.
-    await pushModelAuthToControlPlane(false, true, !enable);
-    res.json({ ok: true, records: await listCredentialRecords(credsDir) });
-  } catch (error) {
-    await setCredentialUnattended(credsDir, provider, label, previous).catch(() => {});
     next(error);
   }
 });

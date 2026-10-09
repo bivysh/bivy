@@ -43,16 +43,13 @@ describe("bootstrap start.sh env", () => {
     expect(start({ provider: "fly" })).toContain("export BIVY_DATA_DIR=/etc/bivy");
   });
 
-  it("opts into hosted work and credential custody only when asked", () => {
-    expect(start()).not.toMatch(/BIVY_GITHUB_HOSTED_TASKS|BIVY_NODE_LABEL|BIVY_GITHUB_TOKEN|BIVY_HOSTED_CREDENTIAL/);
-    const script = start({ repo: "owner/repo", hostedTasks: true, nodeLabel: "ab12cd34", hostedCredentialCustody: true, hostedCredentialPublisher: true, hostedMint: true });
+  it("opts into hosted work only when asked", () => {
+    expect(start()).not.toMatch(/BIVY_GITHUB_HOSTED_TASKS|BIVY_NODE_LABEL|BIVY_GITHUB_TOKEN/);
+    const script = start({ repo: "owner/repo", hostedTasks: true, nodeLabel: "ab12cd34", hostedMint: true });
     expect(script).toContain("export BIVY_REPO='owner/repo'");
     expect(script).toContain("export BIVY_GITHUB_HOSTED_TASKS=1");
     expect(script).toContain("export BIVY_NODE_LABEL='ab12cd34'");
-    expect(script).toContain("export BIVY_HOSTED_CREDENTIAL_CUSTODY=1");
-    expect(script).toContain("export BIVY_HOSTED_CREDENTIAL_PUBLISH=1");
     expect(script).toContain("export BIVY_HOSTED_MINT=1");
-    expect(start({ hostedCredentialCustody: true })).not.toContain("BIVY_GITHUB_HOSTED_TASKS");
   });
 
   it("single-quotes a token so shell metacharacters can't break out of the export", () => {
