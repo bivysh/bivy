@@ -32,7 +32,7 @@ async function fixture(page: Page, theme: string, empty = false, trigger = "sche
       return route.fulfill({ json: item });
     }
     const json = url.pathname.endsWith("/simulate")
-      ? { preflight: [], gate: { blocked: false, blockingChecks: [], requiresAck: false, warnChecks: [] }, match: { matched: true }, routing: {} }
+      ? { subjectId: item.id, matchedId: item.id, trail: [], overlaps: [], preflight: [], gate: { blocked: false, blockingChecks: [], requiresAck: false, warnChecks: [] } }
       : url.pathname === "/account/automations" ? (options.multiple ? [{...item,id:'first',name:'First source'}, item] : [item])
       : url.pathname === '/account/github-app' ? {connected:true,apps:[{appId:'app',connected:true,installed:true,installCount:1,mention:'bivy'}]}
       : url.pathname === "/account/nodes" ? nodes
