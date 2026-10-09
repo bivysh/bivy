@@ -61,6 +61,8 @@ export interface RunTerminalSpec {
   /** Extra environment: the display a desktop app view runs on, or a chat
    *  session's own TUI launch spec. */
   env?: Record<string, string>;
+  /** Owned by something else (an app view): see TerminalMeta.background. */
+  background?: boolean;
 }
 
 /** What a run leaves behind when its agent exposed no session of its own:
@@ -278,7 +280,7 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
   }
 
   async function runTerminalList(): Promise<unknown[]> {
-    const runs = terminals.list((meta) => meta.kind === "run").filter((t) => runTerminals.has(t.id));
+    const runs = terminals.list((meta) => meta.kind === "run" && !meta.background).filter((t) => runTerminals.has(t.id));
     let saved: Array<{ id: string; path?: string; name?: string }> = [];
     if (runs.some((t) => t.meta.autoName)) {
       try { saved = await deps.listAllSessions(); } catch { /* best-effort listing */ }
@@ -413,7 +415,8 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
     const commandLine = [spec.command, ...spec.args].join(" ");
     const explicitName = spec.name?.trim();
     const name = explicitName || (spec.mux ? undefined : defaultRunName(spec.agent, commandLine, workspace));
-    const notifiable = !spec.mux;
+    // A mux attach or an app's own program is not a session of its own.
+    const isSession = !spec.mux && !spec.background;
     const createdAt = Date.now();
     // The agent inside gets the same session env a chat session's agent does, so
     // `bivy notify`/`ask`/`app` reach this run: under its pinned session id, else
@@ -431,7 +434,7 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
         cols: spec.cols,
         rows: spec.rows,
         clientId: spec.clientId,
-        meta: { kind: "run", agent: spec.agent, model: spec.model, label, name, autoName: !explicitName && !spec.mux, command: commandLine, mux: spec.mux, sessionId: spec.sessionId },
+        meta: { kind: "run", agent: spec.agent, model: spec.model, label, name, autoName: !explicitName && !spec.mux, command: commandLine, mux: spec.mux, sessionId: spec.sessionId, background: spec.background },
         onData: (data) => {
           emitRunOutput(id, data);
           const at = Date.now();
@@ -439,7 +442,7 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
             lastActivityPing.set(id, at);
             deps.broadcast({ type: "terminal.activity", termId: id, at });
           }
-          if (notifiable) armRunIdleNotify(id, name);
+          if (isSession) armRunIdleNotify(id, name);
         },
         onExit: (code, _signal, scrollback) => {
           runTerminals.delete(id);
@@ -456,7 +459,7 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
             try { deps.sessionListChanged(); } catch { /* best-effort */ }
             return;
           }
-          if (!spec.mux) {
+          if (isSession) {
             // The durable record of this run, in order of fidelity: the agent's
             // own session (pinned at launch), the session discovered in the
             // agent's store, else — for any agent at all — the terminal
@@ -488,7 +491,7 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
               try { deps.sessionListChanged(); } catch { /* best-effort */ }
             })();
           }
-          if (!spec.mux) {
+          if (isSession) {
             void ingestAgentCredentials(spec.agent, deps.credsDir, deps.piDir)
               .then(async (imported) => {
                 if (imported > 0) {
@@ -508,7 +511,7 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
         catch { /* best-effort: a metadata write must never block the run launch */ }
       }
       emit({ type: "terminal.opened", termId: id, workspace, mode: "run", agent: spec.agent, label, name });
-      deps.broadcast({ type: "terminal.created", terminal: { termId: id, workspace, createdAt, lastActivityAt: createdAt, kind: "run", agent: spec.agent, model: spec.model, label, name, command: commandLine, mux: spec.mux, sessionId: spec.sessionId, pid: terminals.pid(id) } });
+      if (!spec.background) deps.broadcast({ type: "terminal.created", terminal: { termId: id, workspace, createdAt, lastActivityAt: createdAt, kind: "run", agent: spec.agent, model: spec.model, label, name, command: commandLine, mux: spec.mux, sessionId: spec.sessionId, pid: terminals.pid(id) } });
       // A pinned run is now a durable session too: push the authoritative list
       // (status "working" while this PTY lives) and re-advertise, so clients on
       // other nodes — which never see this node's terminal.created — still get

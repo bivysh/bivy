@@ -2429,7 +2429,7 @@ const notAgentServers = (offers: AppOffer[]) => offers.filter((offer) => !agentC
 const appService = new AppService(appRegistry, appGateway ?? remotePreview, {
   start: async (spec) => {
     let failure = "Could not start the app terminal.";
-    const id = await runTerms.openRunTerminal({ ...spec, agent: "app", label: spec.name }, (event) => {
+    const id = await runTerms.openRunTerminal({ ...spec, agent: "app", label: spec.name, background: true }, (event) => {
       const e = event as { type?: string; error?: string };
       if (e.type === "terminal.error" && e.error) failure = e.error;
     });
@@ -8314,14 +8314,17 @@ function attachSessionListeners(record: SessionRecord) {
     if (event.type === "turn_start" || event.type === "message_boundary" || event.type === "message_end" || event.type === "turn_end") {
       transcripts.persistTranscriptSnapshot(record);
     }
-    // A finalized assistant message may reference a remote image via markdown
-    // (`![alt](https://…)`) — fetch and store it now so the chat can render it
-    // (see resolveInlineImages). Checked on both events: message_end is the
-    // precise "this assistant message is done" signal most runtimes emit, but
-    // turn_end is a safety net for one that only surfaces the final text there.
-    // Fire-and-forget and internally deduped, so checking on both costs nothing.
+    // A finalized assistant message may reference an image via markdown — a
+    // remote URL (`![alt](https://…)`) to fetch, or a file the agent just
+    // produced in its workspace (`![alt](out/chart.png)`) to read. Resolve and
+    // store either now, so the chat can render it and history keeps it after the
+    // workspace is gone. Checked on both events: message_end is the precise
+    // "this assistant message is done" signal most runtimes emit, but turn_end
+    // is a safety net for one that only surfaces the final text there. Both
+    // resolvers are internally deduped, so checking twice costs nothing.
     if (event.type === "message_end" || event.type === "turn_end") {
       transcripts.resolveInlineImages(record);
+      transcripts.resolveWorkspaceRefs(record, harnessDirFor(record));
     }
     // Durably persist the throttled sidecars at the turn boundary so a crash
     // loses at most the in-flight turn's UI detail, not the whole turn. A

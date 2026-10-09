@@ -53,6 +53,13 @@ const RULES = [
     note: "the node compiles this file through src/session/handoff-seed.ts, so it imports nothing.",
   },
   {
+    name: "message-components-is-dependency-neutral",
+    dir: "packages/core/src/message-components.ts",
+    forbid: [""],
+    enforce: true,
+    note: "the node compiles this file through src/session/message-components.ts, so it imports nothing.",
+  },
+  {
     name: "credentials-is-a-leaf",
     dir: "src/credentials",
     // The rule is architectural: no runtime/, agents/, session/, server, or
@@ -280,6 +287,7 @@ const SHARED_SOURCES = [
   { alias: "src/session/session-contract-values.ts", canonical: "packages/core/src/session-contract.ts", name: "session-contract" },
   { alias: "src/session/plan.ts", canonical: "packages/core/src/plan.ts", name: "plan" },
   { alias: "src/session/handoff-seed.ts", canonical: "packages/core/src/handoff-seed.ts", name: "handoff-seed" },
+  { alias: "src/session/message-components.ts", canonical: "packages/core/src/message-components.ts", name: "message-components" },
 ];
 for (const shared of SHARED_SOURCES) {
   const alias = path.join(repoRoot, shared.alias);

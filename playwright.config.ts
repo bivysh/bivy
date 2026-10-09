@@ -8,6 +8,8 @@ const singleViewport = [
   "**/api-isolation.spec.ts",
   "**/runtime-config.spec.ts",
   "**/chat-attachments.spec.ts",
+  "**/chat-components.spec.ts",
+  "**/chat-inline-app.spec.ts",
   "**/pwa-lifecycle.spec.ts",
   "**/library.spec.ts",
   "**/share-landing.spec.ts",

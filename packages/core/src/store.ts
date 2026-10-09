@@ -27,7 +27,8 @@ import {
   type SessionDraftCommand,
 } from "./session-draft.js";
 import { type SlashCommand } from "./slash.js";
-import { toHtml, extractRemoteImageUrls } from "./markdown.js";
+import { toHtml } from "./markdown.js";
+import { extractImageReferences } from "./message-components.js";
 import { normalizeEventType } from "./tool-activity.js";
 import { SeqReassembler } from "./seq-reassembler.js";
 import { foldConnectionEvent } from "./connection-event-fold.js";
@@ -295,13 +296,16 @@ export interface TranscriptEntry {
    *  attachmentsByText below), so this is populated from the client's own
    *  send-time cache, not from history data. */
   attachments?: PromptAttachment[];
+  /** These attachments are images a tool returned (a screenshot the agent read),
+   *  shown beside its card — part of the tool's output, not files the agent sent. */
+  toolOutput?: boolean;
   /** Actions the node suggested for this notice (e.g. "/new", "fork"), rendered
    *  as inline buttons on a system/error entry so the suggestion is tappable
    *  instead of just describing something the user would have to do. */
   actions?: string[];
   /** Resolved AttachmentRefs for this (assistant) entry's remote markdown images
    *  (`![alt](https://…)`), keyed by the exact URL the markdown referenced — see
-   *  inlineImagesByUrl / withInlineImageRefs below. ChatView's hydrate effect
+   *  inlineImagesByRef / withInlineImageRefs below. ChatView's hydrate effect
    *  looks up each `<img data-remote-src>` here to fetch its bytes and swap in a
    *  `blob:` URL (the deployed CSP blocks a literal remote `src`). Populated at
    *  render time from durable history (`foldInlineImageRefs`) and patched in
@@ -997,8 +1001,10 @@ interface KnownAgentAttachment {
 
 /** An agent-sent attachment's own entry — the only assistant entries carrying
  *  `attachments` (user uploads sit on user entries). */
+/** A file the agent sent. Tool screenshots don't count: they belong to their
+ *  tool call, so a snapshot without the call must not re-add them elsewhere. */
 function isAgentAttachmentEntry(e: TranscriptEntry): boolean {
-  return e.role === "assistant" && !e.tool && !!e.attachments?.length;
+  return e.role === "assistant" && !e.tool && !e.toolOutput && !!e.attachments?.length;
 }
 
 /** A key that names the same entry across history renders (whose ids are not
@@ -1139,14 +1145,16 @@ export class SessionStore {
    *  Bounded like HTML_CACHE so a long session can't grow it without limit. */
   private attachmentsByText = new Map<string, PromptAttachment[]>();
   private static readonly ATTACHMENTS_CACHE_MAX = 100;
-  /** Resolved AttachmentRefs for remote markdown images, keyed by the exact
-   *  `https://` URL the markdown referenced — the client-side twin of the
-   *  node's inline-image event log (src/session/inline-image-fetch.ts). Filled
-   *  from durable history (`foldInlineImageRefs`) and grown live as the node
-   *  resolves more (the "inlineImage" case in applyStreamEvent below). Unbounded
-   *  like the durable log itself is per-session already bounded by how many
-   *  distinct remote images a session's messages actually reference. */
-  private inlineImagesByUrl = new Map<string, AttachmentRef>();
+  /** Resolved AttachmentRefs for markdown images, keyed by the exact reference
+   *  the markdown wrote — an `https://` URL, or a path inside the session
+   *  workspace (see ./message-components.js, which derives the key both sides
+   *  agree on). The client-side twin of the node's inline-image event log
+   *  (src/session/inline-image-fetch.ts). Filled from durable history
+   *  (`foldInlineImageRefs`) and grown live as the node resolves more (the
+   *  "inlineImage" case in applyStreamEvent below). Unbounded like the durable
+   *  log itself is per-session already bounded by how many distinct images a
+   *  session's messages actually reference. */
+  private inlineImagesByRef = new Map<string, AttachmentRef>();
   /** Per-session rendered transcript, so switching back paints instantly. */
   private transcriptCache = new Map<string, TranscriptEntry[]>();
   private static readonly CACHE_MAX = 30;
@@ -1406,7 +1414,7 @@ export class SessionStore {
     if (!entries || !entries.length) return;
     for (const [url, ref] of entries) {
       if (!url || !ref) continue;
-      this.inlineImagesByUrl.set(url, ref);
+      this.inlineImagesByRef.set(url, ref);
     }
   }
 
@@ -1414,18 +1422,18 @@ export class SessionStore {
    *  references a now-cached URL — see TranscriptEntry.imageRefs. A no-op for a
    *  URL not yet resolved (the placeholder just stays unhydrated until it is). */
   private withInlineImageRefs(transcript: TranscriptEntry[]): TranscriptEntry[] {
-    if (this.inlineImagesByUrl.size === 0) return transcript;
+    if (this.inlineImagesByRef.size === 0) return transcript;
     let changed = false;
     const next = transcript.map((e) => {
       if (e.role !== "assistant" || !e.text) return e;
-      const urls = extractRemoteImageUrls(e.text);
-      if (!urls.length) return e;
+      const images = extractImageReferences(e.text);
+      if (!images.length) return e;
       let patch: Record<string, AttachmentRef> | undefined;
-      for (const url of urls) {
-        const ref = this.inlineImagesByUrl.get(url);
-        if (!ref || e.imageRefs?.[url]) continue;
+      for (const { ref: key } of images) {
+        const ref = this.inlineImagesByRef.get(key);
+        if (!ref || e.imageRefs?.[key]) continue;
         patch ??= { ...(e.imageRefs ?? {}) };
-        patch[url] = ref;
+        patch[key] = ref;
       }
       if (!patch) return e;
       changed = true;
@@ -3012,7 +3020,7 @@ export class SessionStore {
         this.draft = folded.value.draft;
         this.set({ transcript: folded.value.transcript as TranscriptEntry[], working: folded.value.working, workingLabel: folded.value.workingLabel });
         for (const command of folded.commands) {
-          if (command.kind === "cache-inline-image") this.inlineImagesByUrl.set(command.url, command.ref as AttachmentRef);
+          if (command.kind === "cache-inline-image") this.inlineImagesByRef.set(command.url, command.ref as AttachmentRef);
           else if (command.kind === "remember-agent-attachments") this.rememberAgentAttachments(this.state.activeSession.activeSessionId, this.state.activeSession.transcript);
           else if (command.kind === "turn-settled") {
             this.drainDeferredHistory();

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { applyPlanUpdate, handoffSeedOf, looksLikeAuthFailure, planUpdateOf, stripAttachmentPlaceholders, toHtml, type PlanEntry, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
+import { createPortal } from "react-dom";
+import { applyPlanUpdate, handoffSeedOf, looksLikeAuthFailure, planUpdateOf, stripAttachmentPlaceholders, toHtml, type PlanEntry, type TranscriptEntry } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
 import { AppMessage } from "./AppMessage.js";
 import { ReviewCard } from "./ReviewCard.js";
@@ -11,7 +12,9 @@ import { DelegationCard } from "./DelegationCard.js";
 import { ToolGroup } from "./ToolGroup.js";
 import { PlanCard } from "./PlanCard.js";
 import { HandoffSeedLine } from "./HandoffSeedLine.js";
-import { ImageGallery } from "./ImageGallery.js";
+import { MessageAttachments } from "./AttachmentChip.js";
+import { base64ToBlobUrl } from "../attachmentUrl.js";
+import { MessageComponent, placementOf } from "./MessageComponent.js";
 import { focusEntries } from "../focusTranscript.js";
 import { clearMessageJump, pendingJumpIndex } from "../messageJump.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
@@ -21,158 +24,6 @@ import { getSpeechPreferences, markdownToSpeech, readAloudSupported, speechSynth
 import { controller } from "../store/useStore.js";
 import { captureChatScroll, restoredChatScrollTop, type ChatScrollMemory } from "../chatScroll.js";
 
-function fmtBytes(n: number): string {
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`;
-  return `${(n / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function base64ToBlobUrl(base64: string, mimeType: string): string | null {
-  try {
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    return URL.createObjectURL(new Blob([bytes], { type: mimeType || "application/octet-stream" }));
-  } catch {
-    return null; // malformed base64 — fall back to a non-clickable chip
-  }
-}
-
-/**
- * Resolve an attachment to a displayable blob URL. Two sources of bytes: inline
- * `data`/`text` (present on the client that just sent it), or — for an attachment
- * rehydrated from history — a content `hash` whose bytes are fetched from the
- * node's durable attachment store on demand. The hash path is what makes
- * attachments re-findable after a reload or on another device (see AttachmentStore
- * / controller.fetchAttachment). Returns null while a hash-only attachment is
- * still fetching, or if the bytes are unavailable. Shared by AttachmentChip and
- * the fullscreen ImageGallery.
- */
-export function useAttachmentUrl(attachment: PromptAttachment | null | undefined): string | null {
-  // Synchronous URL for inline content — bytes we already hold in memory.
-  const inlineUrl = useMemo(() => {
-    if (!attachment || attachment.omitted) return null;
-    if (attachment.data) return base64ToBlobUrl(attachment.data, attachment.mimeType);
-    if (attachment.text !== undefined) {
-      try {
-        return URL.createObjectURL(new Blob([attachment.text], { type: attachment.mimeType || "text/plain" }));
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }, [attachment]);
-
-  useEffect(() => {
-    return () => {
-      if (inlineUrl) URL.revokeObjectURL(inlineUrl);
-    };
-  }, [inlineUrl]);
-
-  // Lazily fetch bytes for a hash-only attachment (rehydrated from history) and
-  // turn them into a blob URL, revoking it on unmount / hash change.
-  const [fetchedUrl, setFetchedUrl] = useState<string | null>(null);
-  useEffect(() => {
-    setFetchedUrl(null);
-    if (inlineUrl || !attachment || attachment.omitted || !attachment.hash) return;
-    const mimeType = attachment.mimeType;
-    let cancelled = false;
-    let objectUrl: string | null = null;
-    void controller.fetchAttachment(attachment.hash, attachment.createdAt).then((res) => {
-      if (cancelled || !res) return;
-      objectUrl = base64ToBlobUrl(res.data, res.mimeType || mimeType);
-      if (objectUrl) setFetchedUrl(objectUrl);
-    });
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [inlineUrl, attachment]);
-
-  return inlineUrl ?? fetchedUrl;
-}
-
-/**
- * A single attachment the user sent with this message, shown as a clickable
- * thumbnail (image) or file chip so they can re-open what they attached. When an
- * `onOpenImage` handler is supplied, a plain left-click on an image launches the
- * in-app gallery instead of opening the raw blob in a new tab; modifier/middle
- * clicks still fall through to the `<a>` so "open in new tab" keeps working.
- */
-function AttachmentChip({ attachment, onOpenImage }: { attachment: PromptAttachment; onOpenImage?: () => void }) {
-  const url = useAttachmentUrl(attachment);
-
-  return (
-    <div className="msg-attachment">
-      {attachment.kind === "image" && url && <a
-        className="attach-preview"
-        href={url}
-        target="_blank"
-        rel="noopener"
-        title={attachment.name}
-        onClick={
-          onOpenImage
-            ? (e) => {
-                // Leave new-tab gestures (cmd/ctrl/shift/middle-click) untouched.
-                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-                e.preventDefault();
-                onOpenImage();
-              }
-            : undefined
-        }
-      >
-        <img src={url} alt={attachment.description || attachment.name} />
-      </a>}
-      <div className="attach-details">
-        <div className="attach-copy">
-          <div className="attach-name">{attachment.name}</div>
-          <div className="attach-description">{attachment.description || `${attachment.mimeType || (attachment.kind === "image" ? "Image" : "File")} · ${fmtBytes(attachment.size)}`}</div>
-        </div>
-        {url ? (
-          <a className="btn icon attach-download" href={url} download={attachment.name} aria-label={`Download ${attachment.name}`} title={`Download ${attachment.name}`}>
-            <DownloadIcon />
-          </a>
-        ) : (
-          <button className="btn icon attach-download" disabled aria-label={`Download ${attachment.name} unavailable`} title="Content unavailable or still loading">
-            <DownloadIcon />
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function DownloadIcon() {
-  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 15v5h16v-5" /></svg>;
-}
-
-/**
- * The row of attachment chips under a message, plus the fullscreen gallery its
- * image chips open. Owns the open/closed gallery state locally so paging stays
- * scoped to this message's images (the reader's chosen scope). Omitted images are
- * left out of the gallery set — they have no bytes to show.
- */
-function MessageAttachments({ attachments }: { attachments: PromptAttachment[] }) {
-  const images = useMemo(() => attachments.filter((a) => a.kind === "image" && !a.omitted), [attachments]);
-  const [galleryIndex, setGalleryIndex] = useState<number | null>(null);
-  return (
-    <div className="msg-attachments">
-      {attachments.map((a, i) => {
-        const imageIndex = images.indexOf(a);
-        return (
-          <AttachmentChip
-            key={`${a.name}-${i}`}
-            attachment={a}
-            onOpenImage={imageIndex >= 0 ? () => setGalleryIndex(imageIndex) : undefined}
-          />
-        );
-      })}
-      {galleryIndex !== null && (
-        <ImageGallery images={images} index={galleryIndex} onClose={() => setGalleryIndex(null)} />
-      )}
-    </div>
-  );
-}
 
 // Friendly label for an inline notice action button. Falls back to the raw
 // command so a newer node advertising an action this client doesn't know still
@@ -378,9 +229,13 @@ const EntryView = memo(function EntryView({
   entry,
   onAction,
   authAction,
+  sessionId,
 }: {
   entry: TranscriptEntry;
   onAction?: (action: string) => void;
+  /** The session this transcript belongs to, for a component that has to ask
+   *  the machine about something (an inline app preview). */
+  sessionId?: string | null;
   /** What to offer when an error turns out to be a credential problem the entry
    *  itself couldn't name — see ChatView's prop of the same name. */
   authAction?: string;
@@ -401,8 +256,9 @@ const EntryView = memo(function EntryView({
     [entry.role, entry.streaming, entry.html, entry.text],
   );
   // Syntax-highlight fenced code blocks once the assistant HTML is in the DOM,
-  // and hydrate any remote markdown images this entry now has a resolved ref
-  // for (see TranscriptEntry.imageRefs / packages/core/src/markdown.ts). Re-runs
+  // and hydrate any markdown image this entry now has a resolved ref for —
+  // remote or workspace-relative, both keyed by the reference the markdown wrote
+  // (see TranscriptEntry.imageRefs / packages/core/src/markdown.ts). Re-runs
   // as streaming replaces the markup, AND when imageRefs grows live (a node
   // "inlineImage" event patches a new ref onto this entry with no text/html
   // change — see store.ts) so a just-resolved image hydrates without a reload.
@@ -418,9 +274,9 @@ const EntryView = memo(function EntryView({
     if (!container || !entry.imageRefs) return;
     let cancelled = false;
     const created: string[] = [];
-    const imgs = container.querySelectorAll<HTMLImageElement>("img.md-image[data-remote-src]");
+    const imgs = container.querySelectorAll<HTMLImageElement>("img.md-image[data-md-ref]");
     imgs.forEach((img) => {
-      const url = img.dataset.remoteSrc;
+      const url = img.dataset.mdRef;
       if (!url || img.dataset.hydrated === "1") return;
       const ref = entry.imageRefs?.[url];
       if (!ref) return; // not resolved yet — stays a placeholder until it is
@@ -439,6 +295,33 @@ const EntryView = memo(function EntryView({
       created.forEach((u) => URL.revokeObjectURL(u));
     };
   }, [entry.role, html, entry.imageRefs]);
+  // Components the agent placed in this message (`::view{…}`, a ```bivy fence)
+  // render as REAL React, portalled into the empty mount points the markdown
+  // left behind — so a file renders as the same AttachmentChip the composer
+  // produces instead of a second copy of that markup built as an HTML string.
+  //
+  // The mount points live inside dangerouslySetInnerHTML content, so they are
+  // replaced wholesale whenever `html` changes. Collecting them in an effect
+  // keyed on `html` is what keeps the portals pointed at live nodes: on a change
+  // React swaps the markup, this re-runs, and the portals re-target. Nodes are
+  // kept in state (not a ref) because rendering a portal is a render-time
+  // decision.
+  const [mounts, setMounts] = useState<HTMLElement[]>([]);
+  useEffect(() => {
+    if (entry.role !== "assistant" || !bodyRef.current) {
+      setMounts((current) => (current.length ? [] : current));
+      return;
+    }
+    const found = Array.from(bodyRef.current.querySelectorAll<HTMLElement>("div.md-component"));
+    // Same-length-and-identity means the markup did not actually change; skip
+    // the state write so this effect cannot drive a render loop.
+    setMounts((current) => (current.length === found.length && current.every((n, i) => n === found[i]) ? current : found));
+  }, [entry.role, html]);
+  const components = mounts.map((node, i) => createPortal(
+    <MessageComponent placement={placementOf(node)} refs={entry.imageRefs} sessionId={sessionId ?? null} />,
+    node,
+    `md-component-${i}`,
+  ));
   if (entry.role === "system")
     return (
       <div className="msg system">
@@ -516,6 +399,7 @@ const EntryView = memo(function EntryView({
       {((entry.text && !captionOnly) || (!hasAttachments && !entry.app && !entry.review && !entry.pin && !entry.notice && !entry.delegation)) && (
         <div ref={bodyRef} className="msg assistant" dangerouslySetInnerHTML={{ __html: html }} />
       )}
+      {components}
       {entry.text && !captionOnly && (
         <div className="msg-actions">
           <CopyButton text={entry.text} />
@@ -842,7 +726,7 @@ export function ChatView({
     ? <ToolGroup key={it.key} tools={it.tools} />
     : it.kind === "plan"
       ? plans.get(it.callId)?.length ? <PlanCard key={it.key} plan={plans.get(it.callId)!} /> : null
-      : <EntryView key={it.key} entry={it.entry} onAction={onAction} authAction={authAction} />;
+      : <EntryView key={it.key} entry={it.entry} onAction={onAction} authAction={authAction} sessionId={sessionKey} />;
 
   return (
     <div className="chat-wrap">
@@ -879,7 +763,7 @@ export function ChatView({
             <div className="transcript-standalone" key={block.key}>{renderItem(block.item)}</div>
           ) : (
             <div className="transcript-turn" key={block.key}>
-              {block.user?.kind === "entry" && <EntryView entry={block.user.entry} onAction={onAction} />}
+              {block.user?.kind === "entry" && <EntryView entry={block.user.entry} onAction={onAction} sessionId={sessionKey} />}
               {block.response.length > 0 && <div className="turn-response-body">{block.response.map(renderItem)}</div>}
             </div>
           ))}

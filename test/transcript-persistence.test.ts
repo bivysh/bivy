@@ -8,11 +8,15 @@
 // lets us drive them with a fake and assert exactly what gets appended.
 import { strict as assert } from "node:assert";
 import test from "node:test";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import { createTranscriptPersistence, type TranscriptPersistenceDeps } from "../src/session/transcript-persistence.js";
 
 function fakeEventLog(over: any = {}) {
   const appended: Array<{ id: string; entry: any }> = [];
+  const inlineImages: any[] = [];
   const base: any[] = [];
   return {
     appended,
@@ -21,7 +25,8 @@ function fakeEventLog(over: any = {}) {
     readBase: over.readBase ?? (() => []),
     appendBaseSnapshot: over.appendBaseSnapshot ?? ((_id: string, b: any) => base.push(b)),
     readInlineImages: over.readInlineImages ?? (() => []),
-    appendInlineImage: () => {},
+    inlineImages,
+    appendInlineImage: (id: string, entry: any) => inlineImages.push({ id, ...entry }),
     flush: () => {},
     deriveHistory: over.deriveHistory ?? ((_id: string, msgs: any) => msgs),
     readAttachments: () => [],
@@ -183,4 +188,178 @@ test("buildReplayEvent returns events on replay and empty on reset", () => {
   const x = reset.tp.buildReplayEvent("s1", 3);
   assert.equal(x.mode, "reset");
   assert.deepEqual(x.events, [], "reset carries no events");
+});
+
+// ---------------------------------------------------------------- workspace references
+// `![alt](out/chart.png)` — an agent illustrating a reply with a file it just
+// produced, with no tool call. planAttachment's confinement (including the
+// symlink-escape case) is covered at its own level in attach-to-chat.test.ts;
+// what has no coverage otherwise is this wiring: that the resolver reaches the
+// disk through it, captures the bytes into the transcript at emit time, and
+// records them under the reference exactly as the markdown wrote it.
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 7)]);
+
+function workspace(files: Record<string, Buffer | string>): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-wsimg-"));
+  for (const [rel, body] of Object.entries(files)) {
+    const full = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(full), { recursive: true });
+    fs.writeFileSync(full, body);
+  }
+  return dir;
+}
+
+test("resolveWorkspaceRefs stores a workspace image and records it under the path as written", () => {
+  const dir = workspace({ "out/chart.png": PNG });
+  const stored: Buffer[] = [];
+  const h = harness();
+  (h.deps.attachmentStore as any).put = (bytes: Buffer, meta: any) => {
+    stored.push(bytes);
+    return { hash: "h1", name: meta.name, mimeType: meta.mimeType, size: bytes.length, kind: meta.kind };
+  };
+  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: "Here it is:\n\n![A chart](./out/chart.png)" }]), dir);
+
+  assert.equal(stored.length, 1, "the bytes are captured at emit time, not left in the workspace");
+  assert.ok(stored[0].equals(PNG));
+  assert.equal((h.eventLog as any).inlineImages.length, 1);
+  assert.equal((h.eventLog as any).inlineImages[0].url, "./out/chart.png", "keyed by the reference the markdown wrote");
+  assert.equal((h.eventLog as any).inlineImages[0].ref.mimeType, "image/png", "classified from the bytes, not the extension");
+  assert.equal(h.broadcasts.length, 1, "clients are told live, not only on reload");
+  assert.equal((h.broadcasts[0] as any).event.type, "inlineImage");
+});
+
+test("resolveWorkspaceRefs refuses a file that is not an image", () => {
+  const dir = workspace({ "notes.md": "# not an image" });
+  const h = harness();
+  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: "![notes](notes.md)" }]), dir);
+  assert.equal((h.eventLog as any).inlineImages.length, 0, "a mistyped link must not become an unopenable chip");
+  assert.equal(h.broadcasts.length, 0);
+});
+
+test("resolveWorkspaceRefs ignores a message with no workspace reference", () => {
+  const dir = workspace({ "out/chart.png": PNG });
+  const h = harness();
+  // A remote URL is the other resolver's job, and an absolute path is refused by
+  // the grammar before anything touches the filesystem.
+  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: "![a](https://x.test/a.png) ![b](/etc/passwd)" }]), dir);
+  assert.equal((h.eventLog as any).inlineImages.length, 0);
+});
+
+test("resolveWorkspaceRefs keeps a non-image a ::view directive asked for, and names its kind", () => {
+  // `![…](notes.md)` is a mistyped link and stays refused (above). A directive
+  // asked for the file on purpose, so the bytes are kept and the stored kind is
+  // what lets the view layer pick the file chip rather than an image.
+  const dir = workspace({ "notes.md": "# a report" });
+  const stored: any[] = [];
+  const h = harness();
+  (h.deps.attachmentStore as any).put = (bytes: Buffer, meta: any) => {
+    stored.push(meta);
+    return { hash: "h2", name: meta.name, mimeType: meta.mimeType, size: bytes.length, kind: meta.kind };
+  };
+  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: "Here:\n\n::view{src=notes.md}" }]), dir);
+
+  assert.equal(stored.length, 1);
+  assert.equal(stored[0].kind, "file", "a directive's non-image bytes are stored as a file");
+  assert.equal((h.eventLog as any).inlineImages[0].url, "notes.md");
+});
+
+test("resolveWorkspaceRefs reads one file for a path written both as an image and a directive", () => {
+  const dir = workspace({ "out/chart.png": PNG });
+  let reads = 0;
+  const h = harness();
+  (h.deps.attachmentStore as any).put = (bytes: Buffer, meta: any) => {
+    reads++;
+    return { hash: "h3", name: meta.name, mimeType: meta.mimeType, size: bytes.length, kind: meta.kind };
+  };
+  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: "![c](out/chart.png)\n::view{src=out/chart.png}" }]), dir);
+  assert.equal(reads, 1, "one reference, one read, one stored copy");
+});
+
+test("resolveWorkspaceRefs resolves a dataset a chart spec points at", () => {
+  // `data.url` inside a ```bivy fence is a reference like any other: the node
+  // reads it under the same confinement, so the chart never fetches anything.
+  const dir = workspace({ "data/use.csv": "city,kwh\nOslo,4650\n" });
+  const stored: any[] = [];
+  const h = harness();
+  (h.deps.attachmentStore as any).put = (bytes: Buffer, meta: any) => {
+    stored.push({ ...meta, text: bytes.toString() });
+    return { hash: "h4", name: meta.name, mimeType: meta.mimeType, size: bytes.length, kind: meta.kind };
+  };
+  const text = ["Here:", "", "```bivy", '{"mark":"bar","data":{"url":"data/use.csv"}}', "```"].join("\n");
+  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: text }]), dir);
+
+  assert.equal((h.eventLog as any).inlineImages.length, 1);
+  assert.equal((h.eventLog as any).inlineImages[0].url, "data/use.csv");
+  assert.equal(stored[0].kind, "file", "a dataset is not an image");
+  assert.match(stored[0].text, /Oslo,4650/, "the rows are captured into the transcript at emit time");
+});
+
+test("resolveWorkspaceRefs ignores a remote url in a spec", () => {
+  const dir = workspace({ "data/use.csv": "city,kwh\nOslo,4650\n" });
+  const h = harness();
+  const text = ["```bivy", '{"mark":"bar","data":{"url":"https://x.test/d.csv"}}', "```"].join("\n");
+  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: text }]), dir);
+  assert.equal((h.eventLog as any).inlineImages.length, 0, "a remote dataset is refused, not fetched");
+});
+
+test("resolveWorkspaceRefs re-reads a reference the newest message makes, so an overwritten file updates", () => {
+  // The case this exists for: an agent regenerates a chart and shows it again.
+  // Without the re-read the reply says "here is the updated chart" above the
+  // old picture.
+  const dir = workspace({ "out/chart.png": PNG });
+  const logged: Array<[string, any]> = [];
+  const stored: Buffer[] = [];
+  const h = harness({ eventLog: { readInlineImages: () => logged } });
+  (h.deps.attachmentStore as any).put = (bytes: Buffer, meta: any) => {
+    stored.push(Buffer.from(bytes));
+    return { hash: `h-${bytes.length}`, name: meta.name, mimeType: meta.mimeType, size: bytes.length, kind: meta.kind };
+  };
+  const msg = { role: "assistant", content: "![c](out/chart.png)" };
+
+  h.tp.resolveWorkspaceRefs(sess([msg]), dir);
+  assert.equal((h.eventLog as any).inlineImages.length, 1, "first resolve");
+  logged.push(["out/chart.png", (h.eventLog as any).inlineImages[0].ref]);
+
+  // The agent overwrites the file and references it again in a new message.
+  fs.writeFileSync(path.join(dir, "out/chart.png"), Buffer.concat([PNG, Buffer.alloc(16, 9)]));
+  h.tp.resolveWorkspaceRefs(sess([msg, { role: "assistant", content: "Updated:\n\n![c](out/chart.png)" }]), dir);
+
+  assert.equal((h.eventLog as any).inlineImages.length, 2, "the newest message's reference is re-read");
+  assert.notEqual(
+    (h.eventLog as any).inlineImages[1].ref.hash,
+    (h.eventLog as any).inlineImages[0].ref.hash,
+    "the new bytes win",
+  );
+});
+
+test("resolveWorkspaceRefs does not re-record an unchanged file", () => {
+  const dir = workspace({ "out/chart.png": PNG });
+  const logged: Array<[string, any]> = [];
+  const h = harness({ eventLog: { readInlineImages: () => logged } });
+  (h.deps.attachmentStore as any).put = (bytes: Buffer, meta: any) =>
+    ({ hash: `h-${bytes.length}`, name: meta.name, mimeType: meta.mimeType, size: bytes.length, kind: meta.kind });
+  const msg = { role: "assistant", content: "![c](out/chart.png)" };
+
+  h.tp.resolveWorkspaceRefs(sess([msg]), dir);
+  logged.push(["out/chart.png", (h.eventLog as any).inlineImages[0].ref]);
+  // Same message, same bytes: re-read, but nothing new to say about it.
+  h.tp.resolveWorkspaceRefs(sess([msg]), dir);
+  assert.equal((h.eventLog as any).inlineImages.length, 1, "an unchanged file must not grow the log or wake devices");
+  assert.equal(h.broadcasts.length, 1);
+});
+
+test("resolveWorkspaceRefs leaves an older message's reference alone", () => {
+  const dir = workspace({ "out/old.png": PNG, "out/new.png": PNG });
+  const logged: Array<[string, any]> = [["out/old.png", { hash: "existing" }]];
+  const read: string[] = [];
+  const h = harness({ eventLog: { readInlineImages: () => logged } });
+  (h.deps.attachmentStore as any).put = (bytes: Buffer, meta: any) => {
+    read.push(meta.name);
+    return { hash: "h", name: meta.name, mimeType: meta.mimeType, size: bytes.length, kind: meta.kind };
+  };
+  h.tp.resolveWorkspaceRefs(
+    sess([{ role: "assistant", content: "![a](out/old.png)" }, { role: "assistant", content: "![b](out/new.png)" }]),
+    dir,
+  );
+  assert.deepEqual(read, ["new.png"], "only the newest message's references are re-read");
 });

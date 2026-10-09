@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { EphemeralNodeConfig, ModelInfo } from "@bivy/core";
 import { controller, useAppState } from "../store/useStore.js";
 import { Sheet, type DismissSheet } from "./Sheet.js";
+import { nodePresence, PRESENCE } from "../cloudDestinations.js";
 
 /** Stable select value for a model; provider + id together identify it. */
 function modelKey(model: ModelInfo & { provider?: unknown }): string {
@@ -143,7 +144,7 @@ export function ForkSheet({ sessionId, intent = "fork", onClose }: {
           >
             {nodeList.map((n) => (
               <option key={n.id} value={n.id}>
-                {n.name || n.id} ({n.id === currentNodeId ? "current" : n.online ? "online" : "offline"})
+                {n.name || n.id} ({n.id === currentNodeId ? "current" : PRESENCE[nodePresence(n)].label.toLowerCase()})
               </option>
             ))}
             {managedConfig && <option value="__managed__">{managedConfig.name || "Bivy Cloud"} (managed · starts on demand)</option>}

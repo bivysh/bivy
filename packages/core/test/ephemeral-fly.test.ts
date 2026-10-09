@@ -71,7 +71,7 @@ describe("fly adapter — provision", () => {
 
     // The app is created in the org resolved from the token, not a hardcoded one.
     const appCreate = calls.find((c) => c.url === "https://api.machines.dev/v1/apps" && c.method === "POST")!;
-    expect((appCreate.body as { org_slug?: string }).org_slug).toBe("my-github-org");
+    expect(appCreate.body).toMatchObject({ org_slug: "my-github-org", network: "bivy-abc123" });
 
     const create = calls.find((c) => /\/machines$/.test(c.url))!;
     const cfg = machineConfig(create);

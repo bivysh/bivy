@@ -639,6 +639,29 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .msg.assistant .mermaid-diagram:first-child { margin-top: 0; }
 .msg.assistant .mermaid-diagram:last-child { margin-bottom: 0; }
 .msg.assistant .mermaid-diagram svg { display: inline-block; max-width: none; height: auto; vertical-align: top; }
+/* Mount point for a component the agent placed in its message (::view{…}, a
+   ```bivy fence). Layout only: what renders inside is an existing component
+   (.msg-attachment, .card), so this must not restyle its shell — it only gives
+   it the same vertical rhythm as a paragraph. Empty until the portal mounts,
+   and empty forever if a reference never resolves, so it carries no border or
+   background of its own that would leave a visible hole. */
+.msg.assistant .md-component { margin: 0.75em 0; }
+.msg.assistant .md-component:first-child { margin-top: 0; }
+.msg.assistant .md-component:last-child { margin-bottom: 0; }
+.msg.assistant .md-component:empty { margin: 0; }
+/* A placed component is a block in the reading column, not a tile in a row: it
+   fills the message width so every kind lines up with every other one and with
+   the prose around it. The fixed chip width belongs to the composer's wrapping
+   attachment list, where several chips share a line. */
+.msg.assistant .md-component > * { width: 100%; }
+/* A single number the agent wants read at a glance. Inherits .card's shell;
+   only the value's type scale is its own. */
+.metric-component { text-align: center; }
+.metric-value { font-size: var(--text-3xl); line-height: var(--lh-3xl); font-weight: var(--weight-semibold); }
+/* A table from a CSV or a spec reuses .markdown-table-wrap, so it reads exactly
+   like a table the agent wrote as markdown. The caption is the only addition. */
+.table-component { margin: 0; }
+.table-component figcaption { margin-top: var(--space-2); }
 /* Syntax highlighting for fenced code blocks (highlight.js token classes).
    Colors use light-dark() so one rule set tracks the app's light/dark scheme
    (color-scheme is set on :root). A GitHub-flavored palette that sits well on
@@ -3626,3 +3649,22 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
   font-family: var(--font-serif);
   font-weight: var(--weight-medium);
 }
+/* A Vega-Lite chart an agent placed in a message. Vega owns the SVG inside
+   .chart-host, so nothing here styles its internals — colors come from the
+   tokens read in vega.ts, which is how the chart tracks light/dark. */
+.chart-component { margin: 0; }
+.chart-component .chart-host {
+  width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; padding: 10px;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface);
+}
+.chart-component figcaption { margin-top: var(--space-2); }
+/* An app preview framed inside a message. Same bordered surface as a chart or
+   a mermaid diagram — all three are a figure in the prose, and should not read
+   as three different things. */
+.inline-app { margin: 0; }
+.inline-app-frame {
+  display: block; width: 100%; height: 420px; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--surface);
+}
+.inline-app figcaption { display: flex; gap: var(--space-2); align-items: baseline; justify-content: space-between; margin-top: var(--space-2); }
+.inline-app-open { flex: none; }

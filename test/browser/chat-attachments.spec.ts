@@ -103,6 +103,8 @@ test('gallery keeps panning separate from navigation and resets each image', asy
   await expect(page.getByRole('button', { name: 'Fit image' })).toHaveText('100%');
   await page.keyboard.press('ArrowLeft');
   await expect(page.getByRole('img', { name: 'first.svg' })).toBeVisible();
+  // The zoom tools enable on load; the focus trap skips them until then.
+  await expect(page.getByRole('button', { name: 'Fit image' })).toBeEnabled();
   await page.keyboard.press('Shift+Tab');
   await expect(page.getByRole('button', { name: 'Close', exact: true })).toBeFocused();
   await page.keyboard.press('Tab');

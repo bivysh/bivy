@@ -381,7 +381,7 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
           toolImages.add(key);
           return true;
         });
-        if (attachments.length) entries.push({ id: historyId(), role: "assistant", text: "", attachments });
+        if (attachments.length) entries.push({ id: historyId(), role: "assistant", text: "", attachments, toolOutput: true });
       }
     }
   }

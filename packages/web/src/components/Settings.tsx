@@ -26,6 +26,7 @@ import { CredentialVault } from "./CredentialVault.js";
 import { AgentInstructionsPanel } from "./AgentInstructionsPanel.js";
 import { Toggle } from "./Toggle.js";
 import { useMediaQuery } from "../useMediaQuery.js";
+import { nodePresence, PRESENCE } from "../cloudDestinations.js";
 
 const VoiceSettings = lazy(() => import("./VoiceSettings.js").then((module) => ({ default: module.VoiceSettings })));
 
@@ -1650,7 +1651,7 @@ function AccountPanel() {
               key={n.id}
               active={n.id === controller.local.cur}
               title={n.name || n.id}
-              meta={n.online ? "Online" : "Offline"}
+              meta={PRESENCE[nodePresence(n)].label}
               right={
                 <button
                   type="button"

@@ -20,7 +20,9 @@ import type { EventLog } from "./event-log.js";
 import { mergeBases } from "./event-log.js";
 import type { AttachmentStore } from "./attachment-store.js";
 import { thinkingTextFromContent } from "./transcript-merge.js";
-import { extractInlineImageUrls, fetchInlineImage, isFetchImageError, inlineImageDisplayName, assistantTextForImageScan } from "./inline-image-fetch.js";
+import { extractInlineImageUrls, extractWorkspaceRefs, fetchInlineImage, isFetchImageError, inlineImageDisplayName, assistantTextForImageScan } from "./inline-image-fetch.js";
+import { planAttachment, isAttachPlanError } from "./attach-to-chat.js";
+import type { ReferenceSyntax } from "./message-components.js";
 import { historyDelta, type HistoryCursor } from "../history-sync.js";
 import { withToolDetails } from "../runtime/tool-call-map.js";
 import type { RuntimeMessage, RuntimeEvent } from "../runtime/index.js";
@@ -80,6 +82,9 @@ export interface TranscriptPersistence {
   persistToolActivityFromEvent(record: PersistSession, runtimeEvent: RuntimeEvent): void;
   persistIntermediateFromEvent(record: PersistSession, event: Record<string, unknown>, final?: boolean): void;
   resolveInlineImages(record: PersistSession): void;
+  /** `workspaceDir` is the confinement root — the caller's resolved working
+   *  directory for this session (worktree path, cwd, or workspace). */
+  resolveWorkspaceRefs(record: PersistSession, workspaceDir: string): void;
   conversationMessages(record: PersistSession): RuntimeMessage[];
   forkMessages(record: PersistSession): RuntimeMessage[];
   buildHistoryEvent(opts: BuildHistoryEventOptions): Record<string, unknown>;
@@ -140,6 +145,13 @@ function thinkingTextFromEvent(event: Record<string, unknown>): string {
 
 const INLINE_IMAGE_RETRY_COOLDOWN_MS = 10 * 60 * 1000;
 
+/** Ceiling for one workspace file copied into the transcript. Matches the
+ *  remote cap (MAX_INLINE_IMAGE_BYTES) rather than the larger explicit-attach
+ *  one: a `![…](path)` is incidental illustration the agent spent no tool call
+ *  on, and every byte is persisted in the event log and replicated to phones. An
+ *  agent that means to send something big still has `bivy attach`. */
+const MAX_WORKSPACE_REF_BYTES = 8 * 1024 * 1024;
+
 export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): TranscriptPersistence {
   const { eventLog, attachmentStore } = deps;
   const project = createClientProjection(attachmentStore, eventLog);
@@ -162,13 +174,135 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
     eventLog.appendBaseSnapshot(record.id, logged.length ? mergeBases(logged, base) : base);
   }
 
-  function resolveInlineImages(record: PersistSession): void {
-    const messages = record.session.getMessages();
-    const urls = new Set<string>();
-    for (const m of messages) {
+  /** Every distinct reference the session's assistant messages make, via the
+   *  extractor for one origin. */
+  function imageRefsInTranscript(record: PersistSession, extract: (text: string) => string[]): Set<string> {
+    const refs = new Set<string>();
+    for (const m of record.session.getMessages()) {
       if (m.role !== "assistant") continue;
-      for (const url of extractInlineImageUrls(assistantTextForImageScan(m.content))) urls.add(url);
+      for (const ref of extract(assistantTextForImageScan(m.content))) refs.add(ref);
     }
+    return refs;
+  }
+
+  /** The same, for workspace references, keeping which syntax asked for each.
+   *  First mention wins: a path written as an image and as a directive is one
+   *  file read, and the stricter image rule applies to it. */
+  function workspaceRefsInTranscript(record: PersistSession): Map<string, ReferenceSyntax> {
+    const refs = new Map<string, ReferenceSyntax>();
+    for (const m of record.session.getMessages()) {
+      if (m.role !== "assistant") continue;
+      for (const { ref, syntax } of extractWorkspaceRefs(assistantTextForImageScan(m.content))) {
+        if (!refs.has(ref)) refs.set(ref, syntax);
+      }
+    }
+    return refs;
+  }
+
+  /** References made by the NEWEST assistant message. These are re-read even
+   *  when the log already has them, which is what lets an agent overwrite a
+   *  file and reference it again; see resolveWorkspaceRefs. */
+  function refsInLatestMessage(record: PersistSession): Set<string> {
+    const messages = record.session.getMessages();
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i]!;
+      if (m.role !== "assistant") continue;
+      return new Set(extractWorkspaceRefs(assistantTextForImageScan(m.content)).map(({ ref }) => ref));
+    }
+    return new Set();
+  }
+
+  /** Store resolved bytes under `ref` and tell every client, durably and live.
+   *  One place, so the remote and workspace resolvers below cannot drift in how
+   *  they record what they found. `kind` carries whether the bytes are an image,
+   *  which is what lets the view layer pick a renderer for a `::view` that
+   *  points at something other than a picture. */
+  function recordResolvedRef(
+    sessionId: string,
+    ref: string,
+    bytes: Buffer,
+    meta: { name: string; mimeType: string; kind?: "image" | "file" },
+    previousHash?: string,
+  ): void {
+    const stored = attachmentStore.put(bytes, { name: meta.name, mimeType: meta.mimeType, kind: meta.kind ?? "image" });
+    // Content-addressed, so re-reading an unchanged file yields the hash
+    // already recorded. Appending that again would grow the log and wake every
+    // device for a picture none of them would redraw.
+    if (previousHash && stored.hash === previousHash) return;
+    eventLog.appendInlineImage(sessionId, { url: ref, ref: stored });
+    eventLog.flush(sessionId);
+    deps.broadcast(deps.stampSessionEvent({ type: "session.event", sessionId, event: { type: "inlineImage", url: ref, ref: stored } }));
+  }
+
+  /**
+   * Resolve markdown images an agent wrote as a path inside the session
+   * workspace (`![Coverage](out/coverage.png)`) — the common case, since the
+   * file the agent just produced is right there and writing the markdown costs
+   * it nothing. Bytes are copied into the content-addressed AttachmentStore now,
+   * at emit time, because the transcript outlives the workspace: an ephemeral
+   * machine is destroyed, and history still has to render on a phone weeks later.
+   *
+   * Confinement is planAttachment's, exactly as for `bivy attach` — the resolved
+   * real path must sit inside the session's working directory. That matters more
+   * here than there: this path comes from message *prose*, so a prompt injection
+   * can propose one. The grammar refuses absolute paths and traversal before we
+   * get here; planAttachment is what actually proves containment, symlinks
+   * included.
+   *
+   * Synchronous (a local read, unlike a remote fetch) and resolved once per
+   * reference per session, so re-rendering history never re-reads the disk. One
+   * consequence: if the agent overwrites a file it already referenced and
+   * references the same path again, the chat keeps showing the first version.
+   * Distinct paths are the workaround until componentRefs carry a per-message
+   * anchor the way outbound attachments already do.
+   */
+  function resolveWorkspaceRefs(record: PersistSession, workspaceDir: string): void {
+    if (!workspaceDir) return;
+    const refs = workspaceRefsInTranscript(record);
+    if (!refs.size) return;
+    const resolved = new Map(eventLog.readInlineImages(record.id));
+    // References the agent just made are re-read even when the log already has
+    // them. An agent that regenerates out/chart.png and shows it again means
+    // the new one; without this it would say "here is the updated chart" above
+    // the old picture. Bounded to the newest message, so this costs at most the
+    // per-message reference budget in reads per turn rather than re-reading
+    // every file the whole session ever mentioned.
+    const fresh = refsInLatestMessage(record);
+    for (const [rel, syntax] of refs) {
+      const previous = resolved.get(rel);
+      const isFresh = fresh.has(rel);
+      if (previous && !isFresh) continue;
+      const failedAt = inlineImageFailedAt.get(rel);
+      // A fresh reference ignores the cooldown: the likeliest reason it failed
+      // before is that the agent had not written the file yet, and waiting ten
+      // minutes to show a file that now exists is worse than one extra read.
+      if (!isFresh && failedAt !== undefined && Date.now() - failedAt < INLINE_IMAGE_RETRY_COOLDOWN_MS) continue;
+      const plan = planAttachment({ workspaceDir, filePath: rel, maxBytes: MAX_WORKSPACE_REF_BYTES });
+      if (isAttachPlanError(plan)) {
+        console.warn(`[component] ${rel}: ${plan.error}`);
+        inlineImageFailedAt.set(rel, Date.now());
+        continue;
+      }
+      // `![…](notes.md)` is a link the agent mistyped, not an image, so refusing
+      // non-image bytes keeps a stray one from becoming an unopenable chip. A
+      // `::view{src=notes.md}` asked for the file on purpose, so it is kept and
+      // the view layer picks a renderer from the mime type.
+      if (syntax === "image" && plan.kind !== "image") {
+        console.warn(`[component] ${rel}: not an image (${plan.mimeType})`);
+        inlineImageFailedAt.set(rel, Date.now());
+        continue;
+      }
+      try {
+        recordResolvedRef(record.id, rel, plan.bytes, { name: plan.name, mimeType: plan.mimeType, kind: plan.kind }, previous?.hash);
+      } catch (error) {
+        console.warn(`[component] ${rel}:`, error instanceof Error ? error.message : String(error));
+        inlineImageFailedAt.set(rel, Date.now());
+      }
+    }
+  }
+
+  function resolveInlineImages(record: PersistSession): void {
+    const urls = imageRefsInTranscript(record, extractInlineImageUrls);
     if (!urls.size) return;
     const alreadyResolved = new Set(eventLog.readInlineImages(record.id).map(([url]) => url));
     for (const url of urls) {
@@ -183,10 +317,7 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
             inlineImageFailedAt.set(url, Date.now());
             return;
           }
-          const ref = attachmentStore.put(result.bytes, { name: inlineImageDisplayName(url, result.mimeType), mimeType: result.mimeType, kind: "image" });
-          eventLog.appendInlineImage(record.id, { url, ref });
-          eventLog.flush(record.id);
-          deps.broadcast(deps.stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "inlineImage", url, ref } }));
+          recordResolvedRef(record.id, url, result.bytes, { name: inlineImageDisplayName(url, result.mimeType), mimeType: result.mimeType });
         } catch (error) {
           console.warn(`[inline-image] ${url}:`, error instanceof Error ? error.message : String(error));
           inlineImageFailedAt.set(url, Date.now());
@@ -342,6 +473,7 @@ export function createTranscriptPersistence(deps: TranscriptPersistenceDeps): Tr
     persistToolActivityFromEvent,
     persistIntermediateFromEvent,
     resolveInlineImages,
+    resolveWorkspaceRefs,
     conversationMessages,
     forkMessages,
     buildHistoryEvent,

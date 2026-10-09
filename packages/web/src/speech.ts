@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+import { parseComponentDirective } from "@bivy/core";
+
 // Read-aloud helpers. Browser synthesis remains the free/on-device option;
 // OpenAI speech is requested through the node by the chat component.
 
@@ -63,6 +65,19 @@ export function readAloudSupported(): boolean {
 /** Strip markdown down to speakable prose rather than reading its punctuation. */
 export function markdownToSpeech(md: string): string {
   return md
+    // A component directive is markup, not prose: read its caption if it has
+    // one, the way an image's alt text is read below, and otherwise say
+    // nothing. Without this, read-aloud speaks the whole directive — braces,
+    // path and all. (A ```bivy spec needs no rule: the fence strip below
+    // already removes it.)
+    .split("\n")
+    .map((line) => {
+      const directive = parseComponentDirective(line);
+      if (!directive) return line;
+      const caption = directive.attrs.caption;
+      return typeof caption === "string" ? caption : "";
+    })
+    .join("\n")
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/`([^`]+)`/g, "$1")
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")

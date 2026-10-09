@@ -1,0 +1,174 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+//
+// Components an agent placed inside its message, rendered by the real ChatView
+// with the real stylesheet. What this is here to prove cannot be seen from the
+// markdown renderer's output alone: the mount points the renderer leaves behind
+// actually receive React, the chip is the SAME one the composer produces, and
+// the two ways a component can fail to render both say so instead of leaving a
+// hole in the message.
+import { expect, test, themes, type WebApp } from "./fixtures.js";
+import { fileURLToPath } from "node:url";
+
+let server: WebApp;
+let origin: string;
+test.beforeAll(async ({ webApp }) => {
+  server = webApp;
+  origin = webApp.origin;
+});
+
+// 390 is the phone case the chip width has to survive; 1024 is where a chip
+// inside prose must not stretch to the full message column.
+for (const theme of themes) for (const width of [390, 1024]) {
+  test(`${theme} ${width}: placed components render, and say so when they cannot`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    const text = [
+      "Here is what I found.",
+      "",
+      "::view{src=out/report.pdf caption=\"The quarterly summary\"}",
+      "",
+      "::view{src=data/use.csv caption=\"Delivered heat, by city\"}",
+      "",
+      "```bivy",
+      '{"type":"metric","value":"4 650 kWh","label":"Oslo, per year"}',
+      "```",
+      "",
+      "```bivy",
+      '{"mark":"bar","description":"Delivered heat per city",',
+      ' "data":{"values":[{"city":"Oslo","kwh":4650},{"city":"Tromsø","kwh":6730}]},',
+      ' "encoding":{"x":{"field":"city","type":"nominal"},"y":{"field":"kwh","type":"quantitative"}}}',
+      "```",
+      "",
+      "```bivy",
+      '{"mark":"line","title":"From the dataset",',
+      ' "data":{"url":"data/use.csv"},',
+      ' "encoding":{"x":{"field":"City","type":"nominal"},"y":{"field":"kWh/yr","type":"quantitative"}}}',
+      "```",
+      "",
+      "A chart that tries to fetch a remote URL:",
+      "",
+      "```bivy",
+      '{"mark":"line","data":{"url":"https://x.test/data.json"}}',
+      "```",
+      "",
+      "A reference the node has not resolved yet:",
+      "",
+      "::view{src=out/pending.pdf}",
+      "",
+      "And a kind this build does not know:",
+      "",
+      "```bivy",
+      '{"type":"sankey","title":"Where the time went"}',
+      "```",
+      "",
+      "That is everything.",
+    ].join("\n");
+    const html = await server.transformIndexHtml('/component-test', `<!doctype html><html data-theme="${theme}"><head><meta name="viewport" content="width=device-width, initial-scale=1"></head><body><div id="root" style="height:100dvh;display:flex;flex-direction:column"></div><script type="module">
+      import { createElement as h } from 'react';
+      import { createRoot } from 'react-dom/client';
+      import '/@fs/${fileURLToPath(new URL('../../packages/ui/tokens.css', import.meta.url))}';
+      import '/src/styles.css';
+      import { ChatView } from '/src/components/ChatView.tsx';
+      import { controller } from '/src/store/useStore.ts';
+      // The resolved chip fetches its bytes by hash from the node. There is no
+      // node here, so stand in for that one call — everything else under test
+      // (kind resolution, the registry, the portal, the layout) is real.
+      const bytes = {
+        'resolved-hash': 'a report',
+        'csv-hash': 'City,kWh/yr,Notes\\nOslo,4650,\"Mild, coastal\"\\nTromsø,6730,Cold',
+      };
+      controller.fetchAttachment = async (hash) => hash in bytes
+        ? { data: btoa(unescape(encodeURIComponent(bytes[hash]))), mimeType: 'text/plain' }
+        : null;
+      createRoot(document.getElementById('root')).render(h(ChatView, {
+        entries: [{
+          id: 'reply', role: 'assistant', text: ${JSON.stringify(text)},
+          imageRefs: {
+            'out/report.pdf': { hash: 'resolved-hash', name: 'report.pdf', mimeType: 'application/pdf', size: 20, kind: 'file' },
+            'data/use.csv': { hash: 'csv-hash', name: 'use.csv', mimeType: 'text/csv', size: 60, kind: 'file' },
+          },
+        }],
+        working: false, draftRoute: false, sessionKey: 'test',
+      }));
+      </script></body></html>`);
+    await page.route(`${origin}/component-test`, route => route.fulfill({ contentType: 'text/html', body: html }));
+    await page.goto(`${origin}/component-test`);
+
+    // The prose around the components is untouched, and the components sit
+    // between the paragraphs rather than being hoisted above them.
+    await expect(page.getByText('Here is what I found.')).toBeVisible();
+    await expect(page.getByText('That is everything.')).toBeVisible();
+
+    // A resolved reference renders the ordinary attachment chip, caption and
+    // all, with a download that works.
+    const chip = page.locator('.md-component .msg-attachment').first();
+    await expect(chip).toBeVisible();
+    await expect(chip.getByText('report.pdf')).toBeVisible();
+    await expect(chip.getByText('The quarterly summary')).toBeVisible();
+    const download = page.getByRole('link', { name: 'Download report.pdf' });
+    const started = page.waitForEvent('download');
+    await download.click();
+    expect((await started).suggestedFilename()).toBe('report.pdf');
+
+    // A CSV renders as a table that reads like one the agent wrote as markdown,
+    // with quoted cells containing the delimiter kept whole and non-ASCII intact.
+    const table = page.locator('.md-component .table-component');
+    await expect(table.getByRole('columnheader', { name: 'kWh/yr' })).toBeVisible();
+    await expect(table.getByRole('cell', { name: 'Mild, coastal' })).toBeVisible();
+    await expect(table.getByRole('cell', { name: 'Tromsø' })).toBeVisible();
+    await expect(table.getByText('Delivered heat, by city')).toBeVisible();
+
+    // A spec needs no file at all: it renders straight from the message.
+    await expect(page.getByText('4 650 kWh')).toBeVisible();
+    await expect(page.getByText('Oslo, per year')).toBeVisible();
+
+    // A Vega-Lite spec is recognised by its shape — no `type` to remember — and
+    // drawn from the lazy chunk. The axis labels come from the spec's data.
+    const chart = page.locator('.md-component .chart-component').first();
+    await expect(chart.locator('svg')).toBeVisible({ timeout: 15_000 });
+    await expect(chart.getByText('Delivered heat per city')).toBeVisible();
+    await expect(chart.locator('svg').getByText('Oslo')).toBeVisible();
+    // Axis labels stay horizontal: Vega-Lite rotates a discrete x-axis 90° by
+    // default, which is hard to read in a message (see vega.ts).
+    const labelTransform = await chart.evaluate((el) =>
+      [...el.querySelectorAll('svg text')].find((t) => t.textContent === 'Oslo')?.getAttribute('transform') ?? '');
+    expect(labelTransform).not.toContain('rotate');
+
+    // A chart can point at a workspace dataset instead of carrying every row:
+    // the node resolved the path like any other reference, and the rows are
+    // substituted in before Vega sees the spec.
+    const dataChart = page.locator('.md-component .chart-component').nth(1);
+    await expect(dataChart.locator('svg')).toBeVisible({ timeout: 15_000 });
+    await expect(dataChart.locator('svg').getByText('From the dataset')).toBeVisible();
+    // The y-axis proves the CSV's numbers were coerced from strings: a
+    // quantitative encoding fed strings would plot as nominal categories.
+    await expect(dataChart.locator('svg').getByText('6,000')).toBeVisible();
+
+    // A REMOTE url is still refused — the viewer's browser must not fetch an
+    // address an agent chose.
+    await expect(page.getByText(/can only read data from the workspace/)).toBeVisible();
+
+    // Both failure modes name what the agent meant. Neither is silent, and
+    // neither is styled as the reader's error.
+    await expect(page.getByText('out/pending.pdf')).toBeVisible();
+    await expect(page.getByText(/still being prepared/)).toBeVisible();
+    await expect(page.getByText('Where the time went')).toBeVisible();
+    await expect(page.getByText(/cannot show a “sankey” yet/)).toBeVisible();
+
+    // Every placed component fills the same reading column, so a chip and a
+    // fallback card line up with each other and with the prose.
+    const box = (await chip.boundingBox())!;
+    const fallback = (await page.locator('.md-component .card').first().boundingBox())!;
+    expect(box.x).toBeCloseTo(fallback.x, 0);
+    expect(box.width).toBeCloseTo(fallback.width, 0);
+    expect(box.x + box.width).toBeLessThanOrEqual(width);
+
+    // Document order: the components are where the agent wrote them.
+    const order = await page.locator('.msg.assistant > *').evaluateAll(
+      (nodes) => nodes.map((n) => (n.className || n.tagName).toString()),
+    );
+    expect(order.filter((c) => c.includes('md-component'))).toHaveLength(8);
+    expect(order[0]).toBe('P');
+
+    await page.screenshot({ path: testInfo.outputPath('components.png'), fullPage: true });
+  });
+}

@@ -294,6 +294,16 @@ test("a raw `bivy run -- <command>` with no agent is kept as a run log too", asy
   assert.equal(metadata[0].name, "bash · repo");
 });
 
+test("an app's own program (background) never becomes a session row, live or ended", async () => {
+  const terminals = fakeTerminals({ meta: () => ({ kind: "run", agent: "app", background: true }) });
+  const { rt, emit, metadata, broadcasts } = harness({ terminals });
+  await rt.openRunTerminal({ command: "npm", args: ["run", "dev"], agent: "app", workspace: "/w/repo", background: true }, emit);
+  assert.equal(broadcasts.some((b) => b.type === "terminal.created"), false);
+  terminals.calls.open[0].onExit(1, undefined, "Error: listen EADDRINUSE\r\n");
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(metadata.length, 0, "a crashing server leaves no run log row");
+});
+
 test("a run that produced no output leaves no row at all", async () => {
   const terminals = fakeTerminals({ meta: () => ({ kind: "run", agent: "aider" }) });
   const { rt, emit, metadata, listChanged } = harness({ terminals });
