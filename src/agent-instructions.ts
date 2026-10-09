@@ -54,6 +54,8 @@ export const BIVY_AGENT_NOTE = [
     "A chart cannot fetch a remote URL.",
   "- Send a file WITHOUT writing a reply (or from a script): run " +
     '`bivy attach <path> [--caption "short note"]`, or call the `attach_to_chat` tool if you have it.',
+  "- Put a published app's preview INSIDE your reply: `::view{app=<app id>}` on its own line. It frames the app " +
+    "where you wrote it, and still opens full screen on demand.",
   "- Something with a UI: `bivy app publish <manifest.json>` (a web server's port, a static build, a terminal) or " +
     "`bivy app run -- <command>` (a desktop app) gives the user a live preview; `bivy app shot` screenshots it so you " +
     "can check your work; `bivy app present` tells the user a visible change is ready to look at, and " +

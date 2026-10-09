@@ -22,6 +22,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { componentKind, specReferences, type AttachmentRef, type PromptAttachment } from "@bivy/core";
 
 import { AttachmentChip } from "./AttachmentChip.js";
+import { InlineApp } from "./InlineApp.js";
 import { MAX_COMPONENT_TEXT_BYTES, useAttachmentText } from "../attachmentUrl.js";
 import { csvToObjects, parseCsv } from "../csv.js";
 import { renderChart, substituteWorkspaceData } from "../vega.js";
@@ -45,6 +46,10 @@ interface RenderArgs {
   /** Every resolved reference on this entry. A kind whose SPEC points at files
    *  (a chart's `data.url`) needs more than its own `placement.ref`. */
   refs?: Record<string, AttachmentRef>;
+  /** The session this transcript belongs to. Passed down rather than read from
+   *  the active session, so a kind that talks to the machine asks about the
+   *  right one and can be rendered on its own in a test. */
+  sessionId: string | null;
 }
 
 /** An AttachmentRef is what the node stored; AttachmentChip wants the richer
@@ -280,6 +285,12 @@ function Chart({ placement, refs }: RenderArgs) {
 
 /** kind → renderer. The whole registry. */
 const REGISTRY: Record<string, (args: RenderArgs) => React.ReactNode> = {
+  app: ({ placement, sessionId }) => {
+    const appId = placement.spec?.appId;
+    return typeof appId === "string"
+      ? <InlineApp appId={appId} caption={captionOf(placement)} sessionId={sessionId} />
+      : <Unavailable what="An app" why="This component names no app to show." />;
+  },
   chart: (args) => <Chart {...args} />,
   metric: ({ placement }) =>
     placement.spec ? <Metric spec={placement.spec} /> : <Unavailable what="A number" why="This component has no value to show." />,
@@ -307,7 +318,7 @@ export const RENDERABLE_KINDS = Object.keys(REGISTRY);
  * yet, which is a normal transient while the node reads the file, so that case
  * renders the fallback rather than nothing.
  */
-export function MessageComponent({ placement, refs }: { placement: Placement; refs?: Record<string, AttachmentRef> }) {
+export function MessageComponent({ placement, refs, sessionId }: { placement: Placement; refs?: Record<string, AttachmentRef>; sessionId: string | null }) {
   const attachment = placement.ref ? refs?.[placement.ref] ?? null : null;
   const kind = useMemo(
     () => componentKind({ path: placement.ref, mimeType: attachment?.mimeType, spec: placement.spec }),
@@ -325,7 +336,7 @@ export function MessageComponent({ placement, refs }: { placement: Placement; re
       />
     );
   }
-  return <>{render({ placement, attachment, refs })}</>;
+  return <>{render({ placement, attachment, refs, sessionId })}</>;
 }
 
 /**
