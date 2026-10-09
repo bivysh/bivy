@@ -107,6 +107,8 @@ test("publishing becomes previewable through automatic outbound delivery; no nod
     assert.deepEqual((await request(f.port, url.host, "/large.bin", { headers: { cookie } })).body, f.asset);
     // One kept-alive node stream carries a view's successive requests, and is counted.
     assert.equal(a.tickets.length - tickets, 1);
+    assert.equal(a.delivery.inUse(), true, "a preview being loaded keeps its machine awake");
+    assert.equal(a.delivery.inUse(Date.now() + 3 * 60_000), false, "a tab that has gone quiet doesn't");
     assert.ok(f.previews.metrics().bytesFromNode - before > f.asset.length);
     a.service.remove("session", app.id);
     assert.equal((await request(f.port, url.host, "/", { headers: { cookie } })).status, 404);
