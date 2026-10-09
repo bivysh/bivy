@@ -19,12 +19,13 @@
 //      names what the agent meant. Agents get syntax wrong; a message that
 //      quietly loses a third of itself is worse than one that says so.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { componentKind, type AttachmentRef, type PromptAttachment } from "@bivy/core";
+import { componentKind, specReferences, type AttachmentRef, type PromptAttachment } from "@bivy/core";
 
 import { AttachmentChip } from "./AttachmentChip.js";
-import { useAttachmentText } from "../attachmentUrl.js";
-import { parseCsv } from "../csv.js";
-import { renderChart } from "../vega.js";
+import { MAX_COMPONENT_TEXT_BYTES, useAttachmentText } from "../attachmentUrl.js";
+import { csvToObjects, parseCsv } from "../csv.js";
+import { renderChart, substituteWorkspaceData } from "../vega.js";
+import { controller } from "../store/useStore.js";
 
 /** What the renderer put in the mount point's data attributes. */
 export interface Placement {
@@ -41,6 +42,9 @@ interface RenderArgs {
   placement: Placement;
   /** The resolved attachment for `placement.ref`, once the node has stored it. */
   attachment: AttachmentRef | null;
+  /** Every resolved reference on this entry. A kind whose SPEC points at files
+   *  (a chart's `data.url`) needs more than its own `placement.ref`. */
+  refs?: Record<string, AttachmentRef>;
 }
 
 /** An AttachmentRef is what the node stored; AttachmentChip wants the richer
@@ -136,6 +140,39 @@ function Grid({ caption, header, rows, omitted }: { caption?: string; header: st
 }
 
 /**
+ * One dataset a chart points at, as rows. Returns null when the file cannot be
+ * read as data, which the caller turns into a sentence naming the file — a
+ * chart that silently plots nothing is worse than one that says why.
+ *
+ * The bytes come from the node's attachment store, where the reference was
+ * resolved under the usual workspace confinement; nothing is fetched from the
+ * network here. `.json` is taken as-is (Vega-Lite accepts an array of objects),
+ * anything else is read as delimited text.
+ */
+async function loadChartData(path: string, ref: AttachmentRef): Promise<unknown[] | null> {
+  if (ref.size > MAX_COMPONENT_TEXT_BYTES) return null;
+  const res = await controller.fetchAttachment(ref.hash);
+  if (!res) return null;
+  let text: string;
+  try {
+    const binary = atob(res.data);
+    text = new TextDecoder().decode(Uint8Array.from(binary, (c) => c.charCodeAt(0)));
+  } catch {
+    return null;
+  }
+  if (/\.json$/i.test(path) || (ref.mimeType || "").includes("json")) {
+    try {
+      const parsed = JSON.parse(text);
+      return Array.isArray(parsed) ? parsed : null;
+    } catch {
+      return null;
+    }
+  }
+  const rows = csvToObjects(text);
+  return rows.length ? rows : null;
+}
+
+/**
  * A Vega-Lite chart. Drawn imperatively into a host node because Vega owns the
  * SVG it produces — React must not reconcile inside it — which is the same
  * arrangement Mermaid already has with fenced diagrams.
@@ -144,25 +181,79 @@ function Grid({ caption, header, rows, omitted }: { caption?: string; header: st
  * not a formality. It stays silent (an empty box at the chart's height) rather
  * than flashing a spinner for what is usually a few hundred milliseconds.
  */
-function Chart({ placement }: RenderArgs) {
+function Chart({ placement, refs }: RenderArgs) {
   const host = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const spec = placement.spec;
   const height = Number(placement.attrs.height) || 0;
+
+  // A spec may point at a dataset instead of carrying every row (`data.url`).
+  // Those paths were resolved by the node like any other reference, so the rows
+  // are fetched here and substituted into the spec before Vega sees it — Vega
+  // itself never loads anything. A reference still waiting on the node leaves
+  // the chart in `loading`, which is the same state a slow renderer produces.
+  // Serialized for the same reason as specJson below: `spec` and `refs` are
+  // fresh objects on every render, so an effect depending on them directly
+  // would refetch constantly. This string changes exactly when a referenced
+  // path changes or the node resolves one, and the effect reads its inputs back
+  // out of it rather than closing over either object.
+  const dataPlan = useMemo(
+    () => JSON.stringify((spec ? specReferences(spec) : []).map((ref) => [ref, refs?.[ref] ?? null])),
+    [spec, refs],
+  );
+  // Starts LOADING when the spec references anything. Starting "ready" with an
+  // empty map would draw once with the `url` still in the spec, which
+  // renderChart correctly refuses — and that refusal replaces the figure, so
+  // the host node is gone by the time the data lands and the chart can never
+  // recover.
+  const [data, setData] = useState<{ state: "loading" | "ready" | "error"; byRef?: Map<string, unknown[]>; reason?: string }>(
+    () => ((JSON.parse(dataPlan) as unknown[]).length ? { state: "loading" } : { state: "ready", byRef: new Map() }),
+  );
+  useEffect(() => {
+    const planned = JSON.parse(dataPlan) as Array<[string, AttachmentRef | null]>;
+    if (!planned.length) {
+      setData({ state: "ready", byRef: new Map() });
+      return;
+    }
+    // Still waiting on the node to resolve one of them.
+    if (planned.some(([, ref]) => !ref)) {
+      setData({ state: "loading" });
+      return;
+    }
+    let cancelled = false;
+    setData({ state: "loading" });
+    void Promise.all(planned.map(async ([path, ref]) => [path, await loadChartData(path, ref!)] as const)).then((entries) => {
+      if (cancelled) return;
+      const bad = entries.find(([, rows]) => rows === null);
+      if (bad) {
+        setData({ state: "error", reason: `“${bad[0]}” could not be read as data.` });
+        return;
+      }
+      setData({ state: "ready", byRef: new Map(entries as Array<[string, unknown[]]>) });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [dataPlan]);
 
   // The spec arrives as a fresh object on every markdown render, so the effect
   // keys on its SERIALIZED form — by identity, an unrelated re-render would tear
   // the chart down and redraw it. The effect reads the spec back from this
   // string rather than closing over the object, so its dependency is exactly
   // what it uses.
-  const specJson = useMemo(() => (spec ? JSON.stringify(spec) : ""), [spec]);
+  // Drawn only once its data is in hand, so Vega is handed a spec with nothing
+  // left to load. Serialized for the same reason as dataPlan above.
+  const drawable = useMemo(
+    () => (spec && data.state === "ready" ? JSON.stringify(substituteWorkspaceData(spec, data.byRef!)) : ""),
+    [spec, data],
+  );
   useEffect(() => {
     const node = host.current;
-    if (!node || !specJson) return;
+    if (!node || !drawable) return;
     let cancelled = false;
     node.replaceChildren();
     setFailed(null);
-    void renderChart(node, JSON.parse(specJson) as Record<string, unknown>).then((result) => {
+    void renderChart(node, JSON.parse(drawable) as Record<string, unknown>).then((result) => {
       if (cancelled || result.ok) return;
       if (result.reason) setFailed(result.reason);
     });
@@ -170,11 +261,13 @@ function Chart({ placement }: RenderArgs) {
       cancelled = true;
       node.replaceChildren();
     };
-  }, [specJson]);
+  }, [drawable]);
 
   if (!spec) return <Unavailable what="A chart" why="This component has no chart to draw." />;
+  const title = typeof spec.title === "string" ? spec.title : "A chart";
+  if (data.state === "error") return <Unavailable what={title} why={data.reason!} />;
   if (failed) {
-    return <Unavailable what={typeof spec.title === "string" ? spec.title : "A chart"} why={failed} />;
+    return <Unavailable what={title} why={failed} />;
   }
   const caption = captionOf(placement) ?? (typeof spec.description === "string" ? spec.description : undefined);
   return (
@@ -232,7 +325,7 @@ export function MessageComponent({ placement, refs }: { placement: Placement; re
       />
     );
   }
-  return <>{render({ placement, attachment })}</>;
+  return <>{render({ placement, attachment, refs })}</>;
 }
 
 /**

@@ -50,7 +50,8 @@ export const BIVY_AGENT_NOTE = [
     "rule. A `.csv`/`.tsv` renders as a table; anything else arrives as a download.",
   "- Show a NUMBER or a CHART inside your reply: fence a spec as ```bivy. A number is " +
     '`{"type":"metric","value":"4 650 kWh","label":"per year"}`; a chart is a plain Vega-Lite spec with its data ' +
-    "inline (`{\"mark\":\"bar\",\"data\":{\"values\":[…]},\"encoding\":{…}}`). A chart cannot fetch a URL — put the data in the spec.",
+    "inline, or pointing at a workspace data file with `\"data\":{\"url\":\"data/use.csv\"}` (.csv/.tsv/.json). " +
+    "A chart cannot fetch a remote URL.",
   "- Send a file WITHOUT writing a reply (or from a script): run " +
     '`bivy attach <path> [--caption "short note"]`, or call the `attach_to_chat` tool if you have it.',
   "- Something with a UI: `bivy app publish <manifest.json>` (a web server's port, a static build, a terminal) or " +

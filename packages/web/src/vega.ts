@@ -38,19 +38,64 @@ export interface ChartResult {
 }
 
 /**
+ * Replace every `{ url: … }` the caller has data for with `{ values: [...] }`,
+ * anywhere in the spec — Vega-Lite allows one per layer, facet and lookup, not
+ * just at the top.
+ *
+ * Substituting rather than letting Vega fetch is the whole design: the bytes
+ * came from the workspace through the node, under the same confinement as every
+ * other reference, so by the time Vega sees the spec there is nothing left to
+ * load. `format` goes with the `url` it described, since the values are already
+ * parsed.
+ */
+export function substituteWorkspaceData(spec: unknown, byRef: Map<string, unknown[]>, depth = 0): unknown {
+  if (depth > 8 || !spec || typeof spec !== "object") return spec;
+  if (Array.isArray(spec)) return spec.map((item) => substituteWorkspaceData(item, byRef, depth + 1));
+  const source = spec as Record<string, unknown>;
+  if (typeof source.url === "string" && byRef.has(source.url)) {
+    const { url: _url, format: _format, ...rest } = source;
+    return { ...rest, values: byRef.get(source.url) };
+  }
+  return Object.fromEntries(
+    Object.entries(source).map(([key, value]) => [key, substituteWorkspaceData(value, byRef, depth + 1)]),
+  );
+}
+
+/** A `url` the spec still carries after substitution — i.e. one pointing
+ *  somewhere other than the workspace. Vega must never be handed it. */
+export function unresolvedUrl(spec: unknown, depth = 0): string | null {
+  if (depth > 8 || !spec || typeof spec !== "object") return null;
+  if (Array.isArray(spec)) {
+    for (const item of spec) {
+      const found = unresolvedUrl(item, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  for (const [key, value] of Object.entries(spec as Record<string, unknown>)) {
+    if (key === "url" && typeof value === "string") return value;
+    const found = unresolvedUrl(value, depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
  * Draw `spec` into `host`. Resolves when the chart is on screen, or with a
  * reason the caller can render instead — an invalid spec must read as a sentence
  * in the message, never as an exception that blanks it.
  *
- * `data.url` is refused: it would make the viewer's browser fetch a URL an agent
- * chose, which is the same SSRF/privacy hole the node avoids by fetching remote
- * markdown images server-side. Data belongs inline in the spec, where the whole
- * chart is one reviewable value.
+ * A `url` still present here is one the caller could NOT resolve from the
+ * workspace — a remote address — and is refused. A workspace dataset has
+ * already been substituted for its rows by the time this runs, so Vega never
+ * fetches anything: the bytes came through the node under the same confinement
+ * as every other reference, rather than the viewer's browser loading whatever
+ * address an agent named.
  */
 export async function renderChart(host: HTMLElement, spec: Record<string, unknown>): Promise<ChartResult> {
-  const data = spec.data as { url?: unknown } | undefined;
-  if (data && typeof data === "object" && "url" in data) {
-    return { ok: false, reason: "A chart has to carry its own data; it cannot load a URL." };
+  const unresolved = unresolvedUrl(spec);
+  if (unresolved) {
+    return { ok: false, reason: `A chart can only read data from the workspace, not from “${unresolved}”.` };
   }
   let embed: VegaEmbed;
   try {
