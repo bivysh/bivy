@@ -15,6 +15,7 @@ import { Spinner } from "./Spinner.js";
 import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { openSettings } from "../settingsRoute.js";
 import { agentPickerLabel, filterAndSortAgentRuntimes, isTopAgent } from "../agentPickerCatalog.js";
+import { nodePresence, PRESENCE } from "../cloudDestinations.js";
 
 const agentLabel = agentPickerLabel;
 
@@ -562,7 +563,7 @@ export function NodePicker({
             key={n.id}
             active={n.id === currentNodeId}
             title={n.name || n.id}
-            meta={n.online ? "Online" : "Offline"}
+            meta={PRESENCE[nodePresence(n)].label}
             onClick={() => onPick(n.id)}
           />
         ))}

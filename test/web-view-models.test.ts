@@ -17,7 +17,7 @@ import { modelAccountChoice } from "../packages/web/src/modelAccounts.js";
 import { githubInstallationSettings, githubMentionHandles, githubSourceStatus } from "../packages/web/src/components/githubSource.js";
 import { focusEntries } from "../packages/web/src/focusTranscript.js";
 import { standbyCopyOf } from "../packages/web/src/standby.js";
-import { cloudDestinations } from "../packages/web/src/cloudDestinations.js";
+import { cloudDestinations, nodePresence } from "../packages/web/src/cloudDestinations.js";
 
 test("account routing follows project, active, default and ambiguity rules", () => {
   const records = [{ label: "default" }, { label: "work" }];
@@ -192,4 +192,12 @@ test("a managed cloud profile is one destination that reuses its newest online M
   const account = { id: "cc", setupId: undefined, nodeId: "eph-managed-auto-0123456789abcdef", provider: "fly", purpose: "interactive" as const, createdAt: at(3) };
   const reused = cloudDestinations([config], [account], [{ id: "eph-managed-auto-0123456789abcdef", online: true }]);
   assert.equal(reused[0]?.nodeId, "eph-managed-auto-0123456789abcdef", "the account's cloud computer is reused by its node id");
+  const sleeping = cloudDestinations([config], [account], [{ id: "eph-managed-auto-0123456789abcdef", online: false }]);
+  assert.deepEqual(sleeping.map((row) => [row.nodeId, row.asleep]), [[undefined, true]], "a sleeping cloud computer wakes on send");
+  assert.equal(asleep[0]?.asleep, false, "no cloud computer yet: one starts on send");
+  assert.deepEqual(
+    [{ id: "eph-managed-auto-0123456789abcdef", online: false }, { id: "laptop", online: false }, { id: "laptop", online: true }].map(nodePresence),
+    ["asleep", "offline", "online"],
+    "only the cloud computer sleeps; any other machine that isn't connected is offline",
+  );
 });
