@@ -252,6 +252,7 @@ import {
 import { synthesizeOpenAiSpeech } from "./tts.js";
 import { seal, open } from "./e2e.js";
 import { recoverModelAuthKey } from "./model-auth-key-recovery.js";
+import { runPrompt, trustedInstructions } from "./work-instructions.js";
 import { RunDelegationService, parseDelegationSource, type SafeRunResult, type StartRunInput } from "./run-tools.js";
 import { delegationCard, type DelegationStart } from "./session/delegation-cards.js";
 import { TERMINAL_DELEGATION, isDelegatedFrom, type DelegatedFrom, type DelegationCard } from "./session/delegations.js";
@@ -1758,6 +1759,14 @@ function nodeConfiguredDefaultAgent(): string {
 
 /** How interactive sessions recover after a restart interrupted them mid-turn.
  *  Defaults to "auto" (re-drive the turn); "manual" waits for a user tap. */
+/** This machine runs Slack prompts, which arrive unsealed: the node setting, or BIVY_SLACK_PROMPTS. Off by default. */
+function slackPromptsEnabled(): boolean {
+  const env = process.env.BIVY_SLACK_PROMPTS;
+  if (env === "1" || env === "true") return true;
+  if (env === "0" || env === "false") return false;
+  return readNodeConfig(appDir)?.automation?.slackPrompts === true;
+}
+
 /** Agents may screenshot app previews: the node setting, or BIVY_APP_SCREENSHOTS. */
 function appScreenshotsEnabled(): boolean {
   const env = process.env.BIVY_APP_SCREENSHOTS;
@@ -5730,8 +5739,9 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
   // source.
   let credentialLabels: Record<string, string> | undefined;
   let filter: AutomationFilter | undefined;
-  if (item.body?.startsWith("bivy-room-v1:")) {
-    const [, nodeId, ...payload] = item.body.split(":");
+  const sealed = Boolean(item.body?.startsWith("bivy-room-v1:"));
+  if (sealed) {
+    const [, nodeId, ...payload] = item.body!.split(":");
     if (nodeId !== identity.nodeId || payload.length === 0) {
       throw new Error("automation instructions were encrypted for a different node");
     }
@@ -5744,6 +5754,11 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
       throw new Error("could not decrypt automation instructions on this node");
     }
   }
+  // Only sealed, fetched, built-in or opted-in Slack instructions reach the agent
+  // (src/work-instructions.ts): the control plane can't author a run.
+  const trusted = trustedInstructions(item, { sealed, slackPrompts: slackPromptsEnabled() });
+  if (!trusted.ok) throw new Error(trusted.reason);
+  item = { ...item, body: trusted.body };
   // Gate before any repository fetch, session continuation, or agent creation.
   // A skip finishes this selected automation; it does not fall through to another.
   if (filter && !await passWebhookFilter(filter, item, report, signal)) return;
@@ -5865,9 +5880,7 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
   // into the prompt. A scheduled chat message must arrive verbatim; the name is
   // only the run/session label.
   const delegatedProvenance = parseDelegationSource(item.source);
-  const request = item.source === "schedule" || delegatedProvenance
-    ? (item.body || item.title)
-    : item.body ? `${item.title}\n\n${item.body}` : item.title;
+  const request = runPrompt(item, trusted.titleInPrompt);
   // Plain chat messages (scheduled "message me later" reminders) skip
   // auto-push and required checks — even when a workspace target happens to be
   // a git checkout.
