@@ -138,15 +138,8 @@ async function main() {
   expect(hp0.json?.encryptionReady === true, "encryption key is configured (encryptionReady)");
   expect(hp0.json?.keyId === "default", "active key id reported (single-key → 'default')");
 
-  // Disabled → the plan won't provision.
-  const plan0 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
-  expect(plan0.json?.plan?.willProvision === false && /disabled/.test(plan0.json?.plan?.reason), "plan: disabled → no provision");
-
-  // Enable + route to the config, but no provider token yet.
+  expect(hp0.json?.execution?.ready === false, "no deployment compute → unattended cloud execution is not ready");
   await req(port, "PUT", "/account/hosted-provisioning", { enabled: true }, token);
-  await req(port, "PUT", "/account/queue-routing", { primary: { kind: "config", configId: id } }, token);
-  const plan1 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
-  expect(plan1.json?.plan?.willProvision === false && /does not point at an ephemeral config/.test(plan1.json?.plan?.reason), "plan: routing to a profile the account doesn't have → no provision");
 
   // Add credentials (encrypted at rest); verify they are never echoed back.
   const hpSet = await req(port, "PUT", "/account/hosted-provisioning", { githubToken: "ghp_secret_value", providerTokens: { fly: "fly_secret_value" } }, token);
@@ -184,11 +177,6 @@ async function main() {
   const audit2 = await req(port, "GET", "/account/hosted-audit", undefined, token);
   expect(Array.isArray(audit2.json) && audit2.json.some((e: { action: string }) => e.action === "credential_rotated"), "audit records credential_rotated");
 
-  // Shared routing → nothing to provision.
-  await req(port, "PUT", "/account/queue-routing", { primary: { kind: "shared" } }, token);
-  const plan3 = await req(port, "POST", "/account/hosted-provision-now", {}, token);
-  expect(plan3.json?.plan?.willProvision === false && /does not point at an ephemeral config/.test(plan3.json?.plan?.reason), "plan: shared routing → no provision");
-
   // Fail closed: a control plane WITHOUT an encryption key refuses to store secrets.
   const port2 = await startControlPlane();
   const token2 = (await req(port2, "POST", "/auth/dev-login", { email: "nokey@example.com" })).json.token;
@@ -200,14 +188,13 @@ async function main() {
   // Existing users who predate managed onboarding receive the deployment-owned
   // profile when their ordinary Machine picker lists configs. Explicit first-run
   // setup remains idempotent, and later reads reconcile a stale image.
-  // The deployment extension supplies the managed profile and credential.
+  // The deployment extension supplies the managed profile.
   const extension = http.createServer((request, response) => {
     let raw = "";
     request.on("data", (chunk) => { raw += chunk; });
     request.on("end", () => {
       const answers: Record<string, unknown> = {
-        "/v1/compute/profile": { profile: { provider: "fly", image: "ghcr.io/bivysh/bivy-ephemeral-runner:current-staging-sha", ttlMinutes: 60 } },
-        "/v1/compute/credential": { token: "operator-token-not-used-by-default-setup" },
+        "/v1/compute/profile": { profile: { provider: "fly", image: "ghcr.io/bivysh/bivy-ephemeral-runner:current-staging-sha", ttlMinutes: 60, accountMachine: true } },
         "/v1/policy/check": { allowed: true },
         "/v1/account": { presentation: {} },
       };
@@ -239,8 +226,11 @@ async function main() {
   expect(managedConfigs.json?.length === 1 && reconciled?.image === "ghcr.io/bivysh/bivy-ephemeral-runner:current-staging-sha" && reconciled?.ttlMinutes === 60, "managed config carries the deployment-owned image and TTL");
   const managedRouting = await req(port3, "GET", "/account/queue-routing", undefined, token3);
   expect(managedRouting.json?.primary?.kind === "shared", "interactive managed setup does not silently enable unattended queue routing");
+  await req(port3, "PUT", "/account/queue-routing", { primary: { kind: "config", configId: adopted.id } }, token3);
+  const readiness = await req(port3, "GET", "/account/hosted-provisioning", undefined, token3);
+  expect(readiness.json?.execution?.ready === true && readiness.json?.execution?.configId === adopted.id, "automation routed to the cloud destination is ready");
   const forgedRestore = await req(port3, "POST", "/account/managed-machines/restore", { configId: managedDefault.json.config.id, nodeId: "eph-other", sessionId: "s-other" }, token3);
-  expect(forgedRestore.status === 404, "managed restore requires an account-scoped durable session correlation");
+  expect(forgedRestore.status === 404, "managed restore only brings back the account's own cloud computer");
 
   console.log("\nAll ephemeral-configs + queue-routing + hosted-provisioning checks passed.");
 }

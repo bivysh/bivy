@@ -40,8 +40,6 @@ import {
   type CentralGithubInstallationInput,
   type HostedAuditEvent,
   type HostedMachineAttempt,
-  type SessionUsageRecord,
-  ConcurrentAttemptUpdateError,
   type ModelAuthVault,
   type ModelAuthWrappedKey,
   type ModelAuthKeyRequest,
@@ -1928,18 +1926,6 @@ export class PostgresStore implements ControlPlaneStore {
     return (rowCount ?? 0) > 0;
   }
 
-  async getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>> {
-    const { rows } = await this.query(`SELECT hosted_machines FROM accounts WHERE id = $1`, [accountId]);
-    const v = rows[0]?.hosted_machines;
-    return Array.isArray(v) ? v : [];
-  }
-
-  async setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>> {
-    const arr = Array.isArray(machines) ? machines : [];
-    await this.query(`UPDATE accounts SET hosted_machines = $2 WHERE id = $1`, [accountId, JSON.stringify(arr)]);
-    return arr;
-  }
-
   private hostedAttemptFromRow(row: Record<string, any>): HostedMachineAttempt {
     return {
       accountId: String(row.account_id), attemptId: String(row.attempt_id),
@@ -1957,157 +1943,12 @@ export class PostgresStore implements ControlPlaneStore {
     };
   }
 
-  async putHostedMachineAttempt(attempt: HostedMachineAttempt, opts?: { expectedVersion?: number }): Promise<HostedMachineAttempt> {
-    const expectedVersion = opts?.expectedVersion;
-    const params = [
-      attempt.accountId, attempt.attemptId, attempt.provider, attempt.configId ?? null, attempt.nodeId,
-      attempt.state, attempt.desiredState ?? "active", attempt.observedState ?? null,
-      attempt.deadlineAt ?? null, attempt.ownershipTag ?? null,
-      JSON.stringify(attempt.desired ?? {}), attempt.machine ? JSON.stringify(attempt.machine) : null,
-      attempt.lastError ?? null, attempt.retryCount, attempt.createdAt, attempt.updatedAt,
-    ];
-    if (expectedVersion != null) {
-      // A fenced write only ever applies to an existing row (the caller must
-      // have already read it to know its version), so this is a plain
-      // conditional UPDATE rather than an upsert. Deliberately NOT expressed
-      // as `INSERT ... ON CONFLICT DO UPDATE ... WHERE ... RETURNING`: that
-      // form does not reliably return zero rows on a WHERE mismatch under
-      // pg-mem (the in-memory Postgres this store also runs against for
-      // dev/tests — see postgres-store.test evidence in the PR), silently
-      // turning a rejected fence into an apparent success. A bare UPDATE with
-      // a WHERE clause is unambiguous under both.
-      const { rows } = await this.query(
-        `UPDATE hosted_machine_attempts SET
-           provider=$3, config_id=$4, node_id=$5, state=$6, desired_state=$7, observed_state=$8,
-           deadline_at=$9, ownership_tag=$10, desired=$11, machine=$12, last_error=$13, retry_count=$14,
-           version=version + 1, updated_at=$15
-         WHERE account_id=$1 AND attempt_id=$2 AND version=$16
-         RETURNING *`,
-        // created_at is immutable on updates. Do not leave its unused bind slot:
-        // real PostgreSQL cannot infer the type of an unreferenced parameter.
-        [...params.slice(0, 14), attempt.updatedAt, expectedVersion],
-      );
-      if (!rows[0]) throw new ConcurrentAttemptUpdateError(attempt.accountId, attempt.attemptId);
-      return this.hostedAttemptFromRow(rows[0]);
-    }
-    const { rows } = await this.query(
-      `INSERT INTO hosted_machine_attempts
-         (account_id, attempt_id, provider, config_id, node_id, state, desired_state, observed_state,
-          deadline_at, ownership_tag, desired, machine, last_error, retry_count, version, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,1,$15,$16)
-       ON CONFLICT (account_id, attempt_id) DO UPDATE SET
-         provider=EXCLUDED.provider, config_id=EXCLUDED.config_id, node_id=EXCLUDED.node_id,
-         state=EXCLUDED.state, desired_state=EXCLUDED.desired_state, observed_state=EXCLUDED.observed_state,
-         deadline_at=EXCLUDED.deadline_at, ownership_tag=EXCLUDED.ownership_tag,
-         desired=EXCLUDED.desired, machine=EXCLUDED.machine,
-         last_error=EXCLUDED.last_error, retry_count=EXCLUDED.retry_count,
-         version=hosted_machine_attempts.version + 1, updated_at=EXCLUDED.updated_at
-       RETURNING *`,
-      params,
-    );
-    return this.hostedAttemptFromRow(rows[0]);
-  }
-
-  async getHostedMachineAttempt(accountId: string, attemptId: string): Promise<HostedMachineAttempt | undefined> {
-    const { rows } = await this.query(`SELECT * FROM hosted_machine_attempts WHERE account_id=$1 AND attempt_id=$2`, [accountId, attemptId]);
-    return rows[0] ? this.hostedAttemptFromRow(rows[0]) : undefined;
-  }
-
   async listHostedMachineAttempts(accountId: string, activeOnly = false): Promise<HostedMachineAttempt[]> {
     const { rows } = await this.query(
       `SELECT * FROM hosted_machine_attempts WHERE account_id=$1${activeOnly ? " AND state <> 'deleted'" : ""} ORDER BY created_at`,
       [accountId],
     );
     return rows.map((row) => this.hostedAttemptFromRow(row));
-  }
-
-  async upsertSessionUsage(record: SessionUsageRecord): Promise<SessionUsageRecord> {
-    const { rows } = await this.query(
-      `INSERT INTO session_usage
-         (account_id, usage_id, session_id, machine_id, node_id, launched_at, first_agent_event_at,
-          settled_at, machine_seconds, active_agent_seconds)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-       ON CONFLICT (account_id, usage_id) DO UPDATE SET
-         usage_id=session_usage.usage_id
-       RETURNING *`,
-      [record.accountId, record.usageId, record.sessionId ?? null, record.machineId ?? null,
-       record.nodeId ?? null, record.launchedAt, record.firstAgentEventAt ?? null, record.settledAt,
-       record.machineSeconds, record.activeAgentSeconds],
-    );
-    return this.sessionUsageFromRow(rows[0]);
-  }
-
-  async listSessionUsage(accountId: string, startsAt: string, endsAt: string, limit?: number): Promise<SessionUsageRecord[]> {
-    const boundedLimit = limit == null ? undefined : Math.max(1, Math.min(10_000, Math.floor(limit)));
-    const { rows } = await this.query(
-      `SELECT * FROM session_usage
-       WHERE account_id=$1 AND settled_at > $2 AND launched_at < $3
-       ORDER BY settled_at DESC${boundedLimit == null ? "" : " LIMIT $4"}`,
-      boundedLimit == null ? [accountId, startsAt, endsAt] : [accountId, startsAt, endsAt, boundedLimit],
-    );
-    return rows.map((row) => this.sessionUsageFromRow(row));
-  }
-
-  private sessionUsageFromRow(row: Record<string, any>): SessionUsageRecord {
-    return {
-      accountId: String(row.account_id), usageId: String(row.usage_id),
-      sessionId: row.session_id || undefined, machineId: row.machine_id || undefined,
-      nodeId: row.node_id || undefined,
-      launchedAt: new Date(row.launched_at).toISOString(),
-      firstAgentEventAt: row.first_agent_event_at ? new Date(row.first_agent_event_at).toISOString() : undefined,
-      settledAt: new Date(row.settled_at).toISOString(),
-      machineSeconds: Number(row.machine_seconds) || 0,
-      activeAgentSeconds: Number(row.active_agent_seconds) || 0,
-    };
-  }
-
-  async listHostedMachineAccountIds(): Promise<string[]> {
-    // Filter in JS: pg-mem (the dev/test backend) does not implement Postgres's
-    // jsonb_typeof/jsonb_array_length functions, and this scan runs only on the
-    // small account metadata rows (never session content).
-    const { rows } = await this.query(`SELECT id, hosted_machines FROM accounts WHERE hosted_machines IS NOT NULL`);
-    const ids = new Set(rows.filter((row) => Array.isArray(row.hosted_machines) && row.hosted_machines.length > 0).map((row) => String(row.id)));
-    const attempts = await this.query(`SELECT DISTINCT account_id FROM hosted_machine_attempts WHERE state <> 'deleted'`);
-    for (const row of attempts.rows) ids.add(String(row.account_id));
-    return [...ids];
-  }
-
-  async listReadyCapacityAccountIds(): Promise<string[]> {
-    const { rows } = await this.query(`SELECT id, ephemeral_configs FROM accounts WHERE ephemeral_configs IS NOT NULL`);
-    return rows.filter((row) => normalizeEphemeralConfigs(row.ephemeral_configs).some((config) => (config.readyCapacity ?? 0) > 0)).map((row) => String(row.id));
-  }
-
-  async listHostedEnabledAccountIds(): Promise<string[]> {
-    const { rows } = await this.query(`SELECT id, hosted_provisioning FROM accounts WHERE hosted_provisioning IS NOT NULL`);
-    return rows.filter((row) => normalizeHostedProvisioning(row.hosted_provisioning).enabled).map((row) => String(row.id));
-  }
-
-  async acquireHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean> {
-    const expiresAt = new Date(Date.now() + Math.max(30, ttlSeconds) * 1000).toISOString();
-    const { rows } = await this.query(
-      `INSERT INTO hosted_provision_leases (account_id, holder, expires_at)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (account_id) DO UPDATE
-       SET holder = EXCLUDED.holder, expires_at = EXCLUDED.expires_at
-       WHERE hosted_provision_leases.expires_at < now()
-       RETURNING holder`,
-      [accountId, holder, expiresAt],
-    );
-    return rows[0]?.holder === holder;
-  }
-
-  async renewHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean> {
-    const expiresAt = new Date(Date.now() + Math.max(30, ttlSeconds) * 1000).toISOString();
-    const { rows } = await this.query(
-      `UPDATE hosted_provision_leases SET expires_at=$3
-       WHERE account_id=$1 AND holder=$2 AND expires_at >= now() RETURNING holder`,
-      [accountId, holder, expiresAt],
-    );
-    return rows[0]?.holder === holder;
-  }
-
-  async releaseHostedProvisionLease(accountId: string, holder: string): Promise<void> {
-    await this.query(`DELETE FROM hosted_provision_leases WHERE account_id = $1 AND holder = $2`, [accountId, holder]);
   }
 
   async appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void> {
@@ -2585,15 +2426,6 @@ export class PostgresStore implements ControlPlaneStore {
     if (!rows[0]) return undefined;
     const raw = rows[0].room_key_enc;
     return (typeof raw === "string" ? JSON.parse(raw) : raw) as SecretEnvelope;
-  }
-
-  async setNodeRoomKeyEnc(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<void> {
-    await this.query(
-      `INSERT INTO node_room_keys (account_id, node_id, room_key_enc, updated_at)
-       VALUES ($1, $2, $3, now())
-       ON CONFLICT (account_id, node_id) DO UPDATE SET room_key_enc = EXCLUDED.room_key_enc, updated_at = now()`,
-      [accountId, nodeId, JSON.stringify(enc)],
-    );
   }
 
   async setNodeRoomKeyEncIfAbsent(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<SecretEnvelope> {

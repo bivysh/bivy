@@ -76,10 +76,9 @@ services:
       RELAY_SECRET: "${RELAY_SECRET}"
       RELAY_PUBLIC_URL: "${RELAY_PUBLIC_URL}"
       PUBLIC_CONTROL_PLANE_URL: "${PUBLIC_CONTROL_PLANE_URL}"
-      # Single runtime opt-in: "1" enables UI and managed launches (when operator
-      # credentials are configured). "0" disables new launches in both lanes;
-      # unset retains legacy BYO API behavior without enabling UI/managed compute.
-      # Cleanup and reconciliation continue while disabled.
+      # Single runtime opt-in: "1" enables the cloud machine UI and acquiring the
+      # account's cloud computer (when a deployment extension supplies compute).
+      # Any other value keeps both off.
       EPHEMERAL_MACHINES_ENABLED: "${EPHEMERAL_MACHINES_ENABLED:-}"
       # Encrypted credential storage for hosted provisioning ("Run automations
       # while I'm offline" in Settings → Cloud machine profiles). Optional and

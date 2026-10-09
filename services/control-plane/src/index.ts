@@ -12,23 +12,18 @@ import { createApns } from "./apns.js";
 import { associatedApps } from "./associated-apps.js";
 import { resolveWebhookAuth, verifyWebhookAuth, DEFAULT_WEBHOOK_HEADER, type WebhookAuth } from "./webhook-auth.js";
 import { matchGithubItemTrigger } from "./github-item-trigger.js";
-import { ephemeralAdapter, validateCapabilityTags } from "@bivy/core";
+import { validateCapabilityTags } from "@bivy/core";
 import { notificationLink } from "./notification-link.js";
 import { type Account, type NodeRecord, type NotificationKind, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
-import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity } from "./central-github-app.js";
-import { maybeAutoProvision, planAutoProvision, hostedExecutionReadiness, mintHostedInstallationToken, provisionEphemeralForAccount, provisionEphemeralRestore, reapSettledHostedMachine, reconcileAllHostedMachines, sweepAllOrphanProviderResources, markHostedMachineMilestone, EPHEMERAL_MILESTONES, type ManagedProvisionRequest } from "./ephemeral-provisioner.js";
+import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity, mintHostedInstallationToken } from "./central-github-app.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, encryptSecret, decryptSecret, initializeHostedKeyring } from "./hosted-crypto.js";
 import { hostedVaultWriteRejection, legacyEscrowWriteRejection } from "./hosted-vault-policy.js";
 import { webRuntimeConfigScript } from "./web-runtime-config.js";
 import { publicManagedLaunchError } from "./managed-launch-error.js";
 import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation, mintInstallationToken } from "./hosted-github-auth.js";
-import { correlateHostedSessions } from "./hosted-correlation.js";
 import { countActiveAccountSessions } from "./session-count.js";
-import { usageFromManagedMachine } from "./compute-metering.js";
-import { managedCapacityCount } from "./managed-admission.js";
-import { managedInteractiveLaunch, ManagedLaunchConflict, type ManagedInteractiveRequest } from "./managed-interactive-launch.js";
-import { DeploymentCompute, deploymentCompute, managedComputeEnabled, setDeploymentCompute, type ComputePurpose } from "./deployment-compute.js";
-import { bootCloudComputer, cloudComputerNodeId, cloudComputerRoomKey, isCloudComputerNode, routeWorkToCloudComputer } from "./cloud-computer.js";
+import { DeploymentCompute, deploymentCompute, managedComputeEnabled, setDeploymentCompute } from "./deployment-compute.js";
+import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, cloudComputerRoomKey, isCloudComputerNode, isEphemeralMilestone, routeWorkToCloudComputer } from "./cloud-computer.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
 import { configureProxyTrust } from "./proxy-trust.js";
@@ -150,10 +145,6 @@ async function deploymentDecision(
   idempotencyKey?: string,
   context: DeploymentPolicyContext = {},
 ) {
-  if (operation === "ephemeral.provision" && context.computeSource === "managed" && context.activeManagedMachines === undefined) {
-    // The deployment's concurrency rule needs the count; Core supplies the fact.
-    context = { ...context, activeManagedMachines: managedCapacityCount(await store.getHostedMachines(accountId), await store.listHostedMachineAttempts(accountId, true)) };
-  }
   return deploymentExtension.authorize(accountId, operation, idempotencyKey, context);
 }
 
@@ -246,16 +237,6 @@ async function notifyWorkAvailableOrParkForPlan(accountId: string, item: { id: s
   return { blocked: true, reason: decision.reason };
 }
 
-function managedProvisionAdmission(accountId: string) {
-  return ({ attemptId, ...context }: ManagedProvisionRequest) =>
-    deploymentDecision(accountId, "ephemeral.provision", attemptId, context);
-}
-
-function managedLaunchFailureRecorder(accountId: string) {
-  return (attemptId: string) => deploymentExtension.record(accountId, {
-    type: "ephemeral.launch-failed", attemptId, at: new Date().toISOString(),
-  });
-}
 try {
   await store.init();
 } catch (error) {
@@ -332,19 +313,15 @@ async function notifyRelaysWorkAvailable(
   // have only routing metadata here, so use the id as a content-free revision;
   // later lifecycle mutations publish their durable event timestamp.
   void notifyRelaysRunUpdated(accountId, { id: item.id, createdAt: item.id });
-  // Cancelling must never start a machine. Normal enqueue notifications retain
-  // the unattended-provisioning check.
+  // Cancelling must never start a machine. Normal enqueue notifications wake
+  // the account's cloud computer when routing sends the work there.
   if (options.autoProvision !== false) {
     void (async () => {
-      if (await accountMachineMode(accountId)) {
-        if (await routeWorkToCloudComputer(store, accountId)) {
-          const acquired = await deploymentExtension.computeAcquire(accountId, { purpose: "automation", requestId: `work:${item.id}` });
-          if (!acquired.allowed) console.warn(`[cloud-computer] automation launch refused for ${accountId}: ${acquired.decision.code ?? acquired.decision.reason ?? "denied"}`);
-        }
-        return;
-      }
-      await maybeAutoProvision(store, accountId, provisionEnv(), undefined, managedProvisionAdmission(accountId), managedLaunchFailureRecorder(accountId));
-    })().catch((error) => console.error("[deployment-extension] provisioning admission failed", error));
+      if (!(await accountMachineMode(accountId))) return;
+      if (!(await routeWorkToCloudComputer(store, accountId))) return;
+      const acquired = await deploymentExtension.computeAcquire(accountId, { purpose: "automation", requestId: `work:${item.id}` });
+      if (!acquired.allowed) console.warn(`[cloud-computer] automation launch refused for ${accountId}: ${acquired.decision.code ?? acquired.decision.reason ?? "denied"}`);
+    })().catch((error) => console.error("[cloud-computer] automation acquire failed", error));
   }
 }
 if (relayShardUrls.length > 1) {
@@ -359,9 +336,9 @@ function normalizePublicUrl(value: string): string {
 
 const publicControlPlaneUrl = process.env.PUBLIC_CONTROL_PLANE_URL ? normalizePublicUrl(process.env.PUBLIC_CONTROL_PLANE_URL) : undefined;
 
-// Bootstrap URLs the control plane bakes into a machine it launches itself.
-// These must be PUBLIC (the VM reaches them); without PUBLIC_CONTROL_PLANE_URL a
-// hosted machine can't reach us, so hosted provisioning is effectively off.
+// Bootstrap URLs baked into the account's cloud computer boot payload. These
+// must be PUBLIC (the VM reaches them); without PUBLIC_CONTROL_PLANE_URL a
+// hosted machine can't reach us, so deployment compute is effectively off.
 const provisionEnv = (): { cpBaseUrl: string; relayUrl: string } => ({
   cpBaseUrl: publicControlPlaneUrl ?? `http://localhost:${process.env.PORT ?? 8080}`,
   relayUrl: relayPublicUrl,
@@ -451,51 +428,6 @@ async function pruneExpiredAuthTokens() {
 }
 void pruneExpiredAuthTokens();
 setInterval(pruneExpiredAuthTokens, 60 * 60_000).unref();
-
-// Cost-safety backstop: sweep every account that still tracks a hosted runner,
-// even when no new work arrives and the runner never reports /node/settled.
-// Cleanup deliberately ignores the launch feature flag: an emergency kill switch
-// must stop new spend without disabling deletion of resources already billing.
-// Continuous convergence: this now runs on a short interval (default 60s, was
-// 5 minutes) so a create that never joins or a runner past TTL is observed and
-// destroyed promptly instead of waiting out a long, fixed sweep window —
-// tracked state only converges with reality if something re-checks it
-// continuously. Bounded to per-account tracked machines, which is small.
-const HOSTED_MACHINE_RECONCILE_MS = Math.max(60_000, Number(process.env.HOSTED_MACHINE_RECONCILE_MS) || 60_000);
-async function reconcileHostedMachineFleet() {
-  try {
-    const result = await reconcileAllHostedMachines(store, provisionEnv());
-    if (result.reaped || result.failed) {
-      console.log(`[hosted-reconcile] accounts=${result.accounts} reaped=${result.reaped} failed=${result.failed}`);
-    }
-  } catch (error) {
-    console.error("[hosted-reconcile] account scan failed:", error);
-  }
-}
-void reconcileHostedMachineFleet();
-setInterval(reconcileHostedMachineFleet, HOSTED_MACHINE_RECONCILE_MS).unref();
-
-// Discover-based orphan recovery — deletion needs discovery, not only a
-// remembered id. The one failure the fast convergence sweep above can't catch
-// is tracking itself being lost, so
-// this asks each provider directly for everything tagged as an account's and
-// reconciles anything neither the legacy inventory nor any attempt row still
-// knows about. Runs on its own, coarser interval — `discover` is a heavier,
-// multi-call provider operation with no business running every 60s — and
-// visits every hosted-enabled account, not only ones with something tracked.
-const HOSTED_ORPHAN_SWEEP_MS = Math.max(60_000, Number(process.env.HOSTED_ORPHAN_SWEEP_MS) || 5 * 60_000);
-async function sweepHostedOrphans() {
-  try {
-    const result = await sweepAllOrphanProviderResources(store, provisionEnv());
-    if (result.found || result.failed) {
-      console.log(`[hosted-orphan-sweep] accounts=${result.accounts} found=${result.found} reaped=${result.reaped} failed=${result.failed}`);
-    }
-  } catch (error) {
-    console.error("[hosted-orphan-sweep] account scan failed:", error);
-  }
-}
-void sweepHostedOrphans();
-setInterval(sweepHostedOrphans, HOSTED_ORPHAN_SWEEP_MS).unref();
 
 function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   res.setHeader("X-Content-Type-Options", "nosniff");
@@ -1304,12 +1236,6 @@ app.get("/me", requireUser, asyncHandler(async (req, res) => {
 // handles the selected action out of process.
 app.delete("/account", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
-  // Never remove the account row while a Bivy-managed machine is active: the
-  // reconciler needs that row to keep retrying provider deletion.
-  const activeMachines = await store.listHostedMachineAttempts(account.id, true);
-  if (activeMachines.length > 0) {
-    return void res.status(409).json({ error: "Delete your hosted machines before deleting your account" });
-  }
   // Billing cleanup runs first. If it fails, retain the account so the user can
   // retry without losing access to the deletion flow.
   await deploymentExtension.deleteAccount(account.id, account.email);
@@ -1343,8 +1269,9 @@ function presentNodeClaim(claim: NodeClaim) {
   return { ...claim, status };
 }
 
-/** Whether the deployment runs one sleeping cloud computer per account (and
- * owns its lifecycle) rather than a machine per session launched by Core. */
+/** Whether the deployment supplies compute to this account. Deployment compute
+ * is always the account's cloud computer: one sleeping machine per account
+ * whose lifecycle the deployment owns. Core never launches machines itself. */
 async function accountMachineMode(accountId: string): Promise<boolean> {
   return (await deploymentCompute().profile("interactive", accountId).catch(() => null))?.accountMachine === true;
 }
@@ -1382,22 +1309,20 @@ async function respondCloudComputer(
   }
 }
 
-/** The deployment's profile for a purpose as a managed ephemeral config, or
- * null when the deployment offers no managed compute. */
-async function managedProfileConfig(purpose: ComputePurpose, accountId: string, runtimeId?: string): Promise<EphemeralNodeConfig | null> {
-  const profile = await deploymentCompute().profile(purpose, accountId, runtimeId);
-  const adapter = profile ? ephemeralAdapter(profile.provider) : undefined;
-  if (!profile || !adapter) return null;
+/** The deployment's interactive profile as the account's managed config (the
+ * "Bivy Cloud" destination), or null when the deployment offers no compute. */
+async function managedProfileConfig(accountId: string): Promise<EphemeralNodeConfig | null> {
+  const profile = await deploymentCompute().profile("interactive", accountId);
+  if (!profile) return null;
   const now = new Date().toISOString();
   return {
-    id: purpose === "auth-runner" ? "managed-auth-runner" : "managed-default",
-    name: purpose === "auth-runner" ? "Authentication Machine" : "Bivy Cloud",
+    id: "managed-default",
+    name: "Bivy Cloud",
     provider: profile.provider,
-    region: profile.region || adapter.defaultRegion,
-    size: profile.size || adapter.defaultSize,
+    region: profile.region,
+    size: profile.size,
     image: profile.image,
     ttlMinutes: Math.max(5, Math.min(24 * 60, Number(profile.ttlMinutes) || 60)),
-    ...(purpose === "interactive" ? { teardownOnAgentFinish: profile.teardownOnAgentFinish ?? true } : {}),
     computeSource: "managed",
     createdAt: now,
     updatedAt: now,
@@ -1405,7 +1330,7 @@ async function managedProfileConfig(purpose: ComputePurpose, accountId: string, 
 }
 
 async function ensureManagedDefaultForAccount(accountId: string): Promise<EphemeralNodeConfig> {
-  const desired = await managedProfileConfig("interactive", accountId);
+  const desired = await managedProfileConfig(accountId);
   if (!desired) throw Object.assign(new Error("Managed session provider is not configured."), { status: 503 });
   const configs = await store.getEphemeralConfigs(accountId);
   const existing = configs.find((config) => config.computeSource === "managed");
@@ -1455,12 +1380,8 @@ app.post("/account/onboarding/auth-runner", managedOnboardingRateLimit, requireU
   // establish the later interactive profile before redirects/reloads can lose
   // browser-only onboarding state.
   await ensureManagedDefaultForAccount(account.id);
-  if (await accountMachineMode(account.id)) {
-    return respondCloudComputer(res, account.id, { purpose: "auth-runner", requestId: String(req.body?.requestId ?? randomUUID()) });
-  }
-  const config = await managedProfileConfig("auth-runner", account.id);
-  if (!config) return res.status(503).json({ error: "Managed setup provider is not configured." });
-  await respondManagedLaunch(res, account.id, { config, purpose: "auth-runner", requestId: req.body?.requestId ?? randomUUID() });
+  if (!(await accountMachineMode(account.id))) return res.status(503).json({ error: "Managed setup provider is not configured." });
+  await respondCloudComputer(res, account.id, { purpose: "auth-runner", requestId: String(req.body?.requestId ?? randomUUID()) });
 }));
 
 // Establish the durable, non-secret profile used by the repo-first composer.
@@ -1507,47 +1428,10 @@ app.get("/account/managed-credential-status", requireUser, asyncHandler(async (r
   res.json({ ready: Boolean(vault?.ciphertext), generation: vault?.generation ?? 0 });
 }));
 
-async function respondManagedLaunch(res: Response, accountId: string, request: ManagedInteractiveRequest): Promise<void> {
-  const config = request.config;
-  const adapter = ephemeralAdapter(config.provider);
-  if (!adapter) { res.status(503).json({ error: "Managed provider is not configured." }); return; }
-  const sizeId = config.size || adapter.defaultSize;
-  const size = adapter.sizes.find((entry) => entry.id === sizeId);
-  try {
-    const result = await managedInteractiveLaunch(store, accountId, request, {
-      admit: async (attemptId, activeManagedMachines) => {
-        const decision = await deploymentDecision(accountId, "ephemeral.provision", attemptId, {
-          activeManagedMachines,
-          computeSource: "managed", provider: config.provider, sizeId, vcpus: size?.vcpus,
-          memoryMiB: size?.memoryMiB, ttlMinutes: config.ttlMinutes ?? 60, configId: config.id,
-          purpose: request.restore ? "interactive-restore" : request.purpose,
-        });
-        if (!decision.allowed) throw Object.assign(new ManagedLaunchConflict(403, decision.code || "managed_launch_denied", decision.reason || "Managed launch denied"), { decision });
-      },
-      launch: (attemptId, nodeId) => request.restore
-        ? provisionEphemeralRestore(store, accountId, config, provisionEnv(), {
-            reuseNodeId: nodeId, restoreSessionId: request.restore.sessionId, attemptId, retryCount: 0, purpose: "interactive",
-          })
-        : provisionEphemeralForAccount(store, accountId, config, provisionEnv(), undefined, Date.now(), request.purpose, { attemptId, nodeId, retryCount: 0 }),
-      launchFailed: managedLaunchFailureRecorder(accountId),
-    });
-    const encryptedKey = result.machine.nodeId ? await store.getNodeRoomKeyEnc(accountId, result.machine.nodeId) : undefined;
-    if (!encryptedKey) throw new ManagedLaunchConflict(409, "managed_launch_pending", "Machine key recovery is pending. Retry this same request.");
-    res.status(result.duplicate ? 200 : 201).json({ ok: true, ...result, roomKey: decryptSecret(accountId, encryptedKey) });
-  } catch (error) {
-    if (error instanceof ManagedLaunchConflict) {
-      res.status(error.status).json({ error: error.message, code: error.code, ...(error as ManagedLaunchConflict & { decision?: object }).decision });
-    } else {
-      // Never return provider bodies or credential-bearing bootstrap failures.
-      res.status(502).json(publicManagedLaunchError(error));
-    }
-  }
-}
-
-// Interactive managed launch. The account chooses only a server-authored managed
-// profile; provider credentials remain operator-only. The room key is returned
-// once over the authenticated no-store response so this browser can establish
-// the same E2E channel as a device-launched Machine.
+// Interactive managed session. The account chooses only a server-authored
+// managed profile; the deployment acquires (creates or wakes) the account's
+// cloud computer. The room key is returned once over the authenticated
+// no-store response so this browser can establish the E2E channel.
 app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   res.setHeader("cache-control", "no-store");
@@ -1556,24 +1440,15 @@ app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res)
   }
   const configId = String(req.body?.configId ?? "").trim();
   const runtimeId = String(req.body?.runtimeId ?? "").trim().slice(0, 120);
-  // Missing hosted credentials no longer reject the session before allocation.
-  // The intended interactive Machine starts in credential-setup mode; agent
-  // execution remains paused until its initial filtered snapshot is confirmed.
   const storedConfig = (await store.getEphemeralConfigs(account.id)).find((candidate) => candidate.id === configId);
   if (!storedConfig || storedConfig.computeSource !== "managed") return res.status(404).json({ error: "Managed session profile not found." });
-  if (await accountMachineMode(account.id)) {
-    return respondCloudComputer(res, account.id, { purpose: "interactive", requestId: String(req.body?.requestId ?? randomUUID()), runtimeId: runtimeId || undefined });
-  }
-  // Select the smallest prebuilt image that contains the requested runtime. The
-  // deployment-owned baseline remains the fallback for custom/unknown agents.
-  const config = { ...storedConfig, image: (await managedProfileConfig("interactive", account.id, runtimeId))?.image ?? storedConfig.image };
-  const adapter = ephemeralAdapter(config.provider);
-  if (!adapter) return res.status(503).json({ error: "Managed session provider is not configured." });
-  await respondManagedLaunch(res, account.id, { config, purpose: "interactive", runtimeId, requestId: req.body?.requestId ?? randomUUID() });
+  if (!(await accountMachineMode(account.id))) return res.status(503).json({ error: "Managed session provider is not configured." });
+  await respondCloudComputer(res, account.id, { purpose: "interactive", requestId: String(req.body?.requestId ?? randomUUID()), runtimeId: runtimeId || undefined });
 }));
 
-// Rebuild a managed session onto fresh operator-owned compute. Account-scoped
-// correlation + escrowed key checks prevent choosing another session/node.
+// Bring a managed session back. The account's cloud computer keeps its
+// sessions on its own disk: this is a wake (or, if its disk was lost, a
+// rebuild of the session onto the same node from its sealed snapshot).
 app.post("/account/managed-machines/restore", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   res.setHeader("cache-control", "no-store");
@@ -1584,26 +1459,9 @@ app.post("/account/managed-machines/restore", requireUser, asyncHandler(async (r
   const nodeId = String(req.body?.nodeId ?? "").trim();
   const configId = String(req.body?.configId ?? "").trim();
   if (!sessionId || !nodeId || !configId) return res.status(400).json({ error: "sessionId, nodeId and configId are required." });
-  // The account's cloud computer keeps its sessions on its own disk: bringing
-  // it back is a wake (or, if its disk was lost, a rebuild onto the same node).
-  if (isCloudComputerNode(account.id, nodeId) && await accountMachineMode(account.id)) {
-    return respondCloudComputer(res, account.id, { purpose: "interactive", requestId: String(req.body?.requestId ?? `restore:${sessionId}:${randomUUID()}`), sessionId });
-  }
-  const [config, correlation, encryptedKey] = await Promise.all([
-    store.getEphemeralConfigs(account.id).then((configs) => configs.find((candidate) => candidate.id === configId)),
-    store.getSessionCorrelation(account.id, sessionId),
-    store.getNodeRoomKeyEnc(account.id, nodeId),
-  ]);
-  if (!config || config.computeSource !== "managed") return res.status(404).json({ error: "Managed session profile not found." });
-  if (!correlation || correlation.nodeId !== nodeId || correlation.setupId !== configId || correlation.computeSource !== "managed") {
-    return res.status(404).json({ error: "Managed session restore record not found." });
-  }
-  if (!encryptedKey) return res.status(409).json({ error: "Managed session key is no longer available." });
-  const adapter = ephemeralAdapter(config.provider);
-  if (!adapter) return res.status(503).json({ error: "Managed session provider is not configured." });
-  // Older clients get a stable identity for this source-machine generation.
-  const requestId = req.body?.requestId ?? createHash("sha256").update(JSON.stringify(["restore", nodeId, sessionId, correlation.machineId || "legacy"])).digest("hex");
-  await respondManagedLaunch(res, account.id, { config, purpose: "interactive", requestId, restore: { nodeId, sessionId } });
+  if (!isCloudComputerNode(account.id, nodeId)) return res.status(404).json({ error: "Managed session restore record not found." });
+  if (!(await accountMachineMode(account.id))) return res.status(503).json({ error: "Managed session provider is not configured." });
+  await respondCloudComputer(res, account.id, { purpose: "interactive", requestId: String(req.body?.requestId ?? `restore:${sessionId}:${randomUUID()}`), sessionId });
 }));
 
 // Mint the one-line personal-machine command. The raw code is returned exactly
@@ -1746,7 +1604,6 @@ app.post("/node/heartbeat", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   await store.setNodeOnline(node.id, true);
   await store.setNodeBootstrapStatus(node.id, "ready");
-  await markHostedMachineMilestone(store, node.accountId, node.id, "nodeReadyAt").catch(() => false);
   if (isCloudComputerNode(node.accountId, node.id)) await store.setNodeMilestone(node.id, "nodeReadyAt", new Date().toISOString());
   res.json({ ok: true });
 }));
@@ -1765,26 +1622,12 @@ app.post("/node/bootstrap-status", requireNode, asyncHandler(async (req, res) =>
 app.post("/node/ephemeral-milestone", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const milestone = String(req.body?.milestone ?? "");
-  if (!(EPHEMERAL_MILESTONES as readonly string[]).includes(milestone)) return res.status(400).json({ error: "unknown milestone" });
-  const at = new Date().toISOString();
-  // The account's cloud computer has no per-launch record: its milestones live
-  // on the node, for the current boot.
-  if (isCloudComputerNode(node.accountId, node.id)) {
-    await store.setNodeMilestone(node.id, milestone, at);
-    return res.json({ ok: true, tracked: true });
-  }
-  const tracked = await markHostedMachineMilestone(store, node.accountId, node.id, milestone as (typeof EPHEMERAL_MILESTONES)[number], at);
-  if (tracked && milestone === "firstAgentEventAt") {
-    const machine = (await store.getHostedMachines(node.accountId)).find((candidate) => candidate.nodeId === node.id);
-    if (machine?.computeSource === "managed" && typeof machine.attemptId === "string") {
-      // Await activation so a failed Cloud policy write is retried by the
-      // milestone caller; the store update above is first-write-wins and safe.
-      await deploymentExtension.record(node.accountId, {
-        type: "ephemeral.first-agent-event", attemptId: machine.attemptId, at,
-      });
-    }
-  }
-  res.json({ ok: true, tracked });
+  if (!isEphemeralMilestone(milestone)) return res.status(400).json({ error: "unknown milestone" });
+  // Only the account's cloud computer is tracked: its milestones live on the
+  // node, for the current boot.
+  if (!isCloudComputerNode(node.accountId, node.id)) return res.json({ ok: true, tracked: false });
+  await store.setNodeMilestone(node.id, milestone, new Date().toISOString());
+  res.json({ ok: true, tracked: true });
 }));
 
 app.post("/node/name", requireNode, asyncHandler(async (req, res) => {
@@ -1867,28 +1710,12 @@ app.put("/session-correlation/:sessionId", requireUser, asyncHandler(async (req,
   res.json({ ok: true, correlation: rec });
 }));
 
-// A disposable ephemeral machine's daemon calls this once it has gone idle, so
-// the control plane can promptly reap providers that don't self-destruct on
-// daemon exit (Hetzner halts but keeps billing). Non-secret: identifies the node
-// via its enrollment bearer only. Fly/EC2 already self-reap on exit, so this is
-// a harmless backstop for them; device-launched machines aren't tracked
-// server-side → reaped:false. See src/ephemeral-teardown.ts.
-app.post("/node/settled", requireNode, asyncHandler(async (req, res) => {
-  const node = (req as Request & { node: NodeRecord }).node;
-  const settledAt = new Date().toISOString();
-  const machine = (await store.getHostedMachines(node.accountId)).find((candidate) => candidate.nodeId === node.id);
-  const usage = machine?.computeSource === "managed" ? usageFromManagedMachine(node.accountId, machine, settledAt) : undefined;
-  const reaped = await reapSettledHostedMachine(store, node.accountId, node.id, provisionEnv()).catch(() => false);
-  // Billing/usage outages must never prevent provider teardown. The extension
-  // event is idempotent and can be recovered from the durable Core settlement.
-  if (usage && typeof machine?.attemptId === "string") {
-    await deploymentExtension.record(node.accountId, {
-      type: "ephemeral.settled", attemptId: machine.attemptId, at: settledAt,
-      machineSeconds: usage.machineSeconds, activeAgentSeconds: usage.activeAgentSeconds,
-    }).catch((error) => console.error("[deployment-extension] settlement event failed", error));
-  }
-  res.json({ ok: true, reaped });
-}));
+// An ephemeral machine's daemon calls this once it has gone idle. Core launches
+// no machines itself, so there is nothing to reap; the deployment owns the
+// cloud computer's lifecycle. Kept so daemons that still signal get a clean 200.
+app.post("/node/settled", requireNode, (_req, res) => {
+  res.json({ ok: true, reaped: false });
+});
 
 // Opaque app registry IDs (random hex); a node publishes at most 50 at once.
 function appIdsFrom(raw: unknown): string[] {
@@ -1951,7 +1778,6 @@ app.post("/node/sessions", requireNode, asyncHandler(async (req, res) => {
   // Reporting only: an older or unavailable extension must not fail the advert.
   await deploymentExtension.publishApps(node.accountId, appIdsFrom(req.body?.apps))
     .catch((error) => console.warn("publishing app IDs failed", error instanceof Error ? error.message : error));
-  await correlateHostedSessions(store, node, sessions);
   res.json({ ok: true, count: sessions.length });
 }));
 
@@ -1989,7 +1815,6 @@ app.put("/internal/nodes/:nodeId/sessions/:sessionId", requireNode, asyncHandler
   const advert = sessionAdvertsFrom([{ ...req.body, sessionId: req.params.sessionId }]);
   for (const s of advert) await store.upsertNodeSession(node.accountId, node.id, s);
   await deploymentExtension.publishSessions(node.accountId, advert.map((session) => session.sessionId));
-  await correlateHostedSessions(store, node, advert);
   res.json({ ok: true, count: advert.length });
 }));
 
@@ -3865,7 +3690,7 @@ app.get("/account/hosted-provisioning", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const status = await store.getHostedProvisioningStatus(client.accountId);
-  res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid(), execution: await hostedExecutionReadiness(store, client.accountId) });
+  res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid(), execution: await cloudComputerReadiness(store, client.accountId, managedComputeEnabled() && await accountMachineMode(client.accountId)) });
 }));
 
 app.put("/account/hosted-provisioning", asyncHandler(async (req, res) => {
@@ -3964,7 +3789,7 @@ app.get("/account/github/central-app", asyncHandler(async (req, res) => {
     configured: Boolean(central),
     appId: central?.appId,
     slug: central?.slug,
-    managedComputeAvailable: managedComputeEnabled() && Boolean(await managedProfileConfig("interactive", client.accountId)),
+    managedComputeAvailable: managedComputeEnabled() && await accountMachineMode(client.accountId),
     installations: installations.map(({ installationId, githubAccount, githubAccountType, repositorySelection, createdAt }) => ({
       installationId, githubAccount, githubAccountType, repositorySelection, createdAt,
     })),
@@ -4089,80 +3914,41 @@ app.delete("/account/github/central-app/installations/:installationId", asyncHan
   res.json({ ok: true });
 }));
 
-// Redacted inventory for unattended runners. Provider credentials and escrowed
-// room keys live in separate stores and are never returned here; keep the
-// allowlist explicit so future internal bookkeeping fields do not leak by
-// accident. This endpoint is also the observable contract used by live smoke
-// tests to prove that teardown left no paid resource tracked.
+// The account's cloud machines as the deployment reports them, redacted to an
+// explicit allowlist so deployment bookkeeping fields never leak by accident.
+// Escrowed room keys live in separate stores and are never returned here.
 app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  if (await accountMachineMode(client.accountId)) {
-    const nodes = await store.listNodes(client.accountId);
-    res.json((await deploymentExtension.computeMachines(client.accountId).catch(() => [])).map((m) => ({
-      milestones: nodes.find((n) => n.id === m.nodeId)?.milestones,
-      id: typeof m.id === "string" ? m.id : "",
-      nodeId: typeof m.nodeId === "string" ? m.nodeId : undefined,
-      name: typeof m.name === "string" ? m.name : "Bivy Cloud",
-      provider: typeof m.provider === "string" ? m.provider : "",
-      region: typeof m.region === "string" ? m.region : undefined,
-      size: typeof m.size === "string" ? m.size : undefined,
-      status: typeof m.status === "string" ? m.status : undefined,
-      createdAt: typeof m.createdAt === "string" ? m.createdAt : "",
-      purpose: "interactive",
-      lifecycleState: typeof m.state === "string" ? m.state : undefined,
-    })));
-    return;
-  }
-  const machines = await store.getHostedMachines(client.accountId);
-  // Join in the durable attempt for lifecycle fields the legacy inventory row
-  // doesn't carry — phase, deadline, last provider-observed status, and the
-  // last error, so the PWA can show WHY a machine is stuck rather than just
-  // that it exists. Best-effort: a missing/unreadable attempt just omits them.
-  const machinesWithAttempts = await Promise.all(machines.map(async (m) => {
-    const attemptId = typeof m.attemptId === "string" ? m.attemptId : "";
-    const attempt = attemptId ? await store.getHostedMachineAttempt(client.accountId, attemptId).catch(() => undefined) : undefined;
-    return { m, attempt };
-  }));
-  res.json(machinesWithAttempts.map(({ m, attempt }) => ({
+  if (!(await accountMachineMode(client.accountId))) return res.json([]);
+  const nodes = await store.listNodes(client.accountId);
+  res.json((await deploymentExtension.computeMachines(client.accountId).catch(() => [])).map((m) => ({
+    milestones: nodes.find((n) => n.id === m.nodeId)?.milestones,
     id: typeof m.id === "string" ? m.id : "",
     nodeId: typeof m.nodeId === "string" ? m.nodeId : undefined,
-    name: typeof m.name === "string" ? m.name : undefined,
+    name: typeof m.name === "string" ? m.name : "Bivy Cloud",
     provider: typeof m.provider === "string" ? m.provider : "",
     region: typeof m.region === "string" ? m.region : undefined,
     size: typeof m.size === "string" ? m.size : undefined,
     status: typeof m.status === "string" ? m.status : undefined,
     createdAt: typeof m.createdAt === "string" ? m.createdAt : "",
-    ttlMinutes: typeof m.ttlMinutes === "number" ? m.ttlMinutes : undefined,
-    setupId: typeof m.setupId === "string" ? m.setupId : undefined,
-    purpose: m.purpose === "queue-item" || m.purpose === "queue-default" || m.purpose === "ready-capacity" || m.purpose === "auth-runner" || m.purpose === "interactive" ? m.purpose : undefined,
-    claimedAt: typeof m.claimedAt === "string" ? m.claimedAt : undefined,
-    milestones: m.milestones && typeof m.milestones === "object" ? m.milestones : undefined,
-    lifecycleState: attempt?.state,
-    desiredState: attempt?.desiredState,
-    observedState: attempt?.observedState,
-    deadlineAt: attempt?.deadlineAt,
-    lastError: attempt?.lastError,
+    purpose: "interactive",
+    lifecycleState: typeof m.state === "string" ? m.state : undefined,
   })));
 }));
 
-// Manual cost kill switch for one tracked hosted runner. `reap` retains the
-// record when provider deletion fails; verify absence afterwards so the API
-// never reports success for a machine that may still be billing.
+// Destroy the account's cloud computer and its disk. The deployment confirms
+// the release; the API never reports success for a machine that may remain.
 app.delete("/account/hosted-machines/:nodeId", asyncHandler(async (req, res) => {
   const client = await store.resolveClient(bearer(req));
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const nodeId = String(req.params.nodeId || "").trim();
   if (!nodeId) return res.status(400).json({ error: "nodeId is required" });
-  if (isCloudComputerNode(client.accountId, nodeId) && await accountMachineMode(client.accountId)) {
-    const released = await deploymentExtension.computeRelease(client.accountId, nodeId).catch(() => false);
-    if (!released) return res.status(502).json({ error: "The cloud machine couldn't be released; it remains tracked for retry" });
-    return res.json({ ok: true, nodeId });
+  if (!isCloudComputerNode(client.accountId, nodeId) || !(await accountMachineMode(client.accountId))) {
+    return res.status(404).json({ error: "Hosted machine not found" });
   }
-  const existed = await reapSettledHostedMachine(store, client.accountId, nodeId, provisionEnv());
-  if (!existed) return res.status(404).json({ error: "Hosted machine not found" });
-  const retained = (await store.getHostedMachines(client.accountId)).some((m) => m.nodeId === nodeId);
-  if (retained) return res.status(502).json({ error: "Provider teardown failed; machine remains tracked for retry" });
+  const released = await deploymentExtension.computeRelease(client.accountId, nodeId).catch(() => false);
+  if (!released) return res.status(502).json({ error: "The cloud machine couldn't be released; it remains tracked for retry" });
   res.json({ ok: true, nodeId });
 }));
 
@@ -4176,22 +3962,6 @@ app.post("/account/hosted-provisioning/rotate", asyncHandler(async (req, res) =>
   await store.appendHostedAudit(client.accountId, { at: new Date().toISOString(), action: "credential_rotated", detail: `kid ${hostedPrimaryKid() ?? ""}` });
   const status = await store.getHostedProvisioningStatus(client.accountId);
   res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid() });
-}));
-
-// Inspect or trigger the provisioning decision. Dry-run by default (returns the
-// plan); pass { execute: true } to actually launch when the plan says so.
-app.post("/account/hosted-provision-now", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
-  if (!client) return res.status(401).json({ error: "Unauthorized" });
-  const admission = managedProvisionAdmission(client.accountId);
-  const plan = await planAutoProvision(store, client.accountId, Date.now(), admission);
-  if (req.body?.execute === true && plan.willProvision) {
-    const machine = await maybeAutoProvision(
-      store, client.accountId, provisionEnv(), undefined, admission, managedLaunchFailureRecorder(client.accountId),
-    );
-    return res.json({ plan, provisioned: machine ? { id: machine.id, nodeId: machine.nodeId } : null });
-  }
-  res.json({ plan });
 }));
 
 // Mint-on-demand: a hosted machine's git credential helper fetches a fresh

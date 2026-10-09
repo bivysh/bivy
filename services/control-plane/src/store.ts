@@ -408,9 +408,9 @@ export function redactHostedProvisioning(h: HostedProvisioning): HostedProvision
   };
 }
 
-/** Durable control-plane intent for one paid machine creation. Written before
- * enrollment/provider calls and retained through confirmed deletion so a crash
- * cannot make a provider resource invisible to reconciliation. */
+/** A machine launch recorded by the retired in-core per-session provisioner.
+ * Nothing writes these any more; existing rows are read only so a guest they
+ * name keeps its restricted hosted-vault write rights. */
 export type HostedMachineAttemptState =
   | "requested" | "enrolled" | "provider-accepted" | "tracked"
   | "ready" | "claimed" | "working" | "deleting" | "deleted" | "failed";
@@ -454,26 +454,6 @@ export interface HostedMachineAttempt {
   version?: number;
   createdAt: string;
   updatedAt: string;
-}
-
-/** Thrown by `putHostedMachineAttempt` when `expectedVersion` no longer matches
- * the stored row — another writer (a second reconciler pass, a concurrent
- * replica) has already moved this attempt forward. Callers should re-read and
- * decide whether their update still applies rather than blindly retrying. */
-export class ConcurrentAttemptUpdateError extends Error {
-  constructor(accountId: string, attemptId: string) {
-    super(`hosted machine attempt ${accountId}/${attemptId} was updated concurrently`);
-    this.name = "ConcurrentAttemptUpdateError";
-  }
-}
-
-/** Stable, non-reversible per-account tag applied to every provider resource a
- * hosted launch creates (Hetzner label, Fly metadata, EC2 tag). Never the raw
- * account id — a provider account/API console may be shared or visible to
- * support staff, and the tag's only job is to scope an orphan-discovery scan to
- * "resources this Bivy account is responsible for", not to identify the account. */
-export function ownershipTagFor(accountId: string): string {
-  return createHash("sha256").update(`bivy-ownership:${accountId}`).digest("hex").slice(0, 24);
 }
 
 /** An audit event recording a use of hosted credentials (never contains a secret). */
@@ -1191,20 +1171,6 @@ export interface UsageMetrics {
   sessionsByStatus: Record<string, number>;
 }
 
-export interface SessionUsageRecord {
-  accountId: string;
-  /** Stable launch/attempt identity; the idempotency key for settlement. */
-  usageId: string;
-  sessionId?: string;
-  machineId?: string;
-  nodeId?: string;
-  launchedAt: string;
-  firstAgentEventAt?: string;
-  settledAt: string;
-  machineSeconds: number;
-  activeAgentSeconds: number;
-}
-
 export interface StoreLifecycle {
   init(): Promise<void>;
   // Lightweight liveness check for the backing store. Resolves when the store is
@@ -1394,51 +1360,17 @@ export interface EphemeralConfigurationRepository {
 }
 
 export interface HostedMachineRepository {
-  // Hosted (control-plane-orchestrated) provisioning: per-account credentials +
-  // enable flag, and a tracking list of machines the control plane launched
-  // itself (for dedupe/teardown). Machines are stored as opaque JSONB records.
+  // Hosted provisioning: per-account credentials + enable flag. Legacy launch
+  // attempts from the retired in-core provisioner are listed read-only.
   getHostedProvisioning(accountId: string): Promise<HostedProvisioning>;
   /** Non-decrypting presence view for the settings UI (no master key needed). */
   getHostedProvisioningStatus(accountId: string): Promise<HostedProvisioningStatus>;
   setHostedProvisioning(accountId: string, patch: Partial<HostedProvisioning>): Promise<HostedProvisioning>;
-  getHostedMachines(accountId: string): Promise<Array<Record<string, unknown>>>;
-  setHostedMachines(accountId: string, machines: Array<Record<string, unknown>>): Promise<Array<Record<string, unknown>>>;
-  /** Upsert an attempt row. When `opts.expectedVersion` is given, the write is
-   * fenced: it only applies if the stored row's `version` still matches, else
-   * throws `ConcurrentAttemptUpdateError`. Omitted, this is last-write-wins
-   * (the shape every pre-existing call site relies on). */
-  putHostedMachineAttempt(attempt: HostedMachineAttempt, opts?: { expectedVersion?: number }): Promise<HostedMachineAttempt>;
-  getHostedMachineAttempt(accountId: string, attemptId: string): Promise<HostedMachineAttempt | undefined>;
   listHostedMachineAttempts(accountId: string, activeOnly?: boolean): Promise<HostedMachineAttempt[]>;
-  /** Cross-replica mutex around the read/decide/provider-launch sequence. The
-   * lease expires so a crashed control-plane process cannot wedge the account. */
-  acquireHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean>;
-  /** Extend only a lease still owned by `holder`; false means ownership was lost. */
-  renewHostedProvisionLease(accountId: string, holder: string, ttlSeconds: number): Promise<boolean>;
-  releaseHostedProvisionLease(accountId: string, holder: string): Promise<void>;
-  /** Accounts that currently track at least one control-plane-provisioned
-   * machine. Used by the global lifecycle reconciler; returns ids only. */
-  listHostedMachineAccountIds(): Promise<string[]>;
-  /** Accounts with at least one config requesting ready capacity. */
-  listReadyCapacityAccountIds(): Promise<string[]>;
-  /** Accounts with hosted provisioning enabled — a superset of
-   * `listHostedMachineAccountIds()` that includes accounts with NO currently
-   * tracked machine/attempt. Used by the orphan-discovery sweep: the one
-   * failure mode it exists to catch is exactly "tracking itself was lost", so
-   * it cannot rely on tracking to know which accounts to check. */
-  listHostedEnabledAccountIds(): Promise<string[]>;
   // Append-only audit trail of hosted-credential use (capped, newest-first read).
   appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void>;
   listHostedAudit(accountId: string, limit?: number): Promise<HostedAuditEvent[]>;
 
-}
-
-export interface ComputeUsageRepository {
-  /** Idempotently persist a settled launch. The first settlement boundary wins,
-   * so repeated teardown callbacks cannot extend or double-charge the machine. */
-  upsertSessionUsage(record: SessionUsageRecord): Promise<SessionUsageRecord>;
-  /** Rows overlapping [startsAt, endsAt), oldest boundaries included. */
-  listSessionUsage(accountId: string, startsAt: string, endsAt: string, limit?: number): Promise<SessionUsageRecord[]>;
 }
 
 export interface VaultRepository {
@@ -1509,7 +1441,6 @@ export interface SessionStateRepository {
   // their provider/GitHub creds); device-launched sessions keep the room key
   // device-only and never escrow. Never exposed to any client.
   getNodeRoomKeyEnc(accountId: string, nodeId: string): Promise<SecretEnvelope | undefined>;
-  setNodeRoomKeyEnc(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<void>;
   /** Atomically preserve the first E2E identity created by concurrent devices. */
   setNodeRoomKeyEncIfAbsent(accountId: string, nodeId: string, enc: SecretEnvelope): Promise<SecretEnvelope>;
 
@@ -1734,7 +1665,6 @@ export interface ControlPlaneStore
     NotificationRepository,
     EphemeralConfigurationRepository,
     HostedMachineRepository,
-    ComputeUsageRepository,
     VaultRepository,
     SessionStateRepository,
     GithubAppVaultRepository,

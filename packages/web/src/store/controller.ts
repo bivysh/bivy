@@ -483,7 +483,6 @@ export class AppController {
       direct: () => this.direct,
       currentNodeId: () => this.local.cur,
       nodes: () => this.store.getState().connection.nodes,
-      correlations: () => this.ephemeralCorrelations,
       restoreManagedMachine: (input) => restoreManagedSessionMachine(this.local, input),
       connectToNode: (nodeId, timeoutMs) => this.connectToNode(nodeId, timeoutMs),
       reportError: (error) => this.store.setError(error.message),
@@ -2997,26 +2996,6 @@ export class AppController {
     else await this.launchDraftRunnerAndBind(id);
   }
 
-  /** Preserve the pending prompt but replace a guest whose immutable image is
-   * missing an agent or otherwise cannot recover in place. */
-  async retryPendingLaunchOnFreshMachine(id: string): Promise<void> {
-    const task = this.pendingLaunches.get(id);
-    if (!task) return;
-    const transport = task.transport;
-    task.transport = undefined;
-    transport?.close();
-    const nodeId = task.machine?.nodeId;
-    if (nodeId) await this.destroyHostedMachine(nodeId).catch(() => {});
-    task.machine = undefined;
-    task.sessionId = undefined;
-    task.promptSent = false;
-    task.logs.push("Replacing the Cloud Machine and retrying the preserved first message…");
-    task.phase = "provisioning";
-    task.updatedAt = new Date().toISOString();
-    this.store.retryPendingSession(id);
-    await this.pendingLaunchStore.put(task);
-    await this.launchDraftRunnerAndBind(id);
-  }
 
   async dismissPendingLaunch(id: string): Promise<void> {
     const task = this.pendingLaunches.get(id);

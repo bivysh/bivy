@@ -25,8 +25,7 @@ for (const theme of themes) {
         createRoot(document.getElementById('root')).render(React.createElement(SessionLaunchProgressView, {
           progress: ${JSON.stringify(progress)},
           onSetupCredentials: async () => { globalThis.recovery.push('credentials'); },
-          onRetryLaunch: async () => { globalThis.recovery.push('same-request'); },
-          onRetryFreshMachine: async () => { globalThis.recovery.push('fresh'); }
+          onRetryLaunch: async () => { globalThis.recovery.push('same-request'); }
         }));
       </script></body></html>`);
       await page.route(`${origin}${fixturePath}`, route => route.fulfill({ contentType: "text/html", body: html }));

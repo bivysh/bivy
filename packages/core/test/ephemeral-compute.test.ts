@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import { describe, expect, it } from "vitest";
 import { ephemeralComputeIntent, ephemeralComputeIntentLabel } from "../src/ephemeral-compute.js";
-import { EPHEMERAL_PROVIDER_ADAPTERS } from "../src/ephemeral-provider-registry.js";
 
 describe("ephemeral compute intents", () => {
   it.each([
@@ -17,18 +16,5 @@ describe("ephemeral compute intents", () => {
   it("does not optimistically classify missing facts", () => {
     expect(ephemeralComputeIntent({ id: "unknown", label: "Unknown" })).toBe("quick");
     expect(ephemeralComputeIntentLabel({ id: "x", label: "x", vcpus: 4, memoryMiB: 8192 })).toBe("Standard");
-  });
-
-  it("publishes structured facts and an agent-fit default for every adapter", () => {
-    for (const adapter of EPHEMERAL_PROVIDER_ADAPTERS) {
-      for (const size of adapter.sizes) {
-        expect(size.vcpus, `${adapter.id}/${size.id} vcpus`).toBeGreaterThan(0);
-        expect(size.memoryMiB, `${adapter.id}/${size.id} memory`).toBeGreaterThan(0);
-        expect(size.architecture, `${adapter.id}/${size.id} architecture`).toMatch(/^(x86_64|arm64)$/);
-      }
-      const selected = adapter.sizes.find((size) => size.id === adapter.defaultSize);
-      expect(selected, `${adapter.id} default exists`).toBeDefined();
-      expect(ephemeralComputeIntent(selected!), `${adapter.id} default intent`).toBe("standard");
-    }
   });
 });

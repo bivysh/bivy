@@ -1,24 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-// Explicit provider-side ports and value contracts. Adapter implementations
-// receive transport capabilities through ExecFn and retain no secret globals.
+// Boot contract for an ephemeral node and the machine-size facts shared by
+// lifecycle and compute projections.
 
 import type { PricedMachineSize } from "./ephemeral-lifecycle.js";
-import type { EphemeralMachine } from "./ephemeral-machine.js";
-
-/* eslint-disable @typescript-eslint/no-explicit-any */
-
-export interface ExecRequest {
-  method: string;
-  url: string;
-  headers?: Record<string, string>;
-  body?: unknown;
-}
-export interface ExecResult {
-  status: number;
-  body: any;
-}
-export type ExecFn = (request: ExecRequest) => Promise<ExecResult>;
 
 export interface BootstrapOpts {
   relayUrl: string;
@@ -66,19 +51,15 @@ export interface BootstrapOpts {
    *  the device's "Destroy when the agent finishes" toggle, so it no longer needs
    *  the launching device to stay online. */
   teardownOnAgentFinish?: boolean;
-  /** DEBUG: disable Fly `auto_destroy` so a boot-failed machine stays (stopped)
-   *  with its logs retained, instead of vanishing. Staging diagnosis only. */
-  debugKeepMachine?: boolean;
   /** Rebuild-resume (Gap B): the session id to restore from its control-plane
    *  snapshot on boot (exported as `BIVY_RESTORE`). The machine reuses this
    *  session's node id + room key so it can fetch and decrypt the snapshot. */
   restoreSessionId?: string;
   /** The machine sleeps instead of being destroyed: when idle the daemon exits
    *  without signalling settled, the provider keeps the stopped machine and its
-   *  persistent disk, and `wake` starts it again. Bivy's data dir, the
-   *  workspace and HOME (agent sign-ins, package caches, user-installed tools)
-   *  live on that disk at `PERSISTENT_ROOT`. Only for providers that implement
-   *  `wake`. */
+   *  persistent disk, and the deployment starts it again on use. Bivy's data
+   *  dir, the workspace and HOME (agent sign-ins, package caches, user-installed
+   *  tools) live on that disk at `PERSISTENT_ROOT`. */
   sleepOnIdle?: boolean;
 }
 
@@ -86,7 +67,7 @@ export interface BootstrapOpts {
 export const PERSISTENT_ROOT = "/data";
 
 /** A pickable machine size. `id` is the provider-native identifier that gets
- *  passed back as `config.size` at provision time. */
+ *  passed back as the machine size. */
 export interface ProviderAccelerator {
   vendor: "nvidia" | "amd";
   model: string;
@@ -106,73 +87,8 @@ export interface ProviderSize extends PricedMachineSize {
   architecture?: "x86_64" | "arm64";
   accelerator?: ProviderAccelerator;
   /** Approximate on-demand compute price per hour in the provider's currency
-   *  (see `ProviderAdapter.currency`), for showing an at-a-glance cost estimate
+   *  (see the provider catalog), for showing an at-a-glance cost estimate
    *  before launch. Storage/egress/taxes aren't included. */
   pricePerHour?: number;
   priceSource?: "live" | "indicative";
-}
-
-export interface ProviderProvisionConfig {
-  slug: string;
-  region: string;
-  size: string;
-  image?: string;
-  ttlMinutes?: number;
-  attemptId: string;
-  ownershipTag?: string;
-  /** Provider-specific optional resource overrides used by direct adapter callers. */
-  org?: string;
-  cpus?: number;
-  memoryMb?: number;
-  /** Keep the machine and a persistent disk of this many GB across idle
-   *  periods instead of destroying it (see `BootstrapOpts.sleepOnIdle`). */
-  persistentDiskGb?: number;
-}
-
-export interface ProviderAdapter {
-  id: string;
-  name: string;
-  /** ISO currency code the provider bills in — drives the cost-hint symbol.
-   *  Fly/AWS bill in USD, Hetzner in EUR. */
-  currency: string;
-  regions: { id: string; label: string }[];
-  defaultRegion: string;
-  sizes: ProviderSize[];
-  defaultSize: string;
-  /** Authenticate with a read-only provider request. Used during onboarding so
-   * invalid/under-scoped credentials fail before Bivy stores or launches with
-   * them. Must never create, update, wake, stop, or delete a resource. */
-  validateToken?(args: { exec: ExecFn; token: string; region?: string }): Promise<void>;
-  /** False when guest shutdown does not delete the paid resource. Such a
-   * provider may launch only when an independent controller has teardown
-   * credentials; device-only TTL shutdown is not a billing guarantee. */
-  guestCanEnsureDeletion?: boolean;
-  /** Optionally fetch the provider's live, currently-orderable sizes so the
-   *  hardcoded `sizes` list can't silently go stale (e.g. a plan gets
-   *  deprecated). When a region is given, results are narrowed to what that
-   *  region can actually order. Falls back to `sizes` when absent or on error. */
-  listSizes?(args: { exec: ExecFn; token: string; region?: string }): Promise<ProviderSize[]>;
-  /** `userData` is the ready-made cloud-init payload (used by VM providers).
-   *  `bootstrap` is the same intent in structured form, for providers that can't
-   *  run cloud-init and must assemble their own boot config (Fly — see its
-   *  adapter). Both describe one node; an adapter uses whichever it needs. */
-  provision(args: { exec: ExecFn; token: string; config: ProviderProvisionConfig; userData: string; bootstrap?: BootstrapOpts }): Promise<EphemeralMachine>;
-  status(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<string>;
-  destroy(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<void>;
-  /** Start a machine that went to sleep (stopped with its persistent disk).
-   *  Present only on providers whose stopped machines stop compute billing;
-   *  its presence is the sleep capability. Idempotent on a running machine. */
-  wake?(args: { exec: ExecFn; token: string; machine: EphemeralMachine }): Promise<void>;
-  /** List every live resource tagged with `ownershipTag` at the provider,
-   *  independent of anything Bivy currently has tracked. This is the recovery
-   *  path for the one failure #554's per-attempt idempotent-create/adopt can't
-   *  cover: the durable attempt row itself being lost (both the row AND the
-   *  legacy inventory array) after a resource was actually created. Only
-   *  implemented for providers where an orphaned resource keeps billing
-   *  (Hetzner/Fly/EC2). */
-  discover?(args: { exec: ExecFn; token: string; ownershipTag: string }): Promise<EphemeralMachine[]>;
-  /** Settle a canceled create whose response/identity was never recorded.
-   * Return true only after all resources for the exact launch are absent.
-   * Unsupported/ambiguous ownership must retain the reservation. */
-  cleanupAttempt?(args: { exec: ExecFn; token: string; nodeId: string; attemptId: string; ownershipTag: string }): Promise<boolean>;
 }

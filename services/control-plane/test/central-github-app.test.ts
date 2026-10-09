@@ -16,7 +16,7 @@ import {
   pickCentralInstallation,
   resolveGithubIdentity,
 } from "../src/central-github-app.js";
-import { mintHostedInstallationToken } from "../src/ephemeral-provisioner.js";
+import { mintHostedInstallationToken } from "../src/central-github-app.js";
 import type { CentralGithubInstallation } from "../src/store.js";
 
 const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });

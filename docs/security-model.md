@@ -27,7 +27,7 @@ The short version, before the detail:
 | --- | --- | --- | --- |
 | QR / `bivy link` pairing (hosted or self-hosted control plane) | **Never** | **Never** | The node — the QR carries the node's public key and a single-use secret out of band |
 | Account pairing (a signed-in browser links a node from the app) | **Never** | **Never** for session content | The **control plane** — the node wraps the room key for any device key the control plane authorizes |
-| Hosted ephemeral provisioning (control plane launches the machine) | **Never** | It **holds the room key** (escrowed) | The control plane — this is an explicit hosted-custody mode |
+| Hosted cloud computer (the deployment runs the machine; the control plane boots it) | **Never** | It **holds the room key** (escrowed) | The control plane — this is an explicit hosted-custody mode |
 | Terminal CLI on the node (`bivy run`, `bivy attach`) | n/a — nothing leaves the machine | n/a | Nobody |
 
 "Never" for the relay is unconditional: there is no plaintext or downgrade mode
@@ -542,10 +542,10 @@ sensitive.
     control plane puts the decision under your own control. See
     [Account pairing](#account-pairing-the-control-plane-vouches-for-the-device).
 16. **Hosted ephemeral provisioning is an explicit hosted-custody mode.** When
-    the control plane launches an ephemeral machine on your behalf, it
-    generates the machine's room key and **escrows it** (encrypted at rest,
-    `setNodeRoomKeyEnc`, `services/control-plane/src/ephemeral-provisioner.ts`)
-    so it can reach the machine again later; the same mode may hold a filtered
+    the deployment runs your account's cloud computer, the control plane
+    generates its room key and **escrows it** (encrypted at rest,
+    `setNodeRoomKeyEncIfAbsent`, `services/control-plane/src/cloud-computer.ts`)
+    so it can boot the machine again later; the same mode may hold a filtered
     set of credentials you have explicitly granted for unattended runs. For
     those machines the control plane can decrypt session traffic — this is a
     deliberate trade of end-to-end privacy for device-offline provisioning,
