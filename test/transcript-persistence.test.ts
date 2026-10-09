@@ -281,3 +281,30 @@ test("resolveWorkspaceRefs reads one file for a path written both as an image an
   h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: "![c](out/chart.png)\n::view{src=out/chart.png}" }]), dir);
   assert.equal(reads, 1, "one reference, one read, one stored copy");
 });
+
+test("resolveWorkspaceRefs resolves a dataset a chart spec points at", () => {
+  // `data.url` inside a ```bivy fence is a reference like any other: the node
+  // reads it under the same confinement, so the chart never fetches anything.
+  const dir = workspace({ "data/use.csv": "city,kwh\nOslo,4650\n" });
+  const stored: any[] = [];
+  const h = harness();
+  (h.deps.attachmentStore as any).put = (bytes: Buffer, meta: any) => {
+    stored.push({ ...meta, text: bytes.toString() });
+    return { hash: "h4", name: meta.name, mimeType: meta.mimeType, size: bytes.length, kind: meta.kind };
+  };
+  const text = ["Here:", "", "```bivy", '{"mark":"bar","data":{"url":"data/use.csv"}}', "```"].join("\n");
+  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: text }]), dir);
+
+  assert.equal((h.eventLog as any).inlineImages.length, 1);
+  assert.equal((h.eventLog as any).inlineImages[0].url, "data/use.csv");
+  assert.equal(stored[0].kind, "file", "a dataset is not an image");
+  assert.match(stored[0].text, /Oslo,4650/, "the rows are captured into the transcript at emit time");
+});
+
+test("resolveWorkspaceRefs ignores a remote url in a spec", () => {
+  const dir = workspace({ "data/use.csv": "city,kwh\nOslo,4650\n" });
+  const h = harness();
+  const text = ["```bivy", '{"mark":"bar","data":{"url":"https://x.test/d.csv"}}', "```"].join("\n");
+  h.tp.resolveWorkspaceRefs(sess([{ role: "assistant", content: text }]), dir);
+  assert.equal((h.eventLog as any).inlineImages.length, 0, "a remote dataset is refused, not fetched");
+});

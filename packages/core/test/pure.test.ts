@@ -13,6 +13,7 @@ import {
   inline,
   extractImageReferences,
   extractMessageReferences,
+  specReferences,
   classifyImageTarget,
   componentKind,
   isComponentFence,
@@ -316,6 +317,29 @@ describe("componentKind", () => {
   });
 });
 
+describe("specReferences", () => {
+  it("finds workspace paths in url fields at any depth", () => {
+    // Vega-Lite allows one data.url per layer, facet and lookup, so the whole
+    // spec is walked rather than just its top level.
+    const spec = {
+      data: { url: "data/top.csv" },
+      layer: [{ data: { url: "data/inner.csv" } }, { mark: "line" }],
+      transform: [{ lookup: "k", from: { data: { url: "data/lookup.json" } } }],
+    };
+    expect(specReferences(spec)).toEqual(["data/top.csv", "data/inner.csv", "data/lookup.json"]);
+  });
+  it("ignores a url that is not a workspace path, so it is never resolved", () => {
+    expect(specReferences({ data: { url: "https://x.test/d.csv" } })).toEqual([]);
+    expect(specReferences({ data: { url: "/etc/passwd" } })).toEqual([]);
+    expect(specReferences({ data: { url: "../../secrets.csv" } })).toEqual([]);
+  });
+  it("de-duplicates and respects the shared cap", () => {
+    expect(specReferences({ a: { url: "d.csv" }, b: { url: "d.csv" } })).toEqual(["d.csv"]);
+    const many = Object.fromEntries(Array.from({ length: 12 }, (_, i) => [`k${i}`, { url: `d${i}.csv` }]));
+    expect(specReferences(many)).toHaveLength(MAX_COMPONENTS_PER_MESSAGE);
+  });
+});
+
 describe("extractMessageReferences", () => {
   it("collects image and directive references in document order under one cap", () => {
     const text = ["![a](out/a.png)", "::view{src=data/b.csv}", "![c](https://x.test/c.png)"].join("\n");
@@ -330,6 +354,12 @@ describe("extractMessageReferences", () => {
     // line by line here would place a mount point nothing ever resolved.
     expect(extractMessageReferences("![a long\ncaption](out/a.png)")).toEqual([
       { ref: "out/a.png", origin: "workspace", syntax: "image" },
+    ]);
+  });
+  it("collects a dataset a spec points at, so the node resolves it like any other", () => {
+    const text = ["```bivy", '{"mark":"line","data":{"url":"data/use.csv"}}', "```"].join("\n");
+    expect(extractMessageReferences(text)).toEqual([
+      { ref: "data/use.csv", origin: "workspace", syntax: "spec" },
     ]);
   });
   it("resolves a path written both ways once, keeping the stricter image rule", () => {

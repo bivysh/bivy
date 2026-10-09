@@ -196,8 +196,8 @@ const LEAF_NAMES = new Set(["view"]);
 
 /** Which syntax asked for a reference. The node refuses non-image bytes for an
  *  `image` reference (a mistyped link must not become a chip) but allows them
- *  for a `view`, where showing a file is the whole point. */
-export type ReferenceSyntax = "image" | "view";
+ *  for a `view` or a `spec`, where reading a file is the whole point. */
+export type ReferenceSyntax = "image" | "view" | "spec";
 
 export interface MessageReference {
   ref: string;
@@ -321,11 +321,82 @@ export function componentKind(opts: { path?: string | null; mimeType?: string | 
   return "file";
 }
 
+/** How deep into a spec to look for references. Bounded so a pathological
+ *  nesting cannot turn one message into an unbounded walk. */
+const MAX_SPEC_DEPTH = 8;
+
 /**
- * Every reference a message makes that Bivy has to resolve — from image syntax
- * or from a directive — de-duplicated, in first-seen order, under ONE shared
- * cap. One budget across both forms is deliberate: the cost being bounded is
- * file reads and persisted bytes, which do not care which syntax asked.
+ * Workspace files a SPEC references, by putting a relative path in a `url`
+ * field. That is Vega-Lite's `data.url`, which is how a chart points at a
+ * dataset rather than carrying every row inline — and the whole spec is walked
+ * because Vega-Lite allows one per layer, facet and lookup, not just at the top.
+ *
+ * Deliberately keyed on the field NAME, not on anything Vega-specific: this
+ * file must not learn one kind's schema, and "a `url` field holding a
+ * workspace path is a reference" is a rule any future kind can use.
+ *
+ * A `url` that is not a workspace path (an `https://` address, say) is not
+ * returned, and so is never resolved — the view layer refuses those outright
+ * rather than letting a chart make the reader's browser fetch it.
+ */
+export function specReferences(spec: unknown, limit = MAX_COMPONENTS_PER_MESSAGE): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const walk = (value: unknown, depth: number): void => {
+    if (out.length >= limit || depth > MAX_SPEC_DEPTH || !value || typeof value !== "object") return;
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item, depth + 1);
+      return;
+    }
+    for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+      if (key === "url" && typeof child === "string") {
+        const ref = unescapeComponentRef(child);
+        if (classifyImageTarget(ref) === "workspace" && !seen.has(ref)) {
+          seen.add(ref);
+          out.push(ref);
+          if (out.length >= limit) return;
+        }
+        continue;
+      }
+      walk(child, depth + 1);
+    }
+  };
+  walk(spec, 0);
+  return out;
+}
+
+/** Each ```bivy fence in `text`, as a parsed spec with its offset. Line-wise,
+ *  because that is how a fence is defined; an unterminated one yields nothing,
+ *  which is also how a half-streamed message behaves. */
+function componentFences(text: string): Array<{ spec: Record<string, unknown>; at: number }> {
+  const out: Array<{ spec: Record<string, unknown>; at: number }> = [];
+  const lines = String(text).split("\n");
+  let at = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    const start = at;
+    at += line.length + 1;
+    if (!isComponentFence(line.trim().replace(/^```+/, ""))) continue;
+    const body: string[] = [];
+    let j = i + 1;
+    for (; j < lines.length && !lines[j]!.trim().startsWith("```"); j++) {
+      body.push(lines[j]!);
+      at += lines[j]!.length + 1;
+    }
+    if (j < lines.length) at += lines[j]!.length + 1;
+    const spec = parseComponentSpec(body.join("\n"));
+    if (spec) out.push({ spec, at: start });
+    i = j;
+  }
+  return out;
+}
+
+/**
+ * Every reference a message makes that Bivy has to resolve — from image syntax,
+ * from a directive, or from a `url` inside a spec — de-duplicated, in first-seen
+ * order, under ONE shared cap. One budget across all three forms is deliberate:
+ * the cost being bounded is file reads and persisted bytes, which do not care
+ * which syntax asked.
  */
 export function extractMessageReferences(text: string, limit = MAX_COMPONENTS_PER_MESSAGE): MessageReference[] {
   if (!text) return [];
@@ -349,6 +420,13 @@ export function extractMessageReferences(text: string, limit = MAX_COMPONENTS_PE
     const directive = parseComponentDirective(line);
     if (directive?.ref) found.push({ ref: directive.ref, origin: "workspace", syntax: "view", at });
     at += line.length + 1;
+  }
+
+  // A spec can point at a dataset instead of carrying it (a chart's data.url).
+  for (const { spec, at: offset } of componentFences(source)) {
+    for (const ref of specReferences(spec, limit)) {
+      found.push({ ref, origin: "workspace", syntax: "spec", at: offset });
+    }
   }
 
   found.sort((a, b) => a.at - b.at);

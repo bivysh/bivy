@@ -7,7 +7,7 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 
-import { parseCsv, MAX_TABLE_ROWS } from "../packages/web/src/csv.js";
+import { parseCsv, csvToObjects, MAX_TABLE_ROWS } from "../packages/web/src/csv.js";
 
 test("keeps a quoted field containing the delimiter, a newline and escaped quotes whole", () => {
   const csv = 'city,note\nOslo,"Mild, coastal"\nBergen,"Says ""wet""\nall year"';
@@ -47,4 +47,21 @@ test("a ragged row keeps its own cells; the view pads against the header", () =>
   // against the header), not here, so no data is invented or dropped.
   const { rows } = parseCsv("a,b,c\n1,2\n1,2,3,4");
   assert.deepEqual(rows, [["1", "2"], ["1", "2", "3", "4"]]);
+});
+
+test("csvToObjects coerces numeric cells so a quantitative encoding gets numbers", () => {
+  // Vega-Lite fed strings for a quantitative field plots them as nominal
+  // categories — a chart that looks broken rather than a typing mistake.
+  const rows = csvToObjects("city,kwh,note\nOslo,4650,mild\nTromsø,6730,cold");
+  assert.deepEqual(rows, [
+    { city: "Oslo", kwh: 4650, note: "mild" },
+    { city: "Tromsø", kwh: 6730, note: "cold" },
+  ]);
+  assert.equal(typeof rows[0]!.kwh, "number");
+});
+
+test("csvToObjects leaves an empty cell empty rather than plotting it as zero", () => {
+  const [row] = csvToObjects("a,b\n,5");
+  assert.equal(row!.a, "", "a gap in the data must not become a real 0");
+  assert.equal(row!.b, 5);
 });

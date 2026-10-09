@@ -38,7 +38,13 @@ for (const theme of themes) for (const width of [390, 1024]) {
       ' "encoding":{"x":{"field":"city","type":"nominal"},"y":{"field":"kwh","type":"quantitative"}}}',
       "```",
       "",
-      "A chart that tries to fetch its own data:",
+      "```bivy",
+      '{"mark":"line","title":"From the dataset",',
+      ' "data":{"url":"data/use.csv"},',
+      ' "encoding":{"x":{"field":"City","type":"nominal"},"y":{"field":"kWh/yr","type":"quantitative"}}}',
+      "```",
+      "",
+      "A chart that tries to fetch a remote URL:",
       "",
       "```bivy",
       '{"mark":"line","data":{"url":"https://x.test/data.json"}}',
@@ -127,9 +133,19 @@ for (const theme of themes) for (const width of [390, 1024]) {
       [...el.querySelectorAll('svg text')].find((t) => t.textContent === 'Oslo')?.getAttribute('transform') ?? '');
     expect(labelTransform).not.toContain('rotate');
 
-    // A chart may not make the viewer's browser fetch a URL an agent chose —
-    // the same SSRF/privacy hole the node avoids for remote markdown images.
-    await expect(page.getByText('A chart has to carry its own data')).toBeVisible();
+    // A chart can point at a workspace dataset instead of carrying every row:
+    // the node resolved the path like any other reference, and the rows are
+    // substituted in before Vega sees the spec.
+    const dataChart = page.locator('.md-component .chart-component').nth(1);
+    await expect(dataChart.locator('svg')).toBeVisible({ timeout: 15_000 });
+    await expect(dataChart.locator('svg').getByText('From the dataset')).toBeVisible();
+    // The y-axis proves the CSV's numbers were coerced from strings: a
+    // quantitative encoding fed strings would plot as nominal categories.
+    await expect(dataChart.locator('svg').getByText('6,000')).toBeVisible();
+
+    // A REMOTE url is still refused — the viewer's browser must not fetch an
+    // address an agent chose.
+    await expect(page.getByText(/can only read data from the workspace/)).toBeVisible();
 
     // Both failure modes name what the agent meant. Neither is silent, and
     // neither is styled as the reader's error.
@@ -150,7 +166,7 @@ for (const theme of themes) for (const width of [390, 1024]) {
     const order = await page.locator('.msg.assistant > *').evaluateAll(
       (nodes) => nodes.map((n) => (n.className || n.tagName).toString()),
     );
-    expect(order.filter((c) => c.includes('md-component'))).toHaveLength(7);
+    expect(order.filter((c) => c.includes('md-component'))).toHaveLength(8);
     expect(order[0]).toBe('P');
 
     await page.screenshot({ path: testInfo.outputPath('components.png'), fullPage: true });

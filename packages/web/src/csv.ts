@@ -66,3 +66,31 @@ export function parseCsv(text: string, limit = MAX_TABLE_ROWS): Csv {
   const omitted = Math.max(0, rows.length - limit);
   return { header, rows: rows.slice(0, limit), omitted };
 }
+
+/** Rows a chart may read from one file. Far above the display-table cap: a
+ *  chart summarises a dataset rather than listing it, so the useful ceiling is
+ *  "enough to plot" rather than "enough to read". */
+export const MAX_CHART_ROWS = 5000;
+
+/**
+ * Delimited text as objects keyed by the header, with numeric-looking cells
+ * coerced to numbers — the shape Vega-Lite's `values` expects. Without the
+ * coercion every quantitative encoding would receive strings and plot as
+ * nominal categories, which looks like a broken chart rather than a typing
+ * mistake.
+ *
+ * An empty cell stays an empty string rather than becoming 0, so a gap in the
+ * data is not silently plotted as a real zero.
+ */
+export function csvToObjects(text: string, limit = MAX_CHART_ROWS): Array<Record<string, string | number>> {
+  const { header, rows } = parseCsv(text, limit);
+  return rows.map((row) => {
+    const record: Record<string, string | number> = {};
+    header.forEach((key, i) => {
+      const cell = row[i] ?? "";
+      const numeric = cell !== "" && !Number.isNaN(Number(cell));
+      record[key] = numeric ? Number(cell) : cell;
+    });
+    return record;
+  });
+}
