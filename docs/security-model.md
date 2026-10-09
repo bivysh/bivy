@@ -107,6 +107,15 @@ senders call the control plane directly. The exceptions are:
   Rotation immediately invalidates the old secret, and revocation keeps only a
   disabled endpoint with a newly randomized secret.
 
+Because the control plane relays queued work, it must not be able to author
+it. A node therefore takes a run's instructions only from a template sealed to
+it, from GitHub or Linear content it fetches itself, or from a prompt built into
+the node (a CI failure without a template). A run's plaintext title is a label,
+never part of the prompt, and other unsealed instructions are refused. Slack
+requests are the exception the user opts into per machine
+(`automation.slackPrompts`, off by default), since their text can only arrive
+in plaintext (`src/work-instructions.ts`, [`slack-setup.md`](slack-setup.md)).
+
 Provider-native JSON objects and arrays are accepted entirely as untrusted event
 context. Senders that need Bivy routing fields can opt into this closed envelope
 (unknown fields are rejected once `version` or `instruction` is present):
@@ -149,6 +158,12 @@ against the control plane over TLS, and presents only that ticket
 (`src/relay-client.ts`, `mintTicket`). The relay consumes the ticket on a
 one-shot introspection call, so a fully compromised relay cannot replay it to
 mint link grants, list nodes, or otherwise act as the account.
+
+App previews are the exception: they are ordinary HTTPS for a browser, not
+session frames. TLS ends at the relay (or the proxy in front of it), which
+forwards plain HTTP to the node's app gateway over the node's outbound tunnel
+(`services/relay/src/preview.ts`). Whoever runs the relay can read and alter
+preview traffic, including what a shared-link viewer sees and sends.
 
 ## End-to-end encryption
 
@@ -562,7 +577,10 @@ sensitive.
     [`hosted-provisioning-trust-model.md`](hosted-provisioning-trust-model.md),
     [`key-management.md`](key-management.md), and
     [`ephemeral-sessions.md`](ephemeral-sessions.md).
-17. **The web app that holds your room key is delivered by the control plane.**
+17. **App previews are readable by the relay operator.** See
+    [What the relay sees](#what-the-relay-sees). Don't put secrets in an app
+    you preview through Bivy; open it on the machine itself for that.
+18. **The web app that holds your room key is delivered by the control plane.**
     Browser-side crypto is only as trustworthy as the JavaScript that runs it,
     and the PWA is served by the control plane (hosted `app.bivy.sh`, or your
     own). A compromised control plane could ship modified JS that exfiltrates
