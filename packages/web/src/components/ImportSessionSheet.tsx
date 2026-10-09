@@ -5,6 +5,7 @@ import { controller, useAppState } from "../store/useStore.js";
 import { PickerItem } from "./Sheet.js";
 import { Badge } from "./Badge.js";
 import { NeedsDisclosureError, type DiscoveredNativeSessionDto } from "../store/controller.js";
+import { nodePresence, PRESENCE } from "../cloudDestinations.js";
 
 /** Last path segment of a cwd as a readable "repository" label — the same
  *  best-effort heuristic used for filtering/grouping, not a git lookup. */
@@ -167,7 +168,7 @@ export function ImportSessionContent({ onDone }: { onDone: (sessionId: string) =
                 key={n.id}
                 active={n.id === nodeId}
                 title={n.name || n.id}
-                meta={n.id === currentNodeId ? "current" : n.online ? "online" : "offline"}
+                meta={n.id === currentNodeId ? "current" : PRESENCE[nodePresence(n)].label.toLowerCase()}
                 onClick={() => setNodeId(n.id)}
               />
             ))}

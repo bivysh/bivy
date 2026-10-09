@@ -10,7 +10,7 @@ import { StatusDot } from "./StatusDot.js";
 import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { EphemeralNodeConfig, HostedMachineSummary } from "@bivy/core";
-import { cloudDestinations, type CloudDestination } from "../cloudDestinations.js";
+import { cloudDestinations, nodePresence, PRESENCE, type CloudDestination } from "../cloudDestinations.js";
 import type { TailnetMachine } from "../access.js";
 
 /**
@@ -62,7 +62,7 @@ export function NodeSwitcher() {
   const concreteName = current?.name?.replace(/^Hosted\s+/i, "") || sessionNodeId || "Machine";
   // Whether a cloud node is up is the status dot's job; the name stays the name.
   const label = draftRunner ? draftRunner.name : pendingNodeName || concreteName;
-  const showOnline = draftRunner ? false : current?.online;
+  const presence = draftRunner ? "offline" : nodePresence(current ?? (sessionNodeId ? { id: sessionNodeId } : undefined));
   // Ephemeral machines enroll as real account nodes (id `eph-…`) once they boot,
   // so they'd otherwise show up twice: here under "Your machines" AND as a cloud
   // row. Keep them out of the persistent list — the cloud section is their only
@@ -103,7 +103,7 @@ export function NodeSwitcher() {
             readers and easy to miss for colorblind users. */}
         {reconnecting
           ? <><Spinner size="xs" /><span className="sr-only">Reconnecting — </span></>
-          : <StatusDot status={showOnline ? "online" : "idle"} label={`${showOnline ? "Online" : "Offline"} — `} />}
+          : <StatusDot status={presence === "online" ? "online" : "idle"} label={`${PRESENCE[presence].label} — `} />}
         <span className="node-switcher-name">{label}</span>
         {!locked && <span className="node-switcher-caret">▾</span>}
       </button>
@@ -145,9 +145,9 @@ export function NodeSwitcher() {
                     role="menuitem"
                     onClick={() => pickCloud(row)}
                   >
-                    <StatusDot status={row.online ? "online" : "idle"} label={row.online ? "Online — " : "Not running — "} />
+                    <StatusDot status={row.online ? "online" : "idle"} label={row.online ? "Online — " : row.asleep ? "Asleep — " : "Not running — "} />
                     <span className="node-menu-name">{row.label}</span>
-                    {!row.online && <span className="node-menu-meta">starts when you send</span>}
+                    {!row.online && <span className="node-menu-meta">{row.asleep ? `asleep · ${PRESENCE.asleep.hint}` : "starts when you send"}</span>}
                     {picked && <span className="node-menu-check">✓</span>}
                   </button>
                 );
