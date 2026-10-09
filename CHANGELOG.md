@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A machine only runs instructions the control plane couldn't have written.** Queued runs now take their instructions from a template encrypted to the machine, from GitHub or Linear content the machine fetches itself, or from a prompt built into Bivy (CI failures without a template). Plaintext the control plane relays, such as a run's title or an unencrypted body, is no longer part of the prompt. Slack requests, which arrive unencrypted, run only on machines where you turn them on: `bivy config set automation.slackPrompts true`. **Breaking:** Slack requests stop running until you do.
 - Each Fly launch now gets its own private network. Before, every Bivy app in a Fly org shared one network, so a machine could reach ports opened on other launches' machines (dev servers bound to `0.0.0.0`, for example) and list them through `.internal` DNS. Apps created before this change keep the shared network until they are recreated.
 - The ephemeral runner image applies Debian security updates at build time and refreshes them weekly, even when the rest of the build comes from cache.
 - The control plane's lockfile moves `proxy-addr` to 2.0.8 (GHSA-jqcg-44mw-7w3h: IP spoofing through IPv4-mapped IPv6 addresses in trusted subnets) and `moment` to 2.31.0 (GHSA-4p3w-j4w9-5jqw).

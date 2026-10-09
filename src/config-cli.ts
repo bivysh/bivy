@@ -121,6 +121,7 @@ const ENV_FOR_KEY: Record<string, string> = {
   "sessions.previewBadge": "BIVY_PREVIEW_BADGE",
   "automation.checks": "BIVY_AUTOMATION_CHECKS",
   "automation.checkTimeoutMinutes": "BIVY_AUTOMATION_CHECK_TIMEOUT_MS",
+  "automation.slackPrompts": "BIVY_SLACK_PROMPTS",
 };
 
 const BUILTIN_VALUES: Record<string, unknown> = {
@@ -138,6 +139,7 @@ const BUILTIN_VALUES: Record<string, unknown> = {
   "sessions.previewBadge": true,
   "automation.checks": ["test", "lint", "typecheck"],
   "automation.checkTimeoutMinutes": 10,
+  "automation.slackPrompts": false,
 };
 
 type EffectiveValue = { value: unknown; source: string; configured: unknown; env?: string; detail?: string };
