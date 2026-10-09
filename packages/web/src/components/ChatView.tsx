@@ -229,9 +229,13 @@ const EntryView = memo(function EntryView({
   entry,
   onAction,
   authAction,
+  sessionId,
 }: {
   entry: TranscriptEntry;
   onAction?: (action: string) => void;
+  /** The session this transcript belongs to, for a component that has to ask
+   *  the machine about something (an inline app preview). */
+  sessionId?: string | null;
   /** What to offer when an error turns out to be a credential problem the entry
    *  itself couldn't name — see ChatView's prop of the same name. */
   authAction?: string;
@@ -314,7 +318,7 @@ const EntryView = memo(function EntryView({
     setMounts((current) => (current.length === found.length && current.every((n, i) => n === found[i]) ? current : found));
   }, [entry.role, html]);
   const components = mounts.map((node, i) => createPortal(
-    <MessageComponent placement={placementOf(node)} refs={entry.imageRefs} />,
+    <MessageComponent placement={placementOf(node)} refs={entry.imageRefs} sessionId={sessionId ?? null} />,
     node,
     `md-component-${i}`,
   ));
@@ -722,7 +726,7 @@ export function ChatView({
     ? <ToolGroup key={it.key} tools={it.tools} />
     : it.kind === "plan"
       ? plans.get(it.callId)?.length ? <PlanCard key={it.key} plan={plans.get(it.callId)!} /> : null
-      : <EntryView key={it.key} entry={it.entry} onAction={onAction} authAction={authAction} />;
+      : <EntryView key={it.key} entry={it.entry} onAction={onAction} authAction={authAction} sessionId={sessionKey} />;
 
   return (
     <div className="chat-wrap">
@@ -759,7 +763,7 @@ export function ChatView({
             <div className="transcript-standalone" key={block.key}>{renderItem(block.item)}</div>
           ) : (
             <div className="transcript-turn" key={block.key}>
-              {block.user?.kind === "entry" && <EntryView entry={block.user.entry} onAction={onAction} />}
+              {block.user?.kind === "entry" && <EntryView entry={block.user.entry} onAction={onAction} sessionId={sessionKey} />}
               {block.response.length > 0 && <div className="turn-response-body">{block.response.map(renderItem)}</div>}
             </div>
           ))}

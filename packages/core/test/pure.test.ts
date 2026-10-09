@@ -263,6 +263,26 @@ describe("component directives", () => {
     expect(parseComponentDirective(`::a${"\t".repeat(50_000)}x`)).toBeNull();
     expect(Date.now() - started).toBeLessThan(2000);
   });
+  it("reads app=<id> as an app placement, not a path to read", () => {
+    // An app id names something the machine published. It must not become a
+    // workspace reference, or the node would try to read a file called by it.
+    expect(parseComponentDirective("::view{app=app-7f2a caption=\"The checkout\"}")).toEqual({
+      ref: null,
+      spec: { type: "app", appId: "app-7f2a" },
+      attrs: { caption: "The checkout" },
+    });
+    expect(extractMessageReferences("::view{app=app-7f2a}")).toEqual([]);
+  });
+  it("refuses an app id that is not plainly one", () => {
+    // Path-shaped ids are the ones that matter: an id is the only thing about
+    // an app the chat holds, and it must never be mistaken for something to read.
+    for (const bad of ["../../etc", "a/b", '"app id"', ""]) {
+      expect(parseComponentDirective(`::view{app=${bad}}`), bad).toBeNull();
+    }
+    // `app=app id` is two attributes by the same rule HTML uses, not a broken
+    // id — it yields the app "app", which simply will not resolve.
+    expect(parseComponentDirective("::view{app=app id}")?.spec).toEqual({ type: "app", appId: "app" });
+  });
   it("refuses a directive written as prose, or pointing anywhere but the workspace", () => {
     // Block-level by construction: mid-sentence is prose, and a half-streamed
     // line cannot render until it is complete.

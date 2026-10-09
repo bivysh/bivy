@@ -190,6 +190,11 @@ export const MAX_COMPONENT_SPEC_CHARS = 16 * 1024;
 /** Ceiling for a directive's attribute list, bounding the parse below. */
 const MAX_ATTRS_CHARS = 512;
 
+/** An app id as the apps registry mints them. Narrow on purpose: an id is the
+ *  only thing about an app the chat ever holds, so anything that is not plainly
+ *  one is not treated as an app reference. */
+const APP_ID = /^[\w-]{1,64}$/;
+
 /** Leaf directives this grammar knows. `view` is the general one; a named leaf
  *  can be added later without touching the parser. */
 const LEAF_NAMES = new Set(["view"]);
@@ -257,7 +262,17 @@ export function parseComponentDirective(line: string): ComponentPlacement | null
   // See imagePattern's note; the same rule applies to every pattern here.
   const m = /^::([a-z][\w-]{0,31})[ \t]{0,32}(\{[^}\n]{0,512}\})?$/i.exec(String(line || "").trim());
   if (!m || !LEAF_NAMES.has((m[1] ?? "").toLowerCase())) return null;
-  const { src, ...attrs } = parseAttrs(m[2] ?? "");
+  const { src, app, ...attrs } = parseAttrs(m[2] ?? "");
+
+  // `app=<id>` names something the MACHINE already published, not a file, so it
+  // is not a workspace reference and the node resolves nothing for it: the id
+  // travels in the transcript exactly as `AppMessage` has always stored it, and
+  // the view layer turns it into a preview. Kept as a spec rather than a `ref`
+  // so nothing downstream mistakes it for a path to read.
+  if (typeof app === "string" && APP_ID.test(app)) {
+    return { ref: null, spec: { type: "app", appId: app }, attrs };
+  }
+
   const ref = typeof src === "string" ? unescapeComponentRef(src) : "";
   if (!ref || classifyImageTarget(ref) !== "workspace") return null;
   return { ref, spec: null, attrs };
