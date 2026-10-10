@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-10
+
 ### Added
 
 - **An agent can put an app's preview inside its message.** `::view{app=<app id>}` frames a published app where the agent wrote it, instead of only offering an Open card beside the prose. The preview is prepared when you scroll to it, not when the message renders, so reading back through old history does not open apps you never looked at. If it cannot be framed — a browser that blocks preview cookies, an app that is no longer published, a terminal view — it says so and still offers to open it.
