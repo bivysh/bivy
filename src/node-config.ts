@@ -57,6 +57,9 @@ export interface NodeConfig {
   automation?: {
     checks?: string[];
     checkTimeoutMinutes?: number;
+    /** Run Slack prompts. The control plane relays them unencrypted, so it
+     * could also write one; off unless turned on here. */
+    slackPrompts?: boolean;
   };
   agents?: Record<string, {
     extends: string;
@@ -131,7 +134,7 @@ export function validateNodeConfig(value: unknown): NodeConfigResult {
   const safety = section(root, "safety", ["maxSandbox", "approvalFloor"], errors);
   const sessions = section(root, "sessions", ["sync", "worktreeSync", "standbyNodeId", "resume", "autoAttachToolImages", "appScreenshots", "previewBadge", "forkWorkspaceMaxBytes", "wedgedTurnMinutes"], errors);
   const github = section(root, "github", ["issuePrompt"], errors);
-  const automation = section(root, "automation", ["checks", "checkTimeoutMinutes"], errors);
+  const automation = section(root, "automation", ["checks", "checkTimeoutMinutes", "slackPrompts"], errors);
   const agentsRaw = section(root, "agents", Object.keys(record(root.agents) ?? {}), errors);
   const environment = section(root, "environment", Object.keys(record(root.environment) ?? {}), errors);
 
@@ -196,6 +199,7 @@ export function validateNodeConfig(value: unknown): NodeConfigResult {
     }
   }
   const checkTimeoutMinutes = optionalInteger(automation.checkTimeoutMinutes, "automation.checkTimeoutMinutes", errors, 1, 30);
+  const slackPrompts = optionalBoolean(automation.slackPrompts, "automation.slackPrompts", errors);
   const agents: NonNullable<NodeConfig["agents"]> = {};
   for (const [id, raw] of Object.entries(agentsRaw)) {
     const at = `agents.${id}`;
@@ -246,7 +250,7 @@ export function validateNodeConfig(value: unknown): NodeConfigResult {
     ...(Object.keys(safety).length ? { safety: { maxSandbox, approvalFloor } } : {}),
     ...(Object.keys(sessions).length ? { sessions: { sync, worktreeSync, standbyNodeId, resume, autoAttachToolImages, appScreenshots, previewBadge, forkWorkspaceMaxBytes, wedgedTurnMinutes } } : {}),
     ...(Object.keys(github).length ? { github: { issuePrompt } } : {}),
-    ...(Object.keys(automation).length ? { automation: { checks, checkTimeoutMinutes } } : {}),
+    ...(Object.keys(automation).length ? { automation: { checks, checkTimeoutMinutes, slackPrompts } } : {}),
     ...(Object.keys(agents).length ? { agents } : {}),
     ...(Object.keys(envOut).length ? { environment: envOut } : {}),
   };
@@ -381,7 +385,7 @@ export function setConfigValue(config: NodeConfig, dotted: string, value: unknow
     "defaults.agent", "defaults.model", "defaults.sandbox", "defaults.approval",
     "safety.maxSandbox", "safety.approvalFloor",
     "sessions.sync", "sessions.worktreeSync", "sessions.standbyNodeId", "sessions.resume", "sessions.autoAttachToolImages", "sessions.appScreenshots", "sessions.previewBadge", "sessions.forkWorkspaceMaxBytes", "sessions.wedgedTurnMinutes",
-    "github.issuePrompt", "automation.checks", "automation.checkTimeoutMinutes",
+    "github.issuePrompt", "automation.checks", "automation.checkTimeoutMinutes", "automation.slackPrompts",
   ]);
   if (!allowed.has(dotted) && !/^agents\.[a-z][a-z0-9-]{1,47}$/.test(dotted) && !/^environment\.[A-Z][A-Z0-9_]+$/.test(dotted)) throw new Error(`Unknown configuration key: ${dotted}`);
   const copy = structuredClone(config) as unknown as Record<string, unknown>;

@@ -135,7 +135,7 @@ const RULES = [
   {
     name: "web-coordinators-are-standalone",
     dir: "packages/web/src/store/coordinators",
-    forbid: ["../controller", "react", "ephemeral-provider-adapters", "services/control-plane", "session-contract", "agent-profile"],
+    forbid: ["../controller", "react", "services/control-plane", "session-contract", "agent-profile"],
     enforce: true,
     note: "coordinators receive effects as explicit dependencies and never reach back into AppController or prohibited implementation modules.",
   },
@@ -199,18 +199,11 @@ const RULES = [
     note: "provider-neutral machine facts depend only on other value projections.",
   },
   {
-    name: "ephemeral-launch-plan-is-a-safe-pure-decision",
-    dir: "packages/core/src/ephemeral-launch-plan.ts",
-    forbid: ["./ephemeral-execution-envelope", "./ephemeral-storage", "./ephemeral-provider-adapters", "./ephemeral.js", "./transport", "./local-store", "BootstrapOpts", "enrollmentToken", "roomKeyB64", "githubToken", "node:", "react"],
-    enforce: true,
-    note: "inspectable launch plans contain no bootstrap credentials; the execution envelope is separate and effect-edge-only.",
-  },
-  {
     name: "ephemeral-provider-ports-dont-import-effects",
     dir: "packages/core/src/ephemeral-provider-ports.ts",
-    forbid: ["./ephemeral-storage", "./ephemeral-provider-adapters", "./ephemeral.js", "./transport", "./local-store"],
+    forbid: ["./ephemeral-storage", "./ephemeral.js", "./transport", "./local-store"],
     enforce: true,
-    note: "provider contracts depend on values; adapter and persistence implementations depend on the contracts.",
+    note: "boot contracts depend on values; boot payload builders and persistence depend on the contracts.",
   },
   {
     name: "ephemeral-provider-interpreters-only-depend-downward",
@@ -227,7 +220,6 @@ const RULES = [
     forbid: [
       "../ephemeral.js",
       "../ephemeral-storage",
-      "../ephemeral-launch-plan",
       "../store",
       "../local-store",
       "../transport",
@@ -309,11 +301,6 @@ const explicitFacadeChecks = [
     reject: /export\s*\*/,
     reason: "the ephemeral compatibility facade must use explicit exports",
   },
-  {
-    file: "packages/core/src/ephemeral-provider-adapters.ts",
-    reject: /export\s*\*/,
-    reason: "the provider compatibility facade must use explicit exports",
-  },
   ...[
     "ephemeral.js",
     "connection-event-fold.js",
@@ -335,12 +322,12 @@ const explicitFacadeChecks = [
     reject: /\bid\s*===\s*["'](?:codex|opencode|grok|claude-code|pi|gemini)["']/,
     reason: "the generic runtime wrapper must interpret profile behavior data, not branch on agent ids",
   },
-  // Billable machines launch only through the control plane's auto-provision
-  // policy (dedupe, rate cap, teardown), never from opening the queue panel.
+  // Billable machines are acquired only by the control plane when work is
+  // routed to the cloud, never from opening the queue panel.
   {
     file: "packages/web/src/components/GithubQueue.tsx",
     reject: /launchEphemeralQueueWorker\(/,
-    reason: "the queue panel must not launch billable machines; maybeAutoProvision owns that",
+    reason: "the queue panel must not launch billable machines; the control plane acquires the cloud computer",
   },
   // Coordinators receive state and effects as explicit ports.
   ...fs.readdirSync(path.join(repoRoot, "packages/web/src/store/coordinators"))

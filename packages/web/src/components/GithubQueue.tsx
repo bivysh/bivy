@@ -324,9 +324,9 @@ export function GithubQueuePanel({
   const apps = appInfo?.apps ?? [];
   const unservedApps = apps.filter((a) => a.servedBy === null);
   // Automatic queue provisioning is deliberately absent from this component.
-  // Once the user enables hosted provisioning and queue routing, the control
-  // plane's maybeAutoProvision policy owns launch/dedupe/rate-cap/teardown. A UI
-  // render must never be the causal trigger for a billable machine.
+  // Once queue routing points at the cloud, the control plane acquires the
+  // account's cloud computer from the deployment. A UI render must never be
+  // the causal trigger for a billable machine.
 
   return (
       <div className="settings-form">

@@ -18,7 +18,6 @@ export type DeploymentOperation =
   | "relay.connect"
   | "push.deliver"
   | "automation.run"
-  | "ephemeral.provision"
   | "session.create";
 
 export interface DeploymentDecisionAction {
@@ -51,23 +50,7 @@ export function policyContext(context: DeploymentPolicyContext): DeploymentPolic
 
 export interface DeploymentPolicyContext {
   source?: string;
-  computeSource?: "user" | "managed";
-  provider?: string;
-  sizeId?: string;
-  vcpus?: number;
-  memoryMiB?: number;
-  ttlMinutes?: number;
-  configId?: string;
-  purpose?: string;
-  /** Managed Machines this account already has running or launching. A fact
-   * for the deployment's concurrency rule; Core sets no limit itself. */
-  activeManagedMachines?: number;
 }
-
-export type DeploymentLifecycleEvent =
-  | { type: "ephemeral.first-agent-event"; attemptId: string; at: string }
-  | { type: "ephemeral.launch-failed"; attemptId: string; at: string }
-  | { type: "ephemeral.settled"; attemptId: string; at: string; machineSeconds?: number; activeAgentSeconds?: number };
 
 /** Account-level facts, sent with the account's email so the operator can act
  * on them (e.g. greet a new account) without its own copy of the account table. */
@@ -113,11 +96,6 @@ export class DeploymentExtension {
     const decision = response as Partial<DeploymentDecision>;
     if (typeof decision.allowed !== "boolean") throw new Error("Deployment extension returned an invalid policy decision");
     return decision as DeploymentDecision;
-  }
-
-  async record(accountId: string, event: DeploymentLifecycleEvent): Promise<void> {
-    if (!this.url) return;
-    await this.request("/v1/events", { subject: { accountId }, event });
   }
 
   async recordAccount(accountId: string, email: string, event: DeploymentAccountEvent): Promise<void> {
@@ -173,12 +151,6 @@ export class DeploymentExtension {
       profile: async (purpose: ComputePurpose, accountId?: string, runtimeId?: string) => {
         const result = await this.request("/v1/compute/profile", { subject: accountId ? { accountId } : undefined, purpose, runtimeId }) as { profile?: ComputeProfile | null };
         return result.profile && typeof result.profile === "object" ? result.profile : null;
-      },
-      credential: async (provider: string) => {
-        const result = await this.request("/v1/compute/credential", { provider }) as { token?: unknown; expiresAt?: unknown };
-        return typeof result.token === "string" && result.token
-          ? { token: result.token, expiresAt: typeof result.expiresAt === "string" ? result.expiresAt : undefined }
-          : null;
       },
     };
   }

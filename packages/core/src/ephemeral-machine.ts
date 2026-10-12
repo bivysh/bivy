@@ -65,6 +65,11 @@ export function ephemeralMachineFromCorrelation(correlation: SessionCorrelation)
   };
 }
 
+/** The routing-label suffix an ephemeral node serves (`bivy/<label>`). */
+export function ephemeralNodeLabel(nodeId: string): string {
+  return nodeId.replace(/^eph-/, "");
+}
+
 export function isEphemeralNode(node: {
   id: string;
   ephemeral?: { provider?: string; machineId?: string };

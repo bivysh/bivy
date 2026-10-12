@@ -5,6 +5,8 @@ import { AppGateway, previewOriginTemplate } from "./gateway.js";
 import type { AppRegistry } from "./registry.js";
 import { PreviewStream } from "./preview-stream.js";
 
+const RECENT_USE_MS = 2 * 60_000;
+
 /** Automatically discovered preview delivery. The app gateway receives ONLY
  * HTTP streams on a private in-process socket, never a publicly bound port. */
 export class RemotePreview {
@@ -13,12 +15,14 @@ export class RemotePreview {
   private relayUrl?: string;
   private online = false;
   private sockets = new Set<WebSocket>();
+  private lastConnectAt = -Infinity;
   constructor(private readonly registry: AppRegistry, private readonly returnOrigins: () => readonly string[], private readonly signIn?: ConstructorParameters<typeof AppGateway>[3], private readonly captureNote?: ConstructorParameters<typeof AppGateway>[4], private readonly badge?: ConstructorParameters<typeof AppGateway>[5]) {}
 
   get available(): boolean { return this.online && Boolean(this.gateway); }
-  /** Someone is loading or holding open a preview (pooled streams close after a
-   * few idle seconds; a dev server's live-reload socket stays open). */
-  get inUse(): boolean { return this.sockets.size > 0; }
+  /** Someone loaded part of a preview recently. Each request burst opens a
+   * stream; an open but silent live-reload socket from a forgotten tab doesn't
+   * count, so it can't keep a sleeping machine awake. */
+  inUse(now = Date.now()): boolean { return now - this.lastConnectAt < RECENT_USE_MS; }
   ready(origin: string | undefined, relayUrl: string): void {
     this.disconnect();
     if (!origin) return;
@@ -36,6 +40,7 @@ export class RemotePreview {
   connect(ticket: string): void {
     if (!this.available || !this.relayUrl || !/^[a-f0-9]{64}$/.test(ticket) || this.sockets.size >= 64) return;
     const gateway = this.gateway!;
+    this.lastConnectAt = Date.now();
     const ws = new WebSocket(this.relayUrl, { headers: { authorization: `Bearer ${ticket}` }, maxPayload: 64 * 1024, handshakeTimeout: 10_000, perMessageDeflate: false, followRedirects: false });
     this.sockets.add(ws);
     ws.on("error", () => ws.terminate());

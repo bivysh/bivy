@@ -244,10 +244,10 @@ WEB_PUSH_SUBJECT=mailto:admin@app.example.com
 
 Runs that start while none of your devices are online — automations on the
 deployment's cloud machines, and rebuilding a cloud session after its machine
-was retired — need the control plane to hold a few credentials encrypted: the
-model credential you allowed for unattended runs, a GitHub credential for
-hosted machines, and escrowed session room keys. The control plane refuses to
-store any of them until it has a key to encrypt them at rest; the request fails
+was retired — need the control plane to hold a GitHub credential for hosted
+machines, encrypted. (Model credentials and room keys stay on the machines:
+the cloud computer holds its own, like any node.) The control plane refuses to
+store it until it has a key to encrypt them at rest; the request fails
 with *"Credential encryption is not configured (set HOSTED_CREDENTIAL_KEY)"*.
 This is a **server-side setting, not something in the app**.
 
@@ -266,8 +266,7 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d control
 
 Reload the app and try again.
 
-What the key does: every hosted credential (unattended model credential,
-GitHub App key or token, escrowed session room keys) is sealed with AES-256-GCM under a per-account subkey
+What the key does: every hosted credential (GitHub App key or token) is sealed with AES-256-GCM under a per-account subkey
 derived from this master key (`services/control-plane/src/hosted-crypto.ts`,
 design in [`hosted-provisioning-trust-model.md`](hosted-provisioning-trust-model.md)).
 No plaintext credential is ever written to Postgres, and with no key configured
@@ -299,57 +298,26 @@ images); runtime configuration never grants server-side authority.
 
 ## Deployment-supplied compute
 
-A deployment can offer a "managed" compute lane: machines launched in a cloud
-account the deployment pays for, instead of each user's own. It is the normal
-hosted ephemeral provisioner. Only the provider credential and the launch
-profile come from the deployment. Model and repository credentials still belong
-to each user.
+A deployment can offer a "managed" compute lane: one cloud machine per account
+(the account's "cloud computer"), in a cloud account the deployment pays for.
+It sleeps when quiet and wakes on use. The deployment owns that machine's
+lifecycle (create, start, stop, volumes, destroy); Core owns the node's
+identity and the boot payload, and tells the deployment
+when the machine is needed. Core never launches machines itself. Model and
+repository credentials still belong to each user.
 
 The control plane holds no configuration for this lane. It asks the deployment
 extension (`DEPLOYMENT_EXTENSION_URL` + `DEPLOYMENT_EXTENSION_TOKEN`, the same
 service that answers policy checks). With no extension configured there is no
-managed lane. Enable new launches with `EPHEMERAL_MACHINES_ENABLED=1`.
+managed lane. Enable it with `EPHEMERAL_MACHINES_ENABLED=1`.
 
-The extension answers two calls, both `POST` with the bearer token:
+The extension answers these calls, all `POST` with the bearer token:
 
 ```text
 POST /v1/compute/profile
-  { "subject": { "accountId": "…" }, "purpose": "interactive" | "auth-runner", "runtimeId": "claude" }
-→ { "profile": { "provider": "fly", "region": "iad", "size": "shared-4x-8gb",
-                 "image": "ghcr.io/your-org/bivy-ephemeral-runner:sha-<commit>",
-                 "ttlMinutes": 60, "teardownOnAgentFinish": true } }
+  { "subject": { "accountId": "…" }, "purpose": "interactive", "runtimeId"?: "claude" }
+→ { "profile": { "provider": "fly", "accountMachine": true, "ttlMinutes": 60, … } }
   or { "profile": null } when this account gets no managed compute.
-
-POST /v1/compute/credential
-  { "provider": "fly" }
-→ { "token": "<provider token>", "expiresAt": "<optional ISO time>" }
-  or {} when there is none.
-```
-
-- **Profile.** Choose the image per `runtimeId` if you publish runtime-specific
-  runner images. Use a prebuilt image: a generic provider image installs Bivy
-  at boot and starts slowly. Answers are reused for a minute.
-- **Credential.** The control plane uses it only transiently for provider API
-  calls. It is never persisted, logged, returned by an account API or put in
-  machine user-data. A fresh credential is reused for five minutes. If the
-  extension is unreachable, the last unexpired credential is still used for
-  teardown, reconciliation and orphan cleanup, so an extension outage can't
-  strand billable machines. Keep answering for a provider until every machine
-  launched with it is destroyed.
-- **Admission.** Every managed launch is checked through `/v1/policy/check`
-  (`operation: "ephemeral.provision"`, `context.computeSource: "managed"`). The
-  context includes `activeManagedMachines`, the account's running and
-  launching managed machines, counted inside the account's launch lease. Enforce
-  any concurrency limit there.
-- **Usage.** `/v1/events` receives `ephemeral.first-agent-event`,
-  `ephemeral.launch-failed` and `ephemeral.settled` (with `machineSeconds` and
-  `activeAgentSeconds`) for metering.
-
-**One sleeping machine per account (optional).** If the profile answer also
-sets `"accountMachine": true`, the deployment runs one cloud computer per
-account and owns its lifecycle, and Core stops launching machines itself:
-
-```text
 POST /v1/compute/acquire   { "subject": {…}, "purpose": "interactive" | "auth-runner" | "automation",
                              "requestId": "…", "runtimeId"?: "…", "sessionId"?: "…" }
 → { "nodeId": "…", "state": "awake" | "waking" | "launching" }   or a policy denial
@@ -358,27 +326,41 @@ POST /v1/compute/machines  { "subject": {…} }                  → { "machines
 POST /v1/compute/release   { "subject": {…}, "nodeId": "…" }   → { "released": true }
 ```
 
-Core calls `acquire` for a launch, `wake` when a client connects to the
-sleeping node, and `acquire` with `"automation"` when queued work is routed to
-the cloud. The extension calls back with the same bearer token:
+- **Profile.** An account is offered managed compute only when its profile
+  sets `"accountMachine": true`. Answers are reused for a minute; during an
+  extension outage the last answer stands.
+- **Acquire.** Core calls it when a session starts on the cloud, during
+  onboarding (`"auth-runner"`), when a retired session is reopened
+  (`sessionId` set), and with `"automation"` when queued work is routed to the
+  cloud. A refusal is returned to the client as the deployment's decision, so
+  enforce plans and limits there.
+- **Wake.** Called when a client connects to, or a preview link is opened for,
+  the sleeping node.
+- **Machines / release.** Back the account's machine panel and its delete
+  action.
 
-- `POST /internal/compute/bootstrap` `{ accountId, awakeCapMinutes, restoreSessionId? }`
+The extension calls back with the same bearer token:
+
+- `POST /internal/compute/bootstrap` `{ accountId, awakeCapMinutes }`
   → `{ nodeId, files, init }`: the Fly Machine `files` and `init.exec` that boot
-  the account's node with a fresh enrollment token and its escrowed room key.
+  the account's node with a fresh enrollment token. The payload carries no room
+  key; the node generates its own and keeps it on its volume.
   The node sleeps when quiet (it exits without settling; the deployment keeps
   the stopped machine and a volume mounted at `/data`).
 - `POST /internal/compute/retired` `{ accountId, nodeId }`: the deployment
   destroyed the machine and its volume; the node stays enrolled and its
   sessions stay rebuildable from their snapshots.
 
-For Fly, give the extension a dedicated organization and a narrowly scoped
-token that can create, inspect and destroy Machines. Validate the guest image
-for egress and process/mining abuse before you offer the lane to anyone you
-don't know.
+Core ships the runner image's build context (`deploy/Dockerfile.ephemeral-runner`);
+the deployment builds and publishes the image it boots. Use an image with Bivy
+preinstalled: a generic image installs Bivy at boot and starts slowly.
 
-Setting `EPHEMERAL_MACHINES_ENABLED=0` blocks new launches in both lanes and
-hides their UI. It does **not** disable teardown, reconciliation,
-creation-attempt cleanup or orphan sweeps.
+For Fly, give the extension a dedicated organization and a narrowly scoped
+token. Validate the guest image for egress and process/mining abuse before you
+offer the lane to anyone you don't know.
+
+Setting `EPHEMERAL_MACHINES_ENABLED` to anything but `1` stops new sessions
+and onboarding from acquiring the cloud computer and hides the managed UI.
 
 ## Using a managed/hosted Postgres
 

@@ -188,7 +188,7 @@ for (const theme of themes) {
     await page.route("**/account/onboarding/auth-runner", async route => {
       runnerRequests++;
       await machineStarted;
-      await route.fulfill({ status: 201, json: { ok: true, roomKey: "a".repeat(43), machine: { id: "eph-managed-auto-1", nodeId: "eph-managed-auto-1", provider: "fly", name: "Bivy Cloud", status: "launching", createdAt: new Date().toISOString(), computeSource: "managed", purpose: "auth-runner" } } });
+      await route.fulfill({ status: 201, json: { ok: true, machine: { id: "eph-managed-auto-1", nodeId: "eph-managed-auto-1", provider: "fly", name: "Bivy Cloud", status: "launching", createdAt: new Date().toISOString(), computeSource: "managed", purpose: "auth-runner" } } });
     });
     await page.goto(origin);
     await page.evaluate(async () => {
@@ -200,7 +200,8 @@ for (const theme of themes) {
         w.oauth.push(args);
         controller.store.apply({ type: "provider.oauth.started", id: "login", provider: args[0], status: "waiting", authUrl: "https://example.invalid/authorize", usesCallbackServer: true });
       };
-      // The relay connection itself needs a live machine; the store sees it come online.
+      // The relay reports online only after this browser holds the room key.
+      // Pairing is that moment; the auth-runner response carries no key.
       controller.connectToNode = async (id: string) => {
         controller.store.setCurrentNode(id);
         controller.store.setStatus("online");
@@ -224,10 +225,10 @@ for (const theme of themes) {
     await expect(page.getByRole("button", { name: "Sign in with ChatGPT" })).toBeEnabled({ timeout: 10_000 });
     expect(runnerRequests).toBe(1);
     await page.getByRole("button", { name: "Sign in with ChatGPT" }).click();
-    // On the cloud machine the sign-in uses the account default, which cloud runs need.
+    // On the cloud machine the sign-in joins the account vault. Nothing is sent as `sync`.
     const [provider, , sync] = await page.evaluate(() => (window as unknown as { oauth: unknown[][] }).oauth[0]);
     expect([provider, sync ?? null]).toEqual(["openai-codex", null]);
-    await expect(page.getByText("Bivy keeps a copy")).toBeVisible();
+    await expect(page.getByText("Another machine that's online can restore it")).toBeVisible();
     // The open sign-in form makes the card tall; it scrolls inside the space above
     // the composer instead of running off the screen.
     await expect(page.getByRole("button", { name: "Submit" })).toBeVisible();

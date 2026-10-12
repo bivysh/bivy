@@ -148,12 +148,11 @@ export function preferIncomingRecord(local: CredentialRecord | undefined, incomi
   const localOauth = oauthOf(local);
   const incomingOauth = oauthOf(incoming);
   if (!localOauth || !incomingOauth) return true;
-  // Identical token content means this is a metadata-only change (an
-  // unattended-runs grant/revoke, a sync-tier move). Token freshness cannot
-  // order those, so the newer record write wins — without this, a grant made
-  // on one machine never reaches its peers, and a peer's next hosted-escrow
-  // push would read as "nothing granted". Equal stamps fall back to canonical
-  // record content so both merge directions still converge.
+  // Identical token content means this is a metadata-only change (a sync-tier
+  // move). Token freshness cannot order those, so the newer record write wins —
+  // without this, a change made on one machine never reaches its peers. Equal
+  // stamps fall back to canonical record content so both merge directions still
+  // converge.
   if (canonicalCredential(localOauth) === canonicalCredential(incomingOauth)) {
     const localAt = Number(local.updatedAt) || 0;
     const incomingAt = Number(incoming.updatedAt) || 0;
@@ -283,14 +282,7 @@ export function mergeDocuments(
     if (sameRecordContent(localRecord, incoming)) continue;
     if (!preferIncomingRecord(localRecord, incoming)) continue;
     if (!(key in credentials)) imported += 1;
-    // An incoming record with no opinion on unattended custody (undefined — the
-    // v2 wire and plaintext ingest never carry the flag) must not strip an
-    // explicit local grant/revoke: agent-side token refreshes flow through this
-    // merge, and dropping the flag would make the node's next escrow push
-    // silently revoke the encrypted cloud copy the user still relies on.
-    credentials[key] = localRecord && incoming.unattended === undefined && localRecord.unattended !== undefined
-      ? { ...incoming, unattended: localRecord.unattended }
-      : incoming;
+    credentials[key] = incoming;
     const incomingUpdatedAt = Number(incoming.updatedAt);
     if (!Number.isFinite(deletedAt[key]) || incomingUpdatedAt > deletedAt[key]) delete deletedAt[key];
     changed = true;

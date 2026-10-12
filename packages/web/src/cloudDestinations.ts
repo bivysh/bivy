@@ -40,8 +40,8 @@ export function nodePresence(node: NodeLike | undefined): Presence {
 
 /**
  * The picker's cloud rows. Each deployment-provided profile ("Bivy Cloud") is
- * ONE destination that reuses its newest online Machine and otherwise starts one
- * on demand, so the user never chooses between a template and its instances.
+ * ONE destination that reuses the account's cloud computer while it is online
+ * and otherwise wakes it on demand.
  */
 export function cloudDestinations(
   configs: EphemeralNodeConfig[],
@@ -50,12 +50,10 @@ export function cloudDestinations(
 ): CloudDestination[] {
   const online = (nodeId?: string) => Boolean(nodes.find((node) => node.id === nodeId)?.online);
   const live = machines
-    .filter((machine) => machine.purpose === "interactive" && machine.desiredState !== "deleted" && online(machine.nodeId))
+    .filter((machine) => isCloudComputerNodeId(machine.nodeId) && online(machine.nodeId))
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
   return configs.filter((config) => config.computeSource === "managed").map((config) => {
-    // A per-session Machine names its profile; the account's cloud computer is
-    // recognised by its node id.
-    const reuse = live.find((machine) => machine.setupId === config.id || isCloudComputerNodeId(machine.nodeId));
+    const reuse = live[0];
     const asleep = !reuse && nodes.some((node) => isCloudComputerNodeId(node.id) && !node.online);
     return { key: config.id, label: (config.name || "Bivy Cloud").replace(/^Hosted\s+/i, ""), online: Boolean(reuse), asleep, nodeId: reuse?.nodeId, config };
   });

@@ -50,7 +50,7 @@ export function ConnectAI({ state, place, startError, onRetry, onDone }: {
       <p className="card-sub">
         Sign in with the plans you already pay for. Connect both to switch agents any time.{" "}
         {cloud
-          ? "Bivy keeps a copy so your cloud agents can run while you're away."
+          ? "Your sign-in stays encrypted on this cloud computer. Another machine that's online can restore it, and this browser can restore an API key."
           : `Your sign-ins stay on ${machine}; Bivy's servers never get a copy.`}
       </p>
 

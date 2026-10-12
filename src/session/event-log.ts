@@ -216,7 +216,39 @@ export function mergeBases(logged: RuntimeMessage[], runtime: readonly RuntimeMe
     }
     if (add(m)) sequence.push({ fresh: m }); // not in the logged base
   }
-  return placeFresh(merged, sequence);
+  return placeLoggedOnly(placeFresh(merged, sequence), sequence);
+}
+
+function timeOf(m: RuntimeMessage): number | undefined {
+  const t = (m as { timestamp?: unknown }).timestamp;
+  return typeof t === "number" && Number.isFinite(t) ? t : undefined;
+}
+
+/**
+ * Put runs of messages only the log has back where they happened. A reload can
+ * drop messages the log stored: Claude's reloaded transcript has no subagent
+ * sidechain. Such a run kept its spot after its last shared message, so every
+ * later turn went in ahead of it and the old subagent work sat below the newest
+ * reply. A run that is older than the shared message before it moves to just
+ * before the first shared message that came later.
+ */
+function placeLoggedOnly(list: RuntimeMessage[], sequence: ReadonlyArray<{ anchor: RuntimeMessage } | { fresh: RuntimeMessage }>): RuntimeMessage[] {
+  const shared = new Set(sequence.map((item) => ("anchor" in item ? item.anchor : item.fresh)));
+  const out: RuntimeMessage[] = [];
+  let previous: RuntimeMessage | undefined; // last shared message already in `out`
+  for (let i = 0; i < list.length;) {
+    if (shared.has(list[i]!)) { previous = list[i]!; out.push(previous); i++; continue; }
+    let end = i;
+    while (end < list.length && !shared.has(list[end]!)) end++;
+    const run = list.slice(i, end);
+    i = end;
+    const t = timeOf(run[0]!);
+    const before = previous && timeOf(previous);
+    if (t === undefined || before === undefined || before <= t) { out.push(...run); continue; }
+    const at = out.findIndex((m) => shared.has(m) && (timeOf(m) ?? -Infinity) > t);
+    out.splice(at < 0 ? out.length : at, 0, ...run);
+  }
+  return out;
 }
 
 /**
@@ -231,10 +263,6 @@ export function mergeBases(logged: RuntimeMessage[], runtime: readonly RuntimeMe
 function placeFresh(merged: RuntimeMessage[], sequence: ReadonlyArray<{ anchor: RuntimeMessage } | { fresh: RuntimeMessage }>): RuntimeMessage[] {
   const freshSet = new Set(sequence.flatMap((item) => ("fresh" in item ? [item.fresh] : [])));
   if (!freshSet.size) return merged;
-  const timeOf = (m: RuntimeMessage): number | undefined => {
-    const t = (m as { timestamp?: unknown }).timestamp;
-    return typeof t === "number" && Number.isFinite(t) ? t : undefined;
-  };
   const placed = merged.filter((m) => !freshSet.has(m));
   let previous: RuntimeMessage | undefined; // last anchor seen, or last fresh placed after it
   for (let i = 0; i < sequence.length; i++) {

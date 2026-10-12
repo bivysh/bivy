@@ -23,7 +23,6 @@ import {
   RunFetchError,
   ManagedLaunchError,
   recordProductMetric,
-  createManagedAuthRunner,
   launchManagedSessionMachine,
   restoreManagedSessionMachine,
   fetchEphemeralConfigs,
@@ -411,23 +410,16 @@ describe("paired devices", () => {
 });
 
 describe("managed account Machines", () => {
-  it("preserves managed profiles and adopts the auth runner room key", async () => {
+  it("preserves managed profiles", async () => {
     const store = createLocalStore(mem(), mem());
     store.s = "tok";
     store.cp = "https://app.bivy.sh";
-    const fakeFetch = (async (url: string) => {
-      if (String(url).endsWith("/account/ephemeral-configs")) {
-        return new Response(JSON.stringify([{ id: "managed-default", name: "Bivy Cloud", provider: "fly", computeSource: "managed" }]), { status: 200 });
-      }
-      return new Response(JSON.stringify({ machine: { id: "m-auth", provider: "fly", name: "Auth", region: "iad", status: "running", ip: null, createdAt: "", nodeId: "eph-auth" }, roomKey: "room-auth" }), { status: 201 });
-    }) as typeof fetch;
+    const fakeFetch = (async () => new Response(JSON.stringify([{ id: "managed-default", name: "Bivy Cloud", provider: "fly", computeSource: "managed" }]), { status: 200 })) as typeof fetch;
     const configs = await fetchEphemeralConfigs(store, fakeFetch);
     expect(configs[0]?.computeSource).toBe("managed");
-    await createManagedAuthRunner(store, fakeFetch);
-    expect(store.keys()["eph-auth"]).toBe("room-auth");
   });
 
-  it("launches an interactive managed Machine and adopts its one-time room key", async () => {
+  it("launches the cloud computer without taking a room key from the control plane", async () => {
     const store = createLocalStore(mem(), mem());
     store.s = "tok";
     store.cp = "https://app.bivy.sh";
@@ -439,7 +431,9 @@ describe("managed account Machines", () => {
     const machine = await launchManagedSessionMachine(store, "managed-default", { runtimeId: "codex", requestId: "starting-persisted", fetchImpl: fakeFetch });
     expect(JSON.parse(body)).toEqual({ configId: "managed-default", runtimeId: "codex", requestId: "starting-persisted" });
     expect(machine.nodeId).toBe("eph-1");
-    expect(store.keys()["eph-1"]).toBe("room-1");
+    // Even if a control plane still sends one, the device gets the machine's
+    // key only by pairing with the machine.
+    expect(store.keys()["eph-1"]).toBeUndefined();
   });
 
   it("preserves deployment-owned remediation actions on launch denial", async () => {
@@ -467,7 +461,7 @@ describe("managed account Machines", () => {
     } satisfies Partial<ManagedLaunchError>);
   });
 
-  it("restores a managed Machine and adopts escrowed key material on a fresh device", async () => {
+  it("restores a managed Machine without taking a room key from the control plane", async () => {
     const store = createLocalStore(mem(), mem());
     store.s = "tok";
     store.cp = "https://app.bivy.sh";
@@ -478,7 +472,7 @@ describe("managed account Machines", () => {
     }) as typeof fetch;
     await restoreManagedSessionMachine(store, { configId: "managed-default", nodeId: "eph-old", sessionId: "s1", requestId: "restore:s1:eph-old:m1" }, fakeFetch);
     expect(JSON.parse(body)).toEqual({ configId: "managed-default", nodeId: "eph-old", sessionId: "s1", requestId: "restore:s1:eph-old:m1" });
-    expect(store.keys()["eph-old"]).toBe("room-restored");
+    expect(store.keys()["eph-old"]).toBeUndefined();
   });
 });
 

@@ -2790,7 +2790,7 @@ export class SessionStore {
         // A configured provider we were managing → refresh its auth detail too.
         this.set({ providers });
         // The prompt is satisfied once the *targeted* provider becomes configured
-        // (login completed here, or a peer/hosted-escrow sync landed the vault).
+        // (login completed here, or a peer sync landed the vault).
         // Check the specific provider, not just "any provider configured": a
         // mid-session prompt for e.g. openai-codex must not be dismissed just
         // because anthropic is already connected.

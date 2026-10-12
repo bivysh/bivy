@@ -28,11 +28,11 @@ export function rememberConnectAiDone(): void {
   localStorage.setItem(AI_DONE_KEY, "1");
 }
 
-/** Where a sign-in made from this device is kept. Unless the user runs agents
- *  on Bivy Cloud, a sign-in stays on the computer it was made on: it never
- *  joins the account's synced vault, so nothing about it reaches the server.
- *  Cloud machines (`eph-…`) always use the account default, because cloud runs
- *  need the kept copy. */
+/** Where a sign-in made from this device is kept. On your own computer it stays
+ *  on that machine and never joins the account vault. On Bivy Cloud, including
+ *  any `eph-` machine, it joins the account vault so a new disk can receive it
+ *  from another machine that is online. The vault is encrypted; the control
+ *  plane cannot read it. */
 export function signInSync(nodeId: string | null | undefined, place: RunPlace | null = readRunPlace()): "node" | undefined {
   return place !== "cloud" && !nodeId?.startsWith("eph-") ? "node" : undefined;
 }

@@ -19,6 +19,7 @@ import type {
   HostedAuditEvent,
   HostedProvisioning,
 } from "./store.js";
+import { mintInstallationToken } from "./hosted-github-auth.js";
 
 export interface CentralGithubAppConfig {
   appId: string;
@@ -153,6 +154,63 @@ export function resolveGithubIdentity(sources: GithubIdentitySources, repo?: str
     if (resolved) return resolved;
   }
   return null;
+}
+
+/** The slice of the store mint-on-demand needs. */
+export interface HostedMintStorePort {
+  getHostedProvisioning(accountId: string): Promise<HostedProvisioning>;
+  listCentralGithubInstallations(accountId: string): Promise<CentralGithubInstallation[]>;
+  appendHostedAudit(accountId: string, event: HostedAuditEvent): Promise<void>;
+}
+
+/**
+ * Mint a fresh installation token for the account's resolved GitHub identity
+ * (own app or the central app's installation). Used by the mint-on-demand
+ * endpoint so a long-running machine can re-fetch a token per git op instead of
+ * holding a long-lived one. The minted token is returned to the caller and
+ * NEVER persisted. Returns null if hosted provisioning is off or the identity
+ * resolves to no app (a stored PAT is injected at boot, not minted here).
+ *
+ * Isolation: the identity resolves only against installations the store has
+ * bound to `accountId`, so one account can never mint for another's
+ * installation. For the central app the token is additionally scoped down to
+ * `opts.repo` where the API allows; GitHub rejects a repo outside the
+ * installation, in which case the full-installation (still ~1h) token is used.
+ */
+export async function mintHostedInstallationToken(
+  store: HostedMintStorePort,
+  accountId: string,
+  opts?: { repo?: string; fetchImpl?: typeof fetch },
+): Promise<{ token: string; expiresAt: string } | null> {
+  const hosted = await store.getHostedProvisioning(accountId);
+  if (!hosted.enabled) return null;
+  const central = centralGithubAppConfig();
+  const centralInstallations = central ? await store.listCentralGithubInstallations(accountId) : [];
+  const identity = resolveGithubIdentity({ hosted, central, centralInstallations }, opts?.repo);
+  if (identity?.kind !== "app") return null;
+  const creds = { appId: identity.appId, installationId: identity.installationId, privateKeyPem: identity.privateKeyPem };
+  const fetchImpl = opts?.fetchImpl ?? fetch;
+  // Scope to the session repo for the central app only — a BYO app's
+  // installation is already the user's own scoping choice.
+  const repoName =
+    identity.mode === "central-app" && opts?.repo?.includes("/") ? opts.repo.split("/")[1] : undefined;
+  let minted: { token: string; expiresAt: string } | undefined;
+  let scoped = false;
+  if (repoName) {
+    try {
+      minted = await mintInstallationToken(creds, fetchImpl, undefined, { repositories: [repoName] });
+      scoped = true;
+    } catch {
+      // repo outside the installation (or a transient error) — fall back below
+    }
+  }
+  if (!minted) minted = await mintInstallationToken(creds, fetchImpl);
+  await store.appendHostedAudit(accountId, {
+    at: new Date().toISOString(),
+    action: "token_minted",
+    detail: `mint-on-demand mode=${identity.mode}${opts?.repo ? ` repo=${opts.repo}` : ""}${scoped ? " scoped" : ""}`,
+  }).catch(() => { /* audit is best-effort */ });
+  return minted;
 }
 
 // ---------------------------------------------------------------------------

@@ -27,7 +27,6 @@ export interface CredentialItem {
   availability: CredentialAvailability;
   updatedAt?: number;
   expiresAt?: number;
-  unattended?: boolean;
   testable?: boolean;
   lastVerifiedAt?: number;
   lastVerifiedOk?: boolean;
@@ -82,7 +81,6 @@ export function credentialItemFromNodeSummary(summary: CredentialRecordSummary, 
     id: credentialItemId(provider, label), provider, label, kind: summary.kind, origins: ["node"],
     availability: { account: summary.sync === "account", device: false, nodes: [node] },
     ...(summary.expiresAt == null ? {} : { expiresAt: summary.expiresAt }),
-    ...(summary.unattended ? { unattended: true } : {}),
     testable: summary.testable,
     ...(summary.lastVerifiedAt == null ? {} : { lastVerifiedAt: summary.lastVerifiedAt }),
     ...(summary.lastVerifiedOk == null ? {} : { lastVerifiedOk: summary.lastVerifiedOk }),

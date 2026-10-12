@@ -45,6 +45,8 @@ sessions:
 automation:
   checks: [test, lint, typecheck]
   checkTimeoutMinutes: 10
+  # Slack requests arrive unencrypted; run them only when this is true.
+  slackPrompts: false
 
 agents:
   company-codex:

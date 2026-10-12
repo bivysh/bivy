@@ -38,7 +38,6 @@ describe("saved-model unavailable diagnosis", () => {
     expect(withProvider).toBe("Your saved model isn't available on this machine. Choose another model.");
     const withoutProvider = launchModelUnavailableError(saved, [{ id: "gpt-test", provider: "openai-codex" }], true);
     expect(withoutProvider).toContain("its anthropic credential didn't reach Bivy Cloud");
-    expect(withoutProvider).toContain("unattended-runs grant");
   });
 
   it("points user-owned machines at connecting the provider, not the Cloud grant", () => {

@@ -100,7 +100,7 @@ describe("RelayTransport pairing rejection recovery", () => {
       webSocketImpl: FakeWS as unknown as typeof WebSocket,
       initialBackoffMs: 1,
     });
-    return { transport, statuses, errors };
+    return { transport, statuses, errors, store };
   }
 
   async function reachPairing(ws: FakeWS) {
@@ -220,6 +220,31 @@ describe("RelayTransport pairing rejection recovery", () => {
     expect(kinds).toContain("sessions.list");
     expect(kinds).toContain("terminal.list");
     expect(kinds).toContain("terminal.multiplexers");
+  });
+
+  it("pairs again when the machine's key changed (a new disk), but not on one bad frame", async () => {
+    const { transport, errors, store } = makeTransport();
+    store.addKey("node-1", b64url(crypto.getRandomValues(new Uint8Array(32))));
+    const machineKey = await importRoomKey(crypto.getRandomValues(new Uint8Array(32)));
+    const undecodable = async (ws: FakeWS) => {
+      ws.emit({ t: "ready" });
+      await settle();
+      ws.emit({ t: "frame", p: await seal(machineKey, JSON.stringify({ data: { type: "sessions" } })) });
+      await settle();
+    };
+    await transport.connect();
+    await undecodable(FakeWS.instances[0]);
+    expect(store.keys()["node-1"]).toBeTruthy();
+    await settle();
+    await undecodable(FakeWS.instances.at(-1)!);
+    expect(store.keys()["node-1"]).toBeFalsy();
+    expect(errors.at(-1)).toMatch(/key changed/);
+    await settle();
+    const next = FakeWS.instances.at(-1)!;
+    next.emit({ t: "ready" });
+    await settle();
+    expect(next.sent.some((s) => s.includes("pair.account"))).toBe(true);
+    transport.close();
   });
 
   it("reconnect() drops a zombie socket and dials a fresh one without going offline", async () => {

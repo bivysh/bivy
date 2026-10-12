@@ -27,7 +27,7 @@ The short version, before the detail:
 | --- | --- | --- | --- |
 | QR / `bivy link` pairing (hosted or self-hosted control plane) | **Never** | **Never** | The node — the QR carries the node's public key and a single-use secret out of band |
 | Account pairing (a signed-in browser links a node from the app) | **Never** | **Never** for session content | The **control plane** — the node wraps the room key for any device key the control plane authorizes |
-| Hosted ephemeral provisioning (control plane launches the machine) | **Never** | It **holds the room key** (escrowed) | The control plane — this is an explicit hosted-custody mode |
+| Hosted cloud computer (the deployment runs the machine; the control plane boots it) | **Never** | **Never** for session content — the machine generates and keeps its own room key | The control plane, as for account pairing — and the deployment operator controls the machine's host |
 | Terminal CLI on the node (`bivy run`, `bivy attach`) | n/a — nothing leaves the machine | n/a | Nobody |
 
 "Never" for the relay is unconditional: there is no plaintext or downgrade mode
@@ -107,6 +107,15 @@ senders call the control plane directly. The exceptions are:
   Rotation immediately invalidates the old secret, and revocation keeps only a
   disabled endpoint with a newly randomized secret.
 
+Because the control plane relays queued work, it must not be able to author
+it. A node therefore takes a run's instructions only from a template sealed to
+it, from GitHub or Linear content it fetches itself, or from a prompt built into
+the node (a CI failure without a template). A run's plaintext title is a label,
+never part of the prompt, and other unsealed instructions are refused. Slack
+requests are the exception the user opts into per machine
+(`automation.slackPrompts`, off by default), since their text can only arrive
+in plaintext (`src/work-instructions.ts`, [`slack-setup.md`](slack-setup.md)).
+
 Provider-native JSON objects and arrays are accepted entirely as untrusted event
 context. Senders that need Bivy routing fields can opt into this closed envelope
 (unknown fields are rejected once `version` or `instruction` is present):
@@ -149,6 +158,12 @@ against the control plane over TLS, and presents only that ticket
 (`src/relay-client.ts`, `mintTicket`). The relay consumes the ticket on a
 one-shot introspection call, so a fully compromised relay cannot replay it to
 mint link grants, list nodes, or otherwise act as the account.
+
+App previews are the exception: they are ordinary HTTPS for a browser, not
+session frames. TLS ends at the relay (or the proxy in front of it), which
+forwards plain HTTP to the node's app gateway over the node's outbound tunnel
+(`services/relay/src/preview.ts`). Whoever runs the relay can read and alter
+preview traffic, including what a shared-link viewer sees and sends.
 
 ## End-to-end encryption
 
@@ -508,8 +523,7 @@ sensitive.
    are file-based.
 8. **No recovery story for the model-auth vault.** If you lose every node and
    device that can unwrap it, the ciphertext on the control plane is
-   unrecoverable by design. There is no escrow of the account vault (the
-   separate, opt-in hosted-custody set in item 16 is the only exception).
+   unrecoverable by design. There is no escrow of the account vault.
 9. **Relay hardening is incomplete.** TLS termination is expected to be provided
    in front of the relay by the operator. Frame-size and per-socket
    message-rate limits exist, but per-account connection caps and quotas do not
@@ -541,21 +555,32 @@ sensitive.
     not depend on the control plane for that decision, and self-hosting the
     control plane puts the decision under your own control. See
     [Account pairing](#account-pairing-the-control-plane-vouches-for-the-device).
-16. **Hosted ephemeral provisioning is an explicit hosted-custody mode.** When
-    the control plane launches an ephemeral machine on your behalf, it
-    generates the machine's room key and **escrows it** (encrypted at rest,
-    `setNodeRoomKeyEnc`, `services/control-plane/src/ephemeral-provisioner.ts`)
-    so it can reach the machine again later; the same mode may hold a filtered
-    set of credentials you have explicitly granted for unattended runs. For
-    those machines the control plane can decrypt session traffic — this is a
-    deliberate trade of end-to-end privacy for device-offline provisioning,
-    off by default and opt-in per account. Device-driven ephemeral launches
-    (the browser mints the room key and bakes it into the machine) keep the
-    control plane blind. See
+16. **The hosted cloud computer runs on a host you don't control.** When the
+    deployment runs your account's cloud computer, the machine holds its own
+    keys like your own computer: it generates its room key on its persistent
+    disk and your devices get it by account pairing (item 15); model
+    credentials reach it only through the end-to-end account vault (a vault
+    key wrapped for it by one of your nodes) or a provider sign-in on the
+    machine itself. The control plane stores neither, cannot decrypt the
+    machine's session traffic or snapshots, and at startup deletes room keys
+    and credential vault keys that earlier versions escrowed
+    (`purgeRetiredKeyEscrow`, `services/control-plane/src/postgres-store.ts`).
+    What remains: the deployment operator runs the host (disk, memory, and the
+    boot payload the control plane writes), so a malicious operator could read
+    what the machine reads; device authorization trusts the control plane as
+    in item 15; the boot payload still carries a GitHub token when the account
+    uses a stored PAT rather than a GitHub App; a cloud computer first booted
+    by an earlier version keeps the room key that version generated until its
+    disk is replaced, so a database backup taken before the upgrade could still
+    decrypt its traffic; and because snapshots are sealed with the disk's key,
+    losing the disk loses the machine's session history. See
     [`hosted-provisioning-trust-model.md`](hosted-provisioning-trust-model.md),
     [`key-management.md`](key-management.md), and
     [`ephemeral-sessions.md`](ephemeral-sessions.md).
-17. **The web app that holds your room key is delivered by the control plane.**
+17. **App previews are readable by the relay operator.** See
+    [What the relay sees](#what-the-relay-sees). Don't put secrets in an app
+    you preview through Bivy; open it on the machine itself for that.
+18. **The web app that holds your room key is delivered by the control plane.**
     Browser-side crypto is only as trustworthy as the JavaScript that runs it,
     and the PWA is served by the control plane (hosted `app.bivy.sh`, or your
     own). A compromised control plane could ship modified JS that exfiltrates

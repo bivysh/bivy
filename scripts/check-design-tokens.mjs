@@ -75,6 +75,7 @@ const RETIRED_CLASSES = [
   "split-send", "split-send-toggle", "send-options-menu",
   // → grouped Runs feed (.run-history + .automation-history-row)
   "run-row", "run-row-open", "run-row-chevron", "runs-overview", "incoming-work", "run-history-filters",
+  "vault-custody-note", // hosted credential custody removed
 ];
 const retiredClassRe = new RegExp(`(?:\\.|className[^\\n]*[\\"'\\x60 {])(${RETIRED_CLASSES.join("|")})(?=[\\s.\\"'\\x60}:])`, "g");
 // Retired selector shapes that are not a single class name.

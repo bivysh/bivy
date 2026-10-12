@@ -81,6 +81,10 @@ export class RelayTransport implements Transport {
   private backoff: number;
   private closedByUs = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A frame has decrypted on this connection, so the key is right. */
+  private decodedOnLink = false;
+  /** Connections in a row whose first frame wouldn't decrypt (see forgetStaleKey). */
+  private staleKeyStrikes = 0;
   private pairSent = false;
   private pairAttempts = 0;
   /** Consecutive failed connect attempts, reset the moment a socket goes live.
@@ -193,6 +197,7 @@ export class RelayTransport implements Transport {
 
   async connect(): Promise<void> {
     this.closedByUs = false;
+    this.decodedOnLink = false;
     this.setStatus("connecting");
     this.curKey = await this.keyFor(this.store.cur);
     if (this.closedByUs) return;
@@ -280,11 +285,16 @@ export class RelayTransport implements Transport {
         this.receiveChain = this.receiveChain.then(async () => {
           if (!isCurrent() || ws.readyState !== 1) return;
           const frame = JSON.parse(await openMsg(key, full)) as { data: ServerEvent } & Record<string, unknown>;
+          this.decodedOnLink = true;
+          this.staleKeyStrikes = 0;
           if (!isCurrent() || ws.readyState !== 1 || !this.acceptFrame(frame)) return;
           this.transfers.accept(frame.data);
         }).catch(() => {
           if (isCurrent() && ws.readyState === 1) {
-            this.handlers.onError?.("Could not decode the machine response. Reconnecting to synchronize."); ws.close();
+            this.handlers.onError?.(this.forgetStaleKey()
+              ? "This machine's key changed. Pairing this device with it again."
+              : "Could not decode the machine response. Reconnecting to synchronize.");
+            ws.close();
           }
         }).finally(() => { this.decryptBytes -= full.length; });
       }
@@ -324,6 +334,19 @@ export class RelayTransport implements Transport {
     const now = Date.now();
     if (ws._resyncAt !== undefined && now - ws._resyncAt < RESYNC_THROTTLE_MS) return false;
     ws._resyncAt = now;
+    return true;
+  }
+
+  /** A machine that got a new disk has a new key, so nothing it sends opens
+   * with the one this device kept. After two connections in a row where not
+   * even the first frame decrypted, drop the key; the reconnect then pairs this
+   * device again through the account. Returns whether the key was dropped. */
+  private forgetStaleKey(): boolean {
+    if (this.decodedOnLink || !this.store.s) return false;
+    if (++this.staleKeyStrikes < 2) return false;
+    this.staleKeyStrikes = 0;
+    this.store.addKey(this.store.cur, "");
+    this.curKey = null;
     return true;
   }
 

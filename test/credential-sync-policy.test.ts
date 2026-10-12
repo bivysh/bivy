@@ -11,7 +11,7 @@ import path from "node:path";
 
 import { createCredentialVault } from "../src/runtime/credential-store.js";
 import type { CredentialRecord } from "../src/credentials/records.js";
-import { exportAccountOAuthCredentials, exportUnattendedRecords, importAccountOAuthCredentials, reconcileHostedCredentialRecords, setCredentialUnattended, setProviderApiKeyLabeled } from "../src/credentials/api.js";
+import { exportAccountOAuthCredentials, importAccountOAuthCredentials, setProviderApiKeyLabeled } from "../src/credentials/api.js";
 
 function freshCredsDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-sync-pol-"));
@@ -69,41 +69,16 @@ function oauthRecord(provider: string, label: string, access: string, expires: n
   }
 }
 
-// --- unattended custody is explicit and exports only granted stored items ---
-{
-  const credsDir = freshCredsDir();
-  try {
-    const store = createCredentialVault(credsDir);
-    await store.setApiKey("anthropic", "personal-key");
-    await store.putRecord({ provider: "anthropic", label: "work", origin: "bivy", sync: "account", source: { kind: "stored", cred: { type: "api_key", key: "work-key" } } });
-    await store.putRecord({ provider: "openai", label: "team", origin: "bivy", sync: "account", source: { kind: "stored", cred: { type: "api_key", key: "team-key" } } });
-    await setCredentialUnattended(credsDir, "anthropic", "work", true);
-    await setCredentialUnattended(credsDir, "openai", "team", true);
-    const hosted = await exportUnattendedRecords(credsDir);
-    assert.deepEqual(Object.keys(hosted).sort(), ["anthropic:work", "openai:team"]);
-    assert.equal(hosted["anthropic:work"]?.unattended, true);
-    assert.equal(hosted["openai:team"]?.unattended, true);
-    assert.equal((await store.readRecord("anthropic", "default"))?.unattended, undefined, "account sync never implies hosted custody");
-    await setProviderApiKeyLabeled(credsDir, "anthropic", "work", "rotated-work-key");
-    assert.equal((await store.readRecord("anthropic", "work"))?.unattended, true, "rotating a key preserves its custody grant");
-  } finally {
-    fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
-  }
-}
-
-// --- a v2-shaped ingest (agent TUI token refresh) keeps custody + tier ------
+// --- a v2-shaped ingest (agent TUI token refresh) keeps the sync tier -------
 // Pi's plaintext auth.json (and the legacy v2 sync wire) carries bare
 // credentials with no record metadata. When the agent's own TUI refreshes the
-// OAuth token set, the fold-back into the vault must keep the record's
-// unattended-runs grant and sync tier — otherwise the node's next escrow push
-// silently revokes the encrypted cloud copy and unattended/cloud sessions
-// report the credential never reached Bivy Cloud.
+// OAuth token set, the fold-back into the vault must keep the record's sync
+// tier — otherwise a machine-only credential would start syncing.
 {
   const credsDir = freshCredsDir();
   try {
     const store = createCredentialVault(credsDir);
     await store.modify("anthropic", async () => ({ type: "oauth", access: "a1", refresh: "r1", expires: 100, refreshedAt: 100 }));
-    await setCredentialUnattended(credsDir, "anthropic", "default", true);
     await store.modify("openai", async () => ({ type: "oauth", access: "b1", refresh: "q1", expires: 100, refreshedAt: 100 }));
     await store.putRecord({ ...(await store.readRecord("openai", "default"))!, sync: "node" });
 
@@ -115,26 +90,8 @@ function oauthRecord(provider: string, label: string, access: string, expires: n
 
     const anthropic = await store.readRecord("anthropic", "default");
     assert.equal(anthropic?.source.kind === "stored" && anthropic.source.cred.type === "oauth" ? anthropic.source.cred.refresh : undefined, "r2", "the fresher token set is folded in");
-    assert.equal(anthropic?.unattended, true, "a token refresh never drops the unattended grant");
-    assert.deepEqual(Object.keys(await exportUnattendedRecords(credsDir)), ["anthropic:default"], "the escrow snapshot still contains the granted record");
     assert.equal((await store.readRecord("openai", "default"))?.sync, "node", "a machine-only tier survives a v2-shaped ingest");
     assert.ok(!("openai" in (await store.exportSyncable())), "the refreshed machine-only credential still never syncs");
-  } finally {
-    fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
-  }
-}
-
-// --- hosted snapshots authoritatively remove revoked custody ----------------
-{
-  const credsDir = freshCredsDir();
-  try {
-    const store = createCredentialVault(credsDir);
-    const record: CredentialRecord = { provider: "anthropic", label: "work", origin: "bivy", sync: "account", unattended: true, updatedAt: 10, source: { kind: "stored", cred: { type: "api_key", key: "hosted-key" } } };
-    const manifest = await reconcileHostedCredentialRecords(credsDir, { "anthropic:work": record }, []);
-    assert.equal((await store.readRecord("anthropic", "work"))?.source.kind, "stored");
-    assert.deepEqual(manifest, [{ provider: "anthropic", label: "work" }]);
-    assert.deepEqual(await reconcileHostedCredentialRecords(credsDir, {}, manifest), []);
-    assert.equal(await store.readRecord("anthropic", "work"), undefined, "omission from the next filtered snapshot revokes a running hosted recipient");
   } finally {
     fs.rmSync(path.dirname(credsDir), { recursive: true, force: true });
   }

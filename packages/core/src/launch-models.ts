@@ -36,6 +36,6 @@ export function launchModelUnavailableError(requested: { id: string; provider: s
     return "Your saved model isn't available on this machine. Choose another model.";
   }
   return managed
-    ? `Your saved model isn't available on this machine — its ${requested.provider} credential didn't reach Bivy Cloud. Check its unattended-runs grant in Settings → Models & keys (with a machine online), then refresh, or choose another model.`
+    ? `Your saved model isn't available on this machine — its ${requested.provider} credential didn't reach Bivy Cloud. Keep one of your machines with that credential online so Bivy Cloud can sync it, or sign in to ${requested.provider} on Bivy Cloud, then refresh, or choose another model.`
     : `Your saved model isn't available on this machine — no ${requested.provider} credential is connected here. Connect ${requested.provider} on this machine, then refresh, or choose another model.`;
 }

@@ -79,7 +79,7 @@ export function NativeCredentialImport({ state, onBack }: { state: AppState; onB
         <option value="node">Only the source machine</option>
         <option value="account">All my machines — end-to-end encrypted</option>
       </select>
-      <p className="muted">{sync === "account" ? "Importing grants account sync, not unattended cloud access. Other machines receive credentials when connected." : "Imported logins stay in this machine’s encrypted vault. You can enable account sync later."}</p>
+      <p className="muted">{sync === "account" ? "Importing grants account sync. Your other machines, Bivy Cloud included, receive credentials end to end when connected." : "Imported logins stay in this machine’s encrypted vault. You can enable account sync later."}</p>
       <button className="btn primary block" disabled={!selected.length || Boolean(busy) || status !== "online"} onClick={() => void confirm()}>{busy === "import" ? "Importing…" : `Import ${selected.length || "selected"} login${selected.length === 1 ? "" : "s"}`}</button>
     </>}
     {result && <div className="banner inline" role="status">

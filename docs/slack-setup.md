@@ -10,6 +10,10 @@ Bivy can turn a Slack slash command into an unattended agent run on one of your 
 4. Copy the Request URL Bivy displays.
 5. In the Slack app, open **Slash Commands**, create `/bivy`, and paste that Request URL.
 6. Install or reinstall the app to your workspace.
+7. On each machine that should run Slack requests, turn them on and restart Bivy:
+   ```sh
+   bivy config set automation.slackPrompts true
+   ```
 
 Bivy stores the signing secret only to verify Slack's request signatures.
 Requests older than five minutes and requests with invalid signatures are
@@ -17,6 +21,12 @@ rejected. The slash-command text necessarily reaches Bivy Cloud in plaintext
 and is retained as the queued run's title until that run is deleted, so do not
 put credentials or other secrets in `/bivy` commands. Repository contents,
 agent transcripts, and model credentials still stay on the node.
+
+Because the command arrives unencrypted, whoever runs the control plane could
+also queue a Slack-style request. That's why machines ignore Slack requests
+until you turn them on (step 7). Other runs are safe by construction: their
+instructions are encrypted to the machine, or the machine fetches them itself
+from GitHub or Linear.
 
 ## Commands
 
@@ -36,5 +46,6 @@ Slack receives an immediate private acknowledgement. Progress and outcomes appea
 ## Troubleshooting
 
 - **Slack says the command failed:** confirm the slash command's Request URL exactly matches the URL shown in Bivy and that the Signing Secret belongs to the same Slack app.
+- **A run fails with "Slack prompts are off on this machine":** run `bivy config set automation.slackPrompts true` on that machine and restart Bivy.
 - **A request stays pending:** make sure the target node is online. Enrolled nodes automatically listen for Slack work; no GitHub issue-pickup environment flag is required.
 - **Repository request cannot clone or push:** connect a GitHub App to that repository or configure a GitHub token on the node.

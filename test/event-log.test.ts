@@ -201,6 +201,16 @@ test("mergeBases takes the runtime whole when it holds every logged message, rep
   assert.deepEqual(mergeBases(scrambled, ordered), ordered);
 });
 
+test("mergeBases moves subagent messages a reload dropped back before the turns that followed them", () => {
+  // Claude's reloaded transcript has no subagent sidechain, so the log alone holds
+  // it. New turns used to go in ahead of it, leaving it below the final reply.
+  const sub = (text: string, ts: number) => ({ ...baseMsg("assistant", text, ts), parentToolUseId: "toolu_agent" });
+  const main = [baseMsg("user", "go", 100), baseMsg("assistant", "spawning", 200), baseMsg("assistant", "subagent done", 500), baseMsg("assistant", "final", 700)];
+  const logged = [...main, sub("reading", 300), sub("editing", 400)]; // as a past merge left it
+  const next = baseMsg("user", "next", 800);
+  assert.deepEqual(mergeBases(logged, [...main, next]), [main[0], main[1], logged[4], logged[5], main[2], main[3], next]);
+});
+
 test("mergeBases keeps a genuinely repeated message (positional, not set-based, dedup)", () => {
   // A user who sends "run tests" twice must keep BOTH turns — the content fold is
   // positional (aligns two serializations of ONE conversation), never a flat set

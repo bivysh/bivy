@@ -131,7 +131,6 @@ export class CredentialsModelsCoordinator {
   }
   removeCredential(provider: string, label: string): Promise<void> { return this.ack({ kind: "credential.remove", provider, label }); }
   setCredentialSync(provider: string, label: string, sync: "account" | "node"): Promise<void> { return this.ack({ kind: "credential.sync.set", provider, label, sync }); }
-  setCredentialUnattended(provider: string, label: string, unattended: boolean): Promise<void> { return this.ack({ kind: "credential.unattended.set", provider, label, unattended }); }
   async testCredential(provider: string, label: string): Promise<{ ok: boolean; at: number; reason?: string }> {
     const event = await this.deps.awaitAck({ kind: "credential.test", provider, label }, 15_000) as { ok?: boolean; at?: number; reason?: string };
     return { ok: Boolean(event.ok), at: Number(event.at) || this.deps.now(), ...(event.reason ? { reason: event.reason } : {}) };

@@ -85,7 +85,8 @@ export interface SourceTriggerEvent {
 
 const SENTINEL_SCHEDULE = { kind: "once" as const, at: "9999-12-31T00:00:00.000Z" };
 
-/** Plaintext default when a CI automation has no E2E template yet. */
+/** Plaintext default when a CI automation has no E2E template yet. Current
+ * nodes ignore it and use their own copy (src/work-instructions.ts). */
 export const DEFAULT_FIX_CI_PROMPT = `Investigate a failed CI build and prepare a tested fix.
 
 1. Use the incoming event context (build URL, job name, conclusion) to locate the failure. Fetch logs with credentials already on this machine — never ask the event for secrets.

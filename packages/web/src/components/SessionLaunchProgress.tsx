@@ -9,7 +9,7 @@ const CHECKPOINTS: ReadonlyArray<{ id: SessionLaunchCheckpointId; label: string;
   { id: "capacity", label: "Reserving Bivy Cloud capacity" },
   { id: "machine", label: "Creating the isolated Machine" },
   { id: "service", label: "Starting the secure Bivy service" },
-  { id: "credentials", label: "Loading encrypted credentials" },
+  { id: "credentials", label: "Checking model credentials" },
   { id: "repository", label: "Preparing the repository", skippedLabel: "No repository selected" },
   { id: "agent", label: "Starting the agent and session" },
   { id: "message", label: "Delivering your first message" },
@@ -26,7 +26,6 @@ export function SessionLaunchProgressView({
   progress,
   onSetupCredentials,
   onRetryLaunch,
-  onRetryFreshMachine,
   onChooseModel,
   onRefreshModels,
 }: {
@@ -35,12 +34,9 @@ export function SessionLaunchProgressView({
   onRefreshModels?: () => void;
   onSetupCredentials?: () => Promise<void>;
   onRetryLaunch?: () => Promise<void>;
-  onRetryFreshMachine?: () => Promise<void>;
 }) {
   const choice = progress.modelChoice;
   const needsCredentials = progress.checkpoints.account?.errorCode === "managed_credentials_required";
-  const retry = progress.checkpoints.machine?.state === "done" ? onRetryFreshMachine : onRetryLaunch;
-  const retryLabel = progress.checkpoints.machine?.state === "done" ? "Retry on a new Cloud Machine" : "Retry this launch";
   const terminalAt = progress.firstResponseAt ?? progress.failedAt;
   const [now, setNow] = useState(() => terminalAt ?? Date.now());
   const [startingSetup, setStartingSetup] = useState(false);
@@ -100,17 +96,17 @@ export function SessionLaunchProgressView({
           {startingSetup ? "Opening setup…" : "Set up model credentials"}
         </button>
       )}
-      {progress.failedAt && !needsCredentials && retry && (
+      {progress.failedAt && !needsCredentials && onRetryLaunch && (
         <button
           type="button"
           className="btn primary session-launch-action"
           disabled={startingSetup}
           onClick={() => {
             setStartingSetup(true);
-            void retry().finally(() => setStartingSetup(false));
+            void onRetryLaunch().finally(() => setStartingSetup(false));
           }}
         >
-          {startingSetup ? "Retrying…" : retryLabel}
+          {startingSetup ? "Retrying…" : "Retry this launch"}
         </button>
       )}
     </section>

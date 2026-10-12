@@ -10,10 +10,10 @@ document describes the trust boundaries for the work-queue routing feature
 change** introduced by control-plane-orchestrated ("hosted") provisioning.
 
 Users don't connect their own cloud accounts. Cloud machines run on compute the
-deployment supplies: the provider credential comes from the deployment extension
-at launch, is held in control-plane memory only, and is never stored, logged, or
-given to a machine (see [self-host.md](self-host.md#deployment-supplied-compute)).
-The control plane stores no user cloud credential.
+deployment supplies: the deployment extension runs one cloud computer per
+account with its own provider credential, which the control plane never sees
+(see [self-host.md](self-host.md#deployment-supplied-compute)). The control
+plane stores no cloud credential.
 
 It complements `docs/security-model.md`, `docs/ephemeral-sessions.md`, and
 `docs/credential-sync.md`; read those for the baseline.
@@ -26,7 +26,7 @@ It complements `docs/security-model.md`, `docs/ephemeral-sessions.md`, and
 | **Control plane (CP)** | The hosted API. Front door for webhooks, enrollment, work-queue metadata, and cloud-machine orchestration. |
 | **Relay** | Message bus between CP/devices and nodes. Sees only per-connect tickets and E2E-sealed frames. |
 | **Node / machine** | A runner. A *persistent node* is long-lived and holds its own credentials in a local vault; an *ephemeral machine* is a disposable VM the system launches. |
-| **Cloud provider** | Fly Machines. Holds the VM; authenticated by the deployment's provider credential. |
+| **Cloud provider** | Fly Machines. Holds the VM; driven by the deployment extension with the deployment's own credential. |
 | **GitHub** | Source of webhooks and target of clone/push/PR. Authenticated by a fine-grained PAT or a GitHub App installation token. |
 
 ## Baseline invariant (unchanged for everything except hosted provisioning)
@@ -35,9 +35,8 @@ It complements `docs/security-model.md`, `docs/ephemeral-sessions.md`, and
 
 Concretely, in the pre-existing and device-driven paths:
 
-- **Cloud provider credentials** belong to the deployment, not to users. The
-  control plane asks the deployment extension for one when it launches or
-  cleans up a machine and keeps it in memory only.
+- **Cloud provider credentials** belong to the deployment, not to users, and
+  stay in the deployment extension. The control plane never holds one.
 - **GitHub credentials**: a device-held fine-grained PAT
   (`BIVY_GITHUB_TOKEN`), injected into a machine at launch via provider
   user-data; or, on a persistent node, a GitHub **App private key** that stays
@@ -74,19 +73,18 @@ Gating and shape (`HostedProvisioning` in `services/control-plane/src/store.ts`)
 - **Off by default**, enabled per account.
 - Stored as JSONB on the account row (`hosted_provisioning`).
 - Reads are **redacted**: the API never returns token values.
-- The machine never holds a cloud credential: the provider credential is used
-  transiently at launch. The GitHub token is injected as `BIVY_GITHUB_TOKEN`,
+- The machine never holds a cloud credential. The GitHub token is injected as `BIVY_GITHUB_TOKEN`,
   or the machine mints short-lived installation tokens from the control plane.
 
 ### What each principal holds — before vs after
 
 | Secret | Baseline (device-driven) | Hosted provisioning (opt-in) |
 |---|---|---|
-| Cloud provider credential | None (users hold none) | The deployment's, in control-plane memory only |
+| Cloud provider credential | None (users hold none) | None — the deployment extension holds it and runs the machine |
 | GitHub token | Device local storage only | **+ Control plane** (per account) |
-| E2E room key | Device-generated, device-held | CP generates it and **escrows it at rest** (`node_room_keys`, sealed with the per-account hosted key) so it can rebuild a torn-down session with no device online — injected into the new machine, never used to decrypt a snapshot CP-side |
-| Model credentials | Peer-wrapped account vault (CP-blind) | **Per-item opt-in.** Bivy creates a separate filtered ciphertext containing only credentials marked “Allow unattended runs”, encrypts it under a different key, and seals that key at rest in `hosted_model_auth_keys`. Escrowing the hosted key cannot decrypt the ordinary account vault. Non-hosted accounts stay fully peer-wrapped. |
-| Account session token | Device | CP mints one per launch (`createSession`) to self-enroll |
+| E2E room key | Node-generated, node-held; devices get it by pairing | Unchanged. The cloud computer generates its own key on its persistent disk and devices get it by account pairing; the boot payload carries no key and the CP never holds one |
+| Model credentials | Peer-wrapped account vault (CP-blind) | Unchanged. The cloud computer gets the vault key wrapped by one of the account's online nodes, or the user signs in to a provider on the machine; the CP has no route that can decrypt a model credential |
+| Node enrollment token | Device | CP re-enrolls the cloud computer's node on each boot and puts the fresh token in its boot payload |
 | GitHub App private key | Node vault only | Unchanged (not used by this path) |
 
 ## Data flow: hosted provisioning
@@ -95,35 +93,34 @@ Gating and shape (`HostedProvisioning` in `services/control-plane/src/store.ts`)
 GitHub webhook ─▶ CP enqueue ─▶ notifyRelaysWorkAvailable
                                       │  (every enqueue funnels here)
                                       ▼
-                          maybeAutoProvision(account)
-                          gate: enabled? routing→config? creds?
-                                no node online? not already provisioning?
-                                      │  yes
+                          routeWorkToCloudComputer(account)
+                          routing→cloud? (primary, or fallback while
+                          the chosen machine is offline)
+                                      │  yes: work moves to the cloud
+                                      ▼  computer's label
+                   deployment extension /v1/compute/acquire
                                       ▼
-                   launchEphemeralMachine (server-side deps):
-                     • provider cred   ← deployment extension (memory only)
-                     • enroll bearer    ← CP createSession(account)
-                     • provider API     ← direct fetch (host-allowlisted)
-                     • BIVY_GITHUB_TOKEN← CP hosted vault
+                   deployment starts the account's machine and calls
+                   /internal/compute/bootstrap:
+                     • enroll bearer    ← CP re-enrolls the stable node
+                     • GitHub identity  ← mint-on-demand, or the stored PAT
+                     (no room key: the machine keeps its own)
                                       ▼
-                   ephemeral VM boots, claims the work item, does
-                   clone/push/PR with the injected GitHub token, then
-                   self-destructs at TTL.
+                   the cloud computer boots, claims the work item, does
+                   clone/push/PR, then sleeps when quiet.
 ```
 
-Decision logic (`planAutoProvision`): provision only when hosted provisioning is
-enabled **and** routing points at an ephemeral config (as a `config` primary, or
-as a `node` primary's fallback while that node is offline) **and** the config is the
-deployment's cloud profile with a credential available **and** no persistent node is online
-**and** no recent hosted machine is already active (dedupe window). A `config`
-primary is the designated runner; a `node` primary only falls back to its config
-when nothing is online.
+Routing logic (`routeWorkToCloudComputer` in
+`services/control-plane/src/cloud-computer.ts`): the cloud computer is needed
+when routing points at the deployment's cloud profile as a `config` primary, or
+as a `node` primary's fallback while that node is offline. A `config` primary is
+the designated runner; a `node` primary only falls back when it is offline.
 
 ## Threat model (compromise scenarios)
 
 | If compromised… | Baseline exposure | Hosted-provisioning exposure |
 |---|---|---|
-| **Control plane** | Webhook secrets, work-queue metadata, ciphertext. **No** repo/cloud creds. | **+ GitHub credentials of opted-in accounts, and the deployment's provider credential in memory** — the single highest-value target. Attacker can launch VMs on the deployment's cloud and act on opted-in accounts' repos. |
+| **Control plane** | Webhook secrets, work-queue metadata, ciphertext. **No** repo/cloud creds. | **+ GitHub credentials of opted-in accounts** — the single highest-value target. Attacker can ask the deployment extension for machines and act on opted-in accounts' repos, and (as with any account pairing) authorize a device of its own to pair with a cloud computer. It cannot decrypt past traffic, snapshots or model credentials from what it stores. |
 | **Relay** | Tickets + sealed frames only. | Unchanged. |
 | **Ephemeral machine** | The injected `BIVY_GITHUB_TOKEN` (scoped, and short-lived if an app installation token) + its enrollment token. Disposable. | Same. Never holds the cloud provider credential or the app private key. |
 | **Device** | All of that device's launch secrets. | Same (a device may still hold its own copies). |
@@ -131,8 +128,32 @@ when nothing is online.
 
 The net change is concentrated in one place: **compromise of the control plane
 now exposes the GitHub credentials of accounts that opted into hosted
-provisioning, and the deployment's provider credential while it is in memory.** Everything else is unchanged. This is why the feature is opt-in
+provisioning.** Everything else is unchanged. This is why the feature is opt-in
 and why the hardening below is mandatory for production.
+
+### What the cloud computer's own keys guarantee, and what they don't
+
+The cloud computer holds its keys the way a user-owned node does. Its room key
+is generated on its persistent disk (`pairing.json`) and reaches devices only by
+pairing; its model credentials arrive end to end (a vault key wrapped node to
+node) or through a provider sign-in on the machine. The control plane stores
+neither, and deletes room keys and credential vault keys that earlier versions
+escrowed when it starts (`purgeRetiredKeyEscrow`). Limits that remain:
+
+- **The deployment operator controls the host.** It runs the machine, its disk
+  and memory, and executes the boot payload the control plane writes. Someone
+  who controls the host can read what the machine reads.
+- **Device authorization trusts the control plane**, as for every account
+  pairing (security model, limitation 15).
+- **Earlier machines keep their earlier key.** A cloud computer first booted by
+  an earlier version keeps the room key that version generated (and escrowed)
+  until its disk is replaced; the escrowed copy is deleted, but a database
+  backup taken before the upgrade still holds it.
+- **A lost disk loses session history.** Snapshots are sealed with the disk's
+  room key, which no one else holds, so a new disk cannot restore them.
+- **A first boot with no online peer has no model credentials** until one of
+  the account's nodes comes online to wrap the vault key or the user signs in
+  on the machine.
 
 ## Hardening — implemented
 
@@ -161,14 +182,9 @@ have a clear production upgrade path.
    Sessions of any length work without a long-lived secret ever landing on the
    machine. A stored PAT remains the legacy fallback when no app is configured.
    (`hosted-github-auth.ts`.)
-4. **Rate cap** — provisions per account per hour are bounded
-   (`HOSTED_PROVISION_MAX_PER_HOUR`, default 5) in the provisioning decision, on
-   top of the one-at-a-time dedupe window.
-5. **Server-side lifecycle reconciliation** — the CP tracks the machines it
-   launched and reaps them past TTL (`reconcileHostedMachines`): it drops the
-   tracking record and unenrolls the node (freeing the node-limit slot). The VM
-   self-destructs at its TTL independently; this keeps CP state accurate without
-   relying on a device.
+4. **One machine per account** — Core never launches machines. The deployment
+   extension runs at most one cloud computer per account, owns its lifecycle
+   and enforces any limits when Core asks to acquire it.
 
 ## The central GitHub App (managed tier)
 
@@ -213,16 +229,14 @@ than mass-leaked PATs.
 ### Still recommended before GA
 - Extend the keyring beyond the current env and **AWS KMS** sources (for example,
   an HSM) without changing callers.
-- **Scope** the GitHub App installation and the deployment's provider credential
-  to the minimum repos / permissions needed (operational).
+- **Scope** the GitHub App installation to the minimum repos / permissions
+  needed (operational).
 - **Verify the installer's identity** in the central-app setup callback via
   GitHub user OAuth (`code` exchange → `GET /user/installations`). The state
   nonce already proves which Bivy account initiated the install; OAuth would
   additionally prove the GitHub user completing it has access to that
   installation, closing the residual race where an attacker holding a fresh
   state binds a victim's just-created, not-yet-bound installation.
-- Exercise a real **end-to-end cloud launch** with live provider credentials
-  (the code path is complete; it needs a real provider account to run).
 
 ## Design principles preserved
 
@@ -230,7 +244,7 @@ than mass-leaked PATs.
   server-side launches and the credentials can be cleared.
 - The **machine never holds a cloud credential**; the deployment's provider
   credential is used only transiently by the control plane.
-- Every other trust boundary (relay blindness, E2E vaults, node-held app keys)
-  is **unchanged**. The exception is
+- Every other trust boundary (relay blindness, E2E vaults and room keys, node-held
+  app keys) is **unchanged**, including on the cloud computer. The exception is
   narrow, named, and gated — not a general relaxation of "the control plane holds
   no secrets."
