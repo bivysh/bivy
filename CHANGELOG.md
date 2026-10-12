@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.1] - 2026-10-12
+
 ### Changed
 
 - **First run asks where your agents run, then connects your AI.** When the deployment offers a cloud, the first screen after sign-in asks "Bivy Cloud or my own computer?". Picking Bivy Cloud starts your cloud computer right away, and "Connect your AI" (Claude and ChatGPT side by side, with API keys as a fallback) is on screen while it boots. Picking your own computer shows the install command, then the same step on that computer. A sign-in made on your own computer stays on that machine: it isn't added to the account's synced vault, so nothing about it is uploaded. A sign-in on Bivy Cloud joins that vault, still encrypted, so a replaced disk can get it back from another machine that is online, or an API key from this browser. Bivy cannot read it. Turn on sync for a credential in Settings when you add another machine. `provider.oauth.start` accepts `sync: "node"` for this. The unused first-run wizard (`FirstRunOnboarding`) is removed.
