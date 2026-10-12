@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { AppState } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { isPackagedClient, openPackagedExternal } from "../packaged-client.js";
+import { signInSync } from "../onboarding.js";
 
 /**
  * The device-code / callback-url step of an in-flight OAuth login
@@ -105,6 +106,7 @@ export function ProviderConnectForm({
   state,
   providerId,
   apiKeyProvider,
+  keyOnly = false,
 }: {
   state: AppState;
   providerId: string;
@@ -112,7 +114,11 @@ export function ProviderConnectForm({
    *  Codex signs in as `openai-codex` but its key lives under `openai`
    *  (OPENAI_API_KEY). Defaults to `providerId`. */
   apiKeyProvider?: string;
+  /** Only the API-key field: the caller already offers the sign-in. */
+  keyOnly?: boolean;
 }) {
+  // Read when the user acts, so the latest onboarding choice applies.
+  const sync = () => signInSync(state.connection.currentNodeId);
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -138,8 +144,8 @@ export function ProviderConnectForm({
   return (
     <div className="settings-form">
       {error && <div className="banner inline" data-tone="danger" role="alert">{error}</div>}
-      {provider?.oauth && (
-        <button className="btn primary block" onClick={() => controller.startOauth(providerId)}>
+      {provider?.oauth && !keyOnly && (
+        <button className="btn primary block" onClick={() => controller.startOauth(providerId, undefined, sync())}>
           Sign in with {name}
         </button>
       )}
@@ -162,10 +168,12 @@ export function ProviderConnectForm({
               // Await the node's authoritative ack. A timer/re-list can make a
               // failed save look successful and is especially harmful in the
               // first-run auth path.
-              await controller.setCredential(keyProvider, "default", { key: key.trim() });
+              const keep = sync();
+              await controller.setCredential(keyProvider, "default", { key: key.trim(), ...(keep ? { sync: keep } : {}) });
               // Keep the account's device vault converged too, so the same item
               // can seed a first machine even when no peer node is online later.
-              await controller.setEphemeralModelKey(keyProvider, key.trim(), "account", "default").catch(() => {});
+              // A key kept on this machine stays out of it.
+              if (!keep) await controller.setEphemeralModelKey(keyProvider, key.trim(), "account", "default").catch(() => {});
               setKey("");
               controller.listProviders();
             } catch (e) {

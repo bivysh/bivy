@@ -54,7 +54,7 @@ export class CredentialsModelsCoordinator {
   saveApiKey(provider: string, key: string): Promise<void> { return this.ack({ kind: "provider.apiKey", provider, key }); }
   removeProvider(provider: string): void { this.deps.send({ kind: "provider.remove", provider }); }
   resetOauth(provider: string): void { this.deps.send({ kind: "provider.oauth.reset", provider }); }
-  startOauth(provider: string, label?: string): void { this.deps.send({ kind: "provider.oauth.start", provider, ...(label ? { label } : {}) }); }
+  startOauth(provider: string, label?: string, sync?: "account" | "node"): void { this.deps.send({ kind: "provider.oauth.start", provider, ...(label ? { label } : {}), ...(sync ? { sync } : {}) }); }
   async openOauthOnNode(id: string): Promise<{ opened: boolean; error?: string }> {
     const event = await this.deps.awaitAck({ kind: "provider.oauth.open_on_node", id }) as { opened?: boolean; error?: string };
     return { opened: event.opened === true, ...(event.error ? { error: event.error } : {}) };

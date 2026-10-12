@@ -18,6 +18,7 @@ import { githubInstallationSettings, githubMentionHandles, githubSourceStatus } 
 import { focusEntries } from "../packages/web/src/focusTranscript.js";
 import { standbyCopyOf } from "../packages/web/src/standby.js";
 import { cloudDestinations, nodePresence } from "../packages/web/src/cloudDestinations.js";
+import { agentForProviders, signInSync } from "../packages/web/src/onboarding.js";
 
 test("account routing follows project, active, default and ambiguity rules", () => {
   const records = [{ label: "default" }, { label: "work" }];
@@ -198,4 +199,16 @@ test("a managed cloud profile is one destination that reuses the account's cloud
     ["asleep", "offline", "online"],
     "only the cloud computer sleeps; any other machine that isn't connected is offline",
   );
+});
+
+test("first run: own-computer sign-ins stay on that machine, and the agent follows the connected account", () => {
+  assert.equal(signInSync("laptop", "own"), "node");
+  assert.equal(signInSync("eph-managed-auto-1", "own"), undefined, "a cloud machine keeps the account vault, so a new disk can recover it");
+  assert.equal(signInSync("laptop", null), "node", "no cloud chosen (or offered) means own computer");
+  assert.equal(signInSync("laptop", "cloud"), undefined);
+
+  const claude = { id: "claude-code", credentialRequirements: { owner: "agent" as const, strategy: "one-of" as const, providers: ["anthropic"] } };
+  const codex = { id: "codex", credentialRequirements: { owner: "agent" as const, strategy: "one-of" as const, providers: ["openai-codex", "openai"] } };
+  assert.equal(agentForProviders([claude, codex], "claude-code", ["openai-codex"])?.id, "codex");
+  assert.equal(agentForProviders([claude, codex], "claude-code", ["anthropic", "openai-codex"]), undefined, "the selected agent can already run");
 });

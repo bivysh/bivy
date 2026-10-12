@@ -29,7 +29,7 @@ import {
   emptyDocument,
   type CredentialVaultDocumentV3,
 } from "./document.js";
-import { credKey, parseCredKey, normalizeLabel, inferReferenceBackend, DEFAULT_LABEL, type CredentialRecord } from "./records.js";
+import { credKey, parseCredKey, normalizeLabel, inferReferenceBackend, DEFAULT_LABEL, type CredentialRecord, type SyncPolicy } from "./records.js";
 import { type ApiKeyCredential, type OAuthCredential, type StoredCredential } from "./types.js";
 import type { Sealer } from "./ports.js";
 
@@ -216,12 +216,14 @@ export class BivyCredentialStore {
    * safe with multiple accounts per provider: a refresh rotates the *selected*
    * record under its own lock, so refreshing `anthropic:work` can't clobber
    * `anthropic:personal` (rotated refresh tokens are single-use). `fn` operates on
-   * the record's stored credential; the record's label/sync/origin are preserved.
+   * the record's stored credential; the record's label/sync/origin are preserved
+   * unless `sync` is given (a sign-in that asked to stay on this machine).
    */
   async modifyRecord(
     provider: string,
     label: string,
     fn: (current: StoredCredential | undefined) => Promise<StoredCredential | undefined>,
+    sync?: SyncPolicy,
   ): Promise<StoredCredential | undefined> {
     const id = providerId(provider);
     if (!id) throw new Error("Provider is required");
@@ -242,6 +244,7 @@ export class BivyCredentialStore {
         const record: CredentialRecord = existing
           ? { ...existing, source: { kind: "stored", cred: clean }, updatedAt: now }
           : { ...recordFromStored(id, clean), label: normalizeLabel(label), updatedAt: now };
+        if (sync) record.sync = sync;
         document.credentials[key] = record;
         delete document.deletedAt[key];
         this.writeDocument(document);
