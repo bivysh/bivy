@@ -114,7 +114,6 @@ export function App() {
   // answer), consume it immediately so it cannot follow them into later turns
   // or sessions. Keep the old key for backwards compatibility with users who
   // already dismissed it.
-  const [automationNextStepDismissed, setAutomationNextStepDismissed] = useState(() => localStorage.getItem("bivy:automation-next-step") === "done");
   // Settings is URL-backed (#78) — `settingsRoute` mirrors the `/settings` /
   // `/settings/:view` route the same way useAppState mirrors the session
   // store, and is null whenever the URL is on anything else (Settings closed).
@@ -340,15 +339,6 @@ export function App() {
     runtimes: state.catalogs.runtimes,
     readiness: state.catalogs.activationReadiness,
   }), [state.catalogs.activationReadiness, state.catalogs.runtimes, state.connection.signedIn, state.connection.status]);
-  const agentAnswered = state.activeSession.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool);
-  // Shown once: remembered as seen as soon as it appears, but it stays on
-  // screen until answered rather than vanishing on the render that showed it.
-  useEffect(() => {
-    if (!agentAnswered || !state.activeSession.activeSessionId || automationNextStepDismissed) return;
-    localStorage.setItem("bivy:automation-next-step", "done");
-  }, [agentAnswered, state.activeSession.activeSessionId, automationNextStepDismissed]);
-  // One next-step card at a time: the notification offer goes first.
-  const [notifyOfferOpen, setNotifyOfferOpen] = useState(false);
   // Latch: has this client ever had a live connection this run? Once true, we
   // treat the WHOLE transient reconnect window as still-composable — not just the
   // brief "reconnecting" beat, but the redial's "connecting" and any re-pair
@@ -1237,29 +1227,9 @@ export function App() {
               <NotifyOffer
                 working={state.activeSession.working}
                 machineName={activeSessionNode?.name || undefined}
-                onOpenChange={setNotifyOfferOpen}
               />
             )}
 
-            {agentAnswered && activeSession && !automationNextStepDismissed && !notifyOfferOpen && (
-              <section className="card next-step" aria-label="Next step">
-                <div>
-                  <strong>Make this repeatable</strong>
-                  <p>Create an automation to run work without you.</p>
-                </div>
-                <div className="next-step-actions">
-                  <button type="button" className="btn sm primary" onClick={() => {
-                    localStorage.setItem("bivy:automation-next-step", "done");
-                    setAutomationNextStepDismissed(true);
-                    openAutomations();
-                  }}>Open Automations</button>
-                  <button type="button" className="btn sm ghost" aria-label="Dismiss" onClick={() => {
-                    localStorage.setItem("bivy:automation-next-step", "done");
-                    setAutomationNextStepDismissed(true);
-                  }}>Dismiss</button>
-                </div>
-              </section>
-            )}
 
 
             {filesSheetOpen && !sidePane.wide && activeSession && (

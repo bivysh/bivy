@@ -53,7 +53,6 @@ for (const theme of themes) {
     });
     await expect(page.getByText("Done — the status page is published.")).toBeVisible();
     await expect(offer).toBeVisible();
-    await expect(page.getByRole("region", { name: "Next step" })).toHaveCount(0);
 
     // A refusal keeps the offer so the user can fix it and retry.
     await offer.getByRole("button", { name: "Turn on notifications" }).click();
@@ -63,7 +62,6 @@ for (const theme of themes) {
     await expect(page.getByRole("status").filter({ hasText: "Notifications are on" })).toBeVisible();
     expect(await page.evaluate(() => (window as any).enabled)).toBe(2);
     await page.clock.runFor(5000);
-    await expect(page.getByRole("region", { name: "Next step" })).toContainText("Make this repeatable");
 
     // Offered once per device: a later turn after a reload doesn't ask again.
     await page.reload();

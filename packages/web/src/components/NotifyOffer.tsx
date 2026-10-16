@@ -11,7 +11,7 @@ import { controller } from "../store/useStore.js";
 
 const DONE_KEY = "bivy:notify-offer";
 
-export function NotifyOffer({ working, machineName, onOpenChange }: { working: boolean; machineName?: string; onOpenChange?: (open: boolean) => void }) {
+export function NotifyOffer({ working, machineName }: { working: boolean; machineName?: string }) {
   const [done, setDone] = useState(() => localStorage.getItem(DONE_KEY) === "done");
   const [eligible, setEligible] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -36,7 +36,6 @@ export function NotifyOffer({ working, machineName, onOpenChange }: { working: b
   }, [enabled]);
 
   const open = !done && eligible;
-  useEffect(() => onOpenChange?.(open), [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const finish = () => {
     localStorage.setItem(DONE_KEY, "done");
