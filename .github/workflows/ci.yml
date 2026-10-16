@@ -330,9 +330,18 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
+      # The pinned Node runtime the self-contained archive bundles.
+      - name: Cache the archive's Node runtime
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/bivy-release/node
+          key: archive-node-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/release-archives.mjs') }}
       # Pack the exact npm payload; unlike the fallback archive it needs no
-      # excluded package-lock.
-      - run: node scripts/build-release.mjs --npm-pack release-artifact
+      # excluded package-lock. The same build writes this platform's GitHub
+      # release archive, smoke-tested below without a system Node.
+      - run: node scripts/build-release.mjs --npm-pack release-artifact --archives release-archives --targets host
+      - name: Verify the self-contained archive
+        run: node scripts/smoke-archive.mjs release-archives
       # Only the macOS consumer and the clean installer, which run when
       # packaging inputs change, consume the package from another runner.
       - name: Upload release package for packaging lanes

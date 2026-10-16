@@ -5,13 +5,15 @@ name: Release
 # production must live here together -- see docs/releasing.md.
 #
 #   push to main       -> STAGING (automatic). Publishes X.Y.Z-staging.N to
-#                         the `staging` dist-tag on every merge. No approval, no
+#                         the `staging` dist-tag, and its archives to the
+#                         rolling `staging` GitHub prerelease, on every merge. No approval, no
 #                         git tag, never moves `latest`. This is the dev channel
 #                         every change lands on.
 #   push of a v* tag   -> PRODUCTION. `pnpm release` tags a commit already on
 #                         main whose package.json holds that version; this run
 #                         promotes it to the `latest` dist-tag, aliases its
-#                         service images and creates the GitHub release. Pushing
+#                         service images and creates the GitHub release, with
+#                         the self-contained per-platform archives attached. Pushing
 #                         the tag is the approval: the release-tags ruleset lets
 #                         only maintainers create v* tags.
 #   workflow_dispatch  -> PRODUCTION retry, dispatched from the tag ref
@@ -55,7 +57,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write # OIDC: trusted publish + provenance
-      contents: read
+      contents: write # upload archives to the rolling `staging` prerelease
+      attestations: write # build provenance for the archives
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -107,8 +110,22 @@ jobs:
           echo "Publishing staging version: $version"
 
       # `--tag staging` keeps this off `latest`. Provenance is added automatically.
+      # The same build writes the self-contained per-platform archives.
       - name: Publish to npm (dist-tag `staging`)
-        run: pnpm run publish:npm -- --tag staging
+        run: pnpm run publish:npm -- --tag staging --archives release-archives
+
+      - name: Attest the archives' build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-archives/*.tar.gz
+
+      # One rolling prerelease holds the newest staging archives. Versioned
+      # archive names never collide; manifest.json goes last so a reader never
+      # sees it name an archive that isn't uploaded yet.
+      - name: Publish the archives to the `staging` prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/publish-staging-archives.mjs release-archives
 
   # --------------------------------------------------------------- PRODUCTION --
   # One job, so a release pays for one runner start. It validates the tag,
@@ -122,6 +139,7 @@ jobs:
       contents: write # create the GitHub release
       packages: write # add stable tags to the already-built Core service images
       id-token: write # OIDC: trusted publish + provenance
+      attestations: write # build provenance for the archives
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -274,10 +292,18 @@ jobs:
             [ "$latest" = "$VERSION" ] \
               || { echo "::error::npm $VERSION exists but latest points to $latest; refusing an ambiguous recovery."; exit 1; }
             echo "npm $VERSION is already published as latest; resuming promotion."
+            node scripts/build-release.mjs --archives release-archives
           else
-            pnpm run publish:npm
+            # The same build writes the self-contained per-platform archives,
+            # before the irreversible publish.
+            pnpm run publish:npm -- --archives release-archives
           fi
           wait "$images"
+
+      - name: Attest the archives' build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: release-archives/*.tar.gz
 
       - name: Build the checksummed self-host deployment bundle
         run: node scripts/build-self-host.mjs self-host-release
@@ -298,5 +324,6 @@ jobs:
             gh release create "v$VERSION" --verify-tag --title "v$VERSION" --notes-file release-notes.md --draft
           fi
           gh release upload "v$VERSION" self-host-release/bivy-self-host.tar.gz \
-            self-host-release/bivy-self-host.tar.gz.sha256 self-host-release/install.sh --clobber
+            self-host-release/bivy-self-host.tar.gz.sha256 self-host-release/install.sh \
+            release-archives/*.tar.gz release-archives/SHA256SUMS release-archives/manifest.json --clobber
           gh release edit "v$VERSION" --draft=false --latest
