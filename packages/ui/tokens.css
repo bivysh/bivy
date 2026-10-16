@@ -12,9 +12,10 @@
  * hex or px. `pnpm run check:design` enforces that no other stylesheet redeclares
  * a palette token. See packages/web/CLAUDE.md for the design rules agents follow.
  *
- * Palette: a monochrome workbench. Warm off-white light and green-tinted
- * near-black dark, surfaces split by hairlines, primary actions inverted (ink on
- * paper). Color is reserved for status and diffs. Toggle dark with <html data-theme="dark">; with no attribute it
+ * Palette — "Ridge & Spark". Ridge: monochrome chrome on snow-white (light) and
+ * slate night (dark), surfaces split by hairlines, primary actions inverted
+ * (ink on paper). Spark: one warm ember (--signal), only for what is alive — a
+ * running agent, focus, the mark's spark. Everything else stays neutral. Toggle dark with <html data-theme="dark">; with no attribute it
  * follows the OS. prefers-reduced-motion collapses the motion tokens.
  *
  * Naming: the canonical vocabulary is --bg / --surface* / --ink / --muted /
@@ -30,24 +31,29 @@
   /* ---- Core surfaces & text (neutral) ----
      Workbench palette: warm off-white light and green-tinted near-black dark,
      separated by hairlines rather than fills. The chrome stays monochrome. */
-  --bg: #f9fdf6;
-  --surface: #f9fdf6;
-  --surface-2: #eff3ec;
-  --surface-3: #e5e9e2;
-  --ink: #0b0d0b;
-  --muted: #5b605b;
-  --line: #e1e5de;
-  --line-strong: #c8ccc5;
-  --overlay: rgba(11, 13, 11, 0.42);
-  --overlay-strong: rgba(11, 13, 11, 0.8);
+  --bg: #f7f7f5;
+  --surface: #f7f7f5;
+  --surface-2: #eeeeeb;
+  --surface-3: #e4e4e0;
+  --ink: #111316;
+  --muted: #5d626a;
+  --line: #e0e0dc;
+  --line-strong: #c6c7c3;
+  --overlay: rgba(17, 19, 22, 0.42);
+  --overlay-strong: rgba(17, 19, 22, 0.8);
 
   /* ---- Accent: the ink itself. Primary actions are inverted (ink fill, paper
      text), so color is left to status and diffs. ---- */
-  --accent: #0b0d0b;
-  --accent-contrast: #fafaf8;
-  --accent-hover: #262c26;
+  --accent: #111316;
+  --accent-contrast: #f7f7f5;
+  --accent-hover: #2a2e34;
   --accent-active: color-mix(in srgb, var(--accent), #fff 18%);
-  --accent-soft: #e5e9e2;
+  --accent-soft: #e4e4e0;
+
+  /* ---- Spark: the one warm color. Alive things only (running agent, focus,
+     the mark). Text-safe on --bg in both themes. ---- */
+  --signal: #b4470c;
+  --signal-soft: color-mix(in srgb, var(--signal) 14%, var(--bg));
 
   /* ---- Status ---- */
   --danger: #c22a22;   --danger-soft: #f6e1df;   --danger-contrast: #ffffff;
@@ -81,7 +87,7 @@
   --syntax-name: #22863a; --syntax-deletion: #b31d28; --syntax-addition: #22863a;
 
   /* ---- Focus ---- */
-  --focus-ring: color-mix(in srgb, var(--accent) 45%, transparent);
+  --focus-ring: color-mix(in srgb, var(--signal) 55%, transparent);
 
   /* ---- Type ---- */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -175,10 +181,10 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0c1516; --surface: #0c1516; --surface-2: #172122; --surface-3: #212b2b;
-  --ink: #eef5ec; --muted: #9ca49c; --line: #232c2b; --line-strong: #37403f;
+  --bg: #0d1015; --surface: #0d1015; --surface-2: #151921; --surface-3: #1e232c;
+  --ink: #e9ecf1; --muted: #959cab; --line: #1f242d; --line-strong: #343a45;
   --overlay: rgba(0, 0, 0, 0.66); --overlay-strong: rgba(0, 0, 0, 0.82);
-  --accent: #eef5ec; --accent-contrast: #0c1516; --accent-hover: #d3d9d3;
+  --accent: #e9ecf1; --accent-contrast: #0d1015; --accent-hover: #cdd2da;
   --danger: #ef625d; --danger-soft: #3a1d1c; --danger-contrast: #0b0d0b; --ok: #54b879; --merged: #a28fe1;
   --unseen: #d6a038; --unseen-contrast: #0b0d0b;
   --warn: #d6a038;
@@ -193,17 +199,18 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.28);
   --shadow-xl: 0 24px 70px rgba(0, 0, 0, 0.32);
 
-  --accent-soft: #1d2728;
+  --accent-soft: #1e232c;
+  --signal: #ff9d57;
   --warn-soft: #33291a;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     color-scheme: dark;
-    --bg: #0c1516; --surface: #0c1516; --surface-2: #172122; --surface-3: #212b2b;
-  --ink: #eef5ec; --muted: #9ca49c; --line: #232c2b; --line-strong: #37403f;
+    --bg: #0d1015; --surface: #0d1015; --surface-2: #151921; --surface-3: #1e232c;
+  --ink: #e9ecf1; --muted: #959cab; --line: #1f242d; --line-strong: #343a45;
   --overlay: rgba(0, 0, 0, 0.66); --overlay-strong: rgba(0, 0, 0, 0.82);
-  --accent: #eef5ec; --accent-contrast: #0c1516; --accent-hover: #d3d9d3;
+  --accent: #e9ecf1; --accent-contrast: #0d1015; --accent-hover: #cdd2da;
   --danger: #ef625d; --danger-soft: #3a1d1c; --danger-contrast: #0b0d0b; --ok: #54b879; --merged: #a28fe1;
   --unseen: #d6a038; --unseen-contrast: #0b0d0b;
   --warn: #d6a038;
@@ -218,7 +225,8 @@
     --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.28);
     --shadow-xl: 0 24px 70px rgba(0, 0, 0, 0.32);
 
-  --accent-soft: #1d2728;
+  --accent-soft: #1e232c;
+  --signal: #ff9d57;
   --warn-soft: #33291a;
 }
 }
@@ -241,6 +249,7 @@
   --accent-contrast: var(--machine-background);
   --accent-hover: color-mix(in srgb, var(--machine-accent) 80%, var(--machine-foreground));
   --accent-soft: color-mix(in srgb, var(--machine-accent) 20%, var(--machine-background));
+  --signal: var(--machine-orange);
   --danger: var(--machine-red);
   --danger-soft: color-mix(in srgb, var(--machine-red) 20%, var(--machine-background));
   --danger-contrast: var(--machine-background);

@@ -4,6 +4,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useS
 import { activationFromState, authProviderForRuntime, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionAppsResult, type SessionSummary } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
+import { BivyMark } from "./components/BivyMark.js";
 import { ChatView } from "./components/ChatView.js";
 import { SessionLaunchProgressView } from "./components/SessionLaunchProgress.js";
 import { Composer } from "./components/Composer.js";
@@ -875,7 +876,7 @@ export function App() {
         tabIndex={drawerOpen ? -1 : undefined}
       >
         <div className="sidebar-head">
-          <span className="brand">Bivy</span>
+          <span className="brand"><BivyMark className="brand-mark" />Bivy</span>
           <div className="sidebar-head-actions">
             <button className="btn ghost icon only-mobile sidebar-close" onClick={closeDrawer} aria-label="Close sessions">
               <CloseIcon />
