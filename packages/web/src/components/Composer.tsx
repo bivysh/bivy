@@ -7,7 +7,6 @@ import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash } from "@biv
 import { useModalEscape } from "../modalStack.js";
 import { modelSelectionAvailable } from "../modelSelection.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
-import { FollowupQueue } from "./FollowupQueue.js";
 import { HandoffBanner } from "./HandoffBanner.js";
 import { StandbyNotice } from "./StandbyNotice.js";
 import { standbyCopyOf } from "../standby.js";
@@ -227,13 +226,9 @@ export function Composer({
   const sessionCommands = state.activeSession.activeSessionId ? state.sessionIndex.commandsBySession[state.activeSession.activeSessionId] : undefined;
   const runtimeCommands: SlashCommand[] = Array.isArray(currentCaps?.commands) ? currentCaps.commands : [];
   const agentCommands: SlashCommand[] = sessionCommands ?? (state.activeSession.activeSessionId ? [] : runtimeCommands);
-  // Follow-ups held back while this session is busy (or while earlier ones are
-  // still waiting) — see AppController.sendPrompt/mustQueue. Only ever
-  // populated for a real (non-draft) session.
-  const followups = state.activeSession.activeSessionId ? state.sessionIndex.followupsBySession[state.activeSession.activeSessionId] ?? [] : [];
-  // Whether the active runtime has advertised it can safely take an explicit
-  // mid-turn interrupt — gates the "Steer current turn" affordance below.
-  const canSteer = controller.supportsSteering();
+  // A message sent mid-turn steers the running turn. An agent that never
+  // advertised steer support can't take one, so it only offers Stop until idle.
+  const blockedByTurn = working && !controller.supportsSteering();
   const taRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -550,7 +545,7 @@ export function Composer({
 
   function submit() {
     const value = text.trim();
-    if ((!value && !attachments.length) || disabled) return;
+    if ((!value && !attachments.length) || disabled || blockedByTurn) return;
     const modelId = state.catalogs.currentModel?.id || state.catalogs.currentModelId;
     if (isDraft && modelSelectable && (!modelId || modelId === "unknown")) {
       setPicker("model");
@@ -612,7 +607,7 @@ export function Composer({
   const sandboxTitle = runtimeEnforcesProtection(selectedRuntime)
     ? (draftTier ? draftTier.hint : "Protection for this session (machine default)")
     : `${state.catalogs.currentAgentName || "This agent"} can't ask for approval — treated as full access`;
-  const canSend = !disabled && (Boolean(text.trim()) || attachments.length > 0);
+  const canSend = !disabled && !blockedByTurn && (Boolean(text.trim()) || attachments.length > 0);
   const firstIsolatedRun = isDraft && Boolean(state.draft.ephemeralConfig);
 
   return (
@@ -655,15 +650,6 @@ export function Composer({
             setText(draft);
             requestAnimationFrame(() => { autosize(); taRef.current?.focus(); });
           }}
-        />
-      )}
-      {state.activeSession.activeSessionId && (
-        <FollowupQueue
-          sessionId={state.activeSession.activeSessionId}
-          items={followups}
-          canSteer={canSteer}
-          busy={working}
-          onError={onError}
         />
       )}
       {stopTimedOut && (
@@ -874,31 +860,9 @@ export function Composer({
               <MicGlyph />
             </button>
 
-            {/* While busy with something typed AND the active runtime has
-                advertised real steer support, offer an explicit way to inject
-                it into the running turn right now — bypassing the queue
-                entirely — alongside the default Send, which queues it (see
-                AppController.sendPrompt/mustQueue) rather than assuming an
-                interrupt is safe for runtimes that never promised one. */}
-            {working && canSend && canSteer && (
-              <button
-                type="button"
-                className="composer-btn steer"
-                onClick={() => {
-                  // A stale click (the turn just ended, or the runtime lost
-                  // steer support) reports back rather than silently sending
-                  // — only clear the draft once it actually went out.
-                  if (controller.steerNow(text, attachments.length ? attachments : undefined)) clearComposer();
-                }}
-                title="Steer current turn — inject this now instead of queueing it"
-                aria-label="Steer current turn"
-              >
-                ⚡
-              </button>
-            )}
             {/* Keep Stop available for an empty composer; once the user has
-                entered a follow-up, the Send button takes its place. */}
-            {working && !text.trim() && (
+                typed something to steer with, the Send button takes its place. */}
+            {working && !canSend && (
               <button
                 type="button"
                 className={`composer-btn stop${stopping ? " is-stopping" : ""}`}
@@ -917,8 +881,8 @@ export function Composer({
                 type="submit"
                 className="composer-btn send"
                 disabled={!canSend}
-                title={working ? "Queue follow-up" : firstIsolatedRun ? "Launch Machine and send task" : "Send"}
-                aria-label={firstIsolatedRun ? "Launch Machine and send task" : working ? "Queue follow-up" : "Send"}
+                title={working ? "Steer the current turn" : firstIsolatedRun ? "Launch Machine and send task" : "Send"}
+                aria-label={firstIsolatedRun ? "Launch Machine and send task" : working ? "Steer the current turn" : "Send"}
               >
                 <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden><path d="M12 19V5" /><path d="m5 12 7-7 7 7" /></svg>
               </button>

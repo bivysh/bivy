@@ -2293,11 +2293,9 @@ const dedupeSessionNew = (requestId: string | undefined, create: () => Promise<S
   sessionNewDedupe.run(requestId, create);
 
 // Idempotency for `prompt`, keyed by the client's clientMessageId (the same
-// generic key->promise cache as above, reused for a different key) — see
-// issue #154's queued follow-ups. A client that isn't sure whether a queued
-// item's send actually reached the node before the socket dropped (see
-// FollowupCoordinator.retrySending) resends it verbatim after reconnecting;
-// this makes that safe by collapsing a retried clientMessageId onto the
+// generic key->promise cache as above, reused for a different key). A client
+// that isn't sure whether a prompt reached the node before the socket dropped
+// resends it verbatim after reconnecting; this makes that safe by collapsing a retried clientMessageId onto the
 // original broadcast + turn instead of double-prompting the runtime. The key is
 // kept for a day, not session.new's 10 minutes: a phone backgrounded mid-send
 // can reconnect long after the turn ended, and an expired key turned its
@@ -8612,8 +8610,8 @@ async function tryAttachLiveRemote(sessionId: string | undefined, options: OpenS
 }
 
 /** Re-open a runtime that still reports streaming shortly after a manual Stop.
- * The client is settled immediately by the abort handler; prompts arriving from
- * its follow-up queue await this promise and therefore cannot be steered into the
+ * The client is settled immediately by the abort handler; prompts arriving
+ * right after the Stop await this promise and therefore cannot be steered into the
  * stale in-process Pi turn. */
 async function recoverRecordAfterAbort(record: SessionRecord): Promise<void> {
   const oldSession = record.session;

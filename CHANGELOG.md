@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A message sent while the agent works now steers it. The follow-up queue is gone.** Send goes straight into the running turn, and the agent takes it into account as it goes. The panel above the composer is removed, along with its reorder, edit, "Send next", "Run in new session" and separate ⚡ Steer controls. So is the hidden scheduled message that delivered a queued follow-up after you closed the app. An agent that hasn't declared steer support only offers Stop until its turn ends.
+
 ### Added
 
 - **Releases ship self-contained archives on GitHub.** Each release, and the rolling `staging` prerelease on every merge to `main`, carries a `bivy-<version>-<platform>.tar.gz` for Linux and macOS on x64 and arm64. Each archive holds the app, its dependencies built for that platform, and a pinned Node runtime, so running it needs no Node, npm or registry on the machine. `SHA256SUMS`, a `manifest.json` and GitHub build attestations (`gh attestation verify <file> --repo bivysh/bivy`) come with them. `install.sh` and `bivy update` still use npm; switching them over is next.

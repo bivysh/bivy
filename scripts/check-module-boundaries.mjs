@@ -153,13 +153,6 @@ const RULES = [
     enforce: true,
     note: "new-session target choices share one explicit value and are reduced without effects or store identity.",
   },
-  {
-    name: "followup-queue-is-a-pure-reducer",
-    dir: "packages/core/src/followup-queue.ts",
-    forbid: ["./store", "./transport", "./account", "./local-store", "node:", "react"],
-    enforce: true,
-    note: "follow-up commands reduce immutable queue values; the SessionStore is only an identity/subscription shell.",
-  },
   ...[
     "connection-event-fold.ts",
     "session-index-event-fold.ts",

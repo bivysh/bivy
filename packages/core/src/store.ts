@@ -40,13 +40,6 @@ import { foldAttentionEvent } from "./attention-event-fold.js";
 import { foldActiveSessionEvent } from "./active-session-event-fold.js";
 import { foldTranscriptEvent, freshTranscriptDraft, type TranscriptDraftValue } from "./transcript-event-fold.js";
 import type { ToolCallDetail } from "./tool-format.js";
-import {
-  reduceFollowupQueue,
-  type FollowupEditResult,
-  type FollowupQueueCommand,
-  type FollowupQueueTransition,
-  type PendingFollowup,
-} from "./followup-queue.js";
 import { nextId, renderHistory } from "./store-render.js";
 import {
   agentLabel,
@@ -76,14 +69,6 @@ export {
   type SessionDraft,
   type SessionDraftCommand,
 } from "./session-draft.js";
-export {
-  reduceFollowupQueue,
-  type FollowupEditResult,
-  type FollowupQueueCommand,
-  type FollowupQueueTransition,
-  type FollowupStatus,
-  type PendingFollowup,
-} from "./followup-queue.js";
 export { renderHistory, stripAttachmentPlaceholders } from "./store-render.js";
 export {
   githubIssueRefFromSource,
@@ -770,7 +755,6 @@ export interface SessionIndexState {
   tuiSessions: string[];
   pausedSessionIds: string[];
   commandsBySession: Record<string, SlashCommand[]>;
-  followupsBySession: Record<string, PendingFollowup[]>;
 }
 
 export interface ActiveSessionState {
@@ -862,7 +846,7 @@ type AppStatePatch = Partial<
 >;
 
 const CONNECTION_FIELDS = ["status", "signedIn", "nodes", "currentNodeId", "nodeUpdate", "nodeUpdating", "nodeUpdateAcknowledged"] as const;
-const SESSION_INDEX_FIELDS = ["sessions", "runTerminals", "tuiSessions", "pausedSessionIds", "commandsBySession", "followupsBySession"] as const;
+const SESSION_INDEX_FIELDS = ["sessions", "runTerminals", "tuiSessions", "pausedSessionIds", "commandsBySession"] as const;
 const ACTIVE_SESSION_FIELDS = ["activeSessionId", "activeRuntimeId", "activeTitle", "github", "transcript", "working", "workingLabel", "opening", "approvals", "questions", "turnAttentions", "usage", "changes", "changesHistory", "checkpoints"] as const;
 const CATALOG_FIELDS = ["models", "modelsRuntimeId", "currentModelId", "currentModel", "thinking", "runtimes", "currentAgentName", "selectedAgentId", "installingRuntimeId", "repos", "reposAuthed", "reposError", "reposLoading", "reposReason", "githubConnect", "branches", "branchesRepo", "branchesDefault", "branchesError", "branchesLoading", "providers", "activationReadiness"] as const;
 const SETTINGS_FIELDS = ["nodeSettings", "providerAuth", "credentialRecords", "credentialPresets", "localModels", "localModelPresets", "rulesets", "sttConfig", "nodeStats", "capabilities"] as const;
@@ -923,7 +907,7 @@ export function initialState(): AppState {
     },
     sessionIndex: {
       sessions: [], runTerminals: [], tuiSessions: [], pausedSessionIds: [],
-      commandsBySession: {}, followupsBySession: {},
+      commandsBySession: {},
     },
     activeSession: {
       activeSessionId: null, activeRuntimeId: null, activeTitle: "New session",
@@ -1648,87 +1632,6 @@ export class SessionStore {
     this.set({ commandsBySession: next });
   }
 
-  // --- Queued follow-ups (issue #154) -------------------------------------
-  // The queue is immutable data reduced by followup-queue.ts. This store is
-  // only the identity/subscription shell that installs the returned value.
-
-  getFollowups(sessionId: string): PendingFollowup[] {
-    return this.state.sessionIndex.followupsBySession[sessionId] ?? [];
-  }
-
-  private setFollowupsFor(sessionId: string, list: readonly PendingFollowup[]): void {
-    const next = { ...this.state.sessionIndex.followupsBySession };
-    if (list.length) next[sessionId] = [...list];
-    else delete next[sessionId];
-    this.set({ followupsBySession: next });
-  }
-
-  private transitionFollowups(sessionId: string, command: FollowupQueueCommand): FollowupQueueTransition {
-    const transition = reduceFollowupQueue(this.getFollowups(sessionId), command);
-    if (transition.changed) this.setFollowupsFor(sessionId, transition.queue);
-    return transition;
-  }
-
-  enqueueFollowup(sessionId: string, item: { id: string; text: string; attachments?: PromptAttachment[]; scheduledAutomationId?: string }, now: number): PendingFollowup {
-    return this.transitionFollowups(sessionId, { type: "enqueue", item, now }).item!;
-  }
-
-  enqueueScheduledFollowup(sessionId: string, item: { id: string; text: string; scheduledAt: number; scheduledAutomationId: string }, now: number): PendingFollowup {
-    return this.transitionFollowups(sessionId, { type: "schedule", item, now }).item!;
-  }
-
-  attachFollowupAutomation(sessionId: string, id: string, automationId: string): boolean {
-    return this.transitionFollowups(sessionId, { type: "attach-automation", id, automationId }).accepted === true;
-  }
-
-  editFollowup(
-    sessionId: string,
-    id: string,
-    patch: { text: string; attachments?: PromptAttachment[] },
-    expectedVersion: number,
-    now: number,
-  ): FollowupEditResult {
-    return this.transitionFollowups(sessionId, { type: "edit", id, patch, expectedVersion, now }).edit!;
-  }
-
-  removeFollowup(sessionId: string, id: string): boolean {
-    return this.transitionFollowups(sessionId, { type: "remove", id }).accepted === true;
-  }
-
-  pruneScheduledFollowups(sessionId: string, keepIds: ReadonlySet<string>): void {
-    this.transitionFollowups(sessionId, { type: "prune-scheduled", keepIds: [...keepIds] });
-  }
-
-  rescheduleFollowup(sessionId: string, id: string, scheduledAt: number, now: number): boolean {
-    return this.transitionFollowups(sessionId, { type: "reschedule", id, scheduledAt, now }).accepted === true;
-  }
-
-  reorderFollowup(sessionId: string, id: string, toIndex: number): boolean {
-    return this.transitionFollowups(sessionId, { type: "reorder", id, toIndex }).accepted === true;
-  }
-
-  markFollowupSending(sessionId: string, id: string, now: number): PendingFollowup | undefined {
-    return this.transitionFollowups(sessionId, { type: "mark-sending", id, now }).item;
-  }
-
-  confirmFollowupSent(sessionId: string, id: string): void {
-    this.transitionFollowups(sessionId, { type: "confirm-sent", id });
-  }
-
-  revertFollowupToQueued(sessionId: string, id: string, now: number): void {
-    this.transitionFollowups(sessionId, { type: "revert-to-queued", id, now });
-  }
-
-  settleSendingFollowups(sessionId: string): void {
-    this.transitionFollowups(sessionId, { type: "settle-sending" });
-  }
-
-  dropFollowups(sessionId: string): void {
-    if (sessionId in this.state.sessionIndex.followupsBySession) {
-      this.transitionFollowups(sessionId, { type: "clear" });
-    }
-  }
-
   clearActivationReadiness(): void {
     this.set({ activationReadiness: null });
   }
@@ -1856,10 +1759,6 @@ export class SessionStore {
       // Advertised commands are per session on the previous node; never carry
       // them across a node switch.
       commandsBySession: {},
-      // Queued follow-ups are per session on the previous node too — a session
-      // id could even collide across nodes, so carrying this over risks
-      // "delivering" a queued prompt into an unrelated session on the new node.
-      followupsBySession: {},
       error: null,
       notice: null,
       // First-run model-auth prompt is scoped to a specific runner; a node
@@ -2520,7 +2419,6 @@ export class SessionStore {
           ),
         });
         if (sid) this.dropSessionCommands(sid);
-        if (sid) this.dropFollowups(sid);
         if (sid) this.knownAgentAttachmentsBySession.delete(sid);
         if (sid && sid === this.state.activeSession.activeSessionId) this.resetActiveSession();
         return;

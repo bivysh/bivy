@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Issue #154: RuntimeCapabilities.streamingBehaviors is how a runtime tells
-// the client whether an explicit mid-turn "steer" is safe to offer at all
-// (AppController.supportsSteering / the composer's "Steer current turn"
-// action). Maintained integrations declare it statically; a protocol/RPC bridge opts
+// RuntimeCapabilities.streamingBehaviors is how a runtime tells the client
+// whether a message may go into a running turn at all (AppController.supportsSteering;
+// without it the composer only offers Stop mid-turn). Maintained integrations declare it statically; a protocol/RPC bridge opts
 // in via its hello (capabilitiesFromHello in src/runtime/protocol.ts) and
 // defaults to none — an arbitrary shim must promise support before the client
 // will ever try to interrupt it.
