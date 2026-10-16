@@ -998,24 +998,24 @@ export function App() {
             </div>
             {/* Node stays below the title as a plain subtitle line — but it's
                 still the real switcher button underneath, so it's selectable
-                on a brand-new/draft session exactly as it is on a live one.
-                The Chat | Terminal switch shares that line, so the title keeps
-                the full first line on a phone. */}
-            {(showNodeSwitcher || paneViews.length > 1) && (
+                on a brand-new/draft session exactly as it is on a live one. */}
+            {showNodeSwitcher && (
               <div className="topbar-subline">
-                {showNodeSwitcher && (showTailnetSwitcher ? <TailnetSwitcher /> : <NodeSwitcher />)}
-                {paneViews.length > 1 && (
-                  <SessionViewToggle
-                    views={paneViews}
-                    value={showChangesView ? "changes" : canToggleSessionView ? sessionView : "chat"}
-                    onChange={pickPaneView}
-                    changes={changedFiles}
-                  />
-                )}
+                {showTailnetSwitcher ? <TailnetSwitcher /> : <NodeSwitcher />}
               </div>
             )}
           </div>
           <div className="topbar-actions">
+            {/* The view switch (chat / terminal / app / changes) sits with the
+                session's other controls, so the title keeps one line. */}
+            {paneViews.length > 1 && (
+              <SessionViewToggle
+                views={paneViews}
+                value={showChangesView ? "changes" : canToggleSessionView ? sessionView : "chat"}
+                onChange={pickPaneView}
+                changes={changedFiles}
+              />
+            )}
             {sidePane.wide && activeSession && !needsNode && (
               <button
                 className="btn ghost icon side-pane-toggle"
