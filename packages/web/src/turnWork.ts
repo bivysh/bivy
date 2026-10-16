@@ -37,3 +37,62 @@ export function noteSnippet(text: string, max = 140): string {
     .split("\n").map((line) => line.trim()).find(Boolean) ?? "";
   return plain.length > max ? `${plain.slice(0, max - 1).trimEnd()}…` : plain;
 }
+
+/** One turn as the reader sees it: where it starts in the transcript, and how
+ *  many rows it shows (prompt, one work line, then each answer or output). */
+export type TurnSpan = { start: number; rows: number };
+
+/**
+ * Measure the transcript in turns. A prompt opens a turn; a session-level
+ * notice is a turn of its own; entries before the first prompt form a
+ * response-only turn. A turn's work, however many tool calls and interim
+ * messages it holds, counts as one row.
+ */
+export function turnSpans<T>(entries: readonly T[], roleOf: (entry: T) => "prompt" | "notice" | "response", kindOf: (entry: T) => TurnItemKind): TurnSpan[] {
+  const spans: TurnSpan[] = [];
+  let open: { start: number; prompt: boolean; response: T[] } | null = null;
+  const close = () => {
+    if (!open) return;
+    const { work, outputs, answer } = splitTurn(open.response, kindOf);
+    spans.push({ start: open.start, rows: (open.prompt ? 1 : 0) + (work.length ? 1 : 0) + outputs.length + answer.length });
+    open = null;
+  };
+  entries.forEach((entry, index) => {
+    const role = roleOf(entry);
+    if (role === "response") {
+      if (!open) open = { start: index, prompt: false, response: [] };
+      open.response.push(entry);
+      return;
+    }
+    close();
+    if (role === "notice") spans.push({ start: index, rows: 1 });
+    else open = { start: index, prompt: true, response: [] };
+  });
+  close();
+  return spans;
+}
+
+/** Where to start showing whole turns before `before`, adding earlier turns
+ *  while they fit in `rows` (always at least one turn, however long). */
+export function startBefore(spans: readonly TurnSpan[], before: number, rows: number): number {
+  let start = before;
+  let used = 0;
+  for (let i = spans.length - 1; i >= 0; i--) {
+    const span = spans[i]!;
+    if (span.start >= before) continue;
+    if (used > 0 && used + span.rows > rows) break;
+    used += span.rows;
+    start = span.start;
+  }
+  return start;
+}
+
+/** The start of the turn holding `index`, so a window never opens mid-turn. */
+export function turnStartOf(spans: readonly TurnSpan[], index: number): number {
+  return spans.findLast((span) => span.start <= index)?.start ?? 0;
+}
+
+/** Rows hidden before `start`, for the "show earlier" count. */
+export function rowsBefore(spans: readonly TurnSpan[], start: number): number {
+  return spans.reduce((sum, span) => span.start < start ? sum + span.rows : sum, 0);
+}

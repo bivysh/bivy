@@ -871,7 +871,7 @@ export function App() {
     <div className={`app${paneTab ? " has-pane" : ""}`}>
       <div
         ref={drawerRef}
-        className={`sidebar${drawerOpen ? " open" : ""}`}
+        className={`sidebar${drawerOpen ? " open" : ""}${sessionSearchOpen ? " is-searching" : ""}`}
         role={drawerOpen ? "dialog" : "complementary"}
         aria-modal={drawerOpen ? "true" : undefined}
         aria-label="Sessions and workspace"
@@ -882,9 +882,8 @@ export function App() {
           <div className="sidebar-head-actions">
             <button
               className="btn ghost icon sidebar-search-toggle"
-              onClick={() => setSessionSearchOpen((open) => !open)}
-              aria-pressed={sessionSearchOpen}
-              aria-label={sessionSearchOpen ? "Hide session search" : "Search sessions"}
+              onClick={() => setSessionSearchOpen(true)}
+              aria-label="Search sessions"
               title="Search sessions"
             >
               <SearchIcon size={18} aria-hidden />

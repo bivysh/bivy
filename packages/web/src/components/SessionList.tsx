@@ -12,7 +12,7 @@ import { StatusDot } from "./StatusDot.js";
 import { SourceMark } from "./SourceMark.js";
 import { rowHint } from "../runEvidence.js";
 import { sessionDateGroup } from "../sessionPresentation.js";
-import { CheckIcon, SearchIcon } from "./UiIcons.js";
+import { CheckIcon, CloseIcon, SearchIcon } from "./UiIcons.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { nestDelegatedSessions } from "../sessionNesting.js";
 
@@ -175,6 +175,7 @@ export function SessionList({ searchOpen = true, onSearchOpenChange, onPick, onP
   const [filterOpen, setFilterOpen] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE);
   const filterRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!filterOpen) return;
@@ -290,6 +291,17 @@ export function SessionList({ searchOpen = true, onSearchOpenChange, onPick, onP
   }, [query, repoFilter, nodeFilter]);
 
   const activeFilterCount = (repoFilter ? 1 : 0) + (nodeFilter ? 1 : 0);
+  const shown = filtered.length + filteredRuns.length;
+  const resultLabel = searching || activeFilterCount
+    ? `${shown} of ${sessions.length + runTerminals.length} sessions`
+    : `${shown} ${shown === 1 ? "session" : "sessions"}`;
+  const leaveSearch = () => {
+    setQuery("");
+    setRepoFilter("");
+    setNodeFilter("");
+    setFilterOpen(false);
+    onSearchOpenChange?.(false);
+  };
   const filterSummary = [nodeFilter ? nodeName(nodeFilter) : !controller.direct ? "All machines" : null, repoFilter || null].filter(Boolean).join(" · ");
   const emptyText = query.trim() || repoFilter || nodeFilter
     ? "No matching sessions."
@@ -315,7 +327,7 @@ export function SessionList({ searchOpen = true, onSearchOpenChange, onPick, onP
           void controller.deleteSession(id).catch(() => controller.store.setError("Couldn't delete the session.")).finally(() => setDeletingId(null));
         }}
       />}
-      {(onOpenAutomations || onOpenLibrary || onOpenTerminal) && (
+      {!searchOpen && (onOpenAutomations || onOpenLibrary || onOpenTerminal) && (
         <nav className="sidebar-nav" aria-label="Workspace">
           {onOpenAutomations && (
             <button className={`sidebar-nav-item${automationsActive ? " active" : ""}`} onClick={onOpenAutomations} aria-current={automationsActive ? "page" : undefined}>
@@ -345,7 +357,11 @@ export function SessionList({ searchOpen = true, onSearchOpenChange, onPick, onP
           )}
         </nav>
       )}
-      {(searchOpen || query || activeFilterCount > 0) && <div className="session-list-tools">
+      {/* Search mode: replaces the sidebar head (App hides it) with the field and
+          Cancel; filters and the live count sit right under it. Leaving clears
+          the query and filters, so the list is never filtered out of sight. */}
+      {searchOpen && <div className="sidebar-search" role="search">
+        <div className="session-search-bar">
         <label className="session-search-wrap">
           <SearchIcon size={17} aria-hidden />
           <input
@@ -353,18 +369,22 @@ export function SessionList({ searchOpen = true, onSearchOpenChange, onPick, onP
             type="search"
             aria-label="Search sessions"
             placeholder={sessions.length > 1 ? `Search ${sessions.length} sessions` : "Search sessions"}
+            ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            // Opened on request from the sidebar head, so it takes focus; Escape
-            // clears and folds it away again.
-            autoFocus={Boolean(onSearchOpenChange)}
-            onKeyDown={(e) => {
-              if (e.key !== "Escape" || !onSearchOpenChange) return;
-              setQuery("");
-              onSearchOpenChange(false);
-            }}
+            autoFocus
+            enterKeyHint="search"
+            onKeyDown={(e) => { if (e.key === "Escape") leaveSearch(); }}
           />
+          {query && (
+            <button type="button" className="session-search-clear" aria-label="Clear search" onClick={() => { setQuery(""); searchRef.current?.focus(); }}>
+              <CloseIcon size={14} />
+            </button>
+          )}
         </label>
+        <button type="button" className="btn ghost sm session-search-cancel" onClick={leaveSearch}>Cancel</button>
+        </div>
+        <div className="session-search-meta">
         <div className="session-filter" ref={filterRef}>
           <button
             className={`session-filter-btn${activeFilterCount ? " active" : ""}`}
@@ -381,6 +401,7 @@ export function SessionList({ searchOpen = true, onSearchOpenChange, onPick, onP
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M3 5h18l-7 8v6l-4-2v-4z" />
             </svg>
+            <span>Filter</span>
             {activeFilterCount > 0 && <Badge tone="accent" variant="solid" className="session-filter-count">{activeFilterCount}</Badge>}
           </button>
           {filterOpen && (
@@ -458,6 +479,8 @@ export function SessionList({ searchOpen = true, onSearchOpenChange, onPick, onP
               </div>
             </div>
           )}
+        </div>
+        <span className="session-search-count" aria-live="polite">{resultLabel}</span>
         </div>
       </div>}
       {filtered.length === 0 && filteredRuns.length === 0 && <div className="session-empty">{emptyText}</div>}

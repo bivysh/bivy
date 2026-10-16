@@ -20,16 +20,18 @@ for (const theme of themes) {
         import { ChatView } from '/src/components/ChatView.tsx';
         const root = createRoot(document.getElementById('root'));
         let entries = [];
-        const message = (i) => ({ id: 'entry-' + i, role: 'assistant', text: ('Message ' + i + ' — reading history. ').repeat(30) });
+        // Alternating prompts and answers: every entry is one row of the history window.
+        const message = (i) => ({ id: 'entry-' + i, role: i % 2 ? 'assistant' : 'user', text: ('Message ' + i + ' — reading history. ').repeat(30) });
         const render = () => root.render(h(ChatView, { entries: [...entries], working: true, workingLabel: 'Working', draftRoute: false, sessionKey: 'session' }));
         window.load = () => {
           entries = Array.from({length: 40}, (_, i) => message(i));
-          entries[20] = { id: 'tool-entry', role: 'tool', text: '', tool: { callId: 'read-1', name: 'read', input: {path: 'README.md'}, status: 'done', result: 'File contents\\n'.repeat(200) } };
+          // One turn holds interim prose and a tool call: its work counts as one row.
+          entries[30] = { id: 'tool-entry', role: 'tool', text: '', tool: { callId: 'read-1', name: 'read', input: {path: 'README.md'}, status: 'done', result: 'File contents\\n'.repeat(200) } };
           render();
         };
         window.replace = (count) => { entries = Array.from({length: count}, (_, i) => message(i)); render(); };
         window.append = () => { entries.push(message(entries.length)); render(); };
-        window.updateTool = () => { entries[20] = { ...entries[20], tool: { ...entries[20].tool, result: entries[20].tool.result + 'Updated output' } }; render(); };
+        window.updateTool = () => { entries[30] = { ...entries[30], tool: { ...entries[30].tool, result: entries[30].tool.result + 'Updated output' } }; render(); };
         window.stream = () => { entries[entries.length - 1] = { ...entries.at(-1), text: entries.at(-1).text + ' More streamed text.'.repeat(50), streaming: true }; render(); };
         render();
       </script></body></html>`);
@@ -45,6 +47,7 @@ for (const theme of themes) {
     await expect.poll(bottomGap).toBeLessThan(2);
     await chat.evaluate(el => { el.scrollTop = 0; });
     await expect(page.getByRole('button', { name: 'Jump to latest' })).toBeVisible();
+    await page.locator('.turn-work-line').click();
     const opener = page.getByRole('button', { name: /Open work details/ });
     await expect(opener).toBeVisible();
     const before = await chat.evaluate(el => el.scrollTop);
