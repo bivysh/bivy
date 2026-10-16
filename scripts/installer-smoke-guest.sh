@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
 # CI-owned disposable guest. Prepare only curl while the release is built;
-# Node, native build tools and Bivy are still installed by the candidate.
+# Bivy, with its own Node, is installed by the candidate.
 set -euo pipefail
 name=bivy-installer-smoke
 case "${1:-}" in
   start)
-    mkdir -p "$HOME/.cache/bivy-installer-npm" "$HOME/.cache/bivy-installer-apt"
+    mkdir -p "$HOME/.cache/bivy-installer-apt"
     docker run --detach --init --name "$name" \
       -e BIVY_INSTALL_SMOKE=1 -e BIVY_INSTALL_SMOKE_CACHE=1 \
-      -v "$HOME/.cache/bivy-installer-npm:/root/.npm" \
       -v "$HOME/.cache/bivy-installer-apt:/var/cache/apt/archives" \
       -v "$PWD:/candidate:ro" ubuntu:24.04 \
       bash -euc 'export DEBIAN_FRONTEND=noninteractive
@@ -48,11 +47,11 @@ case "${1:-}" in
       docker inspect --format '{{json .State}}' "$name" >&2
       exit 1
     fi
-    docker exec "$name" bash /candidate/scripts/smoke-installer.sh /candidate/release-artifact/bivy-npm.tgz
+    docker exec "$name" bash /candidate/scripts/smoke-installer.sh /candidate/release-artifact/archives
     ;;
   cleanup)
     if docker container inspect "$name" >/dev/null 2>&1; then docker rm --force "$name"; fi
-    for dir in "$HOME/.cache/bivy-installer-npm" "$HOME/.cache/bivy-installer-apt"; do
+    for dir in "$HOME/.cache/bivy-installer-apt"; do
       if [ -d "$dir" ]; then sudo chown -R "$(id -u):$(id -g)" "$dir"; fi
     done
     ;;

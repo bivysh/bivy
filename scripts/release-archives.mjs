@@ -44,8 +44,10 @@ while [ -L "$self" ]; do
     *) self="$(dirname "$self")/$link" ;;
   esac
 done
-root="$(cd "$(dirname "$self")/.." && pwd -P)"
-exec "$root/runtime/bin/node" "$root/app/bin/bivy.mjs" "$@"
+# Logical, not physical: keep an installed path's \`current\` symlink in it, so
+# what Bivy writes to disk (service unit, shims) survives the next update.
+root="$(cd "$(dirname "$self")/.." && pwd)"
+BIVY_ARCHIVE_ROOT="$root" exec "$root/runtime/bin/node" "$root/app/bin/bivy.mjs" "$@"
 `;
 
 /** The target matching this machine, or undefined. */

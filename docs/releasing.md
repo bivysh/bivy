@@ -1,9 +1,10 @@
 # Releasing and distribution
 
-The Bivy node and CLI are distributed on npm as the
-[`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) package. `install.sh`
-is a thin bootstrapper: it ensures a supported Node.js is present, runs
-`npm install -g @bivy/bivy`, and then runs `bivy setup`.
+The Bivy node and CLI are distributed as self-contained per-platform archives
+on GitHub Releases (see "Self-contained archives" below). `install.sh` installs
+the one for the machine and runs `bivy setup`; `bivy update` replaces it the same
+way. The [`@bivy/bivy`](https://www.npmjs.com/package/@bivy/bivy) npm package is
+still published alongside while the archives settle in.
 
 The control plane and relay are distributed as public GHCR images built by
 `service-images.yml` from their source commit. Every Core commit on `main`
@@ -312,27 +313,17 @@ script, which fails in a packaged install.
 
 | Install kind | Update action |
 |---|---|
-| `npm-global` | `npm install -g @bivy/bivy@latest`, then restart the service |
+| `archive` | downloads the channel's archive beside the running one, verifies its sha256, points `current` at it and restarts; points `current` back if the node doesn't come up |
+| `npm-global` | `npm install -g @bivy/bivy@<channel>`, then restart the service |
 | `git` | `git pull` + `pnpm install --frozen-lockfile`, then restart |
-| `packaged` | re-runs `install.sh`, which migrates the install to npm |
+| `packaged` | re-runs `install.sh`, which installs the archive |
 | `npx` | nothing to update; each run fetches afresh |
 
-The daemon checks `https://registry.npmjs.org/%40bivy%2Fbivy/latest` every six hours and
+An archive install's launcher passes the unresolved `current` path to Bivy
+(`BIVY_ARCHIVE_ROOT`), so the service unit, shims and the daemon's own updater
+name `current`, not a version, and survive the swap.
+
+Every six hours the daemon checks the channel's `manifest.json` (an archive
+install) or `https://registry.npmjs.org/%40bivy%2Fbivy/<channel>` (npm), and
 posts an in-session notice when a newer version exists. Override the endpoint
-with `BIVY_UPDATE_REGISTRY_URL` to point at a mirror or private registry.
-
-## Migrating from the tarball installer
-
-Installs created by the previous installer keep their state *inside* the app
-directory, at `~/.bivy/app/.bivy`. A global npm package directory is replaced on
-every update, so state now lives at `~/.bivy`.
-
-`install.sh` performs this migration once, and only when the destination has no
-`cli.json` — so it can never overwrite newer state. The old tree is left in place
-so you can roll back; remove it once you're satisfied:
-
-```bash
-rm -rf ~/.bivy/app
-```
-
-Covered by `test/installer-migration.sh`.
+with `BIVY_UPDATE_REGISTRY_URL`, or the release host with `BIVY_RELEASES_URL`.
