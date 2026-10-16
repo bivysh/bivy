@@ -4309,7 +4309,9 @@ async function restartServiceReconciled(config) {
   // A typed config edit may change workspace, port, or environment without
   // touching the old unit. Reinstall on content drift so `bivy restart` really
   // applies the canonical file instead of reviving stale baked-in values.
-  if (portChanged || configChanged) return await installService(config);
+  // installService only *starts* the unit (`enable --now`, `launchctl load`),
+  // which leaves an already-running node on its old code; restart it as well.
+  if (portChanged || configChanged) return (await installService(config)) && restartService();
   return restartService();
 }
 
