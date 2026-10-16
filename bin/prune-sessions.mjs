@@ -68,23 +68,55 @@ export function linkSessionWorktrees({ sessions, staleSessions, staleWorktrees, 
   return { sessions: sorted, worktrees: [...removeWorktrees] };
 }
 
-// Removal set for sessions. Live ("working") sessions are never touched. The
-// newest `keep` NON-EMPTY sessions (across every agent) survive; empty/untitled
-// sessions are always beyond the keep window. An item is removed only when it is
-// BOTH beyond the keep window AND older than `ageMs` — the same safe intersection
-// as the file-based selectStale, so keep-only and age-only both behave sensibly.
-// `keep`/`ageMs` of null disable that half of the test.
+// Delegated child sessions (sub-agents, `delegatedFrom`) belong to the session
+// that started them, as the sidebar nests them. Groups sessions into families
+// keyed by the top-most listed ancestor; a child whose parent isn't listed is
+// its own root.
+function sessionFamilies(sessions) {
+  const byId = new Map(sessions.map((s) => [s.id, s]));
+  const rootOf = (s) => {
+    const seen = new Set([s.id]);
+    let cur = s;
+    for (;;) {
+      const parent = byId.get(cur.delegatedFrom?.sessionId);
+      if (!parent || seen.has(parent.id)) return cur.id;
+      seen.add(parent.id);
+      cur = parent;
+    }
+  };
+  const families = new Map();
+  for (const s of sessions) {
+    const root = rootOf(s);
+    families.set(root, [...(families.get(root) ?? []), s]);
+  }
+  return [...families.values()];
+}
+
+// Removal set for sessions. A parent and its sub-agent sessions are judged as one
+// unit: the family's activity is its newest member's, it is live if any member is
+// working, and it is empty only if every member is. So sub-agents never take
+// keep slots from real sessions, and a recent child keeps its parent (and vice
+// versa). Live families are never touched. The newest `keep` NON-EMPTY families
+// survive; empty ones are always beyond the keep window. A family is removed only
+// when it is BOTH beyond the keep window AND older than `ageMs` — the same safe
+// intersection as the file-based selectStale. `keep`/`ageMs` of null disable that
+// half of the test.
 export function selectStaleSessions(sessions, keep, ageMs, now) {
-  const eligible = sessions.filter((s) => s.status !== "working");
-  const nonEmptyDesc = eligible
-    .filter((s) => !isEmptySession(s))
-    .sort((a, b) => sessionActivityMs(b) - sessionActivityMs(a));
-  const rank = new Map(nonEmptyDesc.map((s, i) => [s.id, i]));
+  const eligible = sessionFamilies(sessions)
+    .filter((members) => !members.some((s) => s.status === "working"))
+    .map((members) => ({
+      members,
+      activity: Math.max(...members.map(sessionActivityMs)),
+      empty: members.every(isEmptySession),
+    }));
+  const nonEmptyDesc = eligible.filter((f) => !f.empty).sort((a, b) => b.activity - a.activity);
+  const rank = new Map(nonEmptyDesc.map((f, i) => [f, i]));
   return eligible
-    .filter((s) => {
-      const beyondKeep = keep === null ? true : (isEmptySession(s) ? true : (rank.get(s.id) ?? Infinity) >= keep);
-      const olderThan = ageMs === null ? true : now - sessionActivityMs(s) >= ageMs;
+    .filter((f) => {
+      const beyondKeep = keep === null ? true : (f.empty ? true : rank.get(f) >= keep);
+      const olderThan = ageMs === null ? true : now - f.activity >= ageMs;
       return beyondKeep && olderThan;
     })
+    .flatMap((f) => f.members)
     .sort((a, b) => sessionActivityMs(b) - sessionActivityMs(a));
 }
