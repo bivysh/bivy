@@ -30,14 +30,14 @@
   /* ---- Core surfaces & text (neutral) ----
      Workbench palette: warm off-white light and green-tinted near-black dark,
      separated by hairlines rather than fills. The chrome stays monochrome. */
-  --bg: #fafaf8;
-  --surface: #fafaf8;
-  --surface-2: #f0f0ec;
-  --surface-3: #e5e6e1;
+  --bg: #f9fdf6;
+  --surface: #f9fdf6;
+  --surface-2: #eff3ec;
+  --surface-3: #e5e9e2;
   --ink: #0b0d0b;
-  --muted: #5d625d;
-  --line: #e2e3de;
-  --line-strong: #c7c9c3;
+  --muted: #5b605b;
+  --line: #e1e5de;
+  --line-strong: #c8ccc5;
   --overlay: rgba(11, 13, 11, 0.42);
   --overlay-strong: rgba(11, 13, 11, 0.8);
 
@@ -47,7 +47,7 @@
   --accent-contrast: #fafaf8;
   --accent-hover: #262c26;
   --accent-active: color-mix(in srgb, var(--accent), #fff 18%);
-  --accent-soft: #e8e9e4;
+  --accent-soft: #e5e9e2;
 
   /* ---- Status ---- */
   --danger: #c22a22;   --danger-soft: #f6e1df;   --danger-contrast: #ffffff;
@@ -93,7 +93,7 @@
   --text-xs: 11px;   --lh-xs: 16px;
   --text-sm: 12px;   --lh-sm: 17px;
   --text-base: 13px; --lh-base: 20px;
-  --text-md: 14px;   --lh-md: 22px;
+  --text-md: 15px;   --lh-md: 22px;
   --text-lg: 16px;   --lh-lg: 24px;
   --text-xl: 18px;   --lh-xl: 26px;
   --text-2xl: 24px;  --lh-2xl: 32px;
@@ -117,7 +117,7 @@
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 8px;
-  --radius-xl: 10px;
+  --radius-xl: 12px;
   --radius-full: 999px;
 
   /* ---- Elevation ---- */
@@ -138,6 +138,9 @@
 
   --sidebar-width: 320px;
   --sidebar-col: 256px;
+  /* Transcript column: a 624px reading measure plus the chat padding. */
+  --chat-col: 672px;
+  --toolbar-h: 36px;
 
   /* ==== Compat aliases — the older --text / --border / --success vocabulary
      mapped onto the canonical palette. Prefer the canonical names above in new
@@ -172,10 +175,10 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #0b0d0b; --surface: #0b0d0b; --surface-2: #131613; --surface-3: #1c201c;
-  --ink: #eef3ed; --muted: #9ca49c; --line: #222622; --line-strong: #383d38;
+  --bg: #0c1516; --surface: #0c1516; --surface-2: #172122; --surface-3: #212b2b;
+  --ink: #eef5ec; --muted: #9ca49c; --line: #232c2b; --line-strong: #37403f;
   --overlay: rgba(0, 0, 0, 0.66); --overlay-strong: rgba(0, 0, 0, 0.82);
-  --accent: #eef3ed; --accent-contrast: #0b0d0b; --accent-hover: #d3d9d3;
+  --accent: #eef5ec; --accent-contrast: #0c1516; --accent-hover: #d3d9d3;
   --danger: #ef625d; --danger-soft: #3a1d1c; --danger-contrast: #0b0d0b; --ok: #54b879; --merged: #a28fe1;
   --unseen: #d6a038; --unseen-contrast: #0b0d0b;
   --warn: #d6a038;
@@ -190,17 +193,17 @@
   --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.28);
   --shadow-xl: 0 24px 70px rgba(0, 0, 0, 0.32);
 
-  --accent-soft: #1f231f;
+  --accent-soft: #1d2728;
   --warn-soft: #33291a;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     color-scheme: dark;
-    --bg: #0b0d0b; --surface: #0b0d0b; --surface-2: #131613; --surface-3: #1c201c;
-  --ink: #eef3ed; --muted: #9ca49c; --line: #222622; --line-strong: #383d38;
+    --bg: #0c1516; --surface: #0c1516; --surface-2: #172122; --surface-3: #212b2b;
+  --ink: #eef5ec; --muted: #9ca49c; --line: #232c2b; --line-strong: #37403f;
   --overlay: rgba(0, 0, 0, 0.66); --overlay-strong: rgba(0, 0, 0, 0.82);
-  --accent: #eef3ed; --accent-contrast: #0b0d0b; --accent-hover: #d3d9d3;
+  --accent: #eef5ec; --accent-contrast: #0c1516; --accent-hover: #d3d9d3;
   --danger: #ef625d; --danger-soft: #3a1d1c; --danger-contrast: #0b0d0b; --ok: #54b879; --merged: #a28fe1;
   --unseen: #d6a038; --unseen-contrast: #0b0d0b;
   --warn: #d6a038;
@@ -215,7 +218,7 @@
     --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.28);
     --shadow-xl: 0 24px 70px rgba(0, 0, 0, 0.32);
 
-  --accent-soft: #1f231f;
+  --accent-soft: #1d2728;
   --warn-soft: #33291a;
 }
 }
