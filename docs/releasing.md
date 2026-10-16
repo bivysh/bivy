@@ -219,6 +219,47 @@ builds it can trace to a CI workflow — and needs a token or interactive 2FA th
 the trusted-publishing workflow exists precisely to avoid. The build prints a
 warning when this happens. Prefer the workflow.
 
+## Self-contained archives
+
+Every release also publishes one archive per platform to GitHub Releases, built
+by `scripts/release-archives.mjs` from the same curated directory npm gets:
+
+```text
+bivy-<version>-<target>/      target: linux-x64, linux-arm64, darwin-x64, darwin-arm64
+  bin/bivy                    launcher; runs app/bin/bivy.mjs on runtime/bin/node
+  app/                        the curated package plus production node_modules
+  runtime/                    pinned Node (node, npm, npx)
+  bivy-archive.json           { version, target, node }
+```
+
+All four build on one Linux runner. Production dependencies are plain JS
+except node-pty, and npm picks its prebuilt binary per `--os`/`--cpu` from one
+shared lockfile. Each Node download is checked against nodejs.org's
+`SHASUMS256.txt`. The Node version is `NODE_VERSION` in that script; adding a
+platform is a row in `ARCHIVE_TARGETS`.
+
+| Channel | Where | Updated |
+|---|---|---|
+| Production | the `vX.Y.Z` release (`releases/latest/download/manifest.json`) | by the production job |
+| Staging | the rolling `staging` prerelease (`releases/download/staging/manifest.json`) | every merge to `main`; the newest three versions are kept |
+
+Alongside the archives: `SHA256SUMS`, and `manifest.json` (version, commit,
+Node version, and each archive's file, sha256 and size). Archives are attested
+with GitHub's keyless build provenance (Sigstore, like npm's), so there is
+still no release key to guard:
+
+```bash
+gh attestation verify bivy-0.22.0-linux-x64.tar.gz --repo bivysh/bivy
+```
+
+CI's package lane builds this machine's archive on every packaging change, and
+`scripts/smoke-archive.mjs` checks it with no system Node on `PATH`:
+- the launcher works through a symlink;
+- the bundled Node and npm run;
+- node-pty spawns a terminal;
+- no agent SDK is in the archive;
+- the daemon starts and serves `/healthz`.
+
 ## Service container images
 
 ```text

@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Releases ship self-contained archives on GitHub.** Each release, and the rolling `staging` prerelease on every merge to `main`, carries a `bivy-<version>-<platform>.tar.gz` for Linux and macOS on x64 and arm64. Each archive holds the app, its dependencies built for that platform, and a pinned Node runtime, so running it needs no Node, npm or registry on the machine. `SHA256SUMS`, a `manifest.json` and GitHub build attestations (`gh attestation verify <file> --repo bivysh/bivy`) come with them. `install.sh` and `bivy update` still use npm; switching them over is next.
+
 - **Add any ACP agent or CLI from `config.yaml`, with no restart.** An `agents:` entry now takes the same `adapter` block as a plugin manifest: `kind: acp` with a command for any [ACP](https://agentclientprotocol.com) agent, or `kind: process` for any other CLI, with optional output parser, resume and model flags. `bivy agent add` writes there (new `--parser` and `--resume-args` flags) instead of creating a single-agent plugin, and the agent is in the picker as soon as the file is saved. Installing or removing a plugin no longer needs a restart either. See [Add any agent](docs/add-an-agent.md).
 - **Write an adapter for any agent in a few lines.** The JSONL turn format (parser `bivy-protocol`) is now documented as an adapter contract: Bivy runs your program once per turn with the prompt on stdin and reads events from stdout. It gains `session.started` (the adapter's own id, passed back as `{id}` to resume), `message.reasoning` and `usage`. A complete example is in `examples/agents/jsonl-adapter`, and `bivy guide add-an-agent` walks an agent through it.
 

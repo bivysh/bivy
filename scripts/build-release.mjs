@@ -26,6 +26,10 @@
  *                                  leave out the built web app (relay-only nodes)
  *   node scripts/build-release.mjs --npm-pack <dir>
  *                                  write <dir>/bivy-npm.tgz for consumer tests
+ *   node scripts/build-release.mjs --archives <dir> [--targets all|host|id,...]
+ *                                  write self-contained per-platform archives,
+ *                                  SHA256SUMS and manifest.json for GitHub
+ *                                  Releases (see scripts/release-archives.mjs)
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -33,6 +37,7 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { curateManifest } from "./release-manifest.mjs";
+import { buildArchives, resolveTargets } from "./release-archives.mjs";
 
 const argv = process.argv.slice(2);
 const doPublish = argv.includes("--publish");
@@ -47,6 +52,9 @@ const packDir = argValue("--pack");
 // CI consumer tests need the npm payload, not the self-hosted archive. Keeping
 // this separate avoids generating a package-lock.json that npm pack excludes.
 const npmPackDir = argValue("--npm-pack");
+// Where to write the per-platform GitHub release archives. Empty = don't.
+const archivesDir = argValue("--archives");
+const archiveTargets = resolveTargets(argValue("--targets") ?? "all");
 // npm dist-tag to publish under. Defaults to "latest" (a production release).
 // The staging channel passes `--tag staging` so continuous per-merge builds
 // land on the `staging` tag and never move `latest`. See docs/releasing.md.
@@ -133,6 +141,17 @@ if (packDir) {
 
 const releasePkg = JSON.parse(fs.readFileSync(path.join(app, "package.json"), "utf8"));
 
+const commit =
+  process.env.GITHUB_SHA ||
+  process.env.RENDER_GIT_COMMIT ||
+  spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim() ||
+  "";
+
+// Archives first: a failed archive build must stop the irreversible npm publish.
+if (archivesDir) {
+  await buildArchives({ app, outDir: path.resolve(archivesDir), targets: archiveTargets, commit });
+}
+
 // Publish the curated staging dir to npm. The staged package.json has already
 // been corrected for a packaged install (start/dev -> node dist/server.js, the
 // dev-only `prepare` git-hook script removed, mobile deps pruned), and the
@@ -206,16 +225,11 @@ if (packDir) {
   const manifestPath = path.join(packDir, "bivy-latest.json");
   run("tar", ["-czf", tarball, "-C", tmp, "bivy"]);
   const sha256 = crypto.createHash("sha256").update(fs.readFileSync(tarball)).digest("hex");
-  // Commit: the CI SHA when present, else the working tree's HEAD, else empty
-  // (a Docker build stage has neither git nor .git; the workflow passes the SHA
-  // in via GITHUB_SHA). builtAt is stamped at pack time. The artifact URL is
+  // Commit (above): the CI SHA when present, else the working tree's HEAD, else
+  // empty (a Docker build stage has neither git nor .git; the workflow passes the
+  // SHA in via GITHUB_SHA). builtAt is stamped at pack time. The artifact URL is
   // where install.sh will fetch it; override via BIVY_ARTIFACT_URL for a
   // staging/preview download host.
-  const commit =
-    process.env.GITHUB_SHA ||
-    process.env.RENDER_GIT_COMMIT ||
-    spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim() ||
-    "";
   const manifest = {
     name: releasePkg.name,
     version: releasePkg.version,
@@ -230,7 +244,7 @@ if (packDir) {
 }
 
 console.log(`Built ${releasePkg.name}@${releasePkg.version}`);
-if (!doPublish && !packDir && !npmPackDir) {
+if (!doPublish && !packDir && !npmPackDir && !archivesDir) {
   console.log("Not published. Use `pnpm run publish:npm` (or --dry-run) to publish.");
 }
 
