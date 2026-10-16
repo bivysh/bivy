@@ -14,12 +14,13 @@ test.beforeAll(async ({ webApp }) => {
   origin = webApp.origin;
 });
 
-async function fixture(page: Page, theme: string, empty = false, trigger = "schedule", options: { multiple?: boolean; locked?: boolean; history?: boolean; filter?: AutomationFilter } = {}) {
+async function fixture(page: Page, theme: string, empty = false, trigger = "schedule", options: { multiple?: boolean; locked?: boolean; history?: boolean; filter?: AutomationFilter; unreadable?: boolean } = {}) {
   let item = {
     id: "automation-test", name: "Daily review", trigger, enabled: true,
     repo: "acme/app", nodeLabel: "bivy/Runner", runtimeId: "pi", model: "claude-sonnet",
     schedule: { kind: "cron", expression: "0 9 * * 1-5", timezone: "UTC" },
-    templateCiphertext: `bivy-room-v1:runner:${seal(key, encodeAutomationTemplate(instructions, { anthropic: "work", "openai-codex": "retired" }, options.filter))}`,
+    templateCiphertext: `bivy-room-v1:runner:${seal(options.unreadable ? Buffer.alloc(32, 9) : key, encodeAutomationTemplate(instructions, { anthropic: "work", "openai-codex": "retired" }, options.filter))}`,
+    ...(options.unreadable ? { instructionsUnreadable: true } : {}),
   };
   const nodes = [{ id: "runner", name: "Runner", online: true }];
   for (const endpoint of ["runtimes", "models", "repos"]) {
@@ -75,6 +76,7 @@ async function fixture(page: Page, theme: string, empty = false, trigger = "sche
   </script></body></html>`);
   await page.route(`${origin}${fixturePath}`, (route) => route.fulfill({ contentType: "text/html", body: html }));
   await page.goto(`${origin}${fixturePath}`);
+  if (options.unreadable) await expect(page.getByRole("button", { name: "View Daily review" }).getByText("Needs instructions")).toBeVisible();
   await page.getByRole("button", { name: "View Daily review" }).focus();
   await page.getByRole("button", { name: "View Daily review" }).press('Enter');
   await page.getByRole('button', { name: 'Edit automation', exact: true }).click();
@@ -82,6 +84,15 @@ async function fixture(page: Page, theme: string, empty = false, trigger = "sche
 }
 
 for (const theme of themes) {
+  test(`instructions the machine can't open are flagged in the list and asked for again (${theme})`, async ({ page }, testInfo) => {
+    await fixture(page, theme, false, 'schedule', { unreadable: true });
+    const banner = page.getByRole('status').filter({ hasText: 'Enter the instructions again.' });
+    await expect(banner).toBeVisible();
+    await expect(page.getByLabel('Instructions', { exact: true })).toHaveValue('');
+    await banner.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath(`unreadable-${theme}.png`), animations: 'disabled' });
+  });
+
   test(`automation screen hierarchy and grouped sheets (${theme})`, async ({ page }, testInfo) => {
     await fixture(page, theme, false, 'schedule', { history: true });
     const capture = async (name: string) => {

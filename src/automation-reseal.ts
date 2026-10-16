@@ -6,11 +6,15 @@ import { open, seal } from "./e2e.js";
  * Automation instructions are stored as `bivy-room-v1:<node>:<ciphertext>`,
  * sealed under the node's room key. Revoking a device rotates that key, which
  * would leave every stored template unreadable to both the node and its paired
- * devices. This pass re-seals each template still under a retired key.
+ * devices. This pass re-seals each template still under a retired key, and
+ * flags any template no key opens so the user is asked to re-enter it before
+ * a run fails on it.
  */
 export interface StoredTemplate {
   id: string;
   templateCiphertext: string;
+  /** Already flagged by an earlier pass. */
+  instructionsUnreadable?: boolean;
 }
 
 export interface ResealResult {
@@ -25,6 +29,7 @@ export async function resealAutomationTemplates(opts: {
   retired: Buffer[];
   templates: StoredTemplate[];
   save: (id: string, templateCiphertext: string) => Promise<void>;
+  markUnreadable: (id: string) => Promise<void>;
 }): Promise<ResealResult> {
   const prefix = `bivy-room-v1:${opts.nodeId}:`;
   const result: ResealResult = { resealed: 0, unreadable: [] };
@@ -35,6 +40,7 @@ export async function resealAutomationTemplates(opts: {
     const plaintext = opts.retired.map((key) => tryOpen(key, payload)).find((text) => text !== undefined);
     if (plaintext === undefined) {
       result.unreadable.push(template.id);
+      if (!template.instructionsUnreadable) await opts.markUnreadable(template.id);
       continue;
     }
     await opts.save(template.id, `${prefix}${seal(opts.current, plaintext)}`);

@@ -386,10 +386,22 @@ function defaultSourceInstructions(): string {
   return "Handle the incoming item using its event context. Investigate the request, make the smallest safe change, run the relevant checks, and report the outcome with links to any pull request or follow-up.";
 }
 
-// Undefined when the payload was sealed under an older room key: the Machine
-// rotated its key (a device was revoked) before re-sealing this template.
 async function openTemplate(roomKey: string, payload: string): Promise<string | undefined> {
   try { return await open(await importRoomKey(unb64url(roomKey)), payload); } catch { return undefined; }
+}
+
+/** Open an automation's sealed instructions with this device's key for its
+ *  Machine. A key that doesn't open them may be one the Machine has since
+ *  rotated away from while this device was offline, so fetch the current key
+ *  once before calling them unreadable. Undefined when no key opens them. */
+async function openAutomationTemplate(nodeId: string, payload: string, flagged?: boolean): Promise<string | undefined> {
+  const held = controller.local.keys()[nodeId];
+  const opened = held ? await openTemplate(held, payload) : undefined;
+  // A flag from the Machine means it can't open them either.
+  if (opened !== undefined || flagged) return opened;
+  try { await controller.refreshMachineKey(nodeId); } catch { return undefined; }
+  const current = controller.local.keys()[nodeId];
+  return current && current !== held ? openTemplate(current, payload) : undefined;
 }
 
 interface Notice {
@@ -628,7 +640,7 @@ export function AutomationsView({
     if (parts?.[0] === TEMPLATE_PREFIX && parts[1] && parts.slice(2).length) {
       const roomKey = controller.local.keys()[parts[1]];
       if (!roomKey) throw new Error("Instructions are locked on this device. Connect to the assigned Machine before editing this automation.");
-      const opened = await openTemplate(roomKey, parts.slice(2).join(":"));
+      const opened = await openAutomationTemplate(parts[1], parts.slice(2).join(":"), existing.instructionsUnreadable);
       instructionsUnreadable = opened === undefined;
       instructions = opened ?? "";
     }
@@ -688,7 +700,7 @@ export function AutomationsView({
         });
         return;
       }
-      const opened = await openTemplate(roomKey, parts.slice(2).join(":"));
+      const opened = await openAutomationTemplate(parts[1], parts.slice(2).join(":"), item.instructionsUnreadable);
       instructionsUnreadable = opened === undefined;
       instructions = opened ?? "";
     }
@@ -1018,10 +1030,12 @@ export function AutomationsView({
               </div>
               <div className="automation-list">
                 {listedItems.map((item) => {
-                  const chip = isSourceTrigger(item.trigger)
-                    ? sourceAutomationChip(item, sources)
-                    : { tone: item.enabled ? "on" as const : "off" as const, label: item.enabled ? "Active" : "Paused" };
-                  const needsConnect = isSourceTrigger(item.trigger) && chip.tone === "warn" && chip.label.toLowerCase().includes("needs");
+                  const chip = item.instructionsUnreadable
+                    ? { tone: "warn" as const, label: "Needs instructions" }
+                    : isSourceTrigger(item.trigger)
+                      ? sourceAutomationChip(item, sources)
+                      : { tone: item.enabled ? "on" as const : "off" as const, label: item.enabled ? "Active" : "Paused" };
+                  const needsConnect = !item.instructionsUnreadable && isSourceTrigger(item.trigger) && chip.tone === "warn" && chip.label.toLowerCase().includes("needs");
                   const nextRun = item.enabled && item.nextRunAt && item.schedule?.kind !== "once"
                     ? formatNextAutomationRun(item.nextRunAt)
                     : null;
@@ -1314,16 +1328,15 @@ function SourceAutomationEditor({
     const load = async () => {
       if (!item.templateCiphertext) return decodeAutomationTemplate(defaultSourceInstructions());
       const [prefix, nodeId, ...payload] = item.templateCiphertext.split(":");
-      const key = nodeId ? controller.local.keys()[nodeId] : undefined;
-      if (prefix !== TEMPLATE_PREFIX || !key) return null;
-      const opened = await openTemplate(key, payload.join(":"));
+      if (prefix !== TEMPLATE_PREFIX || !nodeId || !controller.local.keys()[nodeId]) return null;
+      const opened = await openAutomationTemplate(nodeId, payload.join(":"), item.instructionsUnreadable);
       return opened === undefined ? null : decodeAutomationTemplate(opened);
     };
     void load().then((template) => { if (!cancelled) setAccountTemplate(template); }).catch((e) => {
       if (!cancelled) { setAccountTemplate(null); setError(String(e)); }
     });
     return () => { cancelled = true; };
-  }, [item.templateCiphertext]);
+  }, [item.templateCiphertext, item.instructionsUnreadable]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const preflight = useAutomationPreflight(item.id || undefined);
@@ -2434,7 +2447,7 @@ function AutomationEditor({
                 <label className="autom-field-label" htmlFor="autom-instructions">Instructions</label>
                 {d.instructionsUnreadable && !d.instructions.trim() && (
                   <div className="banner inline" data-tone="warn" role="status">
-                    <strong>Enter the instructions again.</strong> The saved instructions were encrypted with a key this machine has since replaced, so they can&apos;t be read. Runs fail until you save new ones.
+                    <strong>Enter the instructions again.</strong> The saved instructions were encrypted with a key this machine no longer has, so neither it nor this device can read them. Runs fail until you save new ones.
                   </div>
                 )}
                 <div className="autom-instructions">

@@ -94,7 +94,7 @@ await test("revoking a device rotates the key and re-wraps for survivors", () =>
   assert.equal(deliveries!.find((d) => d.deviceId === a.deviceId), undefined);
 });
 
-await test("automation instructions sealed before a revoke are re-sealed under the new key", async () => {
+await test("automation instructions sealed before a revoke are re-sealed; ones no key opens are flagged", async () => {
   const dir = tmpDir();
   const store = PairingStore.load(dir);
   const { deviceId } = pairDevice(store);
@@ -107,15 +107,23 @@ await test("automation instructions sealed before a revoke are re-sealed under t
   assert.equal(reloaded.openSealed(stale.split(":")[2]), "nightly instructions");
 
   const saved = new Map<string, string>();
+  const flagged: string[] = [];
   const lost = `bivy-room-v1:node-1:${seal(Buffer.alloc(32, 7), "unrecoverable")}`;
   const result = await resealAutomationTemplates({
     nodeId: "node-1",
     current: reloaded.roomKey(),
     retired: reloaded.retiredRoomKeys(),
-    templates: [{ id: "a1", templateCiphertext: stale }, { id: "a2", templateCiphertext: lost }, { id: "a3", templateCiphertext: "bivy-room-v1:node-2:x" }],
+    templates: [
+      { id: "a1", templateCiphertext: stale },
+      { id: "a2", templateCiphertext: lost },
+      { id: "a3", templateCiphertext: "bivy-room-v1:node-2:x" },
+      { id: "a4", templateCiphertext: lost, instructionsUnreadable: true },
+    ],
     save: async (id, ciphertext) => { saved.set(id, ciphertext); },
+    markUnreadable: async (id) => { flagged.push(id); },
   });
-  assert.deepEqual(result, { resealed: 1, unreadable: ["a2"] });
+  assert.deepEqual(result, { resealed: 1, unreadable: ["a2", "a4"] });
+  assert.deepEqual(flagged, ["a2"], "only newly unreadable templates are flagged");
   assert.equal(open(reloaded.roomKey(), saved.get("a1")!.split(":")[2]), "nightly instructions");
 
   reloaded.forgetRetiredRoomKeys();

@@ -682,6 +682,9 @@ export interface AutomationDefinition {
   configOrder?: number;
   /** End-to-end encrypted template; the control plane cannot inspect instructions. */
   templateCiphertext?: string;
+  /** Set by the assigned node when it can't open `templateCiphertext` (sealed
+   *  under a room key it no longer has). Cleared whenever new ciphertext is saved. */
+  instructionsUnreadable?: boolean;
   runtimeId?: string;
   model?: string;
   nodeLabel?: string;

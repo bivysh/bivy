@@ -2780,8 +2780,18 @@ app.get("/node/automation-templates", requireNode, asyncHandler(async (req, res)
   const prefix = `bivy-room-v1:${node.id}:`;
   const templates = (await store.listAutomationDefinitions(node.accountId))
     .filter((d) => d.templateCiphertext?.startsWith(prefix))
-    .map((d) => ({ id: d.id, templateCiphertext: d.templateCiphertext }));
+    .map((d) => ({ id: d.id, templateCiphertext: d.templateCiphertext, instructionsUnreadable: Boolean(d.instructionsUnreadable) }));
   res.json({ templates });
+}));
+
+// The node can't open this template with any key it holds. Flag it so the
+// automation list asks for the instructions again before runs fail.
+app.post("/node/automation-templates/:id/unreadable", requireNode, automationWriteRateLimit, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const current = await store.getAutomationDefinition(node.accountId, String(req.params.id));
+  if (!current?.templateCiphertext?.startsWith(`bivy-room-v1:${node.id}:`)) return res.status(404).json({ error: "Automation not found" });
+  await store.updateAutomationDefinition(node.accountId, current.id, { instructionsUnreadable: true });
+  res.json({ ok: true });
 }));
 
 app.put("/node/automation-templates/:id", requireNode, automationWriteRateLimit, asyncHandler(async (req, res) => {

@@ -932,6 +932,18 @@ export class AppController {
   }
 
   /**
+   * Fetch a machine's current room key again. A device that was offline when
+   * the machine rotated its key (a device revoke) still holds the old one, so
+   * anything sealed since looks unreadable here even though the machine can
+   * open it. The held key is kept if the machine can't be reached.
+   */
+  async refreshMachineKey(nodeId: string): Promise<void> {
+    const machine = this.store.getState().connection.nodes.find((node) => node.id === nodeId);
+    if (!machine?.online) throw new Error("The machine is offline.");
+    await pairWithMachine(this.local, nodeId, (store, handlers) => new RelayTransport({ store, pairingOnly: true, handlers }), { replace: true, timeoutMs: 15_000 });
+  }
+
+  /**
    * Sign in to a model provider on the cloud computer a launch is waiting on.
    * The login runs on that machine (provider OAuth on the node), so the
    * credential is created there and syncs end to end like any other. A launch

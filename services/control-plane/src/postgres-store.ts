@@ -713,6 +713,8 @@ export class PostgresStore implements ControlPlaneStore {
       -- capability-routing.ts before they reach here.
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS required_capabilities JSONB;
       ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS preferred_capabilities JSONB;
+      -- See AutomationDefinition.instructionsUnreadable in store.ts.
+      ALTER TABLE automation_definitions ADD COLUMN IF NOT EXISTS instructions_unreadable BOOLEAN NOT NULL DEFAULT false;
       CREATE UNIQUE INDEX IF NOT EXISTS idx_automation_definitions_config_key
         ON automation_definitions(account_id, config_key) WHERE config_key IS NOT NULL;
       CREATE TABLE IF NOT EXISTS trigger_events (
@@ -2605,13 +2607,18 @@ export class PostgresStore implements ControlPlaneStore {
     const current = await this.getAutomationDefinition(accountId, id);
     if (!current) return undefined;
     const next = { ...current, ...input };
+    // The flag describes the stored ciphertext, so new ciphertext resets it.
+    if (input.instructionsUnreadable === undefined && input.templateCiphertext !== undefined && input.templateCiphertext !== current.templateCiphertext) {
+      next.instructionsUnreadable = false;
+    }
     const { rows } = await this.query(
       `UPDATE automation_definitions SET name=$3, template_ciphertext=$4, runtime_id=$5,
        model=$6, node_label=$7, ephemeral=$8, approval_mode=$9, sandbox=$10,
        enabled=$11, schedule=$12, next_run_at=$13, trigger=$14, webhook_secret=$15,
        repo=$16, labels=$17, repos=$18, app_id=$19, template_id=$20, on_events=$21,
        target_kind=$22, target_session_id=$23, message=$24, config_key=$25,
-       config_order=$26, max_attempts=$27, allow_dangerous=$28, required_capabilities=$29, preferred_capabilities=$30, webhook_header=$31, webhook_auth_mode=$32, updated_at=now()
+       config_order=$26, max_attempts=$27, allow_dangerous=$28, required_capabilities=$29, preferred_capabilities=$30, webhook_header=$31, webhook_auth_mode=$32,
+       instructions_unreadable=$33, updated_at=now()
        WHERE account_id=$1 AND id=$2 RETURNING *`,
       [accountId, id, next.name, next.templateCiphertext ?? null, next.runtimeId ?? null,
         next.model ?? null, next.nodeLabel ?? null, next.ephemeral ?? null,
@@ -2632,7 +2639,8 @@ export class PostgresStore implements ControlPlaneStore {
         next.allowDangerous ?? null,
         next.requiredCapabilities ? JSON.stringify(next.requiredCapabilities) : null,
         next.preferredCapabilities ? JSON.stringify(next.preferredCapabilities) : null,
-        next.webhookHeader ?? null, next.webhookAuthMode ?? null],
+        next.webhookHeader ?? null, next.webhookAuthMode ?? null,
+        next.instructionsUnreadable ?? false],
     );
     return rows[0] ? mapAutomationDefinition(rows[0]) : undefined;
   }
@@ -3414,6 +3422,7 @@ function mapAutomationDefinition(row: any): AutomationDefinition {
     configKey: row.config_key ?? undefined,
     configOrder: row.config_order == null ? undefined : Number(row.config_order),
     templateCiphertext: row.template_ciphertext ?? undefined,
+    instructionsUnreadable: row.instructions_unreadable || undefined,
     runtimeId: row.runtime_id ?? undefined,
     model: row.model ?? undefined,
     nodeLabel: row.node_label ?? undefined,

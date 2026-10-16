@@ -102,6 +102,12 @@ async function main() {
   const resealed = await json(port, "PUT", `/node/automation-templates/${managed.body.id}`, { templateCiphertext: "bivy-room-v1:node-as-code:resealed" }, nodeToken);
   const foreignReseal = await json(port, "PUT", `/node/automation-templates/${managed.body.id}`, { templateCiphertext: "bivy-room-v1:somebody-else:x" }, nodeToken);
   expect(resealed.status === 200 && foreignReseal.status === 400, "a node re-seals only under its own node id");
+  const flagged = await json(port, "POST", `/node/automation-templates/${managed.body.id}/unreadable`, undefined, nodeToken);
+  const flaggedList = await json(port, "GET", "/account/automations", undefined, token);
+  expect(flagged.status === 200 && flaggedList.body.find((d: any) => d.id === managed.body.id)?.instructionsUnreadable === true, "a node flags instructions it can't open for the automation list");
+  await json(port, "PUT", `/node/automation-templates/${managed.body.id}`, { templateCiphertext: "bivy-room-v1:node-as-code:re-entered" }, nodeToken);
+  const clearedList = await json(port, "GET", "/account/automations", undefined, token);
+  expect(!clearedList.body.find((d: any) => d.id === managed.body.id)?.instructionsUnreadable, "saving new instructions clears the flag");
   const managedRun = await json(port, "POST", `/account/automations/${managed.body.id}/run`, undefined, token);
   expect(managedRun.status === 201, "a managed automation can be dispatched normally");
   const cliRun = await json(port, "POST", `/node/automations/${managed.body.id}/run`, undefined, nodeToken);
