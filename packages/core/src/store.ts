@@ -358,6 +358,9 @@ export interface UserQuestionItem {
   header: string;
   options: UserQuestionOption[];
   multiSelect?: boolean;
+  /** A secret request: a hidden input whose value goes to the node's vault,
+   *  never to the agent (mirrors the node's UserQuestionSecret). */
+  secret?: { name: string; url?: string };
 }
 
 /**

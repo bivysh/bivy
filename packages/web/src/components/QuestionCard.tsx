@@ -134,44 +134,65 @@ function QuestionCard({
               <Badge tone="accent" variant="soft" upper>{q.header}</Badge>
             </div>
             <div className="question-text">{q.question}</div>
-            <div className="question-options">
-              {q.options.map((opt) => (
-                <button
-                  key={opt.label}
-                  type="button"
-                  className={`question-option${picked.includes(opt.label) ? " selected" : ""}`}
-                  onClick={() => toggle(qi, opt.label, q.multiSelect)}
-                  disabled={pending}
-                  title={opt.description}
-                >
-                  <span className="question-option-label">{opt.label}</span>
-                  {opt.description && <span className="question-option-desc">{opt.description}</span>}
-                </button>
-              ))}
-              {q.options.length > 0 && (
-                <button
-                  type="button"
-                  className={`question-option${otherActive[qi] ? " selected" : ""}`}
-                  onClick={() => toggleOther(qi, q.multiSelect)}
-                  disabled={pending}
-                >
-                  <span className="question-option-label">Other</span>
-                  <span className="question-option-desc">Write your own answer</span>
-                </button>
-              )}
-              {otherActive[qi] && (
-                <textarea
-                  className="field question-other-input"
+            {q.secret ? (
+              <div className="question-options">
+                <input
+                  className="field"
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
                   value={otherText[qi] || ""}
                   onChange={(e) => setOtherText((prev) => ({ ...prev, [qi]: e.target.value }))}
-                  placeholder="Type your answer…"
+                  onKeyDown={(e) => { if (e.key === "Enter" && answered && !pending) submit(); }}
+                  placeholder="Paste it here"
                   aria-label={q.question}
-                  rows={2}
-                  autoFocus={q.options.length > 0}
                   disabled={pending}
                 />
-              )}
-            </div>
+                <p className="question-note">
+                  Saved on this machine as <code>{q.secret.name}</code>. The agent gets a reference to it, never the value.
+                  {q.secret.url && <> <a href={q.secret.url} target="_blank" rel="noopener noreferrer">Where to find it</a></>}
+                </p>
+              </div>
+            ) : (
+              <div className="question-options">
+                {q.options.map((opt) => (
+                  <button
+                    key={opt.label}
+                    type="button"
+                    className={`question-option${picked.includes(opt.label) ? " selected" : ""}`}
+                    onClick={() => toggle(qi, opt.label, q.multiSelect)}
+                    disabled={pending}
+                    title={opt.description}
+                  >
+                    <span className="question-option-label">{opt.label}</span>
+                    {opt.description && <span className="question-option-desc">{opt.description}</span>}
+                  </button>
+                ))}
+                {q.options.length > 0 && (
+                  <button
+                    type="button"
+                    className={`question-option${otherActive[qi] ? " selected" : ""}`}
+                    onClick={() => toggleOther(qi, q.multiSelect)}
+                    disabled={pending}
+                  >
+                    <span className="question-option-label">Other</span>
+                    <span className="question-option-desc">Write your own answer</span>
+                  </button>
+                )}
+                {otherActive[qi] && (
+                  <textarea
+                    className="field question-other-input"
+                    value={otherText[qi] || ""}
+                    onChange={(e) => setOtherText((prev) => ({ ...prev, [qi]: e.target.value }))}
+                    placeholder="Type your answer…"
+                    aria-label={q.question}
+                    rows={2}
+                    autoFocus={q.options.length > 0}
+                    disabled={pending}
+                  />
+                )}
+              </div>
+            )}
           </div>
         );
       })}
@@ -193,7 +214,7 @@ function QuestionCard({
             Skip
           </button>
           <button className="btn primary" onClick={submit} disabled={!answered}>
-            Send answer{request.questions.length > 1 ? "s" : ""}
+            {request.questions.every((q) => q.secret) ? "Save secret" : `Send answer${request.questions.length > 1 ? "s" : ""}`}
           </button>
         </div>
       )}

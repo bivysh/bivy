@@ -39,9 +39,27 @@ test("a wait slice that ends first reports the question still pending", async ()
   assert.equal((await asks.wait("s", id, 10))?.status, "pending");
 });
 
+test("a secret answer goes to the store and the agent reads back only its reference", async () => {
+  const manager = new QuestionManager();
+  const stored: Array<[string, string]> = [];
+  const asks = new AgentQuestions(manager, Date.now, (name, value) => { stored.push([name, value]); });
+  const [item] = askQuestionsFrom([{ question: "Stripe key?", secret: { name: "STRIPE_API_KEY", url: "https://dashboard.stripe.com/apikeys" } }]) as never[];
+  const { id } = asks.ask("s", [item], 60_000);
+  manager.resolve(id, { behavior: "completed", answers: { "Stripe key?": " sk_live_abc123 " } });
+  assert.deepEqual((await asks.wait("s", id, 1_000))?.answers, { "Stripe key?": "secret://STRIPE_API_KEY" });
+  assert.deepEqual(stored, [["STRIPE_API_KEY", "sk_live_abc123"]]);
+
+  const failing = new AgentQuestions(manager, Date.now, () => { throw new Error("vault locked"); });
+  const second = failing.ask("s", [item], 60_000);
+  manager.resolve(second.id, { behavior: "completed", answers: { "Stripe key?": "sk_live_abc123" } });
+  assert.deepEqual((await failing.wait("s", second.id, 1_000))?.answers, { "Stripe key?": "" }, "a value that wasn't stored never reaches the agent");
+});
+
 test("ask input: free text needs no options; duplicates and empty asks are refused", () => {
   assert.deepEqual(askQuestionsFrom([{ question: "Release name?" }]), [{ question: "Release name?", header: "Question", options: [] }]);
   assert.equal(typeof askQuestionsFrom([{ question: "Ship?", options: ["Yes", "Yes"] }]), "string");
   assert.equal(typeof askQuestionsFrom([{ question: "Ship?", options: ["Yes"] }]), "string");
   assert.equal(typeof askQuestionsFrom([]), "string");
+  assert.equal(typeof askQuestionsFrom([{ question: "Token?", secret: { name: "github.repo-token" } }]), "string", "a secret can't overwrite the node's own vault ids");
+  assert.equal(typeof askQuestionsFrom([{ question: "Token?", secret: { name: "TOKEN" }, options: ["a", "b"] }]), "string");
 });

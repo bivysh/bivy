@@ -237,7 +237,7 @@ import {
   forgetLocalGithubAppVaultKey,
   mintLocalGithubAppVaultKey,
 } from "./github-app-vault.js";
-import { redactSecrets } from "./redact.js";
+import { redactSecrets, registerSecretValue } from "./redact.js";
 import {
   getSttConfig,
   isSttProvider,
@@ -542,7 +542,14 @@ setSessionTokenSigner(sessionTokens.sign);
 // clarifying question across sessions; the guardian interceptor below raises
 // them, and session.question(.resolved) is broadcast from its listeners.
 const questionManager = new QuestionManager();
-const agentQuestions = new AgentQuestions(questionManager);
+// A secret the user types into a `bivy ask --secret` card goes to the node
+// vault; the agent gets its secret:// reference. Vault values are masked in
+// every persisted transcript write (redact.ts), including ones stored before.
+const agentQuestions = new AgentQuestions(questionManager, Date.now, (name, value, description) => {
+  new SecretVault(appDir).setLocal(name, value, description);
+  registerSecretValue(value);
+});
+try { for (const value of new SecretVault(appDir).localValues()) registerSecretValue(value); } catch {}
 // `bivy automation apply` from an agent: an approval request like any other, so
 // the node's approval mode decides whether the user is asked ("never" applies
 // at once; autonomous asks, as for deploys). Either way the result lands in the

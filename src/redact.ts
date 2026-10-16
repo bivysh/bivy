@@ -91,10 +91,31 @@ const KNOWN_SECRET_FIELD_VALUE = new RegExp(
   "g",
 );
 
+// Exact values the node knows are secret: what the user typed into a secret
+// card, and the node vault's local entries. These have no shape to match on (a
+// random API key, a password), so the vault registers them here and every
+// persisted write masks them wherever they appear. Short values are skipped:
+// masking "1234" everywhere would mangle ordinary text.
+const MIN_KNOWN_SECRET = 8;
+const knownSecrets = new Set<string>();
+
+/** Mask `value` in everything persisted from now on. */
+export function registerSecretValue(value: string): void {
+  const trimmed = String(value ?? "").trim();
+  if (trimmed.length >= MIN_KNOWN_SECRET) knownSecrets.add(trimmed);
+}
+
 /** Mask credentials in `text`. Safe on non-string / empty input. */
 export function redactSecrets(text: string): string {
   if (!text) return text;
-  let out = text
+  let out = text;
+  for (const value of knownSecrets) {
+    if (out.includes(value)) out = out.split(value).join(REDACTED);
+    // Persisted text is JSON: a value with quotes, backslashes or newlines appears escaped.
+    const escaped = JSON.stringify(value).slice(1, -1);
+    if (escaped !== value && out.includes(escaped)) out = out.split(escaped).join(REDACTED);
+  }
+  out = out
     .replace(URL_CREDENTIAL, `$1:${REDACTED}@`)
     .replace(GH_TOKEN, REDACTED)
     .replace(GH_FINE_PAT, REDACTED)

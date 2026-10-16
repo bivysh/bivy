@@ -662,6 +662,15 @@ export interface UserQuestionItem {
   options: UserQuestionOption[];
   /** Allow selecting more than one option for this question. */
   multiSelect?: boolean;
+  /** Ask for a secret (`bivy ask --secret`): the card takes a hidden value, the
+   *  node stores it in its vault under `name`, and the agent gets back only
+   *  `secret://<name>`. `url` is where the user finds the value. */
+  secret?: UserQuestionSecret;
+}
+
+export interface UserQuestionSecret {
+  name: string;
+  url?: string;
 }
 
 /** The host's answer to a pending `user_question`, keyed by each item's `question` text. */
