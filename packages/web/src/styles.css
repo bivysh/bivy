@@ -507,7 +507,14 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
   position: relative; display: flex; align-items: center; gap: var(--space-2); width: 100%; text-align: left;
   padding: 6px var(--space-2); border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink);
 }
+/* Desktop rows are one line; the machine (only with more than one) sits before
+   the age. Phones keep the meta line, which already names it. */
+.session-machine {
+  flex: 0 1 auto; min-width: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--muted); font-size: var(--text-xs); line-height: var(--lh-xs);
+}
 @media (min-width: 721px) and (pointer: fine) { .session-item .session-meta { display: none; } }
+@media not ((min-width: 721px) and (pointer: fine)) { .session-machine { display: none; } }
 .session-item:hover { background: var(--surface-2); }
 .session-item.active, .session-item[aria-current="page"] { background: var(--surface-2); }
 /* Two single-line rows: title (+ status dot, PR mark, age) over a quiet meta

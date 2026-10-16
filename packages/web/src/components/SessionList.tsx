@@ -496,6 +496,7 @@ export function SessionList({ searchOpen = true, onSearchOpenChange, onPick, onP
                   <span className="session-title-row">
                     <RowMark status="working" srLabel={`${CLI_SOURCE.label} · Running in terminal`} />
                     <span className="session-name">{title}</span>
+                    {rowNodeName(t.nodeId || currentNodeId || undefined) && <span className="session-machine">{rowNodeName(t.nodeId || currentNodeId || undefined)}</span>}
                     {relTime(t.lastActivityAt ?? t.createdAt) && (
                       <span className="session-age" title="Running in terminal">
                         {relTime(t.lastActivityAt ?? t.createdAt)}
@@ -517,7 +518,8 @@ export function SessionList({ searchOpen = true, onSearchOpenChange, onPick, onP
           const groupHeading = group && group !== previousGroup
             ? <li className="session-group-label">{group}</li>
             : null;
-          const meta = sessionMeta(s, rowNodeName(s.nodeId) || s.pendingNodeName || null);
+          const machine = rowNodeName(s.nodeId) || s.pendingNodeName || null;
+          const meta = sessionMeta(s, machine);
           const label = statusLabel(s);
           const src = sessionSources?.get(s.sessionId) ?? classifySource(s.source);
           // A one-word exception hint on failed / waiting-on-you runs, so those
@@ -549,6 +551,9 @@ export function SessionList({ searchOpen = true, onSearchOpenChange, onPick, onP
                     <RowMark status={statusDotState(s)} srLabel={`${src.label} · ${label}`} />
                     <span className="session-name">{s.name}</span>
                     <PrBadge prs={s.prs} />
+                    {/* Desktop rows are one line (the meta line is hidden), so the
+                        machine rides along before the age when there's more than one. */}
+                    {machine && <span className="session-machine">{machine}</span>}
                     {relTime(s.updatedAt) && (
                       <span className="session-age" title={label}>
                         {relTime(s.updatedAt)}
