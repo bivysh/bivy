@@ -41,8 +41,8 @@ this order:
    is a git checkout (has `.git`). This covers dev checkouts and the
    `install.sh` tarball tree, which are user-owned and preserve `.bivy` across
    updates.
-3. `~/.bivy` otherwise — the `npm i -g @bivy/bivy` / `npx @bivy/bivy` case, where the
-   package directory may be root-owned and is replaced on update.
+3. `~/.bivy` otherwise — every installed release, whose directory is replaced
+   on update.
 
 The CLI then **exports the resolved value as `BIVY_DATA_DIR`** into every child
 process, so the daemon, agents and helper scripts all agree.
@@ -338,7 +338,8 @@ The hosted endpoints all derive from one domain, so you normally set nothing.
 | `BIVY_NODE_LABEL` | label | unset | Supported override — an **extra** work-queue label this node serves, on top of `<base>` and `<base>/<node-name>`. Accepts `bivy/x` or a bare `x`. Rarely needed; the node name is used automatically |
 | `BIVY_URL` | URL | `http://localhost:<PORT>` | Supported — which node the `bivy exec` / attach clients talk to. `--url` wins |
 | `BIVY_DEVICE_TOKEN` | token | unset | Supported — bearer for those clients. `--token` wins |
-| `BIVY_UPDATE_REGISTRY_URL` | URL | `https://registry.npmjs.org/%40bivy%2Fbivy/latest` | Supported — registry endpoint the node polls for update notices. Point at a mirror or private registry |
+| `BIVY_UPDATE_REGISTRY_URL` | URL | the channel's `manifest.json` on GitHub Releases | Supported — endpoint the node polls for update notices; it must answer `{ "version": … }` |
+| `BIVY_RELEASES_URL` | URL | `https://github.com/bivysh/bivy/releases` | Supported — where `install.sh`, `bivy update` and the update notice find release archives; point at a mirror with the same layout |
 | `BIVY_MODEL_CATALOG_URL` | URL | `https://bivy.sh/api/models/local-catalog.json` | Supported — remote local-model presets. Fetched best-effort with a 2.5 s timeout; failure is silent |
 
 ## GitHub work queue
@@ -583,30 +584,27 @@ Maintainer tooling. You do not need any of these to run Bivy.
 
 | Variable | Type | Default | Status |
 | --- | --- | --- | --- |
-| `BIVY_HOME` | path | `$HOME/.bivy/app` | Supported — install destination |
-| `BIVY_VERSION` | npm version or dist-tag | `latest` | Supported — install a specific version, e.g. `0.1.0` |
-| `BIVY_NPM_PREFIX` | path | npm's global prefix | Supported — install into a user-owned prefix instead of needing sudo |
+| `BIVY_VERSION` | release version | the channel's newest | Supported — install a specific release, e.g. `0.22.0` |
+| `BIVY_CHANNEL` | `latest` \| `staging` | `latest` | Supported — which channel to install and follow |
+| `BIVY_INSTALL_DIR` | path | `~/.local/share/bivy` | Supported — where versions are installed |
+| `BIVY_RELEASES_URL` | URL | `https://github.com/bivysh/bivy/releases` | Supported — a mirror of the release downloads |
 | `BIVY_INSTALL_ALL_AGENTS` | `1` | unset | Supported — preinstall every known upstream agent instead of just the one setup picks |
+| `BIVY_NO_RC_UPDATE` | `1` | unset | Supported — print the PATH line instead of adding it to `~/.bashrc` / `~/.zshrc` |
 
-What `install.sh` does: installs prerequisites (including Node 22 via
-NodeSource on apt systems), downloads the tarball and manifest, verifies the
-SHA-256 against the manifest and the manifest's Ed25519 signature, extracts to a
-staging dir, runs `npm ci --omit=dev`, carries the previous `.bivy` state
-directory across, atomically swaps the install (restoring the backup on any
-failure), symlinks `~/.local/bin/bivy`, and finally runs `bivy setup` (or
-`bivy restart` if this was an update of a service install). It installs no
-service unit itself — `bivy setup` does that.
-
-Checksum verification is on and fail-closed. Signature verification is
-fail-closed by policy, but only actually runs when a verification key is
-available.
+What `install.sh` does: reads the release's `SHA256SUMS` for this machine's
+archive, downloads it and checks the sha256 (fail-closed), unpacks it into a
+staging directory and checks it runs, then moves it to
+`<install-dir>/versions/<version>-<platform>`, points `current` at it, keeps
+the previous version, links `~/.local/bin/bivy`, and finally runs `bivy setup`
+(or `bivy restart` on an existing install). It installs no service unit itself
+— `bivy setup` does that.
 
 ## `scripts/build-release.mjs`
 
 | Variable | Type | Default | Notes |
 | --- | --- | --- | --- |
 
-Publishing is driven by flags, not environment: `--publish`, `--dry-run`.
+Outputs are driven by flags, not environment: `--archives <dir>`, `--targets`, `--pack <dir>`, `--without-web`.
 
 ## Other
 

@@ -31,12 +31,8 @@
   "bin": {
     "bivy": "bin/bivy.mjs"
   },
-  "publishConfig": {
-    "access": "public"
-  },
   "scripts": {
     "prepare": "node scripts/disable-git-hooks.mjs",
-    "prepublishOnly": "node -e \"console.error('\\nRefusing to publish from the repo root — this would ship the whole monorepo (src/, services/, tests, and any local .env).\\nUse: pnpm run publish:npm  (scripts/build-release.mjs publishes a curated staging dir). See docs/releasing.md.\\n'); process.exit(1)\"",
     "setup": "node bin/bivy.mjs setup",
     "bivy": "node bin/bivy.mjs",
     "dev": "tsx src/server.ts",
@@ -67,9 +63,6 @@
     "release": "node scripts/release.mjs",
     "release:version": "node scripts/set-release-version.mjs",
     "build:release": "node scripts/build-release.mjs",
-    "test:release-smoke": "node scripts/smoke-release.mjs",
-    "publish:npm": "node scripts/build-release.mjs --publish",
-    "publish:npm:dry": "node scripts/build-release.mjs --publish --dry-run",
     "test:remote": "tsx test/remote-e2e.ts",
     "test:unit": "node scripts/run-tests.mjs",
     "test:browser": "playwright test",

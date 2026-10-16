@@ -41,7 +41,7 @@ areas your change touches:
 
 - **Pull requests and the merge queue run the same checks**, in parallel lanes:
   lint, typechecks, policy checks, the unit suites (split across four runners),
-  the core suite, the web build, the release package and a fresh npm consumer on
+  the core suite, the web build, the release archives checked on
   Linux, the browser suite when the app changes (split across three), and the
   packaging, clean-installer and remote e2e lanes when their inputs change.
 - **The queue reuses a green PR run** when it would test the exact same tree —
@@ -49,7 +49,7 @@ areas your change touches:
   seconds (the `verified` tier). If main has moved, the queue runs the checks
   again on the combined result.
 - **Nightly, releases, queued release commits, and any change to `ci.yml`** run
-  everything, adding the macOS certification and npm-consumer lanes. A failed
+  everything, adding the macOS certification and macOS archive lanes. A failed
   nightly opens or updates a "Nightly full CI is failing" issue.
 
 Browser behavior specs run in light theme only; `test/browser/screenshots.spec.ts`

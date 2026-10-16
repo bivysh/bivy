@@ -1,37 +1,37 @@
 # Maintainer: Petter André Sjulstad
-# Built from the npm release of @bivy/bivy. scripts/aur-bump.mjs updates
-# pkgver and sha256sums for a new release; see packaging/aur/README.md.
+# Built from the GitHub release archives of bivysh/bivy, which bundle their own
+# Node runtime. scripts/aur-bump.mjs updates pkgver and the sha256sums for a new
+# release; see packaging/aur/README.md.
 
-pkgname=bivy
-pkgver=0.20.0
+pkgname=bivy-bin
+pkgver=0.21.2
 pkgrel=1
 pkgdesc='Run coding agents on machines you own and drive them from your phone'
-# node-pty ships native prebuilds for these two.
 arch=('x86_64' 'aarch64')
 url='https://github.com/bivysh/bivy'
 license=('AGPL-3.0-only')
-depends=('nodejs>=20' 'git')
-makedepends=('npm')
+depends=('git')
 optdepends=(
   'tailscale: reach this machine from your phone with no server in between (bivy tailscale)'
 )
+provides=('bivy')
+conflicts=('bivy')
 options=('!strip')
-source=("https://registry.npmjs.org/@bivy/bivy/-/bivy-${pkgver}.tgz")
-noextract=("bivy-${pkgver}.tgz")
-sha256sums=('856b5f322395db659b1256ea2702af0fdef124ec261f5adc11dd0daa57a9b2a6')
+source_x86_64=("https://github.com/bivysh/bivy/releases/download/v${pkgver}/bivy-${pkgver}-linux-x64.tar.gz")
+source_aarch64=("https://github.com/bivysh/bivy/releases/download/v${pkgver}/bivy-${pkgver}-linux-arm64.tar.gz")
+# Set by scripts/aur-bump.mjs from the release's SHA256SUMS.
+sha256sums_x86_64=('SKIP')
+sha256sums_aarch64=('SKIP')
 
 package() {
-  npm install -g --cache "${srcdir}/npm-cache" --prefix "${pkgdir}/usr" \
-    --no-audit --no-fund "${srcdir}/bivy-${pkgver}.tgz"
-
-  local root="${pkgdir}/usr/lib/node_modules/@bivy/bivy"
-
-  # npm leaves group-writable directories and build paths behind.
-  find "${pkgdir}/usr" -type d -exec chmod 755 {} +
-  find "${pkgdir}/usr" -name package.json -print0 | xargs -r -0 sed -i "\|${pkgdir}|d"
+  local target=linux-x64
+  [ "$CARCH" = aarch64 ] && target=linux-arm64
+  install -d "${pkgdir}/usr/lib" "${pkgdir}/usr/bin"
+  cp -a "${srcdir}/bivy-${pkgver}-${target}" "${pkgdir}/usr/lib/bivy"
+  ln -s /usr/lib/bivy/bin/bivy "${pkgdir}/usr/bin/bivy"
 
   # Tells `bivy update` and the app's Update button that pacman owns this copy.
-  printf '{"manager":"pacman","update":"yay -Syu bivy (or your AUR helper)"}\n' > "${root}/.bivy-install.json"
+  printf '{"manager":"pacman","update":"yay -Syu bivy-bin (or your AUR helper)"}\n' > "${pkgdir}/usr/lib/bivy/app/.bivy-install.json"
 
-  install -Dm644 "${root}/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+  install -Dm644 "${pkgdir}/usr/lib/bivy/app/LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
 }

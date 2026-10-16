@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **A message sent while the agent works now steers it. The follow-up queue is gone.** Send goes straight into the running turn, and the agent takes it into account as it goes. The panel above the composer is removed, along with its reorder, edit, "Send next", "Run in new session" and separate ⚡ Steer controls. So is the hidden scheduled message that delivered a queued follow-up after you closed the app. An agent that hasn't declared steer support only offers Stop until its turn ends.
+- **Bivy is no longer published to npm; GitHub Releases is the only channel.** Releases and the `staging` channel publish only the self-contained archives, with their checksums and build attestations. `bivy update` on an older npm or tarball install runs the installer from `main` on the same channel, which moves it to the archive and keeps `~/.bivy`. Remove the old copy afterwards with `npm rm -g @bivy/bivy`. The daemon's update notice reads only the GitHub manifest, and `BIVY_RELEASES_URL` points everything at a mirror. The AUR package is now `bivy-bin`, built from the Linux archives, with git as its only dependency. Agent bridges and npm-distributed agents still install with npm, using the one bundled with the archive.
 
 ### Added
 

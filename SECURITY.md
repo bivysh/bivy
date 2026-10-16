@@ -11,7 +11,7 @@ its known limitations — see [`docs/security-model.md`](docs/security-model.md)
 
 | Version | Supported |
 | --- | --- |
-| Latest version on npm's `latest` tag | Yes |
+| Latest release on GitHub | Yes |
 | Older versions and staging builds | No |
 
 Bivy is early 0.x software. Security fixes ship in a new production release; we

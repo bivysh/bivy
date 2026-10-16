@@ -9,27 +9,20 @@
  * metadata, README and LICENSE. It intentionally excludes src/, deploy/, the
  * hosted services, tests, and internal docs.
  *
- * npm is the primary distribution channel (content-addressed tarballs, integrity
- * verified on install, --provenance attestation from CI). BUT install.sh still
- * falls back to a self-hosted tarball + manifest at bivy.sh/downloads whenever
- * the npm registry 404s (e.g. before an npm release exists), so `--pack` also
- * emits that tarball. Keeping the download channel current is what lets the
- * every-merge staging build reach existing packaged nodes via `bivy update`.
+ * Releases ship as self-contained per-platform archives on GitHub
+ * (scripts/release-archives.mjs). `--pack` also writes one platform-independent
+ * tarball + manifest, for images that install Bivy on a Node they bring.
  *
- *   pnpm run build:release         stage the package, don't publish
- *   pnpm run publish:npm           stage and publish to npm
- *   pnpm run publish:npm:dry       stage and dry-run publish
- *   node scripts/build-release.mjs --pack <dir>
- *                                  stage and write <dir>/bivy-latest.tar.gz +
- *                                  bivy-latest.json (self-hosted download channel)
- *   node scripts/build-release.mjs --without-web
- *                                  leave out the built web app (relay-only nodes)
- *   node scripts/build-release.mjs --npm-pack <dir>
- *                                  write <dir>/bivy-npm.tgz for consumer tests
+ *   pnpm run build:release         stage the package only
  *   node scripts/build-release.mjs --archives <dir> [--targets all|host|id,...]
  *                                  write self-contained per-platform archives,
  *                                  SHA256SUMS and manifest.json for GitHub
  *                                  Releases (see scripts/release-archives.mjs)
+ *   node scripts/build-release.mjs --pack <dir>
+ *                                  stage and write <dir>/bivy-latest.tar.gz +
+ *                                  bivy-latest.json
+ *   node scripts/build-release.mjs --without-web
+ *                                  leave out the built web app (relay-only nodes)
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -40,25 +33,16 @@ import { curateManifest } from "./release-manifest.mjs";
 import { buildArchives, resolveTargets } from "./release-archives.mjs";
 
 const argv = process.argv.slice(2);
-const doPublish = argv.includes("--publish");
-const dryRunPublish = argv.includes("--dry-run");
 /** Read the value that follows a `--flag` on the command line (or undefined). */
 function argValue(flag) {
   const i = argv.indexOf(flag);
   return i >= 0 && i + 1 < argv.length ? argv[i + 1] : undefined;
 }
-// Where to emit the self-hosted tarball + manifest. Empty = don't (npm-only run).
+// Where to emit the platform-independent tarball + manifest. Empty = don't.
 const packDir = argValue("--pack");
-// CI consumer tests need the npm payload, not the self-hosted archive. Keeping
-// this separate avoids generating a package-lock.json that npm pack excludes.
-const npmPackDir = argValue("--npm-pack");
 // Where to write the per-platform GitHub release archives. Empty = don't.
 const archivesDir = argValue("--archives");
 const archiveTargets = resolveTargets(argValue("--targets") ?? "all");
-// npm dist-tag to publish under. Defaults to "latest" (a production release).
-// The staging channel passes `--tag staging` so continuous per-merge builds
-// land on the `staging` tag and never move `latest`. See docs/releasing.md.
-const distTag = argValue("--tag") ?? "latest";
 
 const root = path.resolve(new URL("..", import.meta.url).pathname);
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-release-"));
@@ -132,9 +116,7 @@ const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf8"));
 const releaseReadme = fs.readFileSync(path.join(app, "README.md"), "utf8");
 const curatedPkg = curateManifest(pkg, releaseReadme);
 fs.writeFileSync(pkgPath, `${JSON.stringify(curatedPkg, null, 2)}\n`);
-// The fallback tarball is installed in place with `npm ci`, so it needs a lock.
-// npm excludes package-lock.json from registry packages; don't spend a registry
-// resolution on npm publishes or their clean-consumer smoke artifact.
+// The --pack tarball is installed with npm on the target, so it carries a lock.
 if (packDir) {
   run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: app });
 }
@@ -147,72 +129,8 @@ const commit =
   spawnSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).stdout?.trim() ||
   "";
 
-// Archives first: a failed archive build must stop the irreversible npm publish.
 if (archivesDir) {
   await buildArchives({ app, outDir: path.resolve(archivesDir), targets: archiveTargets, commit });
-}
-
-// Publish the curated staging dir to npm. The staged package.json has already
-// been corrected for a packaged install (start/dev -> node dist/server.js, the
-// dev-only `prepare` git-hook script removed, mobile deps pruned), and the
-// staging dir has no node_modules. Run from `app`, not the repo root, to avoid
-// the `prepare` MODULE_NOT_FOUND trap and shipping src/, services/, docs/, etc.
-//
-// Provenance: when running in GitHub Actions with id-token permission, publish
-// with --provenance so npm records a signed attestation of the workflow, repo,
-// and commit that produced the package. That is what replaces the old
-// self-managed Ed25519 release signature -- users verify with
-// `npm audit signatures` instead of a key we have to guard forever.
-if (doPublish) {
-  const publishArgs = ["publish", "--access", "public", "--tag", distTag];
-  const canAttest = process.env.GITHUB_ACTIONS === "true" && process.env.ACTIONS_ID_TOKEN_REQUEST_URL;
-  if (canAttest) {
-    // npm cross-checks the attestation against package.json's repository URL and
-    // rejects the upload (E422) if it is missing or points elsewhere. The staged
-    // manifest inherits this from the root package.json, so a drop there only
-    // ever surfaces here -- after a full build, and for production after the CI
-    // gate and the approval. Fail with the actual reason instead.
-    const repoUrl = releasePkg.repository?.url ?? releasePkg.repository ?? "";
-    if (!repoUrl) {
-      throw new Error(
-        "Publishing with provenance, but the staged package.json has no `repository` field.\n" +
-        "npm verifies the attestation against it and will reject the publish. Add it to the\n" +
-        "root package.json (curateManifest passes it through).",
-      );
-    }
-    publishArgs.push("--provenance");
-  } else if (!dryRunPublish) {
-    console.warn(
-      "Warning: publishing without provenance. Run this from GitHub Actions with\n" +
-      "`permissions: { id-token: write }` so npm can attest where the build came from.",
-    );
-  }
-  if (dryRunPublish) publishArgs.push("--dry-run");
-  run("npm", publishArgs, { cwd: app });
-  console.log(
-    dryRunPublish
-      ? `npm publish --dry-run complete (tag ${distTag})`
-      : `Published to npm under dist-tag "${distTag}"`,
-  );
-}
-
-// Exact registry-style payload used by clean-consumer CI. `npm pack` deliberately
-// omits package-lock.json, matching what `npm publish` sends to the registry.
-if (npmPackDir) {
-  fs.mkdirSync(npmPackDir, { recursive: true });
-  const result = spawnSync("npm", ["pack", app, "--pack-destination", npmPackDir, "--json"], {
-    cwd: root,
-    encoding: "utf8",
-  });
-  if (result.status !== 0) {
-    process.stderr.write(result.stderr ?? result.stdout ?? "npm pack failed\n");
-    process.exit(result.status ?? 1);
-  }
-  const packed = JSON.parse(result.stdout)[0];
-  if (!packed?.filename) throw new Error("npm pack did not report a tarball");
-  const output = path.join(npmPackDir, "bivy-npm.tgz");
-  fs.renameSync(path.join(npmPackDir, packed.filename), output);
-  console.log(`Packed ${output}`);
 }
 
 // Self-hosted download channel: tar the staged `bivy/` dir and write a manifest
@@ -244,8 +162,8 @@ if (packDir) {
 }
 
 console.log(`Built ${releasePkg.name}@${releasePkg.version}`);
-if (!doPublish && !packDir && !npmPackDir && !archivesDir) {
-  console.log("Not published. Use `pnpm run publish:npm` (or --dry-run) to publish.");
+if (!packDir && !archivesDir) {
+  console.log("Staged only. Pass --archives <dir> to write release archives.");
 }
 
 fs.rmSync(tmp, { recursive: true, force: true });

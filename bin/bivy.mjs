@@ -225,6 +225,10 @@ async function ensureAgentBridges(agentIds) {
   }
 }
 
+// The installer on main installs any channel's archive, so legacy installs and
+// npx hints use it rather than a copy pinned to one release.
+const INSTALLER_URL = process.env.BIVY_INSTALLER_URL || "https://raw.githubusercontent.com/bivysh/bivy/main/install.sh";
+
 const SERVICE_LABEL = "dev.bivy";
 const SERVICE_UNIT = "bivy.service";
 
@@ -4150,7 +4154,7 @@ async function installService(config) {
   if (detectInstallKind() === "npx") {
     console.log(c.yellow("Refusing to install a background service from an ephemeral 'npx bivy' run."));
     console.log(c.dim(`The service would point at the temporary npx cache (${repoRoot}), which npm can delete at any time, leaving a broken unit.`));
-    console.log(`Install a persistent copy first: ${c.cyan("npm i -g @bivy/bivy")}, then run ${c.cyan("bivy service install")}.`);
+    console.log(`Install a persistent copy first: ${c.cyan(`curl -fsSL ${INSTALLER_URL} | bash`)}, then run ${c.cyan("bivy service install")}.`);
     return false;
   }
   const { kind, file } = servicePaths();
@@ -5573,14 +5577,13 @@ async function runUpdate(args = []) {
   const kind = detectInstallKind();
 
   if (kind === "npx") {
-    console.log(c.dim("This is an ephemeral 'npx bivy' run."));
-    console.log(`${c.cyan("npx bivy")} always fetches the latest published version, so there is nothing to update.`);
-    console.log(`To install a persistent copy you can manage: ${c.cyan("npm i -g @bivy/bivy")}`);
+    console.log(c.dim("This is an ephemeral 'npx bivy' run, so there is nothing to update."));
+    console.log(`Install a copy you can update: ${c.cyan(`curl -fsSL ${INSTALLER_URL} | bash`)}`);
     return;
   }
 
-  // npm and the packaged installer replace the installation directory. Leave
-  // it before updating, including for inline invocations started inside it,
+  // An update replaces or moves the installation directory. Leave it before
+  // updating, including for inline invocations started inside it,
   // so subsequent subprocesses never inherit a deleted cwd (uv_cwd).
   process.chdir(os.homedir());
 
@@ -5588,63 +5591,28 @@ async function runUpdate(args = []) {
   // so a staging box stays on staging instead of silently jumping to production.
   const channel = resolveUpdateChannel(args);
 
-  if (kind === "npm-global") {
-    console.log(c.dim(`Updating the globally-installed bivy package (channel: ${channel})…`));
-    // npm's configured global prefix may not be the prefix that owns this
-    // executable (for example, `npm config get prefix` can remain /usr after
-    // installing Bivy with --prefix ~/.local). Always update the installation
-    // that is actually running this command.
-    const prefix = npmGlobalPrefix(repoRoot);
-    const prefixArgs = prefix ? ["--prefix", prefix] : [];
-    const code = await run("npm", ["install", "-g", ...prefixArgs, `@bivy/bivy@${channel}`, "--no-audit", "--no-fund"]);
-    if (code !== 0) {
-      console.log(c.yellow(`npm reported an issue (exit ${code}). Try: sudo npm i -g @bivy/bivy@${channel}`));
-      process.exit(code);
-    }
-    const config = loadConfig();
-    await waitForIdleSessions(config, { skip: skipWait });
-    if (hasConfiguredService(config) && (await restartServiceReconciled(config))) {
-      if (await verifyNodeCameUp(config)) {
-        console.log(c.green("Updated and restarted the background service."));
-      } else {
-        reportNodeDidNotStart();
-        process.exitCode = 1;
-      }
-    } else {
-      console.log(c.green("Updated. Run 'bivy start' (or restart your service) to apply."));
-    }
-    console.log(c.dim(`=== bivy update finished ${new Date().toISOString()} ===`));
-    return;
-  }
-
   if (kind === "archive") {
     await updateArchiveInstall(channel, { skipWait, force: args.includes("--force") });
     console.log(c.dim(`=== bivy update finished ${new Date().toISOString()} ===`));
     return;
   }
 
-  if (kind === "packaged") {
-    console.log(c.dim(`Updating packaged Bivy install (channel: ${channel})…`));
-    // The actual restart happens inside install.sh, which shells out to
-    // `bivy restart` (using the freshly-swapped binary) once the new code is in
-    // place — that invocation waits for busy sessions on its own. This earlier
-    // wait just avoids kicking off the download/swap while a turn is running,
-    // so the window between "update starts" and "restart happens" doesn't
-    // surprise anyone mid-turn.
+  // An npm or legacy tarball install moves to the GitHub release archive:
+  // install.sh installs the channel's archive, links ~/.local/bin/bivy and
+  // restarts the node, keeping ~/.bivy.
+  if (kind === "npm-global" || kind === "packaged") {
+    console.log(c.dim(`Bivy now installs from GitHub releases; moving this install over (channel: ${channel})…`));
     const config = loadConfig();
     await waitForIdleSessions(config, { skip: skipWait });
-    // install.sh reads BIVY_CHANNEL from the env; pass the recorded channel so a
-    // packaged re-install stays on it (and re-records it) instead of latest.
-    const code = await run("bash", ["-o", "pipefail", "-c", "curl -fsSL https://bivy.sh/install.sh | bash"], {
+    const code = await run("bash", ["-o", "pipefail", "-c", `curl -fsSL ${INSTALLER_URL} | bash`], {
       cwd: os.homedir(),
-      env: { ...process.env, BIVY_HOME: repoRoot, BIVY_CHANNEL: channel },
+      env: { ...process.env, BIVY_CHANNEL: channel },
     });
-    // install.sh restarts the service itself; verify the node actually came up
-    // rather than trusting the installer's exit code over a crash-looping node.
     if (code === 0 && hasConfiguredService(config) && !(await verifyNodeCameUp(config))) {
       reportNodeDidNotStart();
       process.exit(1);
     }
+    if (code === 0 && kind === "npm-global") console.log(c.dim("The old npm copy is no longer used; remove it with: npm rm -g @bivy/bivy"));
     process.exit(code);
   }
 

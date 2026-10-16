@@ -1,6 +1,6 @@
 # Bivy
 
-[![npm](https://img.shields.io/npm/v/@bivy/bivy?color=2b6cb0&label=%40bivy%2Fbivy)](https://www.npmjs.com/package/@bivy/bivy)
+[![release](https://img.shields.io/github/v/release/bivysh/bivy?color=2b6cb0&label=release)](https://github.com/bivysh/bivy/releases/latest)
 [![license: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-2b6cb0)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-2b6cb0)](https://nodejs.org)
 
@@ -304,24 +304,18 @@ every session in **Settings → Agent instructions**.
 
 ### Install
 
-Bivy supports **macOS and Linux with Node.js 20+**. The installer installs the
-`@bivy/bivy` package, runs guided setup, and starts a launchd or systemd service:
+Bivy supports **macOS and Linux** (x64 and arm64). The installer downloads the
+release archive for your machine from GitHub, which brings its own Node runtime,
+runs guided setup, and starts a launchd or systemd service:
 
 ```bash
 curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
 Setup helps you choose an agent and configure remote access. Existing agents
-keep their command, login, and configuration. The installer may use `sudo` to
-install a missing Node.js, but never for `npm install`. To inspect it first,
-download it with `curl -fsSL https://bivy.sh/install.sh -o install.sh`.
-
-Already have Node.js and want to avoid sudo?
-
-```bash
-npm install -g @bivy/bivy
-bivy setup
-```
+keep their command, login, and configuration. The installer never uses `sudo`.
+To inspect it first, download it with
+`curl -fsSL https://bivy.sh/install.sh -o install.sh`.
 
 Then try one small task:
 

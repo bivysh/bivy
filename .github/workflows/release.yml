@@ -1,21 +1,18 @@
 name: Release
 
-# ONE trusted-publisher workflow driving BOTH npm channels. npm allows only a
-# single trusted publisher (one workflow file) per package, so staging and
-# production must live here together -- see docs/releasing.md.
+# Publishes Bivy's self-contained per-platform archives to GitHub Releases.
 #
-#   push to main       -> STAGING (automatic). Publishes X.Y.Z-staging.N to
-#                         the `staging` dist-tag, and its archives to the
-#                         rolling `staging` GitHub prerelease, on every merge. No approval, no
-#                         git tag, never moves `latest`. This is the dev channel
-#                         every change lands on.
+#   push to main       -> STAGING (automatic). Builds X.Y.Z-staging.N and
+#                         uploads its archives to the rolling `staging`
+#                         prerelease, on every merge. No approval, no git tag,
+#                         never moves `latest`. This is the dev channel every
+#                         change lands on.
 #   push of a v* tag   -> PRODUCTION. `pnpm release` tags a commit already on
 #                         main whose package.json holds that version; this run
-#                         promotes it to the `latest` dist-tag, aliases its
-#                         service images and creates the GitHub release, with
-#                         the self-contained per-platform archives attached. Pushing
-#                         the tag is the approval: the release-tags ruleset lets
-#                         only maintainers create v* tags.
+#                         aliases its service images and creates the GitHub
+#                         release with the archives attached. Pushing the tag is
+#                         the approval: the release-tags ruleset lets only
+#                         maintainers create v* tags.
 #   workflow_dispatch  -> PRODUCTION retry, dispatched from the tag ref
 #                         (`gh workflow run release.yml --ref vX.Y.Z`).
 #
@@ -24,12 +21,8 @@ name: Release
 # A commit without one (pushed past branch protection, say) gets the canonical
 # CI workflow's full tier, dispatched on the tag, before anything is published.
 #
-# Both jobs authenticate to npm with the job's GitHub Actions OIDC identity
-# (`id-token: write`) against the ONE trusted publisher configured for
-# `@bivy/bivy` -- there is no NPM_TOKEN. That trusted publisher MUST have its
-# Environment field left BLANK: neither job runs in a GitHub environment.
-# Provenance is attached automatically on both (scripts/build-release.mjs adds
-# --provenance whenever GITHUB_ACTIONS + id-token are present).
+# Archives carry keyless GitHub build attestations (OIDC, `id-token: write`),
+# so there is no release key or registry token to guard.
 
 on:
   push:
@@ -41,22 +34,27 @@ permissions:
   contents: read
 
 concurrency:
-  # Never cancel a publish mid-flight. Keyed per ref and SHA so rapid merges
-  # each publish their own unique staging version, and a release tag on a
-  # fresh main commit never queues behind that commit's staging publish.
+  # Never cancel a publish mid-flight. Keyed per ref and SHA so a release tag
+  # on a fresh main commit never queues behind that commit's staging build.
   group: release-${{ github.ref }}-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
   # ------------------------------------------------------------------ STAGING --
   # Automatic on every merge to main. The whole point of the dev channel: any
-  # change that lands is immediately installable via `@bivy/bivy@staging`.
+  # change that lands is immediately installable with BIVY_CHANNEL=staging.
   staging:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    name: Publish staging build (dist-tag `staging`)
+    name: Publish staging build
     runs-on: ubuntu-latest
+    # One at a time, so each build reads the version the last one published.
+    # A burst of merges waits; GitHub keeps only the newest pending run, which
+    # is the build worth having.
+    concurrency:
+      group: release-staging
+      cancel-in-progress: false
     permissions:
-      id-token: write # OIDC: trusted publish + provenance
+      id-token: write # OIDC: build attestations
       contents: write # upload archives to the rolling `staging` prerelease
       attestations: write # build provenance for the archives
     steps:
@@ -67,52 +65,39 @@ jobs:
         with:
           node-version: '22.19.0'
           cache: pnpm
-          registry-url: 'https://registry.npmjs.org'
-
-      # Trusted publishing needs npm >= 11.5.1; the pinned Node bundles an older
-      # npm. Upgrade just the CLI rather than bumping the repo-wide Node version.
-      - name: Upgrade npm for trusted publishing (requires npm >= 11.5.1)
-        run: npm install -g npm@^11
 
       - run: pnpm install --frozen-lockfile
 
-      # Stamp a unique, immutable prerelease version for this build. The counter
-      # is scoped to the clean base version in package.json -- the version main
+      # Stamp a unique prerelease version for this build. The counter is
+      # scoped to the clean base version in package.json -- the version main
       # will release next -- so a new development minor starts at a readable
-      # version like 0.15.0-staging.1 instead of using GitHub's repository-wide
-      # run number. npm versions are immutable, so we derive the next suffix
-      # from already-published versions for this base. Between a release and
-      # its follow-up version bump, package.json names a released version;
-      # staging then targets the next patch so builds still sort above `latest`.
+      # version like 0.15.0-staging.1 instead of GitHub's run number. It
+      # continues from the version the `staging` prerelease names now. Between
+      # a release and its follow-up version bump, package.json names a
+      # released version; staging then targets the next patch so builds still
+      # sort above `latest`.
       - name: Stamp a unique staging prerelease version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           base="$(node -p "require('./package.json').version")"
           case "$base" in
             *-*) echo "::error::package.json version '$base' is already a prerelease; main must hold a clean X.Y.Z."; exit 1 ;;
           esac
-          versions="$(npm view @bivy/bivy versions --json)"
-          base="$(echo "$versions" | node -e '
-            const versions = JSON.parse(require("fs").readFileSync(0, "utf8"));
-            const [major, minor, patch] = process.argv[1].split(".").map(Number);
-            console.log(versions.includes(process.argv[1]) ? `${major}.${minor}.${patch + 1}` : process.argv[1]);
-          ' "$base")"
-          next="$(echo "$versions" | node -e '
-            const versions = JSON.parse(require("fs").readFileSync(0, "utf8"));
-            const prefix = `${process.argv[1]}-staging.`;
-            const suffixes = versions
-              .filter((version) => version.startsWith(prefix))
-              .map((version) => Number(version.slice(prefix.length)))
-              .filter(Number.isSafeInteger);
-            console.log(Math.max(0, ...suffixes) + 1);
-          ' "$base")"
+          if gh release view "v$base" >/dev/null 2>&1; then
+            base="$(node -p 'const [a, b, c] = process.argv[1].split(".").map(Number); `${a}.${b}.${c + 1}`' "$base")"
+          fi
+          current="$(gh release download staging --pattern manifest.json --output - 2>/dev/null | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version' 2>/dev/null || true)"
+          next=1
+          case "$current" in
+            "$base"-staging.*) next=$(( ${current#"$base"-staging.} + 1 )) ;;
+          esac
           version="${base}-staging.${next}"
           pnpm version --no-git-tag-version --allow-same-version "$version"
-          echo "Publishing staging version: $version"
+          echo "Building staging version: $version"
 
-      # `--tag staging` keeps this off `latest`. Provenance is added automatically.
-      # The same build writes the self-contained per-platform archives.
-      - name: Publish to npm (dist-tag `staging`)
-        run: pnpm run publish:npm -- --tag staging --archives release-archives
+      - name: Build the archives
+        run: node scripts/build-release.mjs --archives release-archives
 
       - name: Attest the archives' build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
@@ -132,13 +117,13 @@ jobs:
   # requires a CI receipt for the exact commit, then publishes.
   production:
     if: startsWith(github.ref, 'refs/tags/v')
-    name: Promote to npm `latest` + GitHub release
+    name: Publish the GitHub release
     runs-on: ubuntu-latest
     permissions:
       actions: write # read CI receipts; dispatch full CI when there is none
       contents: write # create the GitHub release
       packages: write # add stable tags to the already-built Core service images
-      id-token: write # OIDC: trusted publish + provenance
+      id-token: write # OIDC: build attestations
       attestations: write # build provenance for the archives
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -207,14 +192,10 @@ jobs:
         with:
           node-version: '22.19.0'
           cache: pnpm
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Upgrade npm for trusted publishing (requires npm >= 11.5.1)
-        run: npm install -g npm@^11
 
       - run: pnpm install --frozen-lockfile
 
-      # The npm artifact ships only the root package, but keep all workspaces in
+      # The archives ship only the root package, but keep all workspaces in
       # lockstep so the monorepo never publishes an internally inconsistent state.
       - name: Verify all workspaces agree on the version
         run: |
@@ -225,8 +206,8 @@ jobs:
               || { echo "::error::$w is $wv but promoting $VERSION -- all workspace versions must match."; exit 1; }
           done
 
-      # Validate release notes and require the immutable service artifacts BEFORE
-      # the irreversible npm publish. Notes are CHANGELOG.md's [Unreleased]
+      # Validate release notes and require the immutable service artifacts
+      # before anything is published. Notes are CHANGELOG.md's [Unreleased]
       # section at the tagged commit plus the tag message (pnpm release
       # --notes-file); the follow-up version bump dates them in CHANGELOG.md.
       - name: Collect release notes
@@ -267,13 +248,10 @@ jobs:
           echo "::error::Core service images were not successfully published for $RELEASE_SHA."
           exit 1
 
-      # npm versions are immutable. The protected tag binds this version to one
-      # commit, so a retry of a run that published and then failed later can
-      # verify `latest` and resume without republishing. The image aliases are
-      # independent of npm, so they are added at the same time.
       # A release tag is an alias of the already-tested SHA manifests, not a
       # rebuild. `latest` therefore points to byte-identical service artifacts.
-      - name: Publish or resume npm `latest`; alias the service images
+      # Aliases are idempotent, so a retry repeats this safely.
+      - name: Build the archives; alias the service images
         run: |
           set -euo pipefail
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -286,18 +264,7 @@ jobs:
                 "ghcr.io/bivysh/$image:$RELEASE_SHA"
             done
           ) & images=$!
-          published="$(npm view "@bivy/bivy@$VERSION" version 2>/dev/null || true)"
-          if [ "$published" = "$VERSION" ]; then
-            latest="$(npm view @bivy/bivy dist-tags.latest)"
-            [ "$latest" = "$VERSION" ] \
-              || { echo "::error::npm $VERSION exists but latest points to $latest; refusing an ambiguous recovery."; exit 1; }
-            echo "npm $VERSION is already published as latest; resuming promotion."
-            node scripts/build-release.mjs --archives release-archives
-          else
-            # The same build writes the self-contained per-platform archives,
-            # before the irreversible publish.
-            pnpm run publish:npm -- --archives release-archives
-          fi
+          node scripts/build-release.mjs --archives release-archives
           wait "$images"
 
       - name: Attest the archives' build provenance
@@ -308,8 +275,9 @@ jobs:
       - name: Build the checksummed self-host deployment bundle
         run: node scripts/build-self-host.mjs self-host-release
 
-      # The GitHub release is the last step on purpose: its existence is the
-      # signal that npm and the images are live, for any deployment waiting on it.
+      # The GitHub release is the last step on purpose: once it is published,
+      # its archives, manifest and images are all live, for any deployment
+      # waiting on it.
       - name: Create the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}

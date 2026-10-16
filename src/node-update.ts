@@ -19,37 +19,18 @@ export function managedInstall(packageRoot: string): { manager: string; update: 
 }
 
 /**
- * True when this daemon runs from a GitHub release archive install: the
- * launcher's BIVY_ARCHIVE_ROOT names the install holding `packageRoot` (the
- * same check bin/archive-install.mjs makes for the CLI).
+ * The recorded channel's GitHub release manifest (URLs as in
+ * bin/archive-install.mjs), which answers with `{ version }`.
  */
-export function isArchiveInstall(packageRoot: string, archiveRoot = process.env.BIVY_ARCHIVE_ROOT): boolean {
-  if (!archiveRoot) return false;
-  try {
-    return fs.realpathSync(path.join(archiveRoot, "app")) === fs.realpathSync(packageRoot)
-      && fs.existsSync(path.join(archiveRoot, "bivy-archive.json"));
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Where to look for a newer version on the install's recorded channel: the npm
- * registry, or for an archive install the channel's GitHub release manifest
- * (URLs as in bin/archive-install.mjs). Both answer with `{ version }`.
- */
-export function updateRegistryUrl(appDir: string, override?: string, archive = false): string {
+export function updateRegistryUrl(appDir: string, override?: string): string {
   if (override) return override;
   let channel = "latest";
   try {
     const recorded = fs.readFileSync(path.join(appDir, "channel"), "utf8").trim();
     if (/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(recorded)) channel = recorded;
   } catch { /* Existing installs track stable. */ }
-  if (archive) {
-    const releases = process.env.BIVY_RELEASES_URL || "https://github.com/bivysh/bivy/releases";
-    return channel === "latest" ? `${releases}/latest/download/manifest.json` : `${releases}/download/${encodeURIComponent(channel)}/manifest.json`;
-  }
-  return `https://registry.npmjs.org/%40bivy%2Fbivy/${encodeURIComponent(channel)}`;
+  const releases = process.env.BIVY_RELEASES_URL || "https://github.com/bivysh/bivy/releases";
+  return channel === "latest" ? `${releases}/latest/download/manifest.json` : `${releases}/download/${encodeURIComponent(channel)}/manifest.json`;
 }
 
 export type NodeUpdateState = { type: "node.update"; current: string; latest?: string };
