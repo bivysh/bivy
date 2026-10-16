@@ -78,6 +78,16 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
   }
 }
 
+// --- Claude Code: a closed session leaves the in-memory registry. Each one holds
+// its whole transcript, so keeping closed ones grew the daemon for its lifetime.
+{
+  const claude = new ClaudeCodeRuntime();
+  const { session } = await claude.createSession({ workspace: process.cwd() });
+  assert.ok((await claude.listSessions()).some((s) => s.id === session.id), "claude lists the open session");
+  session.dispose();
+  assert.ok(!(await claude.listSessions()).some((s) => s.id === session.id), "a disposed claude session is no longer held");
+}
+
 // --- Codex store helper: the on-disk rollout cleanup both CLI/protocol paths use
 {
   const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-del-codex-"));
