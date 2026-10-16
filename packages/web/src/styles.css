@@ -581,6 +581,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    large remote image can't blow out the chat column; rounded to match chips. */
 .msg.assistant img { max-width: 100%; height: auto; border-radius: var(--radius-md); }
 .msg.assistant img.md-image { max-height: 420px; object-fit: contain; }
+.msg.assistant img.md-image[src] { cursor: zoom-in; }
 /* Before ChatView's hydrate effect resolves data-remote-src to a fetched blob:
    URL (or if the node's fetch fails/is disallowed), the element has no `src` and
    would otherwise collapse to nothing — give it a visible placeholder box so a

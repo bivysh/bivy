@@ -110,3 +110,38 @@ test('gallery keeps panning separate from navigation and resets each image', asy
   await page.keyboard.press('Tab');
   await expect(page.getByRole('button', { name: 'Fit image' })).toBeFocused();
 });
+
+test('inline markdown images all hydrate as refs arrive, and open in the gallery', async ({ page }) => {
+  const html = await server.transformIndexHtml('/inline-image-test', `<!doctype html><html><body><div id="root"></div><script type="module">
+    import { createElement as h } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import '/@fs/${fileURLToPath(new URL('../../packages/ui/tokens.css', import.meta.url))}';
+    import '/src/styles.css';
+    import { ChatView } from '/src/components/ChatView.tsx';
+    import { controller } from '/src/store/useStore.ts';
+    const data = btoa('<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200"><rect width="400" height="200" fill="lightblue"/></svg>');
+    // The first image's bytes arrive after the second ref does: the order that
+    // used to leave the first a blank box.
+    controller.fetchAttachment = (hash) => new Promise((resolve) => setTimeout(() => resolve({ mimeType: 'image/svg+xml', data }), hash === 'a' ? 300 : 0));
+    const ref = (hash, name) => ({ hash, name, mimeType: 'image/svg+xml', size: 100, kind: 'image' });
+    const entry = { id: 'reply', role: 'assistant', text: '![First chart](out/a.svg)\\n\\n![Second chart](out/b.svg)' };
+    const root = createRoot(document.getElementById('root'));
+    const render = (imageRefs) => root.render(h(ChatView, { entries: [{ ...entry, imageRefs }], working: false, draftRoute: false, sessionKey: 'test' }));
+    render({ 'out/a.svg': ref('a', 'a.svg') });
+    setTimeout(() => render({ 'out/a.svg': ref('a', 'a.svg'), 'out/b.svg': ref('b', 'b.svg') }), 50);
+    </script></body></html>`);
+  await page.route(`${origin}/inline-image-test`, route => route.fulfill({ contentType: 'text/html', body: html }));
+  await page.goto(`${origin}/inline-image-test`);
+  const first = page.getByRole('button', { name: 'Open image: First chart' });
+  await expect(first).toHaveAttribute('src', /^blob:/);
+  await expect(page.getByRole('button', { name: 'Open image: Second chart' })).toHaveAttribute('src', /^blob:/);
+  await first.click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(page.getByRole('img', { name: 'a.svg' })).toBeVisible();
+  await page.getByRole('button', { name: 'Next image' }).click();
+  await expect(page.getByRole('img', { name: 'b.svg' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Open image: Second chart' }).press('Enter');
+  await expect(page.getByRole('img', { name: 'b.svg' })).toBeVisible();
+});

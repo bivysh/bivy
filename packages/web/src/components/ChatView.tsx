@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { applyPlanUpdate, handoffSeedOf, looksLikeAuthFailure, planUpdateOf, stripAttachmentPlaceholders, toHtml, type PlanEntry, type TranscriptEntry } from "@bivy/core";
+import { applyPlanUpdate, handoffSeedOf, looksLikeAuthFailure, planUpdateOf, stripAttachmentPlaceholders, toHtml, type PlanEntry, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
 import { AppMessage } from "./AppMessage.js";
 import { ReviewCard } from "./ReviewCard.js";
@@ -13,6 +13,7 @@ import { ToolGroup } from "./ToolGroup.js";
 import { PlanCard } from "./PlanCard.js";
 import { HandoffSeedLine } from "./HandoffSeedLine.js";
 import { MessageAttachments } from "./AttachmentChip.js";
+import { ImageGallery } from "./ImageGallery.js";
 import { base64ToBlobUrl } from "../attachmentUrl.js";
 import { MessageComponent, placementOf } from "./MessageComponent.js";
 import { focusEntries } from "../focusTranscript.js";
@@ -265,6 +266,18 @@ const EntryView = memo(function EntryView({
   // All three helpers are idempotent against re-running on already-processed
   // DOM, so bundling them in one effect is safe either way.
   const bodyRef = useRef<HTMLDivElement>(null);
+  // Blob URLs for this entry's inline images, by content hash. They belong to
+  // the entry, not to one run of the effect below: imageRefs grows one ref at a
+  // time, and a re-run that cancelled the previous run's fetch or revoked its
+  // URL left the earlier image a blank box for good.
+  const inlineBlobs = useRef(new Map<string, Promise<string | null>>());
+  useEffect(() => {
+    const blobs = inlineBlobs.current;
+    return () => {
+      blobs.forEach((pending) => void pending.then((url) => url && URL.revokeObjectURL(url)));
+      blobs.clear();
+    };
+  }, []);
   useEffect(() => {
     if (entry.role !== "assistant") return;
     renderMermaidDiagrams(bodyRef.current);
@@ -272,29 +285,55 @@ const EntryView = memo(function EntryView({
     decorateCodeBlocks(bodyRef.current);
     const container = bodyRef.current;
     if (!container || !entry.imageRefs) return;
-    let cancelled = false;
-    const created: string[] = [];
-    const imgs = container.querySelectorAll<HTMLImageElement>("img.md-image[data-md-ref]");
-    imgs.forEach((img) => {
-      const url = img.dataset.mdRef;
-      if (!url || img.dataset.hydrated === "1") return;
-      const ref = entry.imageRefs?.[url];
-      if (!ref) return; // not resolved yet — stays a placeholder until it is
-      img.dataset.hydrated = "1";
-      void controller.fetchAttachment(ref.hash).then((res) => {
-        if (cancelled || !res) return;
-        const blobUrl = base64ToBlobUrl(res.data, res.mimeType || ref.mimeType);
-        if (blobUrl) {
-          img.src = blobUrl;
-          created.push(blobUrl);
+    const blobs = inlineBlobs.current;
+    container.querySelectorAll<HTMLImageElement>("img.md-image[data-md-ref]").forEach((img) => {
+      const ref = entry.imageRefs?.[img.dataset.mdRef ?? ""];
+      // Not resolved yet — stays a placeholder until it is. A changed hash (the
+      // agent overwrote the file) hydrates again.
+      if (!ref || img.dataset.hash === ref.hash) return;
+      img.dataset.hash = ref.hash;
+      let pending = blobs.get(ref.hash);
+      if (!pending) {
+        pending = controller.fetchAttachment(ref.hash).then((res) => (res ? base64ToBlobUrl(res.data, res.mimeType || ref.mimeType) : null));
+        blobs.set(ref.hash, pending);
+      }
+      void pending.then((url) => {
+        if (img.dataset.hash !== ref.hash) return;
+        if (!url) {
+          // Unreadable for now: let the next run try again.
+          blobs.delete(ref.hash);
+          delete img.dataset.hash;
+          return;
         }
+        img.src = url;
+        img.tabIndex = 0;
+        img.setAttribute("role", "button");
+        img.setAttribute("aria-label", `Open image: ${img.alt || ref.name}`);
       });
     });
-    return () => {
-      cancelled = true;
-      created.forEach((u) => URL.revokeObjectURL(u));
-    };
   }, [entry.role, html, entry.imageRefs]);
+  // A hydrated inline image opens the same fullscreen gallery as an attachment,
+  // paging through this message's images.
+  const [gallery, setGallery] = useState<{ images: PromptAttachment[]; index: number } | null>(null);
+  const openInlineImage = useCallback((event: ReactMouseEvent | ReactKeyboardEvent) => {
+    if ("key" in event && event.key !== "Enter" && event.key !== " ") return;
+    if ("button" in event && (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0)) return;
+    const target = (event.target as Element).closest?.("img.md-image[src]");
+    const container = bodyRef.current;
+    if (!target || !container) return;
+    const shown = Array.from(container.querySelectorAll<HTMLImageElement>("img.md-image[src]"));
+    const images: PromptAttachment[] = [];
+    let index = 0;
+    for (const img of shown) {
+      const ref = entry.imageRefs?.[img.dataset.mdRef ?? ""];
+      if (!ref) continue;
+      if (img === target) index = images.length;
+      images.push({ kind: "image", name: ref.name, size: ref.size, mimeType: ref.mimeType, hash: ref.hash, description: img.alt || undefined });
+    }
+    if (!images.length) return;
+    event.preventDefault();
+    setGallery({ images, index });
+  }, [entry.imageRefs]);
   // Components the agent placed in this message (`::view{…}`, a ```bivy fence)
   // render as REAL React, portalled into the empty mount points the markdown
   // left behind — so a file renders as the same AttachmentChip the composer
@@ -397,9 +436,10 @@ const EntryView = memo(function EntryView({
       {entry.delegation && <DelegationCard delegation={entry.delegation} />}
       {hasAttachments && <MessageAttachments attachments={entry.attachments!} />}
       {((entry.text && !captionOnly) || (!hasAttachments && !entry.app && !entry.review && !entry.pin && !entry.notice && !entry.delegation)) && (
-        <div ref={bodyRef} className="msg assistant" dangerouslySetInnerHTML={{ __html: html }} />
+        <div ref={bodyRef} className="msg assistant" onClick={openInlineImage} onKeyDown={openInlineImage} dangerouslySetInnerHTML={{ __html: html }} />
       )}
       {components}
+      {gallery && <ImageGallery images={gallery.images} index={gallery.index} onClose={() => setGallery(null)} />}
       {entry.text && !captionOnly && (
         <div className="msg-actions">
           <CopyButton text={entry.text} />
