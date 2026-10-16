@@ -124,7 +124,7 @@ import { SessionAllowRules } from "./policy/session-allow.js";
 import { TerminalManager } from "./terminal.js";
 import { launchCommand, type CommandHandle } from "./command-launch.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "./multiplexer.js";
-import { createWorktree, removeWorktree, gitRepoRoot, type Worktree } from "./worktree.js";
+import { createWorktree, removeWorktree, gitRepoRoot, isManagedWorktreePath, reapedWorktreeBranch, type Worktree } from "./worktree.js";
 import { HarnessManager } from "./harness/manager.js";
 import { startEgressProxyIfEnabled, applySessionSandboxEgress, stopSessionEgress } from "./harness/egress.js";
 import type { NetEvent } from "./harness/net-proxy.js";
@@ -7200,11 +7200,6 @@ function closeIdleSessions() {
   }
 }
 
-function isManagedWorktreePath(wtPath: string) {
-  const parts = path.resolve(wtPath).split(path.sep);
-  return parts.length >= 3 && parts[parts.length - 3] === ".bivy" && parts[parts.length - 2] === "worktrees";
-}
-
 function sessionTimestampMs(value?: string) {
   const ms = value ? new Date(value).getTime() : NaN;
   return Number.isFinite(ms) ? ms : 0;
@@ -8791,19 +8786,20 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // or branch is gone, we leave it to the invariant to fail safe rather than
   // corrupt a neighbour. The clone root is reconstructed from `source`
   // (`repo:owner/repo`) because stored `workspace` is the old worktree path.
-  if (requestedSessionFile && !worktree && storedMeta?.worktree && storedMeta?.branch) {
-    const parsedSource = parseRepoSource(storedMeta.source);
+  const reapedBranch = requestedSessionFile && !worktree ? reapedWorktreeBranch(storedMeta) : undefined;
+  if (reapedBranch) {
+    const parsedSource = parseRepoSource(storedMeta?.source);
     if (parsedSource) {
       const repoDir = path.join(reposRoot, `${parsedSource.owner}__${parsedSource.repo}`);
       try {
         // Clear any stale registration left by a dir that was rm'd out from under
         // git, so re-adding the branch's worktree doesn't hit "already checked out".
         runGit(["worktree", "prune"], repoDir);
-        const reprovisioned = await createWorktree({ repoDir, id: storedMeta.branch, branch: storedMeta.branch });
+        const reprovisioned = await createWorktree({ repoDir, id: reapedBranch, branch: reapedBranch });
         worktree = reprovisioned;
         runtimeWorkspace = reprovisioned.path;
       } catch (error) {
-        console.warn(`Could not re-provision worktree for resumed session on ${storedMeta.branch}: ${error instanceof Error ? error.message : String(error)}`);
+        console.warn(`Could not re-provision worktree for resumed session on ${reapedBranch}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
   }
