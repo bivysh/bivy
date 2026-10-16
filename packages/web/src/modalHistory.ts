@@ -7,6 +7,8 @@ interface HistoryLayer {
   onBack: () => void;
   closing: boolean;
   disposed: boolean;
+  /** The overlay already closed itself; its Back only tidies history. */
+  handled?: boolean;
 }
 
 export interface ModalHistoryHandle {
@@ -54,6 +56,15 @@ function drainModalHistory(): void {
     const navigation = navigationHistory();
     if (top.returnKey && navigation) navigation.traverseTo(top.returnKey);
     else history.back();
+    // Inside a frame (an app preview of Bivy itself), Back can step the parent
+    // page's history and this window never sees popstate. Don't hold every
+    // later overlay hostage to a traversal that isn't coming.
+    setTimeout(() => {
+      if (traversing !== top) return;
+      historyLayers.splice(historyLayers.indexOf(top), 1);
+      traversing = undefined;
+      drainModalHistory();
+    }, 600);
     return;
   }
   for (const layer of waitingHistoryLayers.splice(0)) {
@@ -87,7 +98,10 @@ if (typeof window !== "undefined") {
     // A modal sentinel is not session navigation. Claim it before routing can
     // reset the transcript and unmount the activity sheet underneath us.
     event.stopImmediatePropagation();
-    if (!layer.disposed) layer.onBack();
+    if (!layer.disposed && !layer.handled) {
+      layer.handled = true;
+      layer.onBack();
+    }
     // Let React finish unmounting related overlays before consuming their
     // entries. A programmatic pop must never dismiss an unrelated lower layer.
     queueMicrotask(drainModalHistory);
@@ -106,6 +120,12 @@ export function pushModalHistory(onBack: () => void): ModalHistoryHandle {
     close() {
       if (layer.closing) return;
       layer.closing = true;
+      // Close now; the Back step that follows only removes the sentinel. Waiting
+      // for its popstate left the overlay open wherever that event never came.
+      if (!layer.disposed && !layer.handled) {
+        layer.handled = true;
+        layer.onBack();
+      }
       drainModalHistory();
     },
     dispose() {

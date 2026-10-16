@@ -160,3 +160,21 @@ test("a replacement overlay waits for old sentinels to drain", async ({ page }) 
   await page.evaluate(() => history.back());
   await expect(page).toHaveURL(`${origin}/auth/github/start`);
 });
+
+test("an overlay closes even when its Back step never reports back", async ({ page }) => {
+  // Framed (an app preview of Bivy itself), Back can step the parent's history,
+  // so this window never sees popstate. Closing must not wait for it, and later
+  // overlays must still open and close.
+  await openFixture(page);
+  await page.evaluate(() => {
+    Object.defineProperty(window, "navigation", { value: undefined, configurable: true });
+    history.back = () => {};
+  });
+  const sheet = page.getByRole("dialog", { name: "Agent", exact: true });
+  await sheet.getByRole("button", { name: "Close" }).click();
+  await expect(sheet).toHaveCount(0);
+  await page.getByRole("button", { name: "Choose agent" }).click();
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sheet).toHaveCount(0);
+});
