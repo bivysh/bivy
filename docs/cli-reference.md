@@ -149,7 +149,7 @@ bivy help --json | jq '.commands[] | select(.scope == "session") | .usage'
 ### `bivy guide [topic] [--json]`
 
 Short playbooks for agents working in Bivy, one screen each: `show-the-user`,
-`talk-to-the-user`, `long-work`, `more-hands` and `automate`. Without a topic it
+`talk-to-the-user`, `long-work`, `more-hands`, `automate` and `add-an-agent`. Without a topic it
 lists them. They are markdown files in `bin/guides/`, and `bivy mcp-serve` also
 serves them as MCP resources (`bivy://guide/<topic>`).
 
@@ -296,19 +296,20 @@ bivy agents --json
 
 ### `bivy agent <add|list|remove>`
 
-Connect an existing user-owned agent using the ordinary declarative package
-contract:
+Add any ACP agent or CLI on this Machine. The entry is written under `agents:` in
+`<data-dir>/config.yaml` and is in the picker at once:
 
 ```bash
 bivy agent add company-agent --command company-agent --transport acp --args '["serve","--acp"]'
 bivy agent add script-agent --command script-agent --transport process --prompt-mode stdin
+bivy agent add my-agent --transport process --parser bivy-protocol \
+  --command ./adapter.mjs --resume-args '["--resume","{id}"]'
 bivy agent list --json
 bivy agent remove company-agent
 ```
 
-`add` never imports agent code into the daemon. ACP and custom protocol logic run
-out of process; process adapters receive only the capabilities they explicitly
-declare and validate. Restart Bivy after add/remove.
+`add` never imports agent code into the daemon; the agent runs out of process.
+`--force` replaces an existing entry. See [Add any agent](add-an-agent.md).
 
 ### `bivy plugin <init|validate|doctor|test|install|list|remove>`
 

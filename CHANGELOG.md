@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Add any ACP agent or CLI from `config.yaml`, with no restart.** An `agents:` entry now takes the same `adapter` block as a plugin manifest: `kind: acp` with a command for any [ACP](https://agentclientprotocol.com) agent, or `kind: process` for any other CLI, with optional output parser, resume and model flags. `bivy agent add` writes there (new `--parser` and `--resume-args` flags) instead of creating a single-agent plugin, and the agent is in the picker as soon as the file is saved. Installing or removing a plugin no longer needs a restart either. See [Add any agent](docs/add-an-agent.md).
+- **Write an adapter for any agent in a few lines.** The JSONL turn format (parser `bivy-protocol`) is now documented as an adapter contract: Bivy runs your program once per turn with the prompt on stdin and reads events from stdout. It gains `session.started` (the adapter's own id, passed back as `{id}` to resume), `message.reasoning` and `usage`. A complete example is in `examples/agents/jsonl-adapter`, and `bivy guide add-an-agent` walks an agent through it.
+
+### Fixed
+
+- `bivy plugin init` and the example plugin pinned `requires.bivy` to a single minor release, so a plugin stopped installing at the next Bivy minor. The recommended range now runs to the next major.
+
 ## [0.21.1] - 2026-10-12
 
 ### Changed

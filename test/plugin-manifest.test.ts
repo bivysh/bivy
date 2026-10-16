@@ -60,7 +60,7 @@ test("plugin manifest validates compatibility ranges and checks the running vers
   assert.equal(result.ok, true, result.errors.join("\n"));
   assert.equal(checkPluginCompatibility(result.manifest!, "0.10.1").compatible, true);
   assert.equal(checkPluginCompatibility(result.manifest!, "0.10.1-staging.42").compatible, true);
-  assert.equal(recommendedBivyRange("0.10.1-staging.42"), ">=0.10.1 <0.11.0");
+  assert.equal(recommendedBivyRange("0.10.1-staging.42"), ">=0.10.1 <1.0.0");
   const incompatible = checkPluginCompatibility(result.manifest!, "0.11.0");
   assert.equal(incompatible.compatible, false);
   assert.match(incompatible.message, /requires Bivy/);

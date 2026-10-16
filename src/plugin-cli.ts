@@ -230,12 +230,12 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       const input = positional[0];
       if (!input) fail("Usage: bivy plugin install <path> [--force]", json);
       const result = installPlugin(input, { dataDir, force: args.includes("--force") });
-      const body = { ok: true, installed: result.manifest.metadata.id, version: result.manifest.metadata.version, path: result.path, replaced: result.replaced, restartRequired: true };
+      const body = { ok: true, installed: result.manifest.metadata.id, version: result.manifest.metadata.version, path: result.path, replaced: result.replaced };
       if (json) outputJson(body);
       else {
         console.log(`${result.replaced ? "Updated" : "Installed"} ${result.manifest.metadata.name} (${result.manifest.metadata.id}@${result.manifest.metadata.version}).`);
         console.log(`Stored at ${result.path}`);
-        console.log("Restart Bivy to activate it: bivy restart");
+        console.log("It is in the agent picker now.");
       }
       return;
     }
@@ -278,11 +278,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       if (!id) fail("Usage: bivy plugin remove <id>", json);
       const removed = removePlugin(id, dataDir);
       if (!removed) fail(`Plugin ${id} is not installed`, json);
-      const body = { ok: true, removed: id, restartRequired: true };
+      const body = { ok: true, removed: id };
       if (json) outputJson(body);
       else {
         console.log(`Removed plugin ${id}.`);
-        console.log("Restart Bivy to unload it: bivy restart");
       }
       return;
     }

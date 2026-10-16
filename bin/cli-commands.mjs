@@ -129,7 +129,7 @@ export const COMMANDS = [
 
   // Help and discovery
   { name: "guide", group: "help", scope: "node", json: true, usage: "guide [topic] [--json]", summary: "Short playbooks for agents: show the user, talk to them, long work, more hands, automate",
-    tools: [{ name: "bivy_guide", description: "Short playbooks for working in Bivy. Without a topic, lists them.", input: { topic: { type: "string", description: "show-the-user, talk-to-the-user, long-work, more-hands or automate." } }, argv: ["guide", { arg: "topic" }] }] },
+    tools: [{ name: "bivy_guide", description: "Short playbooks for working in Bivy. Without a topic, lists them.", input: { topic: { type: "string", description: "show-the-user, talk-to-the-user, long-work, more-hands, automate or add-an-agent." } }, argv: ["guide", { arg: "topic" }] }] },
   { name: "help", aliases: ["-h", "--help"], group: "help", scope: "node", json: true, usage: "help [command] [--json]", summary: "Show this help, one command's row, or every command as JSON" },
   { name: "version", aliases: ["--version", "-v"], group: "help", scope: "node", usage: "version", summary: "Print the installed Bivy version" },
 

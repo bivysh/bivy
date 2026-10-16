@@ -314,9 +314,6 @@ try {
   for (const [key, value] of Object.entries(canonicalNodeConfig.environment ?? {})) {
     if (process.env[key] === undefined) process.env[key] = value;
   }
-  if (canonicalNodeConfig.agents && process.env.BIVY_CUSTOM_AGENTS === undefined) {
-    process.env.BIVY_CUSTOM_AGENTS = JSON.stringify(Object.entries(canonicalNodeConfig.agents).map(([id, spec]) => ({ id, ...spec })));
-  }
   if (canonicalNodeConfig.automation?.checks && process.env.BIVY_AUTOMATION_CHECKS === undefined) {
     process.env.BIVY_AUTOMATION_CHECKS = JSON.stringify(canonicalNodeConfig.automation.checks);
   }

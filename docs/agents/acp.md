@@ -30,16 +30,17 @@ protocol:
 
 ## Configure
 
+Add any ACP agent by its launch command. It is in the picker at once, as
+**Experimental / Unverified**:
+
 ```bash
-# Point Bivy at any ACP agent's launch command.
-export BIVY_ACP_COMMAND=gemini
-export BIVY_ACP_ARGS='["--experimental-acp"]'   # optional JSON array
-BIVY_RUNTIME=acp bivy run acp
+bivy agent add gemini-acp --command gemini --args '["--experimental-acp"]'
 ```
 
-Until it's validated against a specific agent it stays **hidden from the picker**
-(honest — no unproven picker entries). Once validated, promote it into the picker
-as a data-only change.
+This writes an `agents:` entry with `adapter: { kind: acp, … }` to `config.yaml`;
+add as many as you like. See [Add any agent](../add-an-agent.md). The older
+`BIVY_ACP_COMMAND` / `BIVY_ACP_ARGS` variables still drive a single hidden `acp`
+runtime.
 
 ### Per-agent promotion (the preferred direction)
 

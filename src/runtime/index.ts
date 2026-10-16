@@ -72,6 +72,8 @@ import { ProtocolRuntime, protocolRuntimeFromEnv, protocolCommandsFromEnv, type 
 import { codexSlashCommands, opencodeSlashCommands, type SlashCommandProvider } from "./slash-commands.js";
 import { withExactCapabilitySurface, type AgentRuntime } from "./types.js";
 import { installedAgentContributions } from "../plugins/store.js";
+import { readNodeConfig, type NodeAgentConfig } from "../node-config.js";
+import { defaultDataDir } from "../data-dir.js";
 import { forkCapsFromInfo, type AgentForkCaps } from "../session/fork-matrix.js";
 import { currentBivyVersion } from "../app-version.js";
 import type {
@@ -167,56 +169,71 @@ function genericCliInfo(): RuntimeInfo {
   };
 }
 
-/** User-defined agents persisted through cli.json's env block. Custom entries
- * inherit a maintained profile and override only serializable launch metadata. */
-type CustomAgentConfig = {
-  id: string;
-  label?: string;
-  extends: AgentProfileId;
-  command?: string;
-  args?: string[];
-  jsonArgs?: string[];
-  parserId?: string;
-  promptMode?: ProcessPromptMode;
-  hidden?: boolean;
-};
+/** A maintained profile re-pointed at another binary (`config.yaml` `extends`). */
+type ExtendsAgentConfig = Extract<NodeAgentConfig, { extends: string }>;
+/** Any ACP/CLI command, declared with the same `adapter` block as a plugin. */
+type AdapterAgentConfig = Extract<NodeAgentConfig, { adapter: unknown }>;
 
-function customAgentSpecs(): Map<string, AgentProfile> {
-  const out = new Map<string, AgentProfile>();
+/**
+ * The node's own agents, read from `<data-dir>/config.yaml` on every registry
+ * build so an edit or `bivy agent add` shows up without a restart. The legacy
+ * BIVY_CUSTOM_AGENTS projection is used only on a node with no config.yaml.
+ */
+function configuredAgents(dataDir = defaultDataDir()): { agents: Array<[string, NodeAgentConfig]>; error?: string } {
+  try {
+    const config = readNodeConfig(dataDir);
+    if (config) return { agents: Object.entries(config.agents ?? {}) };
+  } catch (error) {
+    return { agents: [], error: error instanceof Error ? error.message : String(error) };
+  }
   const raw = process.env.BIVY_CUSTOM_AGENTS?.trim();
-  if (!raw) return out;
+  if (!raw) return { agents: [] };
   try {
     const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return out;
-    for (const value of parsed) {
-      if (!value || typeof value !== "object") continue;
-      const item = value as Partial<CustomAgentConfig>;
-      const id = typeof item.id === "string" ? item.id.trim().toLowerCase() : "";
-      if (!/^[a-z][a-z0-9-]{1,47}$/.test(id) || out.has(id)) continue;
-      if (typeof item.extends !== "string" || !isAgentProfileId(item.extends)) continue;
-      const base = AGENT_PROFILES[item.extends];
-      const strings = (v: unknown): string[] | undefined => Array.isArray(v) && v.every((x) => typeof x === "string") ? v : undefined;
-      out.set(id, {
-        ...base,
-        displayName: typeof item.label === "string" && item.label.trim() ? item.label.trim() : id,
-        command: typeof item.command === "string" && item.command.trim() ? item.command.trim() : base.command,
-        ...(strings(item.args) ? { args: strings(item.args) } : {}),
-        ...(strings(item.jsonArgs) ? { jsonArgs: strings(item.jsonArgs) } : {}),
-        ...(typeof item.parserId === "string" ? { parserId: item.parserId } : {}),
-        ...(item.promptMode === "stdin" || item.promptMode === "argv" ? { promptMode: item.promptMode } : {}),
-        hidden: item.hidden === true,
-        supportTier: "experimental",
-        testedVersion: undefined,
-        install: undefined,
-        // `extends` reuses declarative launch syntax, never maintained host code.
-        // A different executable must not inherit Codex/OpenCode/Grok credential,
-        // store, slash-command, or native-discovery behavior by accident.
-        behaviors: undefined,
-        ...(base.resume ? { resume: { template: base.resume.template, ...(base.resume.newTemplate ? { newTemplate: base.resume.newTemplate } : {}) } } : {}),
-      });
-    }
+    if (!Array.isArray(parsed)) return { agents: [] };
+    return {
+      agents: parsed
+        .filter((item): item is { id: string } & NodeAgentConfig => Boolean(item) && typeof item.id === "string")
+        .map(({ id, ...spec }) => [id.trim().toLowerCase(), spec as NodeAgentConfig]),
+    };
   } catch {
     // Invalid operator configuration is ignored; packaged integrations remain usable.
+    return { agents: [] };
+  }
+}
+
+function extendsAgentSpec(id: string, item: ExtendsAgentConfig): AgentProfile | undefined {
+  if (!isAgentProfileId(item.extends)) return undefined;
+  const base = AGENT_PROFILES[item.extends];
+  const strings = (v: unknown): string[] | undefined => Array.isArray(v) && v.every((x) => typeof x === "string") ? v : undefined;
+  return {
+    ...base,
+    displayName: typeof item.label === "string" && item.label.trim() ? item.label.trim() : id,
+    command: typeof item.command === "string" && item.command.trim() ? item.command.trim() : base.command,
+    ...(strings(item.args) ? { args: strings(item.args) } : {}),
+    ...(strings(item.jsonArgs) ? { jsonArgs: strings(item.jsonArgs) } : {}),
+    ...(typeof item.parserId === "string" ? { parserId: item.parserId } : {}),
+    ...(item.promptMode === "stdin" || item.promptMode === "argv" ? { promptMode: item.promptMode } : {}),
+    hidden: item.hidden === true,
+    supportTier: "experimental",
+    testedVersion: undefined,
+    install: undefined,
+    // `extends` reuses declarative launch syntax, never maintained host code.
+    // A different executable must not inherit Codex/OpenCode/Grok credential,
+    // store, slash-command, or native-discovery behavior by accident.
+    behaviors: undefined,
+    ...(base.resume ? { resume: { template: base.resume.template, ...(base.resume.newTemplate ? { newTemplate: base.resume.newTemplate } : {}) } } : {}),
+  };
+}
+
+function customAgentSpecs(dataDir?: string): Map<string, AgentProfile> {
+  const out = new Map<string, AgentProfile>();
+  for (const [id, item] of configuredAgents(dataDir).agents) {
+    if (!/^[a-z][a-z0-9-]{1,47}$/.test(id) || out.has(id) || !item || typeof item !== "object") continue;
+    const spec = "adapter" in item
+      ? adapterAgentSpec({ name: item.name || id, ...item }, "Configured on this machine")
+      : extendsAgentSpec(id, item);
+    if (spec) out.set(id, spec);
   }
   return out;
 }
@@ -224,6 +241,8 @@ function customAgentSpecs(): Map<string, AgentProfile> {
 export function pluginAgentConflictDiagnostics(dataDir?: string): string[] {
   const installed = installedAgentContributions(dataDir);
   const errors = [...installed.errors];
+  const configError = configuredAgents(dataDir).error;
+  if (configError) errors.push(configError);
   for (const conflict of agentRegistry(dataDir).diagnostics()) {
     if (conflict.rejectedOrigin.kind !== "package" || conflict.rejectedOrigin.location !== "installed") continue;
     errors.push(`${conflict.rejectedOrigin.packageId}: agent id ${conflict.id} conflicts with ${conflict.retainedSource}`);
@@ -231,20 +250,18 @@ export function pluginAgentConflictDiagnostics(dataDir?: string): string[] {
   return errors;
 }
 
-type InstalledAgentContribution = ReturnType<typeof installedAgentContributions>["agents"][number];
-
-/** Translate a public manifest contribution into the shared CLI adapter shape. */
-function pluginAgentSpec(contribution: InstalledAgentContribution): AgentProfile {
-  const { agent } = contribution;
+/** Translate one `adapter` declaration (plugin manifest or config.yaml) into
+ *  the shared CLI/ACP launch shape. */
+function adapterAgentSpec(agent: AdapterAgentConfig & { name: string }, packageName: string): AgentProfile {
   const common = {
     displayName: agent.name,
     command: agent.adapter.command,
-    packageName: `${contribution.pluginName} plugin`,
+    packageName,
     promptMode: "stdin" as ProcessPromptMode,
     hidden: agent.hidden === true,
     supportTier: "experimental" as RuntimeSupportTier,
     authOwner: agent.authOwner ?? "agent" as const,
-    blurb: agent.description ?? `Agent contributed by ${contribution.pluginName}.`,
+    blurb: agent.description ?? `${packageName}.`,
     install: undefined,
   };
   if (agent.adapter.kind === "acp") {
@@ -1087,9 +1104,10 @@ function agentRegistry(pluginDataDir?: string): AgentRegistry<RuntimeInfo, Runti
 
   // Machine configuration and installed packages use the exact same lifecycle.
   // Earlier registrations win, and every retained/rejected origin remains explicit.
-  for (const [id, spec] of customAgentSpecs()) registry.register(cliRegistration(id, spec, { kind: "config" }));
+  for (const [id, spec] of customAgentSpecs(pluginDataDir)) registry.register(cliRegistration(id, spec, { kind: "config" }));
   for (const contribution of installedAgentContributions(pluginDataDir).agents) {
-    registry.register(cliRegistration(contribution.agent.id, pluginAgentSpec(contribution), {
+    const { agent, pluginName } = contribution;
+    registry.register(cliRegistration(agent.id, adapterAgentSpec({ ...agent, description: agent.description ?? `Agent contributed by ${pluginName}.` }, `${pluginName} plugin`), {
       kind: "package",
       packageId: contribution.pluginId,
       packageVersion: contribution.pluginVersion,

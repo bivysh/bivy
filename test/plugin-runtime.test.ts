@@ -124,16 +124,17 @@ test("installed process and ACP plugin agents join the authoritative runtime pat
 test("plugin agents cannot replace retained package or config-defined integration ids", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-plugin-conflict-"));
   const oldPluginDir = process.env.BIVY_PLUGIN_DIR;
-  const oldCustom = process.env.BIVY_CUSTOM_AGENTS;
+  const oldDataDir = process.env.BIVY_DATA_DIR;
   process.env.BIVY_PLUGIN_DIR = path.join(dir, "plugins");
-  process.env.BIVY_CUSTOM_AGENTS = JSON.stringify([{ id: "company-agent", extends: "aider", command: "node", label: "Config wins" }]);
+  process.env.BIVY_DATA_DIR = dir;
+  fs.writeFileSync(path.join(dir, "config.yaml"), "version: 1\nagents:\n  company-agent: { extends: aider, command: node, label: Config wins }\n");
   try {
     const builtin = path.join(dir, "builtin.yaml");
     fs.writeFileSync(builtin, manifest("pi", `        kind: process
         command: node
 `));
     installPlugin(builtin, { dataDir: dir });
-    const config = path.join(dir, "config.yaml");
+    const config = path.join(dir, "company.yaml");
     fs.writeFileSync(config, manifest("company-plugin", `        kind: process
         command: node
 `)
@@ -156,8 +157,8 @@ test("plugin agents cannot replace retained package or config-defined integratio
   } finally {
     if (oldPluginDir === undefined) delete process.env.BIVY_PLUGIN_DIR;
     else process.env.BIVY_PLUGIN_DIR = oldPluginDir;
-    if (oldCustom === undefined) delete process.env.BIVY_CUSTOM_AGENTS;
-    else process.env.BIVY_CUSTOM_AGENTS = oldCustom;
+    if (oldDataDir === undefined) delete process.env.BIVY_DATA_DIR;
+    else process.env.BIVY_DATA_DIR = oldDataDir;
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });

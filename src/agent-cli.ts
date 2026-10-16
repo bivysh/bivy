@@ -1,15 +1,12 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-/** First-class BYO-agent convenience CLI backed by the ordinary plugin manifest. */
+/** First-class bring-your-own-agent CLI: writes `agents:` in the node config.yaml. */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { stringify as stringifyYaml } from "yaml";
-import { currentBivyVersion } from "./app-version.js";
 import { defaultDataDir } from "./data-dir.js";
-import { recommendedBivyRange, type PluginManifest } from "./plugin-sdk/index.js";
-import { installPlugin, listInstalledPlugins, removePlugin } from "./plugins/store.js";
+import { mergeLegacyIntoNodeConfig, nodeConfigPath, readNodeConfig, writeNodeConfig, type NodeAgentConfig, type NodeConfig } from "./node-config.js";
+import { listInstalledPlugins, removePlugin } from "./plugins/store.js";
 
 function option(args: string[], name: string): string | undefined {
   const index = args.indexOf(name);
@@ -17,7 +14,7 @@ function option(args: string[], name: string): string | undefined {
 }
 
 function positional(args: string[]): string[] {
-  const valued = new Set(["--command", "--transport", "--adapter", "--args", "--name", "--prompt-mode", "--data-dir"]);
+  const valued = new Set(["--command", "--transport", "--adapter", "--args", "--name", "--prompt-mode", "--parser", "--resume-args", "--data-dir"]);
   const out: string[] = [];
   for (let index = 0; index < args.length; index += 1) {
     if (valued.has(args[index]!)) { index += 1; continue; }
@@ -36,44 +33,57 @@ function parseArgs(value: string | undefined): string[] {
   if (!value) return [];
   let parsed: unknown;
   try { parsed = JSON.parse(value); }
-  catch { throw new Error("--args must be a JSON string array"); }
+  catch { throw new Error("--args and --resume-args must be JSON string arrays"); }
   if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) {
-    throw new Error("--args must be a JSON string array");
+    throw new Error("--args and --resume-args must be JSON string arrays");
   }
   return parsed;
 }
 
-function localManifest(args: string[]): PluginManifest {
+function readJson(dataDir: string, name: string): Record<string, unknown> {
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(dataDir, name), "utf8"));
+    return value && typeof value === "object" ? value : {};
+  } catch { return {}; }
+}
+
+/** The node's config.yaml, or the one the daemon would create from legacy files
+ *  — never a bare file that would skip that migration. */
+function nodeConfig(dataDir: string): NodeConfig {
+  return readNodeConfig(dataDir) ?? mergeLegacyIntoNodeConfig(readJson(dataDir, "cli.json"), readJson(dataDir, "settings.json"));
+}
+
+function agentId(args: string[]): string {
   const id = positional(args)[1]?.trim().toLowerCase() ?? "";
   if (!/^[a-z][a-z0-9-]{1,47}$/.test(id)) throw new Error("Agent id must be a lowercase slug of 2-48 characters");
+  return id;
+}
+
+/** `bivy agent add` flags → the `adapter` block config.yaml and plugins share. */
+function agentConfig(args: string[], id: string): NodeAgentConfig {
   const command = option(args, "--command")?.trim();
   if (!command) throw new Error("--command is required");
   const transport = (option(args, "--transport") ?? option(args, "--adapter") ?? "acp").toLowerCase();
   if (transport !== "acp" && transport !== "process") throw new Error("--transport must be acp or process");
   const adapterArgs = parseArgs(option(args, "--args"));
   const name = option(args, "--name")?.trim() || id.split("-").map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(" ");
-  const promptModeValue = option(args, "--prompt-mode") ?? "stdin";
-  if (promptModeValue !== "stdin" && promptModeValue !== "argv") throw new Error("--prompt-mode must be stdin or argv");
-  const promptMode: "stdin" | "argv" = promptModeValue;
+  if (transport === "acp") {
+    for (const flag of ["--prompt-mode", "--parser", "--resume-args"]) if (option(args, flag)) throw new Error(`${flag} applies to --transport process only`);
+    return { name, adapter: { kind: "acp", command, ...(adapterArgs.length ? { args: adapterArgs } : {}) } };
+  }
+  const promptMode = option(args, "--prompt-mode") ?? "stdin";
+  if (promptMode !== "stdin" && promptMode !== "argv") throw new Error("--prompt-mode must be stdin or argv");
+  const parser = option(args, "--parser");
+  const resumeArgs = option(args, "--resume-args");
   return {
-    apiVersion: "bivy.sh/v1alpha1",
-    kind: "Plugin",
-    metadata: {
-      id,
-      name,
-      version: "0.1.0",
-      description: `Local integration for the ${name} agent.`,
-    },
-    requires: { bivy: recommendedBivyRange(currentBivyVersion()) },
-    contributes: {
-      agents: [{
-        id,
-        name,
-        authOwner: "agent",
-        adapter: transport === "acp"
-          ? { kind: "acp", command, ...(adapterArgs.length ? { args: adapterArgs } : {}) }
-          : { kind: "process", command, ...(adapterArgs.length ? { args: adapterArgs } : {}), promptMode },
-      }],
+    name,
+    adapter: {
+      kind: "process",
+      command,
+      ...(adapterArgs.length ? { args: adapterArgs } : {}),
+      promptMode,
+      ...(parser ? { structured: { args: adapterArgs, parser } } : {}),
+      ...(resumeArgs ? { resume: { args: parseArgs(resumeArgs) } } : {}),
     },
   };
 }
@@ -86,61 +96,74 @@ async function main(): Promise<void> {
 
   if (!command || command === "help" || args.includes("--help") || args.includes("-h")) {
     console.log(`Usage:
-  bivy agent add <id> --command <command> [--transport acp|process] [--args '["..."]']
+  bivy agent add <id> --command <command> [--args '["..."]'] [--name <name>] [--force]
+      ACP agent (default):  --transport acp
+      Any other CLI:        --transport process [--prompt-mode stdin|argv]
+                            [--parser <id>] [--resume-args '["...","{id}"]']
   bivy agent list [--json]
-  bivy agent remove <integration-id>
+  bivy agent remove <id>
 
-Adds an existing user-owned agent through the same declarative package contract used by every external integration.`);
+Agents are saved under agents: in <data-dir>/config.yaml and appear in the
+picker right away. Edit that file directly for every adapter option.`);
     return;
   }
 
   try {
     if (command === "add") {
-      const manifest = localManifest(args);
-      const existingPackage = listInstalledPlugins(dataDir).some((plugin) => plugin.id === manifest.metadata.id);
-      if (!existingPackage) {
+      const id = agentId(args);
+      const spec = agentConfig(args, id);
+      const config = nodeConfig(dataDir);
+      const replaced = Boolean(config.agents?.[id]);
+      if (replaced && !args.includes("--force")) throw new Error(`Agent ${id} is already configured; pass --force to replace it`);
+      if (!replaced) {
         const runtimeModule = await import("./runtime/index.js");
-        const retained = runtimeModule.canonicalAgentId(manifest.contributes.agents[0]!.id);
-        if (retained) throw new Error(`Agent id ${manifest.contributes.agents[0]!.id} conflicts with retained integration ${retained}; choose a unique id`);
+        const retained = runtimeModule.canonicalAgentId(id);
+        if (retained) throw new Error(`Agent id ${id} conflicts with ${retained}; choose a unique id`);
       }
-      const temp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-agent-add-"));
-      const file = path.join(temp, "bivy.plugin.yaml");
-      try {
-        fs.writeFileSync(file, stringifyYaml(manifest), { mode: 0o600 });
-        const result = installPlugin(file, { dataDir, force: args.includes("--force"), bivyVersion: currentBivyVersion() });
-        const body = { ok: true, id: manifest.metadata.id, path: result.path, replaced: result.replaced, restartRequired: true };
-        if (json) console.log(JSON.stringify(body, null, 2));
-        else {
-          console.log(`${result.replaced ? "Updated" : "Added"} agent integration ${manifest.metadata.name} (${manifest.metadata.id}).`);
-          console.log("Restart Bivy to activate it: bivy restart");
-        }
-      } finally {
-        fs.rmSync(temp, { recursive: true, force: true });
-      }
+      writeNodeConfig(dataDir, { ...config, agents: { ...config.agents, [id]: spec } });
+      const body = { ok: true, id, path: nodeConfigPath(dataDir), replaced };
+      if (json) console.log(JSON.stringify(body, null, 2));
+      else console.log(`${replaced ? "Updated" : "Added"} ${"name" in spec ? spec.name : id} (${id}). It is in the agent picker now.`);
       return;
     }
 
     if (command === "list" || command === "ls") {
-      const rows = listInstalledPlugins(dataDir).flatMap((plugin) =>
+      const configured = Object.entries(readNodeConfig(dataDir)?.agents ?? {}).map(([id, spec]) => ({
+        id,
+        name: "adapter" in spec ? spec.name ?? id : spec.label ?? id,
+        source: "config",
+        transport: "adapter" in spec ? spec.adapter.kind : `extends ${spec.extends}`,
+        command: "adapter" in spec ? spec.adapter.command : spec.command ?? spec.extends,
+      }));
+      const packaged = listInstalledPlugins(dataDir).flatMap((plugin) =>
         plugin.manifest?.contributes.agents.map((agent) => ({
           id: agent.id,
           name: agent.name,
-          package: plugin.id,
-          version: plugin.manifest!.metadata.version,
+          source: `${plugin.id}@${plugin.manifest!.metadata.version}`,
           transport: agent.adapter.kind,
           command: agent.adapter.command,
-          status: plugin.errors.length ? "invalid" : "installed",
+          ...(plugin.errors.length ? { status: "invalid" } : {}),
         })) ?? [],
       );
+      const rows = [...configured, ...packaged];
       if (json) console.log(JSON.stringify({ ok: true, agents: rows }, null, 2));
-      else if (!rows.length) console.log("No installed agent integration packages.");
-      else for (const row of rows) console.log(`${row.id}\t${row.transport}\t${row.command}\t${row.package}@${row.version}`);
+      else if (!rows.length) console.log("No agents added on this machine. Add one with: bivy agent add <id> --command <command>");
+      else for (const row of rows) console.log(`${row.id}\t${row.transport}\t${row.command}\t${row.source}`);
       return;
     }
 
     if (command === "remove" || command === "rm") {
       const id = positional(args)[1];
-      if (!id) fail("Usage: bivy agent remove <integration-id>", json);
+      if (!id) fail("Usage: bivy agent remove <id>", json);
+      const config = readNodeConfig(dataDir);
+      if (config?.agents?.[id]) {
+        const { [id]: _removed, ...agents } = config.agents;
+        writeNodeConfig(dataDir, { ...config, agents });
+        if (json) console.log(JSON.stringify({ ok: true, id, removed: true }));
+        else console.log(`Removed ${id}.`);
+        return;
+      }
+      // Agents added before config.yaml held them were single-agent plugin packages.
       const installed = listInstalledPlugins(dataDir);
       const direct = installed.find((plugin) => plugin.id === id);
       const matches = direct ? [direct] : installed.filter((plugin) =>
@@ -150,7 +173,7 @@ Adds an existing user-owned agent through the same declarative package contract 
       const packageId = matches[0]?.id ?? id;
       const removed = removePlugin(packageId, dataDir);
       if (json) console.log(JSON.stringify({ ok: true, id, packageId, removed }));
-      else console.log(removed ? `Removed ${id} (${packageId}). Restart Bivy to deactivate it.` : `Agent integration ${id} is not installed.`);
+      else console.log(removed ? `Removed ${id} (${packageId}).` : `Agent ${id} is not configured.`);
       return;
     }
 

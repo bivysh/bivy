@@ -8,7 +8,7 @@ metadata:
   description: Minimal runnable ACP plugin used to demonstrate Bivy conformance.
   homepage: https://github.com/bivysh/bivy/tree/main/examples/plugins/acp-agent
 requires:
-  bivy: ">=0.10.1 <0.11.0"
+  bivy: ">=0.21.0 <1.0.0"
 contributes:
   agents:
     - id: example-acp-agent

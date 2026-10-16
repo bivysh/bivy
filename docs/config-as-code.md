@@ -49,6 +49,14 @@ automation:
   slackPrompts: false
 
 agents:
+  # Any ACP agent or CLI: see add-an-agent.md.
+  gemini-acp:
+    name: Gemini (ACP)
+    adapter:
+      kind: acp
+      command: gemini
+      args: [--experimental-acp]
+  # A maintained agent pointed at another binary.
   company-codex:
     extends: codex
     command: company-codex
