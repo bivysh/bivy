@@ -286,14 +286,20 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    above it — the list simply scrolls underneath. */
 .sidebar-foot {
   margin-top: auto; display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
-  padding: var(--space-2) var(--space-2) max(var(--space-2), env(safe-area-inset-bottom));
+  padding: var(--space-3) var(--space-3) max(var(--space-3), env(safe-area-inset-bottom));
   background: var(--surface);
 }
+/* The one primary action: an ink pill sized to its label, with a round
+   Settings companion beside it. */
 .btn.new-session-btn {
-  flex: 1; display: inline-flex; align-items: center; justify-content: flex-start; gap: var(--space-2); min-height: 32px;
-  padding: 0 var(--space-3); border-radius: var(--radius-md);
-  font-size: var(--text-sm); font-weight: var(--weight-medium);
+  display: inline-flex; align-items: center; gap: var(--space-2); min-height: 40px;
+  padding: 0 var(--space-5) 0 var(--space-4); border-radius: var(--radius-full);
+  font-size: var(--text-base); font-weight: var(--weight-semibold);
+  box-shadow: var(--shadow-sm);
+  transition: background var(--dur) var(--ease-standard), transform var(--dur-fast) var(--ease-standard);
 }
+.btn.new-session-btn svg { width: 16px; height: 16px; }
+.btn.new-session-btn:active { transform: scale(0.97); }
 /* Red dot on the mobile ☰ burger when something needs the user that they
    haven't seen (an agent blocked on approval/question, an unseen finished run,
    a provider needing auth). Replaces the old separate inbox surface — the
@@ -2970,11 +2976,15 @@ textarea.picker-search { resize: vertical; font-family: ui-monospace, monospace;
 /* ---- Sidebar settings gear (round companion to New session, ChatGPT-style) ---- */
 .btn.icon.settings-gear {
   display: inline-flex; align-items: center; justify-content: center; flex: none;
-  width: 32px; height: 32px; min-width: 32px; min-height: 32px; padding: 0; border: 0; border-radius: var(--radius-md);
-  background: transparent; color: var(--muted);
+  width: 40px; height: 40px; min-width: 40px; min-height: 40px; padding: 0; border: 0; border-radius: var(--radius-full);
+  background: var(--surface-2); color: var(--ink);
 }
-.btn.icon.settings-gear:hover { background: var(--surface-2); color: var(--ink); }
+.btn.icon.settings-gear:hover { background: var(--surface-3); color: var(--ink); }
 .btn.icon.settings-gear svg { width: 18px; height: 18px; }
+@media (pointer: coarse) {
+  .btn.new-session-btn { min-height: 44px; }
+  .btn.icon.settings-gear { width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
+}
 
 /* ---- Usage bar ---- */
 
