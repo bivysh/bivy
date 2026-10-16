@@ -31,6 +31,13 @@ for (const theme of themes) {
         };
         window.replace = (count) => { entries = Array.from({length: count}, (_, i) => message(i)); render(); };
         window.append = () => { entries.push(message(entries.length)); render(); };
+        window.replaceWithWorkTurn = () => {
+          const read = (n) => ({ id: 'late-tool-' + n, role: 'tool', text: '', tool: { callId: 'late-' + n, name: 'read', input: {path: 'file-' + n + '.md'}, status: 'done', result: 'ok' } });
+          entries = [...Array.from({length: 12}, (_, i) => message(i)), { id: 'late-prompt', role: 'user', text: 'Last prompt' },
+            ...Array.from({length: 8}, (_, n) => [{ id: 'late-note-' + n, role: 'assistant', text: ('Interim note ' + n + '. ').repeat(20) }, read(n)]).flat(),
+            { id: 'late-answer', role: 'assistant', text: 'Final answer.' }];
+          render();
+        };
         window.updateTool = () => { entries[30] = { ...entries[30], tool: { ...entries[30].tool, result: entries[30].tool.result + 'Updated output' } }; render(); };
         window.stream = () => { entries[entries.length - 1] = { ...entries.at(-1), text: entries.at(-1).text + ' More streamed text.'.repeat(50), streaming: true }; render(); };
         render();
@@ -80,6 +87,21 @@ for (const theme of themes) {
     await expect.poll(bottomGap).toBeLessThan(2);
     await page.evaluate(() => (window as unknown as { stream(): void }).stream());
     await expect.poll(bottomGap).toBeLessThan(2);
+
+    // Opening a turn's work while following the bottom opens it downward: the
+    // line stays where it was and the view is not dragged to the new bottom.
+    await page.evaluate(() => (window as unknown as { replaceWithWorkTurn(): void }).replaceWithWorkTurn());
+    await chat.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
+    await expect.poll(bottomGap).toBeLessThan(2);
+    const workLine = page.locator('.turn-work-line').last();
+    const lineBefore = (await workLine.boundingBox())?.y;
+    const scrollBefore = await chat.evaluate(el => el.scrollTop);
+    await workLine.click();
+    await expect(page.locator('.turn-work-body')).toBeVisible();
+    expect((await workLine.boundingBox())?.y).toBe(lineBefore);
+    expect(await chat.evaluate(el => el.scrollTop)).toBe(scrollBefore);
+    await workLine.click();
+    await chat.evaluate(el => { el.scrollTop = el.scrollHeight; el.dispatchEvent(new Event('scroll')); });
 
     // A long cached/live transcript can be replaced by a shorter canonical
     // snapshot. The old cutoff must never hide the entire refreshed history.

@@ -10,13 +10,16 @@ import { ChevronRightIcon } from "./UiIcons.js";
  * interim messages and tool batches in order, inline; each batch still opens
  * its detail sheet.
  */
-export function TurnWork({ tools, note, notes, running, children }: {
+export function TurnWork({ tools, note, notes, running, onExpand, children }: {
   tools: ToolActivity[];
   /** The latest interim message, as one line. */
   note?: string;
   /** How many interim messages the work holds. */
   notes: number;
   running: boolean;
+  /** Called just before the work opens, so the chat can stop following the
+   *  bottom and the line stays put while the details open below it. */
+  onExpand?: () => void;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -32,7 +35,10 @@ export function TurnWork({ tools, note, notes, running, children }: {
         className={`tool-group-line turn-work-line${running ? " is-running" : ""}${hasError ? " is-error" : ""}`}
         aria-expanded={open}
         aria-controls={bodyId}
-        onClick={() => setOpen((value) => !value)}
+        onClick={() => {
+          if (!open) onExpand?.();
+          setOpen(!open);
+        }}
       >
         <span className="tool-group-state" aria-hidden />
         <span className="tool-group-label">{label}</span>

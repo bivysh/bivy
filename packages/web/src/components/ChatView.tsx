@@ -683,6 +683,10 @@ export function ChatView({
     setPinned(v);
   }, []);
 
+  // Opening something in the transcript means the reader is reading there: stop
+  // following the bottom so it opens downward instead of scrolling the view.
+  const stopFollowing = useCallback(() => setPinnedState(false), [setPinnedState]);
+
   const atBottom = useCallback(() => {
     const el = scrollRef.current;
     if (!el) return true;
@@ -805,6 +809,7 @@ export function ChatView({
         notes={notes.length}
         note={lastNote?.kind === "entry" ? noteSnippet(lastNote.entry.text || "") : undefined}
         running={running}
+        onExpand={stopFollowing}
       >
         {work.map(renderItem)}
       </TurnWork>,
