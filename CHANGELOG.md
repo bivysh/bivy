@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `bivy plugin init` and the example plugin pinned `requires.bivy` to a single minor release, so a plugin stopped installing at the next Bivy minor. The recommended range now runs to the next major.
+- **The node no longer keeps every Claude session it has opened in memory.** The Claude Code runtime held each session it created or reopened, with its full transcript and images, until that session was deleted, so a long-running node grew with every chat it opened. A node up for 3.5 days held 146 of them, about 38 MB of its 185 MB JS heap, with the same transcript held several times when a session was reopened. A session now leaves memory when it closes.
 
 ## [0.21.1] - 2026-10-12
 

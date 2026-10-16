@@ -747,6 +747,8 @@ class ClaudeSession implements RuntimeSession {
   private messages: RuntimeMessage[] = [];
   private streaming = false;
   private name?: string;
+  /** Set by the runtime so a disposed session leaves its registry. */
+  onDispose?: () => void;
 
   private models: ModelInfo[] = [];
   private currentModel?: ModelInfo;
@@ -1452,6 +1454,7 @@ class ClaudeSession implements RuntimeSession {
       }
     }
     this.emitter.removeAllListeners();
+    this.onDispose?.();
   }
 
   async getModels(): Promise<ModelInfo[]> {
@@ -1579,6 +1582,16 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
   constructor(private readonly options: ClaudeCodeRuntimeOptions = {}) {}
 
+  /** Each session holds its whole transcript, so it stays registered only
+   *  while open; a closed one would otherwise be kept for the daemon's lifetime. */
+  private track(session: ClaudeSession): void {
+    this.sessions.push(session);
+    session.onDispose = () => {
+      const i = this.sessions.indexOf(session);
+      if (i >= 0) this.sessions.splice(i, 1);
+    };
+  }
+
   /** Claude Code runs Anthropic models; the authoritative list comes from the
    *  live query per session, so the session-less catalog is the known lineup. */
   listCatalog(): CatalogProvider[] {
@@ -1587,13 +1600,13 @@ export class ClaudeCodeRuntime implements AgentRuntime {
 
   async createSession(options: OpenSessionOptions): Promise<OpenSessionResult> {
     const session = new ClaudeSession({ ...(await withSessionCredentials(this.options, options.credentialLabels)), instructions: options.instructions?.text }, options.workspace, options.toolInterceptor, options.toolProvider);
-    this.sessions.push(session);
+    this.track(session);
     return { session };
   }
 
   async openSession(options: OpenSessionOptions & { sessionFile: string }): Promise<OpenSessionResult> {
     const session = new ClaudeSession({ ...(await withSessionCredentials(this.options, options.credentialLabels)), instructions: options.instructions?.text }, options.workspace, options.toolInterceptor, options.toolProvider, options.sessionFile);
-    this.sessions.push(session);
+    this.track(session);
     return {
       session,
       warning: "Resumed Claude Code session history is replayed by the agent on the next turn; prior messages are not preloaded.",
@@ -1804,12 +1817,8 @@ export class ClaudeCodeRuntime implements AgentRuntime {
     // Drop (and tear down) any in-memory handle so the fallback branch of
     // listSessions (used when no sessionsDir is set) can't re-advertise it, and a
     // still-live child doesn't outlive the delete.
-    for (let i = this.sessions.length - 1; i >= 0; i--) {
-      const s = this.sessions[i]!;
-      if (s.id === sessionId || (sessionFile && s.sessionFile === sessionFile)) {
-        try { s.dispose(); } catch { /* already disposed by the caller's close */ }
-        this.sessions.splice(i, 1);
-      }
+    for (const s of this.sessions.filter((s) => s.id === sessionId || (sessionFile && s.sessionFile === sessionFile))) {
+      try { s.dispose(); } catch { /* already disposed by the caller's close */ }
     }
     // Prefer the exact path the SDK reports (that's the file it would re-read on
     // the next list); fall back to locating the transcript by id across Claude's
