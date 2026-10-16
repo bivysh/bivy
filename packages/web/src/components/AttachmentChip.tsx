@@ -19,9 +19,12 @@ import { fmtBytes, useAttachmentUrl } from "../attachmentUrl.js";
  * `onOpenImage` handler is supplied, a plain left-click on an image launches the
  * in-app gallery instead of opening the raw blob in a new tab; modifier/middle
  * clicks still fall through to the `<a>` so "open in new tab" keeps working.
+ * Without one (a lone `::view` image), the chip opens a gallery of itself.
  */
-export function AttachmentChip({ attachment, onOpenImage }: { attachment: PromptAttachment; onOpenImage?: () => void }) {
+export function AttachmentChip({ attachment, onOpenImage: openInGroup }: { attachment: PromptAttachment; onOpenImage?: () => void }) {
   const url = useAttachmentUrl(attachment);
+  const [viewing, setViewing] = useState(false);
+  const onOpenImage = openInGroup ?? (() => setViewing(true));
 
   return (
     <div className="msg-attachment">
@@ -31,16 +34,12 @@ export function AttachmentChip({ attachment, onOpenImage }: { attachment: Prompt
         target="_blank"
         rel="noopener"
         title={attachment.name}
-        onClick={
-          onOpenImage
-            ? (e) => {
-                // Leave new-tab gestures (cmd/ctrl/shift/middle-click) untouched.
-                if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-                e.preventDefault();
-                onOpenImage();
-              }
-            : undefined
-        }
+        onClick={(e) => {
+          // Leave new-tab gestures (cmd/ctrl/shift/middle-click) untouched.
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+          e.preventDefault();
+          onOpenImage();
+        }}
       >
         <img src={url} alt={attachment.description || attachment.name} />
       </a>}
@@ -59,6 +58,7 @@ export function AttachmentChip({ attachment, onOpenImage }: { attachment: Prompt
           </button>
         )}
       </div>
+      {viewing && <ImageGallery images={[attachment]} index={0} onClose={() => setViewing(false)} />}
     </div>
   );
 }
