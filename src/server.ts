@@ -1176,7 +1176,7 @@ const linkedDevices = createLinkedDeviceController({
     syncPairingMetadata();
     relay?.pushRotate(deliveries);
     broadcast({ type: "devices.updated", devices });
-    void resealRetiredAutomationTemplates();
+    void checkAutomationTemplates();
   },
 });
 const accessDevices = createAccessDeviceController({
@@ -3642,7 +3642,7 @@ function startRelayIfConfigured() {
   if (config.controlPlaneUrl && config.enrollmentToken) {
     sessionAdvertiseTarget = { controlPlaneUrl: config.controlPlaneUrl, enrollmentToken: config.enrollmentToken };
     void syncModelAuthFromControlPlane();
-    void resealRetiredAutomationTemplates();
+    void checkAutomationTemplates();
     if (remoteRuntimeEnabled()) {
       // Stage 3: layer a control-plane-backed location registry UNDER the in-memory
       // one (so a lookup surviving a restart resolves from durable state), then
@@ -3801,30 +3801,40 @@ async function modelAuthFetch(pathname: string, init: RequestInit = {}) {
 
 // A device revoke rotates the room key. Re-seal this node's stored automation
 // instructions under the new key so the node and its devices can still read
-// them, then drop the retired keys. Retried at startup until it completes.
-async function resealRetiredAutomationTemplates() {
+// them, then drop the retired keys. Instructions no key opens are flagged so the
+// automation list asks for them again. Runs at every start (retried there until
+// it completes), after a revoke, and when a run can't open its instructions.
+let automationTemplateCheck: Promise<void> | null = null;
+function checkAutomationTemplates(): Promise<void> {
+  automationTemplateCheck ??= reconcileAutomationTemplates().finally(() => { automationTemplateCheck = null; });
+  return automationTemplateCheck;
+}
+
+async function reconcileAutomationTemplates(): Promise<void> {
+  if (!sessionAdvertiseTarget) return;
   const retired = pairingStore.retiredRoomKeys();
-  if (!retired.length || !sessionAdvertiseTarget) return;
   const current = pairingStore.roomKey();
   try {
     const res = await modelAuthFetch("/node/automation-templates");
     if (!res?.ok) throw new Error(`control plane returned ${res?.status}`);
     const { templates } = await res.json() as { templates: StoredTemplate[] };
+    const call = async (pathname: string, init: RequestInit) => {
+      const out = await modelAuthFetch(pathname, init);
+      if (!out?.ok) throw new Error(`control plane returned ${out?.status}`);
+    };
     const result = await resealAutomationTemplates({
       nodeId: identity.nodeId,
       current,
       retired,
       templates,
-      save: async (id, templateCiphertext) => {
-        const saved = await modelAuthFetch(`/node/automation-templates/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ templateCiphertext }) });
-        if (!saved?.ok) throw new Error(`control plane returned ${saved?.status}`);
-      },
+      save: (id, templateCiphertext) => call(`/node/automation-templates/${encodeURIComponent(id)}`, { method: "PUT", body: JSON.stringify({ templateCiphertext }) }),
+      markUnreadable: (id) => call(`/node/automation-templates/${encodeURIComponent(id)}/unreadable`, { method: "POST" }),
     });
     if (result.resealed) console.log(`[automation-reseal] re-sealed ${result.resealed} automation template(s) under the rotated room key`);
     if (result.unreadable.length) console.warn(`[automation-reseal] ${result.unreadable.length} automation template(s) were sealed under a key this node no longer has: ${result.unreadable.join(", ")}`);
     // Another rotation during this pass retired `current`; run again for it.
-    if (!pairingStore.roomKey().equals(current)) return void resealRetiredAutomationTemplates();
-    pairingStore.forgetRetiredRoomKeys();
+    if (!pairingStore.roomKey().equals(current)) return reconcileAutomationTemplates();
+    if (retired.length) pairingStore.forgetRetiredRoomKeys();
   } catch (error) {
     console.warn("[automation-reseal] will retry at next start:", (error as Error).message);
   }
@@ -5622,6 +5632,7 @@ async function executeWorkItem(item: ControlPlaneWorkItem, report: (patch: Evide
       filter = template.filter;
       item = { ...item, body: template.instructions };
     } catch {
+      void checkAutomationTemplates();
       throw new Error("could not decrypt automation instructions on this node");
     }
   }

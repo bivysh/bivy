@@ -1058,6 +1058,8 @@ export interface AccountAutomation {
   configKey?: string;
   configOrder?: number;
   templateCiphertext?: string;
+  /** The assigned machine can't open `templateCiphertext` with any key it holds. */
+  instructionsUnreadable?: boolean;
   runtimeId?: string;
   model?: string;
   nodeLabel?: string;

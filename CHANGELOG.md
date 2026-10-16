@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Automations whose instructions can't be read are flagged before they fail.** When a machine can't open an automation's encrypted instructions with any key it holds, it now marks the automation, and the list shows **Needs instructions** on it. Before, you only found out when a run failed. The machine checks at every start, after a device is removed, and whenever a run can't open its instructions. Saving new instructions clears the mark.
+- **A device that missed a key change no longer reports readable instructions as lost.** A device that was offline when a machine changed its key still held the old key, so the automation editor said "Enter the instructions again" even though the machine could still read them. The editor now gets the machine's current key before it shows that message.
 - `bivy plugin init` and the example plugin pinned `requires.bivy` to a single minor release, so a plugin stopped installing at the next Bivy minor. The recommended range now runs to the next major.
 
 ## [0.21.1] - 2026-10-12

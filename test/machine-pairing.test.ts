@@ -38,3 +38,19 @@ test("a refused pairing rejects with the machine's reason", async () => {
   f.links[0]!.handlers.onStatus("offline");
   await assert.rejects(paired, /Device limit reached/);
 });
+
+test("replace pairs again over a held key and keeps it until the current one arrives", async () => {
+  const f = fixture();
+  f.keys.cloud = "old-key";
+  f.local.addKey = (id, key) => { f.keys[id] = key; };
+  const paired = pairWithMachine(f.local, "cloud", f.connect, { replace: true });
+  const link = f.links[0]!;
+  assert.equal(link.store.keys().cloud, undefined, "the transport pairs as if it had no key");
+  assert.equal(f.keys.cloud, "old-key");
+  link.handlers.onStatus("online");
+  assert.equal(link.closed, false, "an old key doesn't count as delivered");
+  link.store.addKey("cloud", "new-key");
+  link.handlers.onStatus("online");
+  await paired;
+  assert.equal(f.keys.cloud, "new-key");
+});
