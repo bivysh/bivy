@@ -59,7 +59,7 @@ for (const theme of themes) {
       };
       createRoot(document.getElementById('root')).render(React.createElement(ChatView, {
         entries:[{id:'user',role:'user',text:'Build me an invoice editor with a console.'},{id:'reply',role:'assistant',text:'The invoice workbench is ready. Open it below to try it.'},{id:'app',role:'assistant',text:'',app:{appId:'a',sessionId:'s',name:app.name}}],
-        working:false,workingLabel:'',draftRoute:false,sessionKey:'s',focusView:false
+        working:false,workingLabel:'',draftRoute:false,sessionKey:'s'
       }));
     </script></body></html>`);
     await page.route(`${origin}/apps-test`, (route) => route.fulfill({ contentType: "text/html", body: html }));

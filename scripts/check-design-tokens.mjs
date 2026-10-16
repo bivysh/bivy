@@ -80,6 +80,7 @@ const RETIRED_CLASSES = [
   "followup-queue", "followup-queue-head", "followup-list", "followup-card", "followup-card-row", "followup-reorder",
   "followup-body", "followup-status", "followup-text", "followup-attachments", "followup-card-actions",
   "followup-edit", "followup-edit-input", "followup-edit-actions", "schedule-field", "schedule-label",
+  "focus-view-btn", "focus-view-label", // Focus view removed: a turn's work folds into one line (TurnWork)
 ];
 const retiredClassRe = new RegExp(`(?:\\.|className[^\\n]*[\\"'\\x60 {])(${RETIRED_CLASSES.join("|")})(?=[\\s.\\"'\\x60}:])`, "g");
 // Retired selector shapes that are not a single class name.

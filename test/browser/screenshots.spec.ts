@@ -57,7 +57,7 @@ const fixtures = {
         <div class="sidebar-foot"><button class="btn primary new-session-btn"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"></path><path d="M16.4 3.6a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"></path></svg><span>New session</span></button><button class="btn icon settings-gear" aria-label="Settings"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="3"></circle><path d="M12 2v3M12 19v3M4.9 4.9 7 7M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1 7 17M17 7l2.1-2.1"></path></svg></button></div>
       </aside>
       <main class="main">
-        <header class="topbar"><button class="btn ghost icon only-mobile" aria-label="Open navigation">☰</button><div class="topbar-title"><div class="topbar-title-row"><h1 class="title">Improve onboarding</h1></div><span>Pi on Mac Studio</span></div><div class="topbar-actions"><button class="btn ghost focus-view-btn" aria-label="Show only prompts and final answers" aria-pressed="false"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z"></path><circle cx="12" cy="12" r="3"></circle></svg><span class="focus-view-label">Focus</span></button><button class="btn ghost icon" aria-label="Session menu">⋯</button></div></header>
+        <header class="topbar"><button class="btn ghost icon only-mobile" aria-label="Open navigation">☰</button><div class="topbar-title"><div class="topbar-title-row"><h1 class="title">Improve onboarding</h1></div><span>Pi on Mac Studio</span></div><div class="topbar-actions"><button class="btn ghost icon" aria-label="Session menu">⋯</button></div></header>
         <div class="chat-wrap"><div class="chat"><div class="chat-inner">
           <div class="transcript-turn">
             <div class="msg user">Make the first session easier to understand, then verify it on mobile.</div>
@@ -218,35 +218,6 @@ test("expanded activity stays useful after interim messages", async ({ page }, t
       animations: "disabled",
       caret: "hide",
       maxDiffPixelRatio: 0.025,
-    });
-  }
-});
-
-test("focus view keeps only prompts and final answers", async ({ page }, testInfo) => {
-  for (const theme of THEMES) {
-    await page.evaluate(({ html, selectedTheme }) => {
-      document.documentElement.dataset.theme = selectedTheme;
-      document.body.innerHTML = html;
-      const replies = Array.from(document.querySelectorAll(".turn-response-body > .assistant-row"));
-      replies.slice(0, -1).forEach((reply) => reply.remove());
-      document.querySelectorAll(".tool-group").forEach((group) => group.remove());
-      const focus = document.querySelector(".focus-view-btn")!;
-      focus.setAttribute("aria-pressed", "true");
-      focus.setAttribute("aria-label", "Show full transcript");
-      focus.querySelector(".focus-view-label")!.textContent = "Focused";
-      document.querySelector(".run-pill-stat")!.textContent = "Finished";
-      document.querySelector(".session-item.active .session-meta")!.textContent = "Pi · Mac Studio · just now";
-      document.querySelector(".session-item.active .row-status")!.remove();
-      const send = document.querySelector(".composer-btn")!;
-      send.className = "composer-btn send";
-      send.setAttribute("aria-label", "Send message");
-      send.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path></svg>';
-    }, { html: fixtures.live, selectedTheme: theme });
-    await assertNamedControls(page);
-    await expect(page.locator("body")).toHaveScreenshot(`focus-${testInfo.project.name}-${theme}.png`, {
-      animations: "disabled",
-      caret: "hide",
-      maxDiffPixels: 100,
     });
   }
 });

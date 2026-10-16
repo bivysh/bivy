@@ -11,14 +11,13 @@ import { NoticeCard } from "./NoticeCard.js";
 import { DelegationCard } from "./DelegationCard.js";
 import { ToolGroup } from "./ToolGroup.js";
 import { TurnWork } from "./TurnWork.js";
-import { noteSnippet, rowsBefore, splitTurn, startBefore, turnSpans, turnStartOf, type TurnItemKind } from "../turnWork.js";
+import { entryTurnKind, noteSnippet, rowsBefore, splitTurn, startBefore, turnSpans, turnStartOf, type TurnItemKind } from "../turnWork.js";
 import { PlanCard } from "./PlanCard.js";
 import { HandoffSeedLine } from "./HandoffSeedLine.js";
 import { MessageAttachments } from "./AttachmentChip.js";
 import { ImageGallery } from "./ImageGallery.js";
 import { base64ToBlobUrl } from "../attachmentUrl.js";
 import { MessageComponent, placementOf } from "./MessageComponent.js";
-import { focusEntries } from "../focusTranscript.js";
 import { clearMessageJump, pendingJumpIndex } from "../messageJump.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
 import { renderMermaidDiagrams } from "../mermaid.js";
@@ -574,10 +573,7 @@ function turnItemKind(item: RenderItem): TurnItemKind {
 }
 
 function entryKind(entry: TranscriptEntry): TurnItemKind {
-  if (entry.tool) return isPlanTool(entry.tool) ? "output" : "work";
-  if (entry.role === "thinking") return "work";
-  if (entry.role !== "assistant") return "output";
-  return entry.app || entry.review || entry.notice || entry.pin || entry.delegation || entry.attachments?.length ? "output" : "prose";
+  return entryTurnKind(entry, isPlanTool);
 }
 
 /** How an entry places in a turn; mirrors groupTurns. */
@@ -601,7 +597,6 @@ export function ChatView({
   draftRoute,
   opening,
   sessionKey,
-  focusView,
   onAction,
   authAction,
   header,
@@ -622,8 +617,6 @@ export function ChatView({
   opening?: boolean;
   /** Identity of the open session; used to preserve its window and reading position. */
   sessionKey: string | null;
-  /** Show only user prompts, final assistant answers, and essential notices. */
-  focusView?: boolean;
   /** Run a slash command from an inline notice action button (e.g. "/new"). */
   onAction?: (action: string) => void;
   /** The action that takes the user to the sign-in for this session's agent
@@ -645,12 +638,12 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
-  const source = useMemo(() => focusView ? focusEntries(entries, working) : entries, [entries, focusView, working]);
+  const source = entries;
   const total = source.length;
   const spans = useMemo(() => turnSpans(source, entryTurnRole, entryKind), [source]);
   const scrollMemory = useRef(new Map<string, ChatScrollMemory>());
   const [historyWindow, setHistoryWindow] = useState(() => ({
-    sessionKey, focusView, initialized: total > 0, start: startBefore(spans, total, INITIAL_WINDOW),
+    sessionKey, initialized: total > 0, start: startBefore(spans, total, INITIAL_WINDOW),
   }));
   // A refreshed/filtered transcript can shrink beneath the fixed cutoff. Keep
   // a tail of messages mounted, and persist the corrected cutoff so subsequent
@@ -659,10 +652,10 @@ export function ChatView({
   let start = turnStartOf(spans, Math.min(historyWindow.start, latestStart));
   // Reset before committing a different session/view, or its first snapshot.
   // Ordinary appends must not move the start or change mounted group identities.
-  if (historyWindow.sessionKey !== sessionKey || historyWindow.focusView !== focusView || (!historyWindow.initialized && total > 0)) {
+  if (historyWindow.sessionKey !== sessionKey || (!historyWindow.initialized && total > 0)) {
     const remembered = scrollMemory.current.get(sessionKey ?? "new");
     start = turnStartOf(spans, Math.min(latestStart, remembered ? Math.max(0, total - remembered.limit) : total));
-    setHistoryWindow({ sessionKey, focusView, initialized: total > 0, start });
+    setHistoryWindow({ sessionKey, initialized: total > 0, start });
   } else if (start !== historyWindow.start || (historyWindow.initialized && total === 0)) {
     setHistoryWindow({ ...historyWindow, initialized: total > 0, start });
   }
@@ -670,7 +663,7 @@ export function ChatView({
   const jumpIndex = pendingJumpIndex(sessionKey, source);
   if (jumpIndex !== null && jumpIndex < start) {
     start = turnStartOf(spans, jumpIndex);
-    setHistoryWindow({ sessionKey, focusView, initialized: true, start });
+    setHistoryWindow({ sessionKey, initialized: true, start });
   }
   const limitRef = useRef(total - start);
   useLayoutEffect(() => { limitRef.current = total - start; }, [total, start]);
@@ -793,9 +786,7 @@ export function ChatView({
 
   const lastTurn = blocks.findLast((block) => block.kind === "turn");
   // One work line per turn between the prompt and the answer (see TurnWork).
-  // Focus view already drops the work, so it renders the response as-is.
   const renderResponse = (response: RenderItem[], live: boolean) => {
-    if (focusView) return response.map(renderItem);
     const { work, outputs, answer } = splitTurn(response, turnItemKind);
     if (!work.length) return response.map(renderItem);
     const tools = work.flatMap((item) => item.kind === "tools" ? item.tools : []);

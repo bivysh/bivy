@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import assert from "node:assert/strict";
-import { rowsBefore, splitTurn, startBefore, turnSpans, turnStartOf, type TurnItemKind } from "../packages/web/src/turnWork.js";
+import type { TranscriptEntry } from "@bivy/core";
+import { entryTurnKind, rowsBefore, splitTurn, startBefore, turnSpans, turnStartOf, type TurnItemKind } from "../packages/web/src/turnWork.js";
 
 // A transcript in shorthand: P prompt, N notice, t tool, x thinking, p prose, o output.
 type Row = "P" | "N" | "t" | "x" | "p" | "o";
@@ -35,3 +36,21 @@ assert.equal(startBefore(spans, 11, 4), 2, "show earlier steps back from the cur
 assert.equal(startBefore(spans, 0, 20), 0);
 assert.equal(turnStartOf(spans, 7), 2, "a jump target opens its whole turn");
 assert.equal(rowsBefore(spans, 11), 5);
+
+// What the agent produced stays outside the work line, even when it lands on
+// interim prose: a file attached mid-turn is still in view once the work folds.
+const image = { kind: "image" as const, name: "result.png", size: 42, mimeType: "image/png", hash: "a".repeat(64) };
+const entries: TranscriptEntry[] = [
+  { id: "user", role: "user", text: "Show me" },
+  { id: "note", role: "assistant", text: "I'll attach it.", attachments: [image] },
+  { id: "think", role: "thinking", text: "…" },
+  { id: "tool", role: "tool", text: "", tool: { callId: "attach", name: "shell", input: {}, status: "done" } },
+  { id: "plan", role: "tool", text: "", tool: { callId: "plan", name: "plan", input: {}, status: "done" } },
+  { id: "final", role: "assistant", text: "Attached." },
+];
+const kind = (entry: TranscriptEntry) => entryTurnKind(entry, (tool) => tool.callId === "plan");
+assert.deepEqual(entries.map(kind), ["output", "output", "work", "work", "output", "prose"]);
+const split = splitTurn(entries.slice(1), kind);
+assert.deepEqual(split.work.map((entry) => entry.id), ["think", "tool"]);
+assert.deepEqual(split.outputs.map((entry) => entry.id), ["note"]);
+assert.deepEqual(split.answer.map((entry) => entry.id), ["plan", "final"]);

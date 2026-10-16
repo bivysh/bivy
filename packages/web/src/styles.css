@@ -324,10 +324,6 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .topbar-actions { flex: none; display: flex; align-items: center; gap: 8px; min-width: 0; }
-.focus-view-btn { display: inline-flex; align-items: center; gap: var(--space-2); }
-.focus-view-btn svg { display: block; flex: none; }
-.focus-view-btn[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }
-.focus-view-label { font-size: var(--text-xs); font-weight: var(--weight-semibold); }
 
 /* ---- Side pane (wide screens): the session's changes, apps and artifacts
    beside the chat instead of in a sheet over it. Same bodies as the sheets
@@ -3204,8 +3200,6 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
   .chat-inner { padding: var(--space-4) var(--space-4) var(--space-5); gap: var(--space-5); }
   .transcript-turn { gap: var(--space-3); }
   .msg.user { max-width: 88%; }
-  .focus-view-btn { width: 44px; height: 44px; padding: 0; }
-  .focus-view-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
   .sidebar-close { min-width: 44px; min-height: 44px; }
 }
 

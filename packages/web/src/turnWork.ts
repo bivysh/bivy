@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+import type { TranscriptEntry } from "@bivy/core";
 
 /** What one rendered item of an agent turn is, for grouping its work. */
 export type TurnItemKind =
@@ -10,6 +11,19 @@ export type TurnItemKind =
   | "output";
 
 export type TurnSplit<T> = { work: T[]; outputs: T[]; answer: T[] };
+
+/**
+ * Where a transcript entry goes in its turn. Tool calls and thinking are work;
+ * what the agent produced (files, apps, reviews, pins, notices, delegations, a
+ * top-level plan) stays in view even when it lands on interim prose; other
+ * assistant prose is narration or the answer.
+ */
+export function entryTurnKind(entry: TranscriptEntry, isPlan: (tool: NonNullable<TranscriptEntry["tool"]>) => boolean): TurnItemKind {
+  if (entry.tool) return isPlan(entry.tool) ? "output" : "work";
+  if (entry.role === "thinking") return "work";
+  if (entry.role !== "assistant") return "output";
+  return entry.app || entry.review || entry.notice || entry.pin || entry.delegation || entry.attachments?.length ? "output" : "prose";
+}
 
 /**
  * Split a turn's response into one collapsible work group and what stays in the

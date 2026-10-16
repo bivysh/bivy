@@ -15,7 +15,6 @@ import { sessionDateGroup } from "../packages/web/src/sessionPresentation.js";
 import { attentionRank, isUnseen, statusClass, statusLabel } from "../packages/web/src/sessionStatus.js";
 import { modelAccountChoice } from "../packages/web/src/modelAccounts.js";
 import { githubInstallationSettings, githubMentionHandles, githubSourceStatus } from "../packages/web/src/components/githubSource.js";
-import { focusEntries } from "../packages/web/src/focusTranscript.js";
 import { standbyCopyOf } from "../packages/web/src/standby.js";
 import { cloudDestinations, nodePresence } from "../packages/web/src/cloudDestinations.js";
 import { agentForProviders, signInSync } from "../packages/web/src/onboarding.js";
@@ -50,41 +49,6 @@ test("GitHub status does not conflate hosted installation with executor readines
   assert.deepEqual(githubMentionHandles(null), []);
   assert.equal(githubInstallationSettings(installation), "https://github.com/organizations/acme/settings/installations/42");
   assert.equal(githubInstallationSettings({ ...installation, githubAccountType: "User" }), "https://github.com/settings/installations/42");
-});
-
-test("Focus view keeps attachments while hiding intermediate prose", () => {
-  const image = { kind: "image" as const, name: "result.png", size: 42, mimeType: "image/png", hash: "a".repeat(64) };
-  const user: TranscriptEntry = { id: "user", role: "user", text: "Show me" };
-
-  // An earlier attachment is carried onto the final answer.
-  const carried = focusEntries([
-    user,
-    { id: "commentary", role: "assistant", text: "I’ll attach it.", attachments: [image] },
-    { id: "tool", role: "assistant", text: "", tool: { callId: "attach", name: "shell", input: {}, status: "done" } },
-    { id: "final", role: "assistant", text: "Attached." },
-  ], false);
-  assert.deepEqual(carried.map((entry) => entry.id), ["user", "final"]);
-  assert.deepEqual(carried[1]?.attachments, [image]);
-
-  // An attachment-only turn is kept.
-  const only = focusEntries([user, { id: "attachment", role: "assistant", text: "", attachments: [image] }], false)[1];
-  assert.equal(only?.id, "attachment");
-  assert.deepEqual(only?.attachments, [image]);
-
-  // An attachment already on the final answer is not duplicated.
-  const grouped = focusEntries([
-    user,
-    { id: "attachment", role: "assistant", text: "", attachments: [image] },
-    { id: "final", role: "assistant", text: "Attached.", attachments: [image] },
-  ], false);
-  assert.deepEqual(grouped[1]?.attachments, [image]);
-
-  // In-progress prose is hidden, emitted attachments are not.
-  const working = focusEntries([user, { id: "working", role: "assistant", text: "Interim narration", streaming: true, attachments: [image] }], true)[1];
-  assert.equal(working?.id, "working");
-  assert.equal(working?.text, "");
-  assert.equal(working?.streaming, false);
-  assert.deepEqual(working?.attachments, [image]);
 });
 
 test("automation list and dates: one-off schedules are hidden; nearby runs read relatively", () => {
