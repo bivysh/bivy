@@ -101,7 +101,11 @@ try {
   await daemonServes(node, path.join(install, "app"));
   if (withBridges) {
     run(link, ["agents:install", "--bridges"], { timeout: 600_000 });
-    if (!/"id": "pi"[\s\S]*?"installed": true/.test(run(link, ["agents", "--json"]))) throw new Error("the archive's CLI did not find Pi through its installed bridge");
+    // As the node does, look for bridge CLIs (Pi's `pi`) in the bridges' bin.
+    const bridgeEnv = { ...env, PATH: `${path.join(env.BIVY_DATA_DIR, "bridges", "node_modules", ".bin")}:${env.PATH}` };
+    const agents = JSON.parse(run(link, ["agents", "--json"], { env: bridgeEnv }));
+    const pi = (Array.isArray(agents) ? agents : agents.agents ?? []).find((agent) => agent.id === "pi");
+    if (!pi?.installed) throw new Error("the archive's CLI did not find Pi through its installed bridge");
     // Bridges drive the operator's own agent CLI, so the Claude SDK's bundled
     // per-platform binary (~200 MB) must not be installed.
     const anthropic = fs.readdirSync(path.join(env.BIVY_DATA_DIR, "bridges", "node_modules", "@anthropic-ai"));

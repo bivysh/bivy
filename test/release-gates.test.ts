@@ -19,7 +19,7 @@ test("only a v* tag promotes, and only a commit on main whose package.json names
 test("production cannot publish without a CI receipt for the exact commit", () => {
   const steps = production.steps.map((s: { name?: string }) => s.name);
   // The receipt gates the irreversible publish.
-  assert.ok(steps.indexOf("Require a CI receipt for this commit") < steps.findIndex((n: string) => n?.startsWith("Publish or resume npm")));
+  assert.ok(steps.indexOf("Require a CI receipt for this commit") < steps.findIndex((n: string) => n === "Build the archives; alias the service images"));
   const receipt = step("Require a CI receipt for this commit");
   assert.match(receipt, /head_sha=\$RELEASE_SHA&\$1/);
   // A merge-queue run, or a run where every job passed, is a receipt...
