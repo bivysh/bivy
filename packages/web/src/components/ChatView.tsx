@@ -10,6 +10,8 @@ import { PinCard } from "./PinCard.js";
 import { NoticeCard } from "./NoticeCard.js";
 import { DelegationCard } from "./DelegationCard.js";
 import { ToolGroup } from "./ToolGroup.js";
+import { TurnWork } from "./TurnWork.js";
+import { noteSnippet, splitTurn, type TurnItemKind } from "../turnWork.js";
 import { PlanCard } from "./PlanCard.js";
 import { HandoffSeedLine } from "./HandoffSeedLine.js";
 import { MessageAttachments } from "./AttachmentChip.js";
@@ -563,6 +565,17 @@ function groupEntries(entries: TranscriptEntry[]): RenderItem[] {
   return items;
 }
 
+/** Tool calls and thinking are work; agent output (files, apps, plans, notices)
+ *  stays in view; other assistant prose is narration or the answer. */
+function turnItemKind(item: RenderItem): TurnItemKind {
+  if (item.kind === "tools") return "work";
+  if (item.kind === "plan") return "output";
+  const { entry } = item;
+  if (entry.role === "thinking") return "work";
+  if (entry.role !== "assistant") return "output";
+  return entry.app || entry.review || entry.notice || entry.pin || entry.delegation || entry.attachments?.length ? "output" : "prose";
+}
+
 // Limit the initial mount, not the live transcript. Sliding this window on
 // every append removes the passage being read and remounts tool groups (closing
 // their inspectors). Keep its start fixed until the reader loads more history
@@ -762,6 +775,32 @@ export function ChatView({
   // reserve the generic dots for the gap before the agent emits anything.
   const tailShowsProgress = Boolean(tail?.role === "assistant" || tail?.tool);
 
+  const lastTurn = blocks.findLast((block) => block.kind === "turn");
+  // One work line per turn between the prompt and the answer (see TurnWork).
+  // Focus view already drops the work, so it renders the response as-is.
+  const renderResponse = (response: RenderItem[], live: boolean) => {
+    if (focusView) return response.map(renderItem);
+    const { work, outputs, answer } = splitTurn(response, turnItemKind);
+    if (!work.length) return response.map(renderItem);
+    const tools = work.flatMap((item) => item.kind === "tools" ? item.tools : []);
+    const notes = work.filter((item) => item.kind === "entry" && item.entry.role === "assistant");
+    const lastNote = notes.at(-1);
+    const running = tools.some((tool) => tool.status === "running") || (live && answer.length === 0);
+    return [
+      <TurnWork
+        key={`work-${work[0]!.key}`}
+        tools={tools}
+        notes={notes.length}
+        note={lastNote?.kind === "entry" ? noteSnippet(lastNote.entry.text || "") : undefined}
+        running={running}
+      >
+        {work.map(renderItem)}
+      </TurnWork>,
+      ...outputs.map(renderItem),
+      ...answer.map(renderItem),
+    ];
+  };
+
   const renderItem = (it: RenderItem) => it.kind === "tools"
     ? <ToolGroup key={it.key} tools={it.tools} />
     : it.kind === "plan"
@@ -804,7 +843,7 @@ export function ChatView({
           ) : (
             <div className="transcript-turn" key={block.key}>
               {block.user?.kind === "entry" && <EntryView entry={block.user.entry} onAction={onAction} sessionId={sessionKey} />}
-              {block.response.length > 0 && <div className="turn-response-body">{block.response.map(renderItem)}</div>}
+              {block.response.length > 0 && <div className="turn-response-body">{renderResponse(block.response, working && block === lastTurn)}</div>}
             </div>
           ))}
           {working && !tailShowsProgress && (

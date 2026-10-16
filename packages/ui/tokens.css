@@ -272,6 +272,19 @@
   --syntax-addition: var(--machine-green);
 }
 
+/* Touch screens read one step up from the dense desktop scale: the whole type
+   scale moves, so every component follows without its own override. */
+@media (pointer: coarse) {
+  :root {
+    --text-xs: 12px;   --lh-xs: 16px;
+    --text-sm: 13px;   --lh-sm: 18px;
+    --text-base: 15px; --lh-base: 22px;
+    --text-md: 16px;   --lh-md: 24px;
+    --text-lg: 17px;   --lh-lg: 24px;
+    --text-xl: 20px;   --lh-xl: 28px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   :root { --dur-fast: 0ms; --dur: 0ms; --dur-slow: 0ms; }
 }

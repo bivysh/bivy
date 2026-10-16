@@ -165,7 +165,7 @@ const LIBRARY_NAV: { view: LibraryView; label: string; icon: ReactNode }[] = [
   { view: "apps", label: "Apps", icon: <><rect x="4" y="4" width="6.5" height="6.5" rx="1.5" /><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5" /><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5" /><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5" /></> },
 ];
 
-export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSources, onOpenAutomations, automationsActive, onOpenLibrary, libraryActive, onOpenTerminal, terminalDisabled }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem>; sessionSources?: Map<string, SourceInfo>; onOpenAutomations?: () => void; automationsActive?: boolean; onOpenLibrary?: (view: LibraryView) => void; libraryActive?: LibraryView | null; onOpenTerminal?: () => void; terminalDisabled?: boolean }) {
+export function SessionList({ searchOpen = true, onSearchOpenChange, onPick, onPickTerminal, runEvidence, sessionSources, onOpenAutomations, automationsActive, onOpenLibrary, libraryActive, onOpenTerminal, terminalDisabled }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem>; sessionSources?: Map<string, SourceInfo>; onOpenAutomations?: () => void; automationsActive?: boolean; onOpenLibrary?: (view: LibraryView) => void; libraryActive?: LibraryView | null; onOpenTerminal?: () => void; terminalDisabled?: boolean; /** Show the search + filter row (toggled from the sidebar head). */ searchOpen?: boolean; onSearchOpenChange?: (open: boolean) => void }) {
   const { sessionIndex: { sessions, runTerminals }, activeSession: { activeSessionId }, connection: { nodes, currentNodeId } } = useAppState();
   const [query, setQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<{ sessionId: string; name: string } | null>(null);
@@ -345,7 +345,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
           )}
         </nav>
       )}
-      <div className="session-list-tools">
+      {(searchOpen || query || activeFilterCount > 0) && <div className="session-list-tools">
         <label className="session-search-wrap">
           <SearchIcon size={17} aria-hidden />
           <input
@@ -355,6 +355,14 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
             placeholder={sessions.length > 1 ? `Search ${sessions.length} sessions` : "Search sessions"}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            // Opened on request from the sidebar head, so it takes focus; Escape
+            // clears and folds it away again.
+            autoFocus={Boolean(onSearchOpenChange)}
+            onKeyDown={(e) => {
+              if (e.key !== "Escape" || !onSearchOpenChange) return;
+              setQuery("");
+              onSearchOpenChange(false);
+            }}
           />
         </label>
         <div className="session-filter" ref={filterRef}>
@@ -451,7 +459,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
             </div>
           )}
         </div>
-      </div>
+      </div>}
       {filtered.length === 0 && filteredRuns.length === 0 && <div className="session-empty">{emptyText}</div>}
       <ul>
         {filteredRuns.length > 0 && <li className="session-group-label">Running</li>}

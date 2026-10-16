@@ -55,11 +55,6 @@ body {
   color: var(--ink);
   -webkit-font-smoothing: antialiased;
 }
-/* Touch screens read one step up from the dense desktop scale. */
-@media (pointer: coarse) {
-  body { font-size: var(--text-md); line-height: var(--lh-md); }
-  .msg.assistant { font-size: var(--text-md); }
-}
 button { font: inherit; cursor: pointer; }
 ::selection { background: var(--signal-soft); }
 .composer-input { caret-color: var(--signal); }
@@ -820,6 +815,18 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
   animation: spark-twinkle 1.8s var(--ease-standard) infinite;
 }
 .tool-chevron { color: var(--muted); flex: none; font-size: 11px; }
+/* One work line per turn (TurnWork): collapsed between prompt and answer,
+   expanding inline over a hairline rail. */
+.turn-work { align-self: stretch; width: 100%; max-width: 680px; }
+.turn-work-chevron { transition: transform var(--dur-fast) var(--ease-standard); }
+.turn-work.is-open .turn-work-chevron { transform: rotate(90deg); }
+.turn-work-body {
+  display: flex; flex-direction: column; gap: var(--space-2);
+  margin: var(--space-1) 0 var(--space-2) var(--space-1); padding: var(--space-1) 0 var(--space-1) var(--space-4);
+  border-left: 1px solid var(--line);
+}
+.turn-work-body .msg.assistant { color: var(--muted); }
+.turn-work-body .msg-actions { display: none; }
 .tool-stat { display: inline-flex; align-items: center; gap: 6px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; flex: none; }
 .tool-stat .add { color: var(--ok); }
 .tool-stat .del { color: var(--danger); }

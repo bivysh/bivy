@@ -80,7 +80,7 @@ import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { useModalEscape } from "./modalStack.js";
 import { SessionViewToggle, type SessionPaneView } from "./components/SessionViewToggle.js";
 import { readSessionView, writeSessionView, type SessionView } from "./sessionView.js";
-import { CloseIcon, PanelRightIcon } from "./components/UiIcons.js";
+import { CloseIcon, PanelRightIcon, SearchIcon } from "./components/UiIcons.js";
 import { SidePane } from "./components/SidePane.js";
 import { useSidePane, type SidePaneTabId } from "./useSidePane.js";
 import { controller } from "./store/useStore.js";
@@ -104,6 +104,8 @@ export function App() {
   const appIconBadgeEnabled = useSyncExternalStore(subscribeNotificationSettings, getAppIconBadgeEnabled);
   const notificationPreferences = useSyncExternalStore(subscribeNotificationSettings, getNotificationPreferencesSnapshot);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Session search + filter stay out of the sidebar until asked for.
+  const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const burgerRef = useRef<HTMLButtonElement>(null);
@@ -878,12 +880,23 @@ export function App() {
         <div className="sidebar-head">
           <span className="brand"><BivyMark className="brand-mark" />Bivy</span>
           <div className="sidebar-head-actions">
+            <button
+              className="btn ghost icon sidebar-search-toggle"
+              onClick={() => setSessionSearchOpen((open) => !open)}
+              aria-pressed={sessionSearchOpen}
+              aria-label={sessionSearchOpen ? "Hide session search" : "Search sessions"}
+              title="Search sessions"
+            >
+              <SearchIcon size={18} aria-hidden />
+            </button>
             <button className="btn ghost icon only-mobile sidebar-close" onClick={closeDrawer} aria-label="Close sessions">
               <CloseIcon />
             </button>
           </div>
         </div>
         <SessionList
+          searchOpen={sessionSearchOpen}
+          onSearchOpenChange={setSessionSearchOpen}
           runEvidence={runEvidence}
           sessionSources={sessionSources}
           automationsActive={Boolean(automationsOpen)}
