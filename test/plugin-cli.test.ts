@@ -113,7 +113,6 @@ contributes:
 
     const installed = run(["install", file, "--json"], env);
     assert.equal(installed.status, 0, installed.stderr);
-    assert.equal(JSON.parse(installed.stdout).restartRequired, true);
 
     const listed = run(["list", "--json"], env);
     assert.equal(listed.status, 0, listed.stderr);

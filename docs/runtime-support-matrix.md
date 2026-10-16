@@ -37,7 +37,7 @@ per-agent pages under [docs/agents/](agents/README.md).
 | OpenClaw | `openclaw` | *Experimental* | No | Yes | Yes | No | No | Boundary only | No | OpenClaw CLI | Phase-1 CLI adapter only; resume needs the future Gateway RPC bridge. |
 | Generic CLI | `generic-cli` | *Experimental* | No | Env-configured | Env-configured | Depends | No | Boundary only | No | External CLI | Universal escape hatch; support is best-effort; resumable when `BIVY_AGENT_RESUME_TEMPLATE` is set (same generic primitive as maintained process profiles). |
 | Bivy Agent Protocol | `bivy-agent-protocol` | *Experimental* | No | Env-configured | Env-configured | Depends on agent | Depends on agent | Depends on agent | No | Protocol agent | Best path for third-party agents to become fully supported; resumable when the shim advertises `resume: true`. |
-| ACP Agent | `acp` | *Experimental* | No | Env-configured | Env-configured | Yes | No | **Per-tool (Approve/Deny)** | No | ACP agent | Any [Agent Client Protocol](https://agentclientprotocol.com) agent (e.g. `gemini --experimental-acp`) driven through `bin/acp-shim.mjs` → the same governed `ProtocolRuntime` as Codex. Configure with `BIVY_ACP_COMMAND` / `BIVY_ACP_ARGS`. See [agents/acp.md](agents/acp.md). |
+| ACP Agent | `acp` | *Experimental* | No | Env-configured | Env-configured | Yes | No | **Per-tool (Approve/Deny)** | No | ACP agent | Any [Agent Client Protocol](https://agentclientprotocol.com) agent (e.g. `gemini --experimental-acp`) driven through `bin/acp-shim.mjs` → the same governed `ProtocolRuntime` as Codex. Add one with `bivy agent add <id> --command <cmd>` or an `agents:` entry in `config.yaml` ([Add any agent](add-an-agent.md)). See [agents/acp.md](agents/acp.md). |
 
 Every picker CLI agent's launch flags are overridable per node with
 `BIVY_<ID>_ARGS` (a JSON array), its resume form with `BIVY_<ID>_RESUME_TEMPLATE`
@@ -162,7 +162,7 @@ Four general, opt-in levers move an agent up that ladder without per-agent code:
   (permission-request approvals + observed activity + streaming + resume + model
   selection) as data. Activity that may already be executing is never presented
   as an approval that can still stop it. Use the
-  generic runtime (`BIVY_ACP_COMMAND` / `BIVY_ACP_ARGS`), or promote a specific
+  generic runtime (an `agents:` entry with `adapter.kind: acp`), or promote a specific
   agent that declares an `acp` field. OpenCode runs this way by default;
   `BIVY_<ID>_ACP=1` opts in another one and `BIVY_PREFER_ACP=1` promotes every
   ACP-capable agent. A promoted agent honestly gains Approvals + Resume in the

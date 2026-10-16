@@ -27,7 +27,7 @@ run your first agent Session.
 | Fork work to another agent, model, or Machine | [Capability recipes](capability-recipes.md#fork-or-move-a-session) | [Runtime support matrix](runtime-support-matrix.md) |
 | Use a fleet of workstations, servers, and GPU Machines | [Capability recipes](capability-recipes.md#use-multiple-machines) | [CLI reference](cli-reference.md#machines-and-remote-access) |
 | Start checked work from failed CI, an issue, a schedule, or a webhook | [Capability recipes](capability-recipes.md#let-events-start-runs) | [Automations as code](automations-as-code.md) |
-| Bring an ACP or headless process agent | [Capability recipes](capability-recipes.md#bring-a-custom-agent) | [Plugins](plugins.md) |
+| Bring any ACP agent or CLI, or write an adapter for one | [Add any agent](add-an-agent.md) | [Plugins](plugins.md) |
 | Understand what leaves my Machine | [Why Bivy](why-bivy.md#a-precise-trust-boundary) | [Security model](security-model.md) |
 
 The reference organization below remains the fastest path when you already know
@@ -47,7 +47,8 @@ which subsystem or command you need.
 | --- | --- |
 | [capability-recipes.md](capability-recipes.md) | Developers applying Bivy to real environments, remote continuity, Machine fleets, and event-driven work. |
 | [agent-shim.md](agent-shim.md) | Users wrapping an agent's native terminal session with Bivy. |
-| [plugins.md](plugins.md) | Developers adding an external process or ACP agent through a declarative plugin manifest. |
+| [add-an-agent.md](add-an-agent.md) | Anyone adding an ACP agent or CLI from `config.yaml`, or writing an adapter for one. |
+| [plugins.md](plugins.md) | Developers packaging an agent as a declarative plugin manifest to share it. |
 | [automations-as-code.md](automations-as-code.md) | Developers defining, validating, simulating, and applying automations from YAML. |
 | [automation-evaluator.md](automation-evaluator.md) | Contributors touching automation matching/preflight — the shared first-match, overlap, and checklist logic behind config-as-code, the control plane, and the PWA. |
 | [automation-runs.md](automation-runs.md) | Developers who want the run lifecycle: how every trigger lands in one durable queue, run states, and the milestone timeline. |

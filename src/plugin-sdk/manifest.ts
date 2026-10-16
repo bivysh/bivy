@@ -250,6 +250,17 @@ function parseAcpAdapter(raw: Record<string, unknown>, at: string, errors: strin
   return command ? { kind: "acp", command, ...(args ? { args } : {}) } : undefined;
 }
 
+/** Validate one `adapter` block. Plugin manifests and node `config.yaml` agents
+ *  share it, so an agent is described the same way wherever it is declared. */
+export function parseAgentAdapter(value: unknown, at: string, errors: string[]): ProcessAgentAdapter | AcpAgentAdapter | undefined {
+  const raw = object(value);
+  if (!raw) { errors.push(`${at} must be an object`); return undefined; }
+  if (raw.kind === "process") return parseProcessAdapter(raw, at, errors);
+  if (raw.kind === "acp") return parseAcpAdapter(raw, at, errors);
+  errors.push(`${at}.kind must be process or acp`);
+  return undefined;
+}
+
 function parseAgent(value: unknown, index: number, errors: string[]): PluginAgentContribution | undefined {
   const at = `contributes.agents[${index}]`;
   const raw = object(value);
@@ -267,12 +278,7 @@ function parseAgent(value: unknown, index: number, errors: string[]): PluginAgen
   if (authOwner !== undefined && authOwner !== "agent" && authOwner !== "bivy" && authOwner !== "mixed") {
     errors.push(`${at}.authOwner must be agent, bivy, or mixed`);
   }
-  const adapterRaw = object(raw.adapter);
-  let adapter: ProcessAgentAdapter | AcpAgentAdapter | undefined;
-  if (!adapterRaw) errors.push(`${at}.adapter must be an object`);
-  else if (adapterRaw.kind === "process") adapter = parseProcessAdapter(adapterRaw, `${at}.adapter`, errors);
-  else if (adapterRaw.kind === "acp") adapter = parseAcpAdapter(adapterRaw, `${at}.adapter`, errors);
-  else errors.push(`${at}.adapter.kind must be process or acp`);
+  const adapter = parseAgentAdapter(raw.adapter, `${at}.adapter`, errors);
   if (!id || !name || !adapter) return undefined;
   return {
     id,
@@ -403,5 +409,7 @@ export function checkPluginCompatibility(manifest: PluginManifest, currentVersio
 export function recommendedBivyRange(currentVersion: string): string {
   const parsed = parseSemver(currentVersion);
   if (!parsed) throw new Error(`Cannot generate a compatibility range from invalid Bivy version ${currentVersion}`);
-  return `>=${parsed.major}.${parsed.minor}.${parsed.patch} <${parsed.major}.${parsed.minor + 1}.0`;
+  // The manifest contract is versioned by apiVersion, so a plugin keeps working
+  // across Bivy minor releases; only a major release may break it.
+  return `>=${parsed.major}.${parsed.minor}.${parsed.patch} <${parsed.major + 1}.0.0`;
 }

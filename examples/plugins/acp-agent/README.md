@@ -10,7 +10,6 @@ bivy plugin validate .
 bivy plugin doctor .
 bivy plugin test .
 bivy plugin install .
-bivy restart
 ```
 
 `npm link` only places the example executable on `PATH`; Bivy's plugin install

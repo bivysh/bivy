@@ -4,8 +4,31 @@
 import fs from "node:fs";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { parseAgentAdapter, type AcpAgentAdapter, type PluginAuthOwner, type ProcessAgentAdapter } from "./plugin-sdk/manifest.js";
 
 export const NODE_CONFIG_FILE = "config.yaml";
+
+/** A node-local agent: either any ACP/CLI command (`adapter`, the same block a
+ *  plugin manifest uses) or a maintained agent re-pointed at another binary
+ *  (`extends`). */
+export type NodeAgentConfig =
+  | {
+    name?: string;
+    description?: string;
+    hidden?: boolean;
+    authOwner?: PluginAuthOwner;
+    adapter: ProcessAgentAdapter | AcpAgentAdapter;
+  }
+  | {
+    extends: string;
+    label?: string;
+    command?: string;
+    args?: string[];
+    jsonArgs?: string[];
+    parserId?: string;
+    promptMode?: "stdin" | "argv";
+    hidden?: boolean;
+  };
 export const NODE_CONFIG_VERSION = 1 as const;
 
 export type ConfigSandbox = "read-only" | "workspace-write" | "danger-full-access";
@@ -61,16 +84,7 @@ export interface NodeConfig {
      * could also write one; off unless turned on here. */
     slackPrompts?: boolean;
   };
-  agents?: Record<string, {
-    extends: string;
-    label?: string;
-    command?: string;
-    args?: string[];
-    jsonArgs?: string[];
-    parserId?: string;
-    promptMode?: "stdin" | "argv";
-    hidden?: boolean;
-  }>;
+  agents?: Record<string, NodeAgentConfig>;
   /** Advanced/deployment overrides. Values remain strings, matching process.env. */
   environment?: Record<string, string>;
 }
@@ -206,6 +220,18 @@ export function validateNodeConfig(value: unknown): NodeConfigResult {
     const spec = record(raw);
     if (!/^[a-z][a-z0-9-]{1,47}$/.test(id)) { errors.push(`${at} must use a lowercase slug`); continue; }
     if (!spec) { errors.push(`${at} must be an object`); continue; }
+    if (spec.adapter !== undefined) {
+      unknownKeys(spec, ["name", "description", "hidden", "authOwner", "adapter"], at, errors);
+      const adapter = parseAgentAdapter(spec.adapter, `${at}.adapter`, errors);
+      const authOwner = spec.authOwner as PluginAuthOwner | undefined;
+      if (authOwner !== undefined && authOwner !== "agent" && authOwner !== "bivy" && authOwner !== "mixed") errors.push(`${at}.authOwner must be agent, bivy, or mixed`);
+      const name = optionalString(spec.name, `${at}.name`, errors, 120);
+      const description = optionalString(spec.description, `${at}.description`, errors, 500);
+      const hidden = optionalBoolean(spec.hidden, `${at}.hidden`, errors);
+      if (adapter) agents[id] = { name, description, hidden, authOwner, adapter };
+      continue;
+    }
+    if (spec.extends === undefined) { errors.push(`${at} needs an adapter (any ACP or CLI command) or extends (a maintained agent id)`); continue; }
     unknownKeys(spec, ["extends", "label", "command", "args", "jsonArgs", "parserId", "promptMode", "hidden"], at, errors);
     const extend = optionalString(spec.extends, `${at}.extends`, errors, 80);
     const list = (value: unknown, key: string): string[] | undefined => {

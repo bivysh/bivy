@@ -57,21 +57,10 @@ sandbox semantics, or privileged behavior from help text.
 
 ## Bring your own agent
 
-An ACP agent needs only a command and, when applicable, its ACP arguments:
-
-```bash
-bivy agent add company-agent \
-  --command company-agent \
-  --transport acp \
-  --args '["serve","--acp"]'
-```
-
-A headless process agent can be added with `--transport process` and
-`--prompt-mode stdin|argv`. This command creates and installs the same strict
-manifest used by `bivy plugin install`; it is convenience, not a second
-configuration model. Use an out-of-process ACP/Bivy-protocol bridge when an
-agent needs custom translation. Bivy never imports arbitrary integration code
-into the daemon.
+To run an agent on your own Machine, you don't need a plugin: add it to
+`config.yaml` with `bivy agent add` or by hand. See [Add any agent](add-an-agent.md),
+which also covers writing an adapter. A plugin packages the same `adapter` block
+with a name and version so it can be shared and pinned.
 
 ## Quick start: ACP agent
 
@@ -86,7 +75,7 @@ metadata:
   version: 0.1.0
   description: Internal coding agent exposed over ACP.
 requires:
-  bivy: ">=0.10.1 <0.11.0"
+  bivy: ">=0.21.0 <1.0.0"
 contributes:
   agents:
     - id: company-agent
@@ -107,7 +96,6 @@ bivy plugin doctor ./bivy.plugin.yaml
 bivy plugin test ./bivy.plugin.yaml
 bivy plugin install ./bivy.plugin.yaml
 bivy plugin list
-bivy restart
 ```
 
 The agent appears as **Experimental / Unverified** in Bivy's agent picker. ACP
@@ -186,7 +174,7 @@ metadata:
   description: Optional
   homepage: https://example.com
 requires:
-  bivy: ">=0.10.1 <0.11.0" # optional semver range; recommended
+  bivy: ">=0.21.0 <1.0.0" # optional semver range; recommended
 contributes:
   agents: []                # 1-20 entries in v1alpha1
 ```
@@ -255,8 +243,8 @@ Installed manifests are canonicalized into:
 <data-dir>/plugins/<plugin-id>/manifest.json
 ```
 
-Writes and replacements are atomic. Install/remove requires a node restart so
-the daemon, service environment, and terminal CLI use the same contribution set.
+Writes and replacements are atomic. The node reads the store each time it lists
+agents, so an install or removal takes effect without a restart.
 Set `BIVY_PLUGIN_DIR` to override the store location for testing or managed
 deployments.
 

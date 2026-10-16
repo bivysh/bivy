@@ -384,55 +384,17 @@ limitations.
 
 ## Bring a custom agent
 
-### Existing ACP agent
-
-If the executable already speaks ACP:
-
 ```bash
-bivy agent add company-agent \
-  --command company-agent \
-  --transport acp \
-  --args '["serve","--acp"]'
-bivy restart
-bivy run company-agent
+bivy agent add company-agent --command company-agent --args '["serve","--acp"]'   # ACP
+bivy agent add review-bot --transport process --command review-bot               # any CLI
+bivy exec -a company-agent "Say hello"
 ```
 
-ACP is the higher-capability path: when the agent implements the protocol
-correctly, it can stream structured events, request per-tool approval, advertise
-models, and resume Sessions. A custom ACP agent remains **Experimental /
-Unverified** until independently validated.
-
-### Headless process agent
-
-For a command that accepts prompts on stdin:
-
-```bash
-bivy agent add review-bot \
-  --command review-bot \
-  --transport process \
-  --prompt-mode stdin
-bivy restart
-bivy run review-bot
-```
-
-A process agent can stream output but cannot ask Bivy to approve its built-in
-tools before they execute; it normally has the Machine user's OS permissions.
-For a reviewable, distributable manifest, scaffold the Experimental `v1alpha1`
-plugin format and run its diagnostics:
-
-```bash
-bivy plugin init ./company-agent --adapter acp
-bivy plugin validate ./company-agent
-bivy plugin doctor ./company-agent
-bivy plugin test ./company-agent
-bivy plugin install ./company-agent
-bivy restart
-```
-
-Plugins are declarative and out of process; Bivy does not import third-party
-JavaScript into the daemon. There is no public plugin registry, install script,
-or stable v1 contract yet. See [Plugins](plugins.md) and the generic
-[ACP adapter](agents/acp.md).
+The agent is in the picker straight away. ACP is the higher-capability path: it
+can ask before each tool runs, advertise models, and resume Sessions. A process
+agent streams output but runs its tools with the Machine user's OS permissions.
+When a CLI needs translating, a small adapter that prints JSON events is enough.
+See [Add any agent](add-an-agent.md), and [Plugins](plugins.md) to share one.
 
 ## Choose subscriptions, API keys, or local inference
 

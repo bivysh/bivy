@@ -82,6 +82,20 @@ async function main() {
     assert.equal(types(events).filter((t) => t === "message_end").length, 1);
   });
 
+  await check("bivyProtocol: adapter reports its session id, reasoning and usage", () => {
+    const p = bivyProtocolParser();
+    const events = feed(p, [
+      JSON.stringify({ type: "session.started", sessionId: "abc" }),
+      JSON.stringify({ type: "message.reasoning", text: "Thinking" }),
+      JSON.stringify({ type: "usage", tokens: { input_tokens: 10, output_tokens: 4 }, costUsd: 0.01 }),
+      JSON.stringify({ type: "session.done" }),
+    ]);
+    assert.equal(p.sessionRef?.(), "abc");
+    assert.ok(events.some((e) => e.type === "message_update" && (e as any).message.content[0]?.thinking === "Thinking"));
+    assert.equal(p.usage?.()?.costUsd, 0.01);
+    assert.equal(p.usage?.()?.tokens?.input, 10);
+  });
+
   await check("bivyProtocol: ignores non-JSON banner lines", () => {
     const p = bivyProtocolParser();
     const events = feed(p, ["Starting agent v1.2…", JSON.stringify({ type: "message.delta", text: "ok" }), JSON.stringify({ type: "session.done" })]);

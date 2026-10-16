@@ -247,6 +247,7 @@ export function bivyProtocolParser(): CliParser {
   // appended verbatim (a shim emits an explicit break when it wants one), so it
   // opts out of inferred segment boundaries.
   const acc = new TurnAccumulator({ provider: "bivy-protocol", protocol: "protocol" }, false);
+  let sessionRef: string | undefined;
   return {
     onLine(line) {
       const events: RuntimeEvent[] = [];
@@ -259,8 +260,17 @@ export function bivyProtocolParser(): CliParser {
         return events; // ignore non-JSON noise (banners etc.)
       }
       const type = String(msg.type ?? "");
-      if (type === "message.delta") {
+      if (type === "session.started") {
+        // The adapter's own conversation id; `resume.args` gets it back as {id}.
+        if (typeof msg.sessionId === "string" && msg.sessionId.trim()) sessionRef = msg.sessionId.trim();
+      } else if (type === "message.delta") {
         acc.appendText(String(msg.text ?? ""), events);
+      } else if (type === "message.reasoning") {
+        acc.appendReasoning(String(msg.text ?? ""), events);
+      } else if (type === "usage") {
+        const tokens = extractTokenUsage(msg.tokens ?? msg);
+        const costUsd = typeof msg.costUsd === "number" ? { costUsd: msg.costUsd } : {};
+        if (tokens || costUsd.costUsd !== undefined) acc.addUsage({ ...tokens, ...costUsd });
       } else if (type === "session.status") {
         const status = String(msg.status ?? "");
         if (status === "working") events.push({ type: "turn_start" });
@@ -285,6 +295,8 @@ export function bivyProtocolParser(): CliParser {
       return events;
     },
     messages: () => acc.history(),
+    usage: () => acc.usageSnapshot,
+    sessionRef: () => sessionRef,
   };
 }
 
