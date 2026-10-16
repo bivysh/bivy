@@ -54,6 +54,22 @@ function run() {
   const ordered = selectStaleSessions(sessions, 0, null, NOW).map((s) => s.id);
   assert.deepEqual(ordered, ["n1", "n2", "n3", "e1", "e2", "n4"], "keep 0 removes all non-live, newest first");
 
+  // Sub-agent (delegated) sessions count as part of their parent: a burst of
+  // children doesn't take keep slots from other sessions, a recent child keeps
+  // an old parent, and a stale family goes as one.
+  const child = (id: string, parent: string, m: number) => ({ id, name: `sub ${id}`, delegatedFrom: { sessionId: parent }, updatedAt: ago(m) });
+  const families = [
+    { id: "p", name: "parent", updatedAt: ago(300) },
+    child("p1", "p", 1), child("p2", "p", 2), child("p3", "p", 3),
+    child("p3a", "p3", 4), // grandchild
+    { id: "solo", name: "solo", updatedAt: ago(10) },
+    { id: "old", name: "old", updatedAt: ago(400) },
+    child("o1", "old", 500),
+    child("orphan", "elsewhere", 600), // parent not listed → its own family
+  ];
+  const keep2 = selectStaleSessions(families, 2, null, NOW).map((s) => s.id);
+  assert.deepEqual(keep2, ["old", "o1", "orphan"], "families rank as one; sub-agents don't push out real sessions");
+
   // --- linkSessionWorktrees: a session and its worktree go together ----------
   const wt = (slug: string) => `/repo/.bivy/worktrees/${slug}`;
   const linkedSessions = [
