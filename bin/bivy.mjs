@@ -45,11 +45,16 @@ import { parseTailscaleStatus, serveConflict, serveFailureHint, serveOffArgs, se
 import { resolveAttachSessionId } from "./attach-session-id.mjs";
 import { detectInstallKind as classifyInstallKind, managedInstall, npmGlobalPrefix } from "./install-kind.mjs";
 import { hasConfiguredService as configuredServiceExists } from "./service-state.mjs";
+import { activate, activeVersion, archiveInstall, archiveTarget, channelUrls, fetchManifest, prune, stageArchive } from "./archive-install.mjs";
 import { COMMANDS, EXIT, cliError, completionWords, describeCli, describeCommand, describeTools, renderHelp, resolveCommand, subcommandTable, suggestCommands, toolArgv, wantsJson } from "./cli-commands.mjs";
 
-const selfScript = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(selfScript);
-const repoRoot = path.resolve(__dirname, "..");
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+// A GitHub release archive install runs through its launcher, which names the
+// install's `current` path. Paths written to disk (service unit, shims) use it,
+// so they stay valid when an update points `current` at a new version.
+const archive = archiveInstall(process.env.BIVY_ARCHIVE_ROOT, path.resolve(__dirname, ".."));
+const repoRoot = archive ? path.join(archive.root, "app") : path.resolve(__dirname, "..");
+const selfScript = path.join(repoRoot, "bin", "bivy.mjs");
 // Mutable node state (config, relay E2E keys, sessions, logs) must live in a
 // stable, user-owned directory that survives reinstalls. Pick it by install type:
 //   - BIVY_DATA_DIR set                         -> honor it (explicit override)
@@ -77,10 +82,11 @@ process.env.BIVY_DATA_DIR = appDir;
 //   - "git"        dev checkout (has .git)
 //   - "npx"        ephemeral `npx bivy` run (repoRoot under an npm _npx cache)
 //   - "npm-global" `npm i -g @bivy/bivy` (repoRoot is below node_modules/@bivy)
+//   - "archive"    a GitHub release archive under ~/.local/share/bivy (install.sh)
 //   - "packaged"   install.sh tarball tree (user-owned, self-preserving)
 //   - "managed"    a system package (the AUR's `bivy`), updated by its manager
 function detectInstallKind() {
-  return classifyInstallKind(repoRoot);
+  return archive ? "archive" : classifyInstallKind(repoRoot);
 }
 const cliConfigPath = path.join(appDir, "cli.json");
 const canonicalConfigPath = path.join(appDir, "config.yaml");
@@ -185,7 +191,7 @@ const mcpProxyEntry = path.join(repoRoot, packaged ? "dist/harness/mcp-proxy-cli
 const mcpServeEntry = path.join(repoRoot, packaged ? "dist/harness/mcp-serve-cli.js" : "src/harness/mcp-serve-cli.ts");
 const qrEntry = path.join(repoRoot, "public", "qr.js");
 const tsxCli = packaged ? "" : path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs");
-const nodeBin = process.execPath;
+const nodeBin = archive ? path.join(archive.root, "runtime", "bin", "node") : process.execPath;
 const nodeScriptArgs = (entry) => (tsxCli ? [tsxCli, entry] : [entry]);
 
 // Resolve the baked-in hosted endpoints (app/relay/client URLs). Imported lazily
@@ -230,7 +236,7 @@ function commandPath(extraPath = "") {
     process.env.PATH || "",
     // npm global executables normally live beside the Node binary (including
     // nvm/fnm installs). Services need this even without shell initialization.
-    path.dirname(process.execPath),
+    path.dirname(nodeBin),
   ].filter(Boolean);
   return [...new Set(parts.flatMap((part) => String(part).split(path.delimiter)).filter(Boolean))].join(path.delimiter);
 }
@@ -4065,6 +4071,7 @@ function plistContent(config) {
     PORT: String(config.port),
     BIVY_WORKSPACE: config.workspace,
     BIVY_DATA_DIR: appDir,
+    ...(archive ? { BIVY_ARCHIVE_ROOT: archive.root } : {}),
     ...config.env,
     PATH: commandPath(config.env?.PATH),
   })
@@ -4109,6 +4116,7 @@ function systemdContent(config) {
     PORT: String(config.port),
     BIVY_WORKSPACE: config.workspace,
     BIVY_DATA_DIR: appDir,
+    ...(archive ? { BIVY_ARCHIVE_ROOT: archive.root } : {}),
     ...config.env,
     PATH: commandPath(config.env?.PATH),
   })
@@ -5515,6 +5523,49 @@ async function cmdUpdate(args = []) {
   await runUpdate(args);
 }
 
+/**
+ * Update a GitHub release archive install: stage the channel's archive beside
+ * the running one, point `current` at it, restart, and point `current` back if
+ * the node doesn't come up. The version before stays on disk for that.
+ */
+async function updateArchiveInstall(channel, { skipWait, force }) {
+  const urls = channelUrls(channel);
+  const target = archiveTarget();
+  console.log(c.dim(`Checking ${urls.manifest} (channel: ${channel})…`));
+  const manifest = await fetchManifest(urls.manifest);
+  if (manifest.version === archive.version && !force) {
+    console.log(c.green(`Bivy ${archive.version} is the newest on ${channel}.`));
+    return;
+  }
+  console.log(c.dim(`Downloading Bivy ${manifest.version} for ${target}…`));
+  const staged = await stageArchive({ installRoot: archive.installRoot, manifest, target, archiveUrl: urls.archive });
+  const probe = runQuiet(path.join(staged, "bin", "bivy"), ["--version"]);
+  if (probe.code !== 0 || probe.stdout.trim() !== manifest.version) {
+    throw new Error(`The downloaded Bivy ${manifest.version} does not run here (${(probe.stderr || probe.stdout).trim() || `exit ${probe.code}`}); kept ${archive.version}.`);
+  }
+  const config = loadConfig();
+  await waitForIdleSessions(config, { skip: skipWait });
+  const previous = activate(archive.installRoot, staged);
+  if (!hasConfiguredService(config)) {
+    prune(archive.installRoot, [staged, previous]);
+    console.log(c.green(`Updated to ${manifest.version}. Run 'bivy start' to use it.`));
+    return;
+  }
+  if ((await restartServiceReconciled(config)) && (await verifyNodeCameUp(config))) {
+    prune(archive.installRoot, [staged, previous]);
+    console.log(c.green(`Updated ${archive.version} → ${manifest.version} and restarted the background service.`));
+    return;
+  }
+  if (previous && previous !== activeVersion(archive.installRoot)) {
+    activate(archive.installRoot, previous);
+    await restartServiceReconciled(config);
+    console.log(c.red(`⚠ Bivy ${manifest.version} did not come up, so ${archive.version} is back in place.`));
+  } else {
+    reportNodeDidNotStart();
+  }
+  process.exitCode = 1;
+}
+
 async function runUpdate(args = []) {
   const skipWait = args.includes("--force") || args.includes("--no-wait");
   const kind = detectInstallKind();
@@ -5560,6 +5611,12 @@ async function runUpdate(args = []) {
     } else {
       console.log(c.green("Updated. Run 'bivy start' (or restart your service) to apply."));
     }
+    console.log(c.dim(`=== bivy update finished ${new Date().toISOString()} ===`));
+    return;
+  }
+
+  if (kind === "archive") {
+    await updateArchiveInstall(channel, { skipWait, force: args.includes("--force") });
     console.log(c.dim(`=== bivy update finished ${new Date().toISOString()} ===`));
     return;
   }

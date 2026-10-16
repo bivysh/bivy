@@ -14,6 +14,10 @@ test("checks the install's recorded channel, with safe defaults and override", (
     assert.equal(updateRegistryUrl(dir, "https://example.test/release"), "https://example.test/release");
     fs.writeFileSync(path.join(dir, "channel"), "../bad");
     assert.ok(updateRegistryUrl(dir).endsWith("/latest"));
+    // Archive installs ask the channel's GitHub release manifest instead.
+    assert.equal(updateRegistryUrl(dir, undefined, true), "https://github.com/bivysh/bivy/releases/latest/download/manifest.json");
+    fs.writeFileSync(path.join(dir, "channel"), "staging\n");
+    assert.equal(updateRegistryUrl(dir, undefined, true), "https://github.com/bivysh/bivy/releases/download/staging/manifest.json");
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

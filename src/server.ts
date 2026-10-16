@@ -3,7 +3,7 @@
 // First: drop agent-session markers the node inherited before anything reads them.
 import "./node-env.js";
 import fs from "node:fs";
-import { createNodeUpdateChecker, managedInstall, updateRegistryUrl } from "./node-update.js";
+import { createNodeUpdateChecker, isArchiveInstall, managedInstall, updateRegistryUrl } from "./node-update.js";
 import { createRemoteSessionAdmission, RemoteSessionAdmissionError } from "./session/remote-session-admission.js";
 import { requiresExistingSession, resolveTargetSession } from "./session/target-session.js";
 import path from "node:path";
@@ -919,9 +919,10 @@ if (process.env.BIVY_SESSION_MODEL_FALLBACK) {
   console.log(`[policy] in-session model reroute enabled: ${process.env.BIVY_SESSION_MODEL_FALLBACK}`);
 }
 
+const archiveInstalled = isArchiveInstall(repoRoot);
 const nodeUpdates = createNodeUpdateChecker({
   current: currentVersion() ?? "",
-  registryUrl: () => updateRegistryUrl(appDir, process.env.BIVY_UPDATE_REGISTRY_URL),
+  registryUrl: () => updateRegistryUrl(appDir, process.env.BIVY_UPDATE_REGISTRY_URL, archiveInstalled),
   publish: (state) => broadcast(state),
 });
 

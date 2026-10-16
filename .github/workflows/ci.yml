@@ -339,9 +339,9 @@ jobs:
       # Pack the exact npm payload; unlike the fallback archive it needs no
       # excluded package-lock. The same build writes this platform's GitHub
       # release archive, smoke-tested below without a system Node.
-      - run: node scripts/build-release.mjs --npm-pack release-artifact --archives release-archives --targets host
+      - run: node scripts/build-release.mjs --npm-pack release-artifact --archives release-artifact/archives --targets linux-x64,darwin-arm64
       - name: Verify the self-contained archive
-        run: node scripts/smoke-archive.mjs release-archives
+        run: node scripts/smoke-archive.mjs release-artifact/archives
       # Only the macOS consumer and the clean installer, which run when
       # packaging inputs change, consume the package from another runner.
       - name: Upload release package for packaging lanes
@@ -349,7 +349,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-package
-          path: release-artifact/bivy-npm.tgz
+          path: release-artifact
           if-no-files-found: error
           retention-days: 1
       # Cache registry downloads, never node_modules or an installed Bivy. The
@@ -415,6 +415,8 @@ jobs:
           path: release-artifact
       - name: Verify fresh npm consumers
         run: node scripts/smoke-release.mjs --artifact release-artifact/bivy-npm.tgz
+      - name: Verify the macOS archive
+        run: node scripts/smoke-archive.mjs release-artifact/archives
 
   # apt/Node bootstrap can take minutes on a cold Ubuntu mirror. Keep the real
   # fresh-machine promise, but pay for it only when its inputs change or in the
@@ -430,14 +432,12 @@ jobs:
       actions: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Cache only downloads. Every guest starts without Node, build tools or
-      # Bivy; registry integrity checks and package lifecycle hooks still run.
+      # Cache only apt downloads. Every guest starts without Node, build tools
+      # or Bivy; the archive brings its own runtime.
       - name: Cache installer downloads
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: |
-            ~/.cache/bivy-installer-npm
-            ~/.cache/bivy-installer-apt
+          path: ~/.cache/bivy-installer-apt
           key: installer-downloads-${{ runner.os }}-${{ runner.arch }}-ubuntu24-${{ hashFiles('package.json', 'pnpm-lock.yaml', 'install.sh', 'scripts/smoke-installer.sh', 'scripts/installer-smoke-guest.sh') }}
           restore-keys: installer-downloads-${{ runner.os }}-${{ runner.arch }}-ubuntu24-
       - name: Prepare clean guest concurrently with packaging

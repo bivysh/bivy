@@ -53,6 +53,8 @@ async function daemonServes(node, app) {
   const daemon = spawn(node, [path.join(app, "dist", "server.js")], {
     env: { ...env, PORT: String(port), BIVY_WORKSPACE: path.join(tmp, "ws"), BIVY_REQUIRE_LOCAL_AUTH: "0" },
     stdio: ["ignore", "pipe", "pipe"],
+    // Its own process group, so its helpers die with it before cleanup.
+    detached: true,
   });
   let log = "";
   daemon.stdout.on("data", (d) => { log += d; });
@@ -67,7 +69,7 @@ async function daemonServes(node, app) {
     throw new Error(`archived daemon did not serve /healthz within 30s (exit ${daemon.exitCode})\n${log.slice(-4000)}`);
   } finally {
     // Wait for it to exit so cleanup doesn't race its writes into the data dir.
-    if (daemon.exitCode === null) await new Promise((r) => { daemon.once("exit", r); daemon.kill("SIGKILL"); });
+    if (daemon.exitCode === null) await new Promise((r) => { daemon.once("exit", r); process.kill(-daemon.pid, "SIGKILL"); });
   }
 }
 
@@ -95,5 +97,5 @@ try {
   await daemonServes(node, path.join(install, "app"));
   console.log(`archive smoke passed: ${entry.file} (${(entry.size / 1e6).toFixed(1)} MB), Node ${manifest.node}, daemon serves, no system Node`);
 } finally {
-  fs.rmSync(tmp, { recursive: true, force: true });
+  fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

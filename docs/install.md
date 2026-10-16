@@ -37,38 +37,37 @@ identity.
 
 The installer:
 
-1. checks for Node.js 20+ and installs it if missing — on Debian/Ubuntu via
-   NodeSource's setup script; on other Linux/macOS by downloading the official
-   Node 22 tarball from nodejs.org and installing it under `/usr/local` with
-   `sudo`. An existing Node skips this step. Package setup is noninteractive so
-   prompts cannot consume the piped installer. No compiler toolchain is needed,
-2. runs `npm install -g @bivy/bivy` (never under `sudo` — see below), then
-   installs only the agent CLI and SDK bridge you choose in setup. If that
-   agent is already on `PATH`, setup prints the path and uses the existing CLI,
-   login, and configuration rather than replacing it,
-3. migrates state from a previous tarball install, if it finds one (see below),
-4. launches the interactive `bivy setup` wizard, or restarts the background
-   service on an existing install.
+1. downloads the release archive for your machine (Linux or macOS, x64 or
+   arm64) from [GitHub Releases](https://github.com/bivysh/bivy/releases) and
+   checks it against the release's `SHA256SUMS`. The archive carries its own
+   Node runtime, so nothing else is installed and nothing needs `sudo`,
+2. unpacks it into `~/.local/share/bivy/versions/<version>-<platform>/`, points
+   `~/.local/share/bivy/current` at it and links `~/.local/bin/bivy`. The
+   version before stays on disk for rollback; older ones are removed,
+3. launches the interactive `bivy setup` wizard, which installs only the agent
+   CLI and SDK bridge you choose. If that agent is already on `PATH`, setup uses
+   the existing CLI, login, and configuration rather than replacing it. On an
+   existing install it restarts the background service instead.
 
-Bivy is distributed on npm. npm verifies each package's integrity hash on
-install, and releases published from CI carry a provenance attestation you can
-check with `npm audit signatures`. See [releasing.md](releasing.md).
-
-If you already have Node.js 20+, the installer is optional:
+Each archive also carries a GitHub build attestation recording the workflow and
+commit that built it:
 
 ```bash
-npm install -g @bivy/bivy
-bivy setup
+gh attestation verify bivy-<version>-<platform>.tar.gz --repo bivysh/bivy
 ```
+
+`bivy update` follows the same layout: it downloads the next version beside the
+running one, checks it, points `current` at it and restarts, and points
+`current` back if the node doesn't come up.
 
 Override defaults with environment variables:
 
 ```bash
-# Install a specific version rather than the latest.
-BIVY_VERSION=0.1.0 bash install.sh
+# Install a specific release rather than the newest.
+BIVY_VERSION=0.22.0 bash install.sh
 
-# Install into a user-owned prefix instead of npm's global one (no sudo).
-BIVY_NPM_PREFIX=~/.local bash install.sh
+# Follow the build of every merge to main.
+BIVY_CHANNEL=staging bash install.sh
 
 # Preinstall every known upstream agent rather than just your default.
 BIVY_INSTALL_ALL_AGENTS=1 bash install.sh
@@ -77,22 +76,17 @@ BIVY_INSTALL_ALL_AGENTS=1 bash install.sh
 BIVY_NO_RC_UPDATE=1 bash install.sh
 ```
 
-If npm's global prefix isn't writable, the installer falls back to `~/.local`
-automatically rather than escalating with sudo — installing as root leaves files
-you can't update later without sudo.
-
-If that install location isn't already on `PATH`, the installer appends a
+If `~/.local/bin` isn't already on `PATH`, the installer appends a
 small, clearly-marked block to `~/.bashrc` or `~/.zshrc` (whichever your
 `$SHELL` uses) that puts it there — re-running the installer never duplicates
 the block. A script can't change the PATH of the shell that invoked it, so
 open a new terminal (or `source` the rc file) afterwards to pick it up. Set
 `BIVY_NO_RC_UPDATE=1` to skip this and just get the `export PATH=...` line
-printed for you to run manually.
+printed for you to run manually. If an older `bivy` (an npm install, say) comes
+earlier on `PATH`, the installer names it so you can remove it.
 
-Interactive terminals use `@lydell/node-pty`, which ships a prebuilt binary per
-platform: macOS, Windows, and glibc Linux, each on x64 and arm64. Nothing is
-compiled at install time. On other platforms (Alpine/musl, 32-bit ARM), Bivy
-still runs, but `bivy doctor` reports interactive terminals as unavailable.
+Interactive terminals use `@lydell/node-pty`; each archive ships its platform's
+prebuilt binary, so nothing is compiled at install time.
 
 ### Agent bridges
 
@@ -130,17 +124,8 @@ dependency for `bivy tailscale`. The package source is in
 ## Where your data lives
 
 Node state — config, node identity, relay keys, sessions, logs — lives in
-`~/.bivy`. The npm package directory is replaced on every update, so nothing
-durable is kept there.
-
-Installs created by the older tarball installer kept state *inside* the app
-directory at `~/.bivy/app/.bivy`. The installer moves it to `~/.bivy` once, and
-only when `~/.bivy/cli.json` doesn't already exist, so it can never overwrite
-newer state. The old tree is left in place; remove it when you're satisfied:
-
-```bash
-rm -rf ~/.bivy/app
-```
+`~/.bivy`, apart from the installed versions, so an update or reinstall never
+touches it.
 
 Override the location with `BIVY_DATA_DIR`.
 
