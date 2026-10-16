@@ -76,6 +76,10 @@ const RETIRED_CLASSES = [
   // → grouped Runs feed (.run-history + .automation-history-row)
   "run-row", "run-row-open", "run-row-chevron", "runs-overview", "incoming-work", "run-history-filters",
   "vault-custody-note", // hosted credential custody removed
+  // follow-up queue removed — a mid-turn message steers the running turn
+  "followup-queue", "followup-queue-head", "followup-list", "followup-card", "followup-card-row", "followup-reorder",
+  "followup-body", "followup-status", "followup-text", "followup-attachments", "followup-card-actions",
+  "followup-edit", "followup-edit-input", "followup-edit-actions", "schedule-field", "schedule-label",
 ];
 const retiredClassRe = new RegExp(`(?:\\.|className[^\\n]*[\\"'\\x60 {])(${RETIRED_CLASSES.join("|")})(?=[\\s.\\"'\\x60}:])`, "g");
 // Retired selector shapes that are not a single class name.
@@ -89,12 +93,12 @@ const RETIRED_PATTERNS = [
 const STYLES_FILE = "packages/web/src/styles.css";
 const LAYOUT_ONLY = [
   { shell: ".card", owns: /(?:background|border(?!-collapse)|border-radius|box-shadow)\s*:/, selectors: [
-    ".tui-locked-card", ".followup-card", ".wq-status-card", ".setup-card", ".changes-card", ".readiness",
+    ".tui-locked-card", ".wq-status-card", ".setup-card", ".changes-card", ".readiness",
     ".ruleset-rule-card", ".queue-card", ".autom-runner-card", ".question-card", ".account-offer", ".next-step", ".transcript-error"] },
   { shell: ".toast", owns: /(?:background|border(?!-collapse)|border-radius|box-shadow|padding)\s*:/, selectors: [
     ".update-toast", ".error-toast", ".notice-toast"] },
   { shell: ".field", owns: /(?:background|border(?!-collapse)|border-radius|color|font-size|font-family)\s*:/, selectors: [
-    ".session-search", ".settings-search", ".followup-edit-input", ".question-other-input", ".term-search-input"] },
+    ".session-search", ".settings-search", ".question-other-input", ".term-search-input"] },
   { shell: ".menu", owns: /(?:background|border|border-radius|box-shadow|animation)\s*:/, selectors: [
     ".session-actions-menu", ".row-menu-pop", ".session-filter-menu", ".reasoning-menu", ".term-attach-menu",
     ".node-menu", ".slash-menu"] },

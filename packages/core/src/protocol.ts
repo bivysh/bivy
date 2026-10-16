@@ -301,15 +301,23 @@ export interface InlineImageEvent {
 
 /**
  * How a prompt sent to an already-busy (streaming) session should be handled by
- * the runtime: `"steer"` injects it into the current turn immediately (an
- * explicit interrupt); `"followUp"` defers it until the current turn ends. Not
- * every runtime honors both — see RuntimeCapabilities.streamingBehaviors on the
- * node — so the client only ever sends `"steer"` explicitly (see
- * AppController.steerNow/sendFollowupNow) and otherwise holds a busy session's
- * prompts in its own visible queue (AppState.followupsBySession) rather than
- * relying on a runtime-specific "followUp" to queue them invisibly.
+ * the runtime: `"steer"` injects it into the current turn immediately;
+ * `"followUp"` defers it until the current turn ends. Not every runtime honors
+ * both — see RuntimeCapabilities.streamingBehaviors on the node. The client
+ * sends no hint: the node steers a prompt that arrives mid-turn.
  */
 export type StreamingBehavior = "steer" | "followUp";
+
+/**
+ * Whether a runtime's advertised capabilities include steer support
+ * (`RuntimeCapabilities.streamingBehaviors` on the node). Absent/malformed/empty
+ * all mean "no" — a runtime must opt in before the client sends a prompt into a
+ * running turn.
+ */
+export function supportsSteering(capabilities: { streamingBehaviors?: unknown } | null | undefined): boolean {
+  const behaviors = capabilities?.streamingBehaviors;
+  return Array.isArray(behaviors) && behaviors.includes("steer");
+}
 
 /** Connection lifecycle surfaced by a Transport, independent of the node's own events. */
 export type ConnectionStatus =

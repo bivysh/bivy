@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A message sent while the agent works now steers it. The follow-up queue is gone.** Send goes straight into the running turn, and the agent takes it into account as it goes. The panel above the composer is removed, along with its reorder, edit, "Send next", "Run in new session" and separate ⚡ Steer controls. So is the hidden scheduled message that delivered a queued follow-up after you closed the app. An agent that hasn't declared steer support only offers Stop until its turn ends.
+
 ### Added
 
 - **Install and update from GitHub, with no Node or npm on the machine.** `install.sh` now downloads this machine's release archive (Linux or macOS, x64 or arm64), checks it against the release's `SHA256SUMS`, and unpacks it into `~/.local/share/bivy/versions/`. `~/.local/share/bivy/current` points at the active version and `~/.local/bin/bivy` runs it. A fresh install takes a few seconds. `bivy update` downloads the next version beside the running one, checks that it runs, points `current` at it and restarts the node. If the node doesn't come up, `current` goes back to the version before, which stays on disk. The service unit and shims name `current`, so they keep working across updates. The daemon's update notice reads the channel's GitHub manifest. Re-running the installer moves an npm install over, keeping `~/.bivy`; if the old `bivy` still comes first on `PATH`, the installer names it. `BIVY_NPM_PREFIX`, `BIVY_NO_TARBALL_FALLBACK` and the old tarball migration are gone.

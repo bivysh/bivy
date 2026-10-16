@@ -30,8 +30,6 @@ export interface PwaLifecycleState {
   turnActive: boolean;
   /** Prompts buffered by a reconnecting transport — undelivered until online. */
   locallyQueuedPrompts: number;
-  /** Follow-ups waiting in the visible queue — intentional, already surfaced by their own UI. */
-  queuedFollowups: number;
 }
 
 type BeforeInstallPromptEvent = Event & {
@@ -98,7 +96,6 @@ let state: PwaLifecycleState = {
   readingAttachments: false,
   turnActive: false,
   locallyQueuedPrompts: 0,
-  queuedFollowups: 0,
 };
 
 function publish(patch: Partial<PwaLifecycleState>): void {
@@ -180,13 +177,6 @@ export function clearQueuedPrompts(): void {
   publish({ locallyQueuedPrompts: 0 });
 }
 
-/** Track the controller's visible in-memory follow-up queues across Sessions.
- *  These block a service-worker update (a reload would drop them) but never the
- *  availability banner — the queue already has its own per-session UI. */
-export function setFollowupQueuedPrompts(count: number): void {
-  publish({ queuedFollowups: Math.max(0, Math.floor(count)) });
-}
-
 export function markFirstSuccessfulResponse(): void {
   try { localStorage.setItem(FIRST_SUCCESS_KEY, "1"); } catch {}
   publish({ firstSuccess: true });
@@ -224,7 +214,6 @@ export function updateBlockers(value = state): string[] {
   if (value.hasDraft) blockers.push("the unsent draft is sent or cleared");
   if (value.pendingAttachments) blockers.push("pending attachments are sent or cleared");
   if (value.locallyQueuedPrompts) blockers.push("locally queued prompts reach the Machine");
-  if (value.queuedFollowups) blockers.push("queued follow-ups are delivered");
   return blockers;
 }
 

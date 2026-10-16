@@ -71,10 +71,8 @@ export interface SessionWorkflowPort {
   openSession(sessionId: string, path?: string): void;
   appendPendingLaunchFollowup(id: string, prompt: { text: string; clientMessageId: string; attachments?: PromptAttachment[] }): void;
   addUserMessage(text: string, clientMessageId: string, attachments?: PromptAttachment[]): void;
-  mustQueue(sessionId: string): boolean;
-  enqueueFollowup(sessionId: string, prompt: { id: string; text: string; attachments?: PromptAttachment[] }): void;
-  persistFollowup(sessionId: string, id: string, text: string): void;
-  drainFollowups(sessionId: string): void;
+  /** False while the active session is mid-turn on a runtime that can't steer. */
+  canSendMidTurn(): boolean;
   shouldAutoResume(): boolean;
   bufferResume(prompt: { sessionId: string; text: string; clientMessageId: string; attachments?: PromptAttachment[] }): void;
   resumeNodeForSession(sessionId: string): void;
@@ -172,12 +170,9 @@ export class SessionOrchestrator {
       // opening first also gives the node a deterministic resume target when a
       // close event and a tap happen in the same reconnect window.
       if (port.sessionIsSaved?.(active)) port.openSession(active);
-      if (port.mustQueue(active)) {
-        port.enqueueFollowup(active, { id: clientMessageId, text: trimmed, attachments: files });
-        port.persistFollowup(active, clientMessageId, trimmed);
-        port.drainFollowups(active);
-        return;
-      }
+      // A prompt into a running turn steers it; the node picks that up from
+      // the turn state. A runtime without steer support can't take one.
+      if (!port.canSendMidTurn()) return;
       port.addUserMessage(trimmed, clientMessageId, files);
       if (port.shouldAutoResume()) {
         port.bufferResume({ sessionId: active, text: trimmed, clientMessageId, attachments: files });
@@ -235,12 +230,6 @@ export class SessionOrchestrator {
   /** Start another session like `sourceSessionId` (same project, agent, model
    *  and safety) and send it `text`, without switching to it. Resolves with the
    *  new session's id once the node has created it. */
-  async startLike(sourceSessionId: string, text: string, attachments?: unknown[]): Promise<string> {
-    const reply = await this.request({ kind: "session.new", like: sourceSessionId, title: text, prompt: text, ...(attachments?.length ? { attachments } : {}) }, 120_000, "Starting the session timed out");
-    this.workflowPort().refreshSessions();
-    return String((reply as { sessionId?: unknown }).sessionId ?? "");
-  }
-
   async importNativeSession(runtimeId: string, ref: string, acceptDisclosure = false): Promise<ServerEvent> {
     return this.request({ kind: "session.import", runtimeId, ref, acceptDisclosure }, 60_000);
   }

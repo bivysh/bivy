@@ -57,7 +57,7 @@ import { PlaceChoice } from "./components/PlaceChoice.js";
 import { connectAiDone, readRunPlace, rememberRunPlace, type RunPlace } from "./onboarding.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
 import { PwaLifecycleNotice } from "./components/PwaLifecycleNotice.js";
-import { clearQueuedPrompts, markPromptQueued, setFollowupQueuedPrompts, setTurnActive } from "./pwaLifecycle.js";
+import { clearQueuedPrompts, markPromptQueued, setTurnActive } from "./pwaLifecycle.js";
 // The terminal pulls in xterm + its GPU/search/link addons (~a third of the JS
 // bundle). It's an on-demand overlay, so load it lazily to keep the initial app
 // paint fast; the chunk is fetched the first time the user opens a terminal.
@@ -338,8 +338,6 @@ export function App() {
   const online = state.connection.status === "online";
   useEffect(() => setTurnActive(state.activeSession.working), [state.activeSession.working]);
   useEffect(() => { if (online) clearQueuedPrompts(); }, [online]);
-  const queuedFollowupCount = Object.values(state.sessionIndex.followupsBySession).reduce((total, items) => total + items.length, 0);
-  useEffect(() => setFollowupQueuedPrompts(queuedFollowupCount), [queuedFollowupCount]);
   const activation = useMemo(() => activationFromState({
     direct: controller.direct,
     signedIn: state.connection.signedIn,

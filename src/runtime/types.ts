@@ -575,11 +575,10 @@ export interface RuntimeCapabilities {
   commands?: AgentCommand[];
   /**
    * Which streamingBehavior hints (see PromptOptions.streamingBehavior) this
-   * runtime actually honors when prompted mid-turn, so the client (issue #154's
-   * queued-follow-ups UI) knows whether an explicit "Steer current turn"
-   * action is safe to offer at all. Absent/empty means the client should never
-   * attempt a mid-turn prompt for this runtime — hold everything in its own
-   * queue and only ever send into an idle session. Advertised statically by an
+   * runtime actually honors when prompted mid-turn, so the client knows whether
+   * a message may go into a running turn at all. Absent/empty means the client
+   * never sends a mid-turn prompt to this runtime — it only offers Stop until
+   * the turn ends. Advertised statically by an
    * integration profile (for example Pi or Claude Code); a protocol/RPC bridge
    * can instead declare it in its `hello` (see capabilitiesFromHello in
    * src/runtime/protocol.ts), which defaults to none when omitted — an

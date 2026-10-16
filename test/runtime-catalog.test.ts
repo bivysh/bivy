@@ -157,7 +157,7 @@ assert.equal(
 // streamingBehaviors must survive into the session-less runtimes.list catalog:
 // the composer reads steer support from there (AppController.supportsSteering),
 // so if the catalog constant drifts from the live runtime instance the client
-// never learns steering is available and force-queues every mid-turn message.
+// never learns steering is available and blocks every mid-turn message.
 // Guards against the two catalog constants (CLAUDE_CAPABILITIES / PI_CAPABILITIES
 // in src/agents/profiles.ts) silently dropping what the runtimes actually advertise.
 const claudeCaps = listRuntimes().find((r) => r.id === "claude-code-sdk")!.capabilities as Record<string, unknown>;

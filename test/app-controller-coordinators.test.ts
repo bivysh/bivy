@@ -6,7 +6,6 @@ import { CredentialsModelsCoordinator } from "../packages/web/src/store/coordina
 import { SessionOrchestrator } from "../packages/web/src/store/coordinators/session-orchestrator.js";
 import { EphemeralCoordinator } from "../packages/web/src/store/coordinators/ephemeral-coordinator.js";
 import { AutomationsAccountCoordinator } from "../packages/web/src/store/coordinators/automations-account-coordinator.js";
-import { FollowupCoordinator } from "../packages/web/src/store/coordinators/followup-coordinator.js";
 
 test("node coordinator owns the complete switch ordering", () => {
   const events: string[] = [];
@@ -238,47 +237,24 @@ test("account coordinator refreshes both automation projections after cancellati
   assert.deepEqual(new Set(events.slice(1)), new Set(["runs", "queue"]));
 });
 
-test("follow-up coordinator owns queue timing and delivery", () => {
+test("a prompt into a running turn is sent to steer it, never held back", () => {
   const sent: any[] = [];
-  const followups: any[] = [{ id: "f1", text: "next", status: "queued", version: 1, createdAt: 1, updatedAt: 1 }];
-  let working = false;
-  const store: any = {
-    getState: () => ({ activeSession: { activeSessionId: "s1", working }, catalogs: { selectedAgentId: "pi", runtimes: [] } }),
-    getFollowups: () => followups,
-    reorderFollowup: () => true,
-    markFollowupSending: (_sid: string, id: string) => { followups.find((item) => item.id === id).status = "sending"; },
-    addUserMessage: () => {}, confirmFollowupSent: () => {}, editFollowup: () => ({ ok: false }), removeFollowup: () => false,
+  let canSteer = true;
+  const workflow: any = {
+    activeSessionId: () => "s1", isPendingLaunch: () => false, sessionIsSaved: () => false,
+    canSendMidTurn: () => canSteer, addUserMessage: () => {}, shouldAutoResume: () => false,
+    send: (command: any) => sent.push(command),
   };
-  const coordinator = new FollowupCoordinator(store, {
-    send: (command) => sent.push(command), createClientMessageId: () => "new", now: () => 10,
-    persistBackstop: () => {}, cancelBackstop: () => {},
-  });
-  assert.equal(coordinator.mustQueue("s1"), true, "an earlier queued item preserves ordering even while idle");
-  coordinator.drain("s1");
-  assert.equal(sent[0].kind, "prompt");
-  assert.equal(followups[0].status, "sending");
-  working = true;
-  assert.equal(coordinator.steer("urgent"), false, "steer is unavailable until the runtime advertises it");
-});
-
-test("steering follows the active conversation rather than the next draft agent", () => {
-  const store: any = {
-    getState: () => ({
-      activeSession: { activeSessionId: "s-pi", activeRuntimeId: "pi", working: true },
-      catalogs: {
-        selectedAgentId: "codex",
-        runtimes: [
-          { id: "pi", capabilities: { streamingBehaviors: ["steer", "followUp"] } },
-          { id: "codex", capabilities: { streamingBehaviors: [] } },
-        ],
-      },
-    }),
-    getFollowups: () => [],
-  };
-  const coordinator = new FollowupCoordinator(store, {
-    send: () => {}, createClientMessageId: () => "new", now: () => 10,
-    persistBackstop: () => {}, cancelBackstop: () => {},
-  });
-  assert.equal(coordinator.supportsSteering(), true);
+  const coordinator = new SessionOrchestrator({
+    send: () => {}, sendRequest: () => {}, createRequestId: () => "r1", createClientMessageId: () => "m1",
+    currentNodeId: () => "n1", isDirect: () => false, sessionRuntime: () => undefined, switchNode: () => {},
+    waitForOnline: async () => {}, openSession: () => {}, addUserMessage: () => {}, transcriptUrl: () => "", refreshAccountSessions: () => {},
+    launchManagedDestination: async () => "managed-node",
+  } as any, workflow);
+  coordinator.sendPrompt("also add a test");
+  assert.deepEqual(sent, [{ kind: "prompt", sessionId: "s1", text: "also add a test", clientMessageId: "m1", attachments: undefined }]);
+  canSteer = false;
+  coordinator.sendPrompt("one more");
+  assert.equal(sent.length, 1, "a runtime that can't steer takes nothing mid-turn");
 });
 
