@@ -12,7 +12,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { inferGitHubRepoFromWorkspace, isSharedCloneRoot } from "../src/repo-workspace.js";
-import { createWorktree } from "../src/worktree.js";
+import { createWorktree, reapedWorktreeBranch } from "../src/worktree.js";
 
 const exec = promisify(execFile);
 
@@ -74,6 +74,11 @@ async function main() {
     // Simulate a reap: delete the dir WITHOUT `git worktree remove` (worst case).
     fs.rmSync(first.path, { recursive: true, force: true });
     assert.ok(!fs.existsSync(first.path), "worktree dir reaped");
+    // Cleanup clears `worktree` and leaves `workspace` on the old path; resume
+    // must still see a worktree session that needs its tree back.
+    assert.equal(reapedWorktreeBranch({ workspace: first.path, branch }), branch, "pruned worktree is re-provisioned");
+    assert.equal(reapedWorktreeBranch({ worktree: first.path, branch }), branch, "removed worktree is re-provisioned");
+    assert.equal(reapedWorktreeBranch({ workspace: path.join(base, "gone"), branch }), undefined, "a non-worktree workspace is left alone");
     // Prune the stale registration, then re-provision on the same branch.
     await exec("git", ["-C", repo, "worktree", "prune"]);
     const reprovisioned = await createWorktree({ repoDir: repo, id: branch, branch });

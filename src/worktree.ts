@@ -43,6 +43,24 @@ export function branchSlug(input: string): string {
   );
 }
 
+/** A Bivy-managed worktree lives at `<repo>/.bivy/worktrees/<name>`. */
+export function isManagedWorktreePath(wtPath: string): boolean {
+  const parts = path.resolve(wtPath).split(path.sep);
+  return parts.length >= 3 && parts[parts.length - 3] === ".bivy" && parts[parts.length - 2] === "worktrees";
+}
+
+/**
+ * The branch to re-provision when a worktree session is reopened after its
+ * directory was removed, else undefined. Worktree cleanup clears `worktree` but
+ * leaves `workspace` on the old managed path, so either one marks the session
+ * as having run in a worktree.
+ */
+export function reapedWorktreeBranch(meta?: { worktree?: string; workspace?: string; branch?: string }): string | undefined {
+  if (!meta?.branch) return undefined;
+  const wtPath = meta.worktree ?? (meta.workspace && isManagedWorktreePath(meta.workspace) ? meta.workspace : undefined);
+  return wtPath && !fs.existsSync(wtPath) ? meta.branch : undefined;
+}
+
 /** The toplevel of the git repo containing `dir`, or undefined if not a repo. */
 export async function gitRepoRoot(dir: string): Promise<string | undefined> {
   try {
