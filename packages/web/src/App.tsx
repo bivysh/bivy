@@ -50,7 +50,6 @@ import { Spinner } from "./components/Spinner.js";
 import { StatusDot } from "./components/StatusDot.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
 import { GetStarted, FIRST_CHANGE_PROMPT, openAppPrompt } from "./components/GetStarted.js";
-import { NotifyOffer } from "./components/NotifyOffer.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
 import { ConnectAI } from "./components/ConnectAI.js";
@@ -1223,12 +1222,6 @@ export function App() {
               }
             />
 
-            {activeSession && (
-              <NotifyOffer
-                working={state.activeSession.working}
-                machineName={activeSessionNode?.name || undefined}
-              />
-            )}
 
 
 
