@@ -254,7 +254,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 /* Primary destinations sit above the session stream. Keeping Automations here
    makes it discoverable without competing with the quieter Settings footer. */
 .sidebar-nav {
-  order: 99; margin-top: auto; position: sticky; bottom: 0; z-index: 1;
+  order: 99; margin-top: auto; position: sticky; bottom: 0; z-index: var(--z-sticky);
   display: grid; grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); grid-auto-flow: column; gap: 0;
   margin-inline: calc(-1 * var(--space-2)); padding: var(--space-2) var(--space-1) var(--space-1);
   border-top: 1px solid var(--line); background: var(--surface);
