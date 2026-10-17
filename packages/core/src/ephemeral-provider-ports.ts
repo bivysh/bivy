@@ -63,6 +63,9 @@ export interface BootstrapOpts {
    *  refreshing them, so it can't rotate a refresh token out from under the
    *  machine that owns the login. */
   runner?: boolean;
+  /** The account also has runners: this node hands queued work sealed to it
+   *  to a runner (re-sealed for that runner) instead of running it in line. */
+  handOffToRunners?: boolean;
 }
 
 /** Mount point of a sleeping machine's persistent disk. */

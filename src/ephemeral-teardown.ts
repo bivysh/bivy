@@ -34,6 +34,10 @@ export interface EphemeralTeardownConfig {
   /** The machine sleeps rather than being destroyed: exiting stops it with its
    *  persistent disk, and the control plane must not reap it as settled. */
   sleep: boolean;
+  /** A runner: booted for one piece of work. One that never gets any (its
+   *  handoff failed) ends after `unusedRunnerMs` instead of running to TTL. */
+  runner: boolean;
+  unusedRunnerMs: number;
 }
 
 /** Parse the daemon's ephemeral-teardown config from the process env. */
@@ -46,6 +50,8 @@ export function readEphemeralTeardownConfig(env: NodeJS.ProcessEnv = process.env
     finishGraceMs: Number(env.BIVY_TEARDOWN_FINISH_GRACE_MS) || 10_000,
     idleGraceMs: Number(env.BIVY_SESSION_IDLE_CLOSE_MS) || 30 * 60 * 1000,
     sleep: env.BIVY_EPHEMERAL_SLEEP === "1",
+    runner: env.BIVY_RUNNER === "1",
+    unusedRunnerMs: Number(env.BIVY_UNUSED_RUNNER_MS) || 10 * 60 * 1000,
   };
 }
 
@@ -73,7 +79,9 @@ export function shouldSelfTeardown(cfg: EphemeralTeardownConfig, state: Teardown
   if (!cfg.enabled) return false;
   // A fresh box waits for its first work. A sleeping machine woken for
   // nothing goes back to sleep after the idle window instead of running to TTL.
-  if (!state.everBusy) return cfg.sleep && state.idleForMs >= cfg.idleGraceMs;
+  if (!state.everBusy) {
+    return (cfg.sleep && state.idleForMs >= cfg.idleGraceMs) || (cfg.runner && state.idleForMs >= cfg.unusedRunnerMs);
+  }
   if (state.anyWorking || state.anyRemoteActive || state.inFlightWork > 0) return false;
   const grace = cfg.onFinish ? cfg.finishGraceMs : cfg.idleGraceMs;
   return state.idleForMs >= grace;

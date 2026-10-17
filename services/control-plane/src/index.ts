@@ -23,7 +23,7 @@ import { listAppInstallations, listInstallationRepositories, listInstallationBra
 import { countActiveAccountSessions } from "./session-count.js";
 import { DeploymentCompute, deploymentCompute, managedComputeEnabled, setDeploymentCompute } from "./deployment-compute.js";
 import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, isCloudComputerNode, isEphemeralMilestone, routeWorkToCloudComputer } from "./cloud-computer.js";
-import { bootRunner, isRunnerNode, placeWorkOnRunner } from "./runners.js";
+import { bootRunner, isRunnerNode, placeWorkOnRunner, runnerLabel, runnerNodeId } from "./runners.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
 import { configureProxyTrust } from "./proxy-trust.js";
@@ -4459,6 +4459,41 @@ const requireWorkClaim = asyncHandler(async (req, res, next) => {
 });
 
 // Claim one item (atomic; only one node wins). Returns the item or 409 if taken.
+// The cloud computer hands queued work sealed to it to a runner, so it runs in
+// parallel. Only the computer can read the instructions, so it asks for the
+// runner here, pairs with it, re-seals them for it, and moves the item below.
+// The control plane never sees the instructions.
+app.post("/node/runners", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  if (!isCloudComputerNode(node.accountId, node.id)) return res.status(403).json({ error: "Only the cloud computer hands work to runners" });
+  if (!(await runnersMode(node.accountId))) return res.status(404).json({ error: "This deployment runs no runners" });
+  const itemId = typeof req.body?.itemId === "string" ? req.body.itemId : "";
+  const item = (await store.listWorkItems(node.accountId, 100)).find((i) => i.id === itemId);
+  if (!item || item.status !== "pending" || !item.body?.startsWith(`bivy-room-v1:${node.id}:`) || item.targetKind === "existing_session") {
+    return res.status(409).json({ error: "Only pending work sealed to this machine can be handed off" });
+  }
+  const runnerId = `work:${item.id}`;
+  const launched = await deploymentExtension.runnerLaunch(node.accountId, { runnerId, requestId: runnerId });
+  if (!launched.allowed) return res.status(429).json(launched.decision);
+  res.json({ nodeId: launched.nodeId });
+}));
+
+app.post("/node/work/:id/handoff", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  if (!isCloudComputerNode(node.accountId, node.id)) return res.status(403).json({ error: "Only the cloud computer hands work to runners" });
+  const id = String(req.params.id ?? "");
+  const target = runnerNodeId(node.accountId, `work:${id}`);
+  const body = typeof req.body?.body === "string" ? req.body.body : "";
+  if (req.body?.nodeId !== target || !body.startsWith(`bivy-room-v1:${target}:`)) {
+    return res.status(400).json({ error: "The instructions must be sealed to this item's runner" });
+  }
+  const label = `bivy/${runnerLabel(target)}`;
+  const moved = await store.handOffWorkItem(node.accountId, id, { fromNodeId: node.id, label, body });
+  if (!moved) return res.status(409).json({ error: "The item is no longer pending work sealed to this machine" });
+  void notifyRelaysWorkAvailable(node.accountId, { id, label }, { autoProvision: false });
+  res.json({ ok: true, label });
+}));
+
 app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const id = String(req.params.id);
@@ -4826,6 +4861,7 @@ app.post("/internal/compute/bootstrap", requireDeploymentExtension, asyncHandler
   res.json(await bootCloudComputer(store, {
     accountId, awakeCapMinutes,
     relayUrl: provisionEnv().relayUrl, controlPlaneUrl: provisionEnv().cpBaseUrl,
+    handOffToRunners: await runnersMode(accountId),
   }));
 }));
 

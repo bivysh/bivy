@@ -3168,6 +3168,32 @@ export class PostgresStore implements ControlPlaneStore {
     });
   }
 
+  async handOffWorkItem(
+    accountId: string,
+    id: string,
+    input: { fromNodeId: string; label: string; body: string },
+  ): Promise<WorkItem | undefined> {
+    return this.withLockedWork(accountId, id, async (row, query) => {
+      // The row is locked, so this check holds until the update below.
+      if (row.status !== "pending" || !String(row.body ?? "").startsWith(`bivy-room-v1:${input.fromNodeId}:`)) return undefined;
+      const current = mapAutomationRun(row);
+      const at = new Date().toISOString();
+      const label = normalizeWorkLabel(input.label);
+      const events: RunEvidenceEvent[] = [
+        ...(current?.events ?? []),
+        { at, kind: "routed" as const, summary: "Handed off to a runner.", ref: label, attempt: current?.attempt, milestoneId: `${id}:handoff:${current?.attempt ?? 0}` },
+      ].slice(-100);
+      const { rows } = await query(
+        `UPDATE work_items
+         SET label = $3, body = $4, ephemeral = true, events = $5::jsonb
+         WHERE id = $2 AND account_id = $1 AND status = 'pending'
+         RETURNING *`,
+        [accountId, id, label, input.body, JSON.stringify(events)],
+      );
+      return rows[0] ? mapWorkItem(rows[0]) : undefined;
+    });
+  }
+
   async listPendingWorkItems(accountId: string, labels: string[]): Promise<WorkItem[]> {
     if (labels.length === 0) return [];
     const { rows } = await this.query(

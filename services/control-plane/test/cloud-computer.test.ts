@@ -70,6 +70,7 @@ async function main() {
         "/v1/compute/machines": { machines: [{ id: "fly-1", nodeId, provider: "fly", region: "iad", state: "asleep", createdAt: "2026-10-06T00:00:00Z" }] },
         "/v1/compute/release": { released: true },
         "/v1/compute/runners/release": { released: true },
+        "/v1/compute/runners/launch": { nodeId: body.runnerId ? `eph-runner-${createHash("sha256").update(`${body.subject?.accountId}:${body.runnerId}`).digest("hex").slice(0, 16)}` : "", state: "launching" },
         "/v1/policy/check": { allowed: true },
         "/v1/account": { presentation: {} },
       };
@@ -164,6 +165,22 @@ async function main() {
   expect(machines.json?.[0]?.nodeId === nodeId && machines.json?.[0]?.lifecycleState === "asleep", "the hosted-machines panel shows the extension's machine");
   const released = await req(port, "DELETE", `/account/hosted-machines/${nodeId}`, undefined, token);
   expect(released.status === 200, "release destroys the cloud computer through the extension");
+
+  // Handoff: the cloud computer moves work sealed to it onto a runner, with the
+  // instructions re-sealed for that runner. Nobody else may.
+  expect(/BIVY_HANDOFF_TO_RUNNERS=1/.test(start), "a cloud computer whose deployment runs runners hands work to them");
+  const sealedRun = await req(port, "POST", "/node/automation-runs", { title: "nightly", body: `bivy-room-v1:${nodeId}:abc`, node: "Bivy Cloud" }, relay.enrollmentToken);
+  const itemId = (sealedRun.json?.id ?? sealedRun.json?.run?.id) as string;
+  expect(sealedRun.status < 300 && typeof itemId === "string", "work sealed to the cloud computer is queued");
+  const asked = await req(port, "POST", "/node/runners", { itemId }, relay.enrollmentToken);
+  const handTo = asked.json?.nodeId as string;
+  expect(asked.status === 200 && /^eph-runner-/.test(handTo), "the cloud computer gets a runner for it");
+  expect((await req(port, "POST", `/node/work/${itemId}/handoff`, { nodeId: handTo, body: `bivy-room-v1:${nodeId}:abc` }, relay.enrollmentToken)).status === 400, "instructions must be re-sealed for the runner");
+  const moved = await req(port, "POST", `/node/work/${itemId}/handoff`, { nodeId: handTo, body: `bivy-room-v1:${handTo}:def` }, relay.enrollmentToken);
+  expect(moved.status === 200 && moved.json?.label === `bivy/${handTo.replace(/^eph-/, "")}`, "the item moves to the runner's label");
+  expect((await req(port, "POST", `/node/work/${itemId}/handoff`, { nodeId: handTo, body: `bivy-room-v1:${handTo}:ghi` }, relay.enrollmentToken)).status === 409, "it can't be handed off twice");
+  const laptopEnroll = await req(port, "POST", "/nodes/enroll", { nodeId: "node_laptop", name: "laptop" }, token);
+  expect((await req(port, "POST", "/node/runners", { itemId }, laptopEnroll.json?.enrollmentToken)).status === 403, "only the cloud computer starts runners");
 
   // A runner: its own node for one piece of work, booted to work alone and
   // forgotten once the deployment deletes it.

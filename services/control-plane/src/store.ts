@@ -1571,6 +1571,14 @@ export interface WorkQueueRepository {
     id: string,
     input: { label: string; runtimeId?: string; model?: string; ephemeral?: boolean },
   ): Promise<WorkItem | undefined>;
+  // Move a *pending* item whose instructions are sealed to `fromNodeId` onto
+  // another label with instructions that node re-sealed for the new one.
+  // Atomic on the item still being pending and still sealed to `fromNodeId`.
+  handOffWorkItem(
+    accountId: string,
+    id: string,
+    input: { fromNodeId: string; label: string; body: string },
+  ): Promise<WorkItem | undefined>;
   // Remove a single work item from the queue (the "×" on a row). Account-scoped;
   // returns whether it existed.
   deleteWorkItem(accountId: string, id: string): Promise<boolean>;

@@ -43,8 +43,10 @@ function bivyBootstrapExports(opts: BootstrapOpts): string[] {
     ephemeral && opts.teardownOnAgentFinish ? `export BIVY_TEARDOWN_ON_FINISH=1` : "",
     ephemeral && opts.restoreSessionId ? `export BIVY_RESTORE=${shq(opts.restoreSessionId)}` : "",
     ephemeral && opts.sleepOnIdle ? "export BIVY_EPHEMERAL_SLEEP=1" : "",
+    opts.runner ? "export BIVY_RUNNER=1" : "",
     opts.runner ? "export BIVY_WORK_OWN_LABEL_ONLY=1" : "",
     opts.runner ? "export BIVY_OAUTH_REFRESH=0" : "",
+    opts.handOffToRunners ? "export BIVY_HANDOFF_TO_RUNNERS=1" : "",
   ].filter(Boolean);
 }
 
