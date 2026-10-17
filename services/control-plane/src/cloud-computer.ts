@@ -156,6 +156,19 @@ export async function cloudRouteSourceLabel(
 }
 
 /**
+ * Whether a node may take a queued item. Work placed on the cloud computer or a
+ * runner is theirs alone. While routing sends the shared queue to the cloud,
+ * only the cloud computer takes shared work: the item is moved to the cloud a
+ * moment after it is queued, and another machine claiming it in between would
+ * run work it can't read.
+ */
+export function nodeMayTakeWork(input: { accountId: string; nodeId: string; label: string; sharedGoesToCloud: boolean }): boolean {
+  if (/^bivy\/(managed-auto|runner)-[0-9a-f]{16}$/.test(input.label)) return input.label === `bivy/${ephemeralNodeLabel(input.nodeId)}`;
+  if (input.label === "bivy" && input.sharedGoesToCloud) return isCloudComputerNode(input.accountId, input.nodeId);
+  return true;
+}
+
+/**
  * When the account's automation routing points at the deployment's cloud
  * (as primary, or as fallback while the chosen machine is offline), move the
  * queued work waiting on that route to the cloud computer's own label. Returns
