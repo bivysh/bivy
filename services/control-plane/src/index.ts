@@ -22,7 +22,7 @@ import { publicManagedLaunchError } from "./managed-launch-error.js";
 import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation, mintInstallationToken } from "./hosted-github-auth.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { DeploymentCompute, deploymentCompute, managedComputeEnabled, setDeploymentCompute } from "./deployment-compute.js";
-import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, isCloudComputerNode, isEphemeralMilestone, routeWorkToCloudComputer } from "./cloud-computer.js";
+import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, cloudRouteSourceLabel, isCloudComputerNode, isEphemeralMilestone, nodeMayTakeWork, routeWorkToCloudComputer } from "./cloud-computer.js";
 import { bootRunner, isRunnerNode, placeWorkOnRunner, runnerLabel, runnerNodeId } from "./runners.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
@@ -4446,8 +4446,14 @@ app.get("/node/work", requireNode, asyncHandler(async (req, res) => {
     .map((l) => l.trim())
     .filter(Boolean);
   const items = await store.listPendingWorkItems(node.accountId, labels.length ? labels : ["bivy"]);
-  res.json({ items });
+  const sharedGoesToCloud = items.some((item) => item.label === "bivy") && await sharedWorkGoesToCloud(node.accountId);
+  res.json({ items: items.filter((item) => nodeMayTakeWork({ accountId: node.accountId, nodeId: node.id, label: item.label, sharedGoesToCloud })) });
 }));
+
+/** Routing sends the shared queue to the account's cloud computer. */
+async function sharedWorkGoesToCloud(accountId: string): Promise<boolean> {
+  return await accountMachineMode(accountId) && await cloudRouteSourceLabel(store, accountId) === "bivy";
+}
 
 const workClaimToken = (req: Request): string => req.get('x-bivy-work-claim') || '';
 const requireWorkClaim = asyncHandler(async (req, res, next) => {
@@ -4499,6 +4505,11 @@ app.post("/node/work/:id/claim", requireNode, asyncHandler(async (req, res) => {
   const id = String(req.params.id);
   const pending = await store.getAutomationRun(node.accountId, id);
   if (!pending || ["succeeded", "failed", "cancelled", "needs_attention"].includes(pending.status)) return res.status(409).json({ error: "Already claimed or unknown" });
+  // The label may have changed since the node listed the item.
+  const label = pending.routing.nodeLabel;
+  if (!nodeMayTakeWork({ accountId: node.accountId, nodeId: node.id, label, sharedGoesToCloud: label === "bivy" && await sharedWorkGoesToCloud(node.accountId) })) {
+    return res.status(409).json({ error: "This work is routed to another machine" });
+  }
   const admission = await deploymentDecision(node.accountId, "automation.run", id, { source: pending.source });
   if (!admission.allowed) {
     await parkAutomationRunForDeploymentDenial(node.accountId, { id }, admission);

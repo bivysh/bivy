@@ -234,6 +234,16 @@ async function routing() {
   expect(items.find((i) => i.id === laptopItem.id)?.label === label, "the waiting work moves to the cloud computer's label");
   expect(items.find((i) => i.id === item.id)?.label !== label, "work for another route is left alone");
 
+  // Who may take queued work: cloud and runner labels are theirs alone, and
+  // while routing sends the shared queue to the cloud, other machines leave it.
+  const { nodeMayTakeWork } = await import("../src/cloud-computer.js");
+  const computer = cloudComputerNodeId(account.id);
+  const take = (nodeId: string, itemLabel: string, sharedGoesToCloud = false) => nodeMayTakeWork({ accountId: account.id, nodeId, label: itemLabel, sharedGoesToCloud });
+  expect(!take("n-laptop", label) && take(computer, label), "only the cloud computer takes work on its label");
+  expect(!take("n-laptop", "bivy/runner-0123456789abcdef") && !take(computer, "bivy/runner-0123456789abcdef") && take("eph-runner-0123456789abcdef", "bivy/runner-0123456789abcdef"), "only its runner takes work on a runner's label");
+  expect(!take("n-laptop", "bivy", true) && take(computer, "bivy", true), "shared work routed to the cloud is left to the cloud computer");
+  expect(take("n-laptop", "bivy") && take("n-laptop", "bivy/laptop"), "otherwise machines take shared and their own work as before");
+
   // Runners: work the cloud gets goes to its own runner when one is free.
   const { placeWorkOnRunner, runnerNodeId } = await import("../src/runners.js");
   await store.setQueueRouting(account.id, { primary: { kind: "config", configId: cloud.id } });
