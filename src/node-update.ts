@@ -4,9 +4,9 @@ import { gt, valid } from "semver";
 
 /** Match the channel recorded by install.sh and `bivy update`. */
 /**
- * `{ manager, update }` when a system package manager owns this install (the
- * AUR's `bivy` writes `.bivy-install.json`, as bin/install-kind.mjs reads it for
- * the CLI), so the node must not replace its files; null otherwise.
+ * `{ manager, update }` when a system package manager owns this install (it
+ * writes `.bivy-install.json`, as bin/install-kind.mjs reads it for the CLI),
+ * so the node must not replace its files; null otherwise.
  */
 export function managedInstall(packageRoot: string): { manager: string; update: string } | null {
   try {

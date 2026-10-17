@@ -1026,7 +1026,7 @@ async function maybeNotifyBivyUpdate() {
 // in both. Returns a friendly error instead of throwing when it can't be found
 // (e.g. an unusual layout), so the banner can fall back to the manual command.
 function runBivyUpdate(): { ok: boolean; error?: string } {
-  // A system package (the AUR's `bivy`) owns this install; its manager updates it.
+  // A system package owns this install (.bivy-install.json); its manager updates it.
   const managed = managedInstall(repoRoot);
   if (managed) return { ok: false, error: `Bivy is installed by ${managed.manager} on this machine. Update it there${managed.update ? `: ${managed.update}` : ""}, then restart Bivy.` };
   const script = path.join(repoRoot, "bin", "bivy.mjs");

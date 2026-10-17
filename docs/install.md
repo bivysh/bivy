@@ -106,21 +106,6 @@ A headless install prints `bivy setup` as the next step. With an interactive
 terminal, a failed setup returns a nonzero installer exit code instead of being
 reported as a missing terminal.
 
-### Arch Linux and Omarchy (AUR)
-
-```bash
-yay -S bivy-bin    # or paru -S bivy-bin
-bivy setup
-```
-
-The `bivy-bin` AUR package installs the release archive system-wide under
-`/usr/lib/bivy`, with git as its only dependency. Your data still lives in
-`~/.bivy`. Updates come through your AUR helper (`yay -Syu`), so
-`bivy update` and the app's Update button point you there instead of replacing
-files pacman owns; run `bivy restart` after an upgrade. Tailscale is an optional
-dependency for `bivy tailscale`. The package source is in
-`packaging/aur/`.
-
 ## Where your data lives
 
 Node state — config, node identity, relay keys, sessions, logs — lives in

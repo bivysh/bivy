@@ -84,7 +84,7 @@ process.env.BIVY_DATA_DIR = appDir;
 //   - "npm-global" `npm i -g @bivy/bivy` (repoRoot is below node_modules/@bivy)
 //   - "archive"    a GitHub release archive under ~/.local/share/bivy (install.sh)
 //   - "packaged"   install.sh tarball tree (user-owned, self-preserving)
-//   - "managed"    a system package (the AUR's `bivy`), updated by its manager
+//   - "managed"    a system package (it writes .bivy-install.json), updated by its manager
 function detectInstallKind() {
   return archive ? "archive" : classifyInstallKind(repoRoot);
 }
