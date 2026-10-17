@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A new look for the web app.** Text is denser on desktop (13px; phones stay 15px), areas are split by thin lines instead of fills, and toolbars are one 36px row. Primary buttons are black on light and white on dark, and the only warm color is a spark that marks a running agent. The dark theme is a slate night, the light theme a soft white. The wordmark and the empty-session prompt use the serif; code uses JetBrains Mono, now bundled. Faint contour lines sit behind the empty new-session screen.
+- **One line per turn for the agent's work.** Between your message and the answer, a turn's tool calls and interim messages fold into a single line. While the agent works it shows what it is doing; when it's done it summarises the turn ("Ran 4 commands, edited a file · 3 updates"). Tap it to open everything inline; it opens downward and doesn't scroll the chat. Files, apps and plans the agent produces stay visible outside it. "Show earlier messages" now counts what you see, so a turn's work counts once, and never opens mid-turn. Focus view is removed; this replaces it.
+- **Sidebar.** Automations, Artifacts, Apps and Terminal sit at the bottom on desktop and at the top of the drawer on phones. Search is a button in the header that opens a search bar with a filter and a live count; Cancel or Escape clears it. Desktop session rows are one line and name the machine when you have more than one. New session is a pill with a round Settings button beside it.
+- **Session header.** The Chat / Terminal switch sits beside the session menu, so the title keeps its own line.
+- **The "Make this repeatable" and notification offer cards no longer appear in sessions.** Automations are in the sidebar and notifications in Settings.
 - **A message sent while the agent works now steers it. The follow-up queue is gone.** Send goes straight into the running turn, and the agent takes it into account as it goes. The panel above the composer is removed, along with its reorder, edit, "Send next", "Run in new session" and separate ⚡ Steer controls. So is the hidden scheduled message that delivered a queued follow-up after you closed the app. An agent that hasn't declared steer support only offers Stop until its turn ends.
 
 ### Added
@@ -22,6 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Settings, sheets and dialogs close inside a frame.** Closing waited for the browser to confirm a Back step, and inside a frame (Bivy viewed in an app preview) that step could land on the surrounding page, so the panel stayed open. Panels now close at once, and Back still closes them as before.
 - `bivy restart`, and the restart at the end of `bivy update`, now really restarts a running node after rewriting its service unit. When the unit had drifted (an update moved paths, a config edit changed the environment), it was rewritten and enabled. `enable --now` only starts a stopped unit, so a running node kept its old code while the CLI printed "Service restarted".
 - **Opening an old session no longer marks it "Last turn failed".** Once a closed session's worktree was cleaned up, reopening it started the agent in the deleted directory. The agent failed to start, and the session showed as failed even though you hadn't sent anything. Reopening now recreates the worktree on the session's branch, as it already did when the directory was removed some other way.
 - **`bivy prune` no longer deletes recent sessions to make room for sub-agents.** Each sub-agent (delegated) session counted as its own session, so a parent that started a few sub-agents filled the keep window and pushed recent sessions out. A parent and its sub-agents now count as one session that is as recent as its newest member, and they are kept or removed together.
