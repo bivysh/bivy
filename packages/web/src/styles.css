@@ -172,6 +172,11 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .card[data-tone="muted"] { background: var(--surface-2); }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); }
 .card-title { font-size: var(--text-base); font-weight: var(--weight-semibold); }
+/* A small label above a card's title ("Your step", "High risk"). Plain text, not a
+   badge; a tone colors it only when the label is a warning. */
+.card-eyebrow { color: var(--muted); font-size: var(--text-xs); line-height: var(--lh-xs); font-weight: var(--weight-medium); }
+.card-eyebrow[data-tone="danger"] { color: var(--danger); }
+.card-eyebrow[data-tone="warn"] { color: var(--warn); }
 .card-sub { color: var(--muted); font-size: var(--text-sm); }
 .card-actions { display: flex; gap: var(--space-2); justify-content: flex-end; margin-top: var(--space-3); }
 
@@ -953,16 +958,16 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    instead of being clipped in a fixed region between the chat and composer. No
    own padding: .chat already supplies the 20px gutter and the 14px row gap. */
 .approval-stack { display: flex; flex-direction: column; gap: 10px; }
-.approval-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
-.approval-title { font-size: 14px; font-weight: 650; }
+.approval-card .card-eyebrow { margin-bottom: 2px; }
+.approval-title { font-size: var(--text-md); line-height: var(--lh-md); font-weight: var(--weight-semibold); margin-bottom: var(--space-1); }
 .approval-consequence { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
 .approval-reason { font-size: 13px; font-style: italic; color: var(--muted); margin-bottom: 8px; }
 .approval-command {
-  margin: 0 0 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
-  padding: 8px 10px; overflow-x: auto; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  margin: 0 0 8px; background: var(--surface-2); border-radius: var(--radius-sm);
+  padding: 8px 10px; overflow-x: auto; font-size: var(--text-sm); font-family: var(--font-mono);
 }
 .approval-fields { display: grid; gap: 6px; margin-bottom: 8px; }
-.approval-field-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.approval-field-label { font-size: var(--text-xs); line-height: var(--lh-xs); color: var(--muted); }
 .approval-field-value { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; overflow-wrap: anywhere; word-break: break-word; white-space: pre-line; }
 .approval-raw-toggle { border: 0; background: transparent; color: var(--muted); font-size: 12px; padding: 0; margin-bottom: 8px; text-decoration: underline; }
 .approval-raw-toggle:hover { color: var(--ink); }
@@ -978,12 +983,11 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 /* ---- Clarifying questions (AskUserQuestion) — a blocking question, not a
    tool approval. A quiet neutral card that reads as part of the transcript:
    the composer's "Waiting for you" already flags it, so no accent border or
-   badge. Options are one radio/checkbox list rather than a stack of buttons. */
+   badge (the header is a .card-eyebrow). Options are one radio/checkbox list rather than a stack of buttons. */
 .question-card { display: flex; flex-direction: column; gap: var(--space-4); }
 .question-item { display: flex; flex-direction: column; gap: var(--space-2); }
-.question-head { color: var(--muted); font-size: var(--text-xs); line-height: var(--lh-xs); font-weight: var(--weight-medium); }
 .question-text { font-size: var(--text-md); line-height: var(--lh-md); font-weight: var(--weight-semibold); }
-.question-head + .question-text { margin-top: calc(-1 * var(--space-1)); }
+.card-eyebrow + .question-text { margin-top: calc(-1 * var(--space-1)); }
 .question-options {
   display: flex; flex-direction: column; margin-top: var(--space-1);
   border: 1px solid var(--line); border-radius: var(--radius-md); overflow: hidden;

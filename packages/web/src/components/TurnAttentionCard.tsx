@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useState } from "react";
-import { Badge } from "./Badge.js";
 import type { TurnAttentionRequest } from "@bivy/core";
 
 /** A non-destructive watchdog decision. The turn is still alive while this card
@@ -21,16 +20,16 @@ export function TurnAttentionCard({
   };
 
   return (
-    <div id={`attention-${encodeURIComponent(attention.sessionId)}`} className="card question-card turn-attention-card" data-tone="warn" data-attention-card tabIndex={-1} role="alert">
+    <div id={`attention-${encodeURIComponent(attention.sessionId)}`} className="card question-card" data-attention-card tabIndex={-1} role="alert">
       <div className="question-item">
-        <div className="question-head"><Badge tone="warn" variant="soft" upper>Turn may be stuck</Badge></div>
+        <div className="card-eyebrow" data-tone="warn">Turn may be stuck</div>
         <div className="question-text">{attention.message}</div>
         <div className="question-option-desc">
           Bivy has not stopped the agent. The normal turn time limit is still active.
         </div>
       </div>
       <div className="approval-actions">
-        <button className="btn danger-ghost" onClick={() => resolve("stop")} disabled={pending !== null}>
+        <button className="btn ghost" onClick={() => resolve("stop")} disabled={pending !== null}>
           {pending === "stop" ? "Stopping…" : "Stop turn"}
         </button>
         <button className="btn primary" onClick={() => resolve("continue")} disabled={pending !== null}>

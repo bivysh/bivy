@@ -145,12 +145,23 @@ function QuestionCard({
     return answers;
   };
 
-  const submit = () => {
+  const send = (answers: Record<string, string>) => {
     lastAction.current = "answer";
     setPending(true);
     setStalled(false);
-    onAnswer(request.id, request.sessionId, buildAnswers());
+    onAnswer(request.id, request.sessionId, answers);
     armStallTimer();
+  };
+  const submit = () => send(buildAnswers());
+  // One question, one pick from plain options: tapping an option is the answer,
+  // so there is no separate Send. "Other" still opens a box and a Send button.
+  const only = request.questions.length === 1 ? request.questions[0] : undefined;
+  const oneTap = !!only && !only.secret && !only.multiSelect && only.options.length > 0;
+  const pick = (qi: number, label: string, multiSelect: boolean | undefined) => {
+    if (!oneTap || !only) return toggle(qi, label, multiSelect);
+    setSelected({ [qi]: [label] });
+    setOtherActive({ [qi]: false });
+    send({ [only.question]: label });
   };
   const skip = () => {
     lastAction.current = "skip";
@@ -175,7 +186,7 @@ function QuestionCard({
         const picked = selected[qi] || [];
         return (
           <div className="question-item" key={qi}>
-            {q.header && <div className="question-head">{q.header}</div>}
+            {q.header && <div className="card-eyebrow">{q.header}</div>}
             <div className="question-text" id={`${request.id}-q${qi}`}>{q.question}</div>
             {!q.secret && (q.url || q.code || q.command) && <QuestionStep url={q.url} code={q.code} command={q.command} onRunInTerminal={onRunInTerminal} />}
             {q.secret ? (
@@ -207,7 +218,7 @@ function QuestionCard({
                     aria-checked={picked.includes(opt.label)}
                     className="question-option"
                     data-multi={q.multiSelect || undefined}
-                    onClick={() => toggle(qi, opt.label, q.multiSelect)}
+                    onClick={() => pick(qi, opt.label, q.multiSelect)}
                     disabled={pending}
                   >
                     <span className="question-option-label">{opt.label}</span>
@@ -259,9 +270,9 @@ function QuestionCard({
           <button className="btn ghost" onClick={skip}>
             Skip
           </button>
-          <button className="btn primary" onClick={submit} disabled={!answered}>
+          {(!oneTap || otherActive[0]) && <button className="btn primary" onClick={submit} disabled={!answered}>
             {request.questions.every((q) => q.secret) ? "Save secret" : `Send answer${request.questions.length > 1 ? "s" : ""}`}
-          </button>
+          </button>}
         </div>
       )}
     </div>

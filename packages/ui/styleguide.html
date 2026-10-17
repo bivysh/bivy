@@ -419,6 +419,8 @@ section > .lede { color: var(--muted); font-size: var(--text-sm); margin: 0 0 va
 .card[data-tone="muted"]  { background: var(--surface-2); }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-bottom: var(--space-2); }
 .card-title { font-size: var(--text-base); font-weight: var(--weight-semibold); }
+.card-eyebrow { color: var(--muted); font-size: var(--text-xs); line-height: var(--lh-xs); font-weight: var(--weight-medium); }
+.card-eyebrow[data-tone="danger"] { color: var(--danger); }
 .card-sub { color: var(--muted); font-size: var(--text-sm); }
 .card-actions { display: flex; gap: var(--space-2); justify-content: flex-end; margin-top: var(--space-3); }
 
@@ -730,22 +732,26 @@ section > .lede { color: var(--muted); font-size: var(--text-sm); margin: 0 0 va
   <!-- CARDS ------------------------------------------------------------- -->
   <section id="cards">
     <h2>Cards</h2>
-    <p class="lede">One <code>.card</code> surface, tone via <code>data-tone</code>, one radius. Approval &amp; question cards are just cards.</p>
+    <p class="lede">One <code>.card</code> surface, tone via <code>data-tone</code>, one radius. Approval &amp; question cards are just cards: neutral unless the action is permanent, with a plain <code>.card-eyebrow</code> label above the title instead of a badge.</p>
     <div class="spec"><div class="spec-h"><b>Approval card</b> <code>.card[data-tone="danger"]</code></div>
       <div class="demo col">
         <div class="card" data-tone="danger">
-          <div class="card-head"><span class="card-title">Run shell command</span><span class="badge upper" data-variant="soft" data-tone="danger">critical</span></div>
+          <div class="card-eyebrow" data-tone="danger">Permanent</div>
+          <div class="card-title">Run shell command</div>
           <div class="card-sub">This permanently deletes the build directory.</div>
-          <pre style="margin:8px 0 0;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-sm);padding:8px 10px;font-family:var(--font-mono);font-size:12.5px;overflow:auto">rm -rf build</pre>
+          <pre style="margin:8px 0 0;background:var(--surface-2);border-radius:var(--radius-sm);padding:8px 10px;font-family:var(--font-mono);font-size:12.5px;overflow:auto">rm -rf build</pre>
           <div class="card-actions"><button class="btn ghost">Deny</button><button class="btn primary">Approve</button></div>
         </div>
         <div class="card">
-          <div class="card-head"><span class="card-title">Which database?</span><span class="badge upper" data-variant="soft" data-tone="accent">question</span></div>
-          <button class="selectable active" style="display:block;width:100%;text-align:left;margin-top:8px">Postgres — recommended</button>
-          <button class="selectable" style="display:block;width:100%;text-align:left;margin-top:6px">SQLite</button>
+          <div class="card-eyebrow">Approach</div>
+          <div class="card-title">Which database?</div>
+          <div style="margin-top:8px;border:1px solid var(--line);border-radius:var(--radius-md)">
+            <div style="padding:10px 12px">◉ Postgres</div>
+            <div style="padding:10px 12px;border-top:1px solid var(--line)">○ SQLite</div>
+          </div>
         </div>
       </div>
-      <div class="consolidates"><b>Consolidates ~18 inlined recipes:</b> <code>.approval-card</code>, <code>.question-card</code>, <code>.changes-card</code>, <code>.followup-card</code>, <code>.queue-card</code>, <code>.settings-row</code>, <code>.setup-card</code>, <code>.tui-locked-card</code>, … — same bordered surface with inconsistent radius/background. The selected-option treatment is the <code>.selectable[aria-pressed]</code> utility (also <code>.seg-btn.active</code>, <code>.ruleset-chip.active</code>).</div>
+      <div class="consolidates"><b>Consolidates ~18 inlined recipes:</b> <code>.approval-card</code>, <code>.question-card</code>, <code>.changes-card</code>, <code>.followup-card</code>, <code>.queue-card</code>, <code>.settings-row</code>, <code>.setup-card</code>, <code>.tui-locked-card</code>, … — same bordered surface with inconsistent radius/background. A question's options are one radio/checkbox list (<code>.question-option[aria-checked]</code>); elsewhere the selected-option treatment is the <code>.selectable[aria-pressed]</code> utility (also <code>.seg-btn.active</code>, <code>.ruleset-chip.active</code>).</div>
     </div>
   </section>
 

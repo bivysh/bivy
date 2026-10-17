@@ -50,6 +50,7 @@ const rawZIndexRe = /z-index\s*:\s*-?\d/;
 const RETIRED_CLASSES = [
   "machine-profiles", "connect-option-head", "connect-option-badge", "connect-option-copy", "connect-option-cta", // bring-your-own-cloud UI removed
   "apps-notice", // → canonical banner in shared AppAccess controls
+  "question-head", "approval-head", "turn-attention-card", // → .card-eyebrow label above the title
   "stat-grid", "stat", "stat-label", "stat-value", // Account panel counts; the lists carry them
   "composer-starter",
   "automation-next-step", "automation-next-step-actions", // next-step cards removed
