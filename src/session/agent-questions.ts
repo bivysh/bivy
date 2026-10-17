@@ -51,7 +51,11 @@ export function askQuestionsFrom(value: unknown): UserQuestionItem[] | string {
     if (url && !/^https:\/\/\S+$/.test(url)) return "A link must be an https:// URL.";
     const code = typeof raw.code === "string" ? raw.code.trim() : "";
     if (code.length > 64) return "A code is up to 64 characters.";
-    const extras = { ...(url ? { url } : {}), ...(code ? { code } : {}) };
+    const command = typeof raw.command === "string" ? raw.command.trim() : "";
+    // One line, no control characters: the card types it into a terminal, and a
+    // newline there would run it before the user has read it.
+    if (command.length > 1000 || /[\u0000-\u001f\u007f]/.test(command)) return "A command is one line (up to 1000 characters) with no control characters.";
+    const extras = { ...(url ? { url } : {}), ...(code ? { code } : {}), ...(command ? { command } : {}) };
     const secret = raw.secret as { name?: unknown } | undefined;
     if (secret !== undefined) {
       const name = typeof secret?.name === "string" ? secret.name.trim() : "";
@@ -60,7 +64,7 @@ export function askQuestionsFrom(value: unknown): UserQuestionItem[] | string {
       out.push({ question, header: typeof raw.header === "string" && raw.header.trim() ? header : "Secret", options: [], secret: { name }, ...extras });
       continue;
     }
-    const stepHeader = url && !(typeof raw.header === "string" && raw.header.trim()) ? "Your step" : header;
+    const stepHeader = (url || command) && !(typeof raw.header === "string" && raw.header.trim()) ? "Your step" : header;
     out.push({ question, header: stepHeader, options: labels.map((label) => ({ label })), ...(raw.multiSelect === true ? { multiSelect: true } : {}), ...extras });
   }
   if (new Set(out.map((q) => q.question)).size !== out.length) return "Questions must be different.";

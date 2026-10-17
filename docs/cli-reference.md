@@ -519,6 +519,7 @@ so it works for any agent with a shell.
 | `--secret <NAME>` | Ask for an API key, token or password. The card takes a hidden value, the node stores it in its vault as `NAME` (a letter, then letters, digits or `_`), and the command prints only `secret://NAME`. No options. |
 | `--url <https://…>` | An **Open** button for a page the user has to visit: a sign-in, a settings page, where to find a key |
 | `--code <code>` | A one-time code to enter on that page (a device sign-in code), shown with a copy button |
+| `--run "<command>"` | A one-line command for the user to run themselves (e.g. one needing `sudo`). **Open terminal** opens a terminal on the machine with it typed, not run |
 
 `bivy ask wait <id> [--timeout …]` waits for an earlier `--async` question, and
 `bivy ask status <id>` checks it without waiting. Answers are kept for a day.
@@ -535,6 +536,7 @@ bivy ask wait "$id"
 bivy ask "Paste your Stripe secret key so I can create the products" --secret STRIPE_API_KEY --url https://dashboard.stripe.com/apikeys
 bivy secrets exec --env STRIPE_API_KEY -- stripe products list
 bivy ask "Sign in to GitHub" --url https://github.com/login/device --code ABCD-1234 --option Done --option "It didn't work"
+bivy ask "ffmpeg needs a system install. Run this, then tap Done" --run "sudo apt-get install -y ffmpeg" --option Done --option "It failed"
 ```
 
 ### `bivy app <subcommand>`

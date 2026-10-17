@@ -227,6 +227,9 @@ export function App() {
   /** "Continue in terminal": the overlay hands the active chat session off to
    *  the runtime's interactive TUI (the reverse of "continue in chat"). */
   const [terminalTui, setTerminalTui] = useState(false);
+  // A command a question card asks the user to run (`bivy ask --run`), typed
+  // into a fresh session terminal when it opens.
+  const [terminalInput, setTerminalInput] = useState<string | null>(null);
   /** A live run-terminal the user picked from the sidebar, before they choose
    *  Open terminal vs Use chat. The first screen for an in-terminal session —
    *  mirrors TuiLockedView for chat sessions that already have a TUI open. */
@@ -547,6 +550,14 @@ export function App() {
     }
     setTerminalNodePicker(true);
   }, [state.connection.nodes]);
+
+  const runInTerminal = useCallback((command: string) => {
+    setTerminalTarget(null);
+    setTerminalStandalone(false);
+    setTerminalTui(false);
+    setTerminalInput(command);
+    setTerminalOpen(true);
+  }, []);
 
   const pickTerminalNode = useCallback(
     (nodeId: string) => {
@@ -1211,6 +1222,7 @@ export function App() {
                     questions={activeQuestions}
                     onAnswer={(id, sessionId, answers) => controller.answerQuestion(id, sessionId, answers)}
                     onCancel={(id, sessionId) => controller.cancelQuestion(id, sessionId)}
+                    onRunInTerminal={runInTerminal}
                   />
                   {activeTurnAttention && (
                     <TurnAttentionCard
@@ -1527,8 +1539,10 @@ export function App() {
             attachTermId={terminalTarget}
             standalone={terminalStandalone}
             tui={terminalTui}
+            initialInput={terminalInput ?? undefined}
             onClose={() => {
               setTerminalOpen(false);
+              setTerminalInput(null);
               setTerminalTarget(null);
               setTerminalStandalone(false);
               setTerminalTui(false);

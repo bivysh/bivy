@@ -1,6 +1,6 @@
 # Connect a service
 
-Summary: Get a key, a sign-in or a manual step from the user through the chat: keys, device codes, sign-in pages, a browser on this machine.
+Summary: Get a key, a sign-in or a manual step from the user through the chat: keys, device codes, sign-in pages, a browser on this machine, installing tools.
 
 The user is in a chat app, often on a phone, and may not know a terminal. Do the
 setup yourself and hand them only the step a person has to do, as a card. They
@@ -75,6 +75,27 @@ Turning on 2FA, approving an app, verifying an email, paying:
 
 One step per card. Say why it is needed. If they can't, find another way or
 explain what is blocked.
+
+## A tool that isn't installed
+
+Install it without root first, into the user's home:
+
+    uv tool install <tool>            # Python CLIs (or pipx install)
+    npm install -g --prefix ~/.local <package>
+    mise use -g <tool>@latest         # runtimes and many CLIs
+    brew install <formula>            # macOS, or Linuxbrew if present
+
+Download a release binary into `~/.local/bin` when the project ships one. Only
+when a tool truly needs the system package manager or root, hand the command to
+the user; never run `sudo` yourself or ask for their password:
+
+    bivy ask "ffmpeg needs a system install. Run this, then tap Done" \
+      --run "sudo apt-get install -y ffmpeg" --option "Done" --option "It failed"
+
+The card opens a terminal on this machine with the command typed, not run. They
+check it, press Enter and type their password there; you don't see it. Keep it
+to one line that does one thing, then check the result yourself
+(`command -v ffmpeg`).
 
 ## Prefer, in order
 

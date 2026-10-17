@@ -2690,6 +2690,7 @@ finish: Bivy already pushes when a turn ends while the user is away. --json prin
 // an id to read later with `bivy ask status|wait <id>`.
 const ASK_USAGE = `Usage: bivy ask "<question>" [--option <label>]… [--multi] [--header <label>] [--timeout 10m] [--async] [--json]
        bivy ask "<question>" --url <https://…> [--code <code>] [--option Done --option "Can't"] [--json]
+       bivy ask "<question>" --run "<command>" [--option Done --option "It failed"] [--json]
        bivy ask "<question>" --secret <NAME> [--url <https://…>] [--timeout 10m] [--json]
        bivy ask status <id> [--json]
        bivy ask wait <id> [--timeout 10m] [--json]`;
@@ -2714,6 +2715,11 @@ code to enter there, with a copy button. With options like Done / "Can't" it
 is a "do this, then tell me" step; without options the user can paste back
 what the page shows. See 'bivy guide connect'.
 
+--run "<command>" shows a command for the user to run themselves, with an
+Open terminal button: a terminal on this machine opens with the command typed,
+not run. Use it for anything needing their password (sudo), then check the
+result yourself.
+
 Prints the answer and exits 0. Exits 1 if the user dismissed the question and 5
 if --timeout (default 10m, up to 24h) passes first; the card closes then.
 --async returns the question's id at once; 'bivy ask wait <id>' blocks for the
@@ -2723,7 +2729,7 @@ answer later and 'bivy ask status <id>' checks without waiting.
   }
   const json = wantsJson(args);
   const fail = (error) => cliError(error, { json, paint: c.red });
-  const parsed = parseSessionArgs(args, ["--session", "--option", "--header", "--timeout", "--secret", "--url", "--code"]);
+  const parsed = parseSessionArgs(args, ["--session", "--option", "--header", "--timeout", "--secret", "--url", "--code", "--run"]);
   if (parsed.error) return fail({ code: "usage", message: parsed.error, exit: EXIT.usage });
   const sessionId = resolveAttachSessionId({ sessionFlag: parsed.one("--session"), env: process.env });
   if (!sessionId) return fail({ code: "no_session", message: "No session id.", hint: "Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.", next: "bivy sessions --json", exit: EXIT.usage });
@@ -2775,7 +2781,7 @@ answer later and 'bivy ask status <id>' checks without waiting.
   if (options.length === 1) return fail({ code: "usage", message: "Offer at least two --option values, or none for a free-text answer.", exit: EXIT.usage });
   const secretName = parsed.one("--secret");
   const started = await call("", {
-    questions: [{ question, header: parsed.one("--header"), options, multiSelect: parsed.has("--multi"), url: parsed.one("--url"), code: parsed.one("--code"), ...(secretName !== undefined ? { secret: { name: secretName } } : {}) }],
+    questions: [{ question, header: parsed.one("--header"), options, multiSelect: parsed.has("--multi"), url: parsed.one("--url"), code: parsed.one("--code"), command: parsed.one("--run"), ...(secretName !== undefined ? { secret: { name: secretName } } : {}) }],
     timeoutSeconds: timeout,
   });
   if (parsed.has("--async")) {

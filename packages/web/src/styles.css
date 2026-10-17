@@ -1011,6 +1011,12 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
   border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface-2);
   padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
 }
+.question-command {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
+  border: 1px solid var(--line-strong); border-radius: var(--radius-md); background: var(--surface-2);
+  padding: var(--space-1) var(--space-1) var(--space-1) var(--space-3);
+}
+.question-command code { font-family: var(--font-mono); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .question-code code { font-family: var(--font-mono); font-size: var(--text-xl); font-weight: 600; letter-spacing: 0.08em; overflow-wrap: anywhere; }
 
 /* ---- GitHub pill + action sheet ---- */
