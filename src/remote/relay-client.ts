@@ -52,14 +52,13 @@ export interface RelayConfig {
 export type ClientMessage = { kind: string; [key: string]: unknown };
 
 // Relay admission/config rejections: the relay refused this node at connect time
-// (bad/expired ticket, relay disabled, missing token). Crucially a routine
-// control-plane/relay DEPLOY produces exactly these for a few seconds — a
-// reconnecting node races the still-restarting control plane, its ticket
-// introspection transiently fails, and the relay reports "Unauthorized node". So
-// this is NOT permanently fatal: we keep retrying (on the slower admission
+// (bad/expired ticket, relay disabled, missing token). These are NOT permanently
+// fatal: a ticket can race a deploy, so we keep retrying (on the slower admission
 // ceiling below) and reconnect on our own once admission passes again.
 // Previously these disabled the connector for good, so every routine update
-// knocked every node offline until each was restarted by hand.
+// knocked every node offline until each was restarted by hand. A control plane
+// that is merely unreachable is reported as "Control plane unavailable", which
+// is deliberately not matched here, so it retries on the normal network ceiling.
 function isAdmissionRelayError(message: string) {
   return /hosted relay is not enabled|unauthorized|missing token/i.test(message);
 }

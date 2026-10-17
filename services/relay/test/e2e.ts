@@ -106,6 +106,16 @@ function connect(url: string): Promise<WebSocket> {
   });
 }
 
+// The error the relay sends before closing an admission it refused.
+function firstError(url: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const ws = new WebSocket(url);
+    ws.once("message", (d) => resolve(JSON.parse(d.toString()).error ?? null));
+    ws.once("close", () => resolve(null));
+    ws.once("error", () => resolve(null));
+  });
+}
+
 function expect(cond: boolean, msg: string) {
   if (!cond) throw new Error(`\u2717 FAIL: ${msg}`);
   console.log(`\u2713 ${msg}`);
@@ -224,6 +234,20 @@ async function main() {
     setTimeout(resolve, 1500);
   });
   expect(rejected, "foreign account is refused access to the node");
+
+  // 4. Admission errors say why. A ticket the control plane refuses is
+  //    "Unauthorized" (nodes then back off slowly); a control plane that doesn't
+  //    answer is "Control plane unavailable" (nodes keep the normal backoff).
+  expect((await firstError(`ws://localhost:${RELAY_PORT}/node?ticket=tkt_bogus`)) === "Unauthorized node", "an invalid node ticket is refused as unauthorized");
+  const orphanPort = await freePort();
+  spawnService(relayDir, {
+    PORT: String(orphanPort),
+    METRICS_PORT: String(await freePort()),
+    RELAY_SECRET: SECRET,
+    CONTROL_PLANE_URL: `http://localhost:${await freePort()}`,
+  });
+  await waitForHttp(`http://localhost:${orphanPort}/healthz`);
+  expect((await firstError(`ws://localhost:${orphanPort}/node?ticket=tkt_any`)) === "Control plane unavailable", "an unreachable control plane is reported as unavailable, not unauthorized");
 
   console.log("\nAll relay e2e checks passed.");
 }

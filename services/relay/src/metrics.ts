@@ -13,6 +13,7 @@ export interface RelayCounters {
   framesForwarded: number;
   workNotifications: number;
   rejectedAuth: number;
+  rejectedControlPlane: number;
   rejectedRate: number;
   rejectedTooLarge: number;
   rejectedPerIp: number;
@@ -68,6 +69,7 @@ export function renderRelayMetrics(m: RelayCounters, rooms: number, shardId: str
   metric("bivy_relay_work_notifications_total", "work.available notifications delivered since start.", "counter", [[shard, m.workNotifications]]);
   metric("bivy_relay_rejected_total", "Rejected connections/messages since start, by reason.", "counter", [
     [{ ...shard, reason: "auth" }, m.rejectedAuth],
+    [{ ...shard, reason: "control_plane_unavailable" }, m.rejectedControlPlane],
     [{ ...shard, reason: "rate" }, m.rejectedRate],
     [{ ...shard, reason: "too_large" }, m.rejectedTooLarge],
     [{ ...shard, reason: "per_ip" }, m.rejectedPerIp],

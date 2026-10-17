@@ -10,8 +10,8 @@ import { RelayConnector, type RelayConfig } from "../src/remote/index.js";
 import { PairingStore } from "../src/device-registry.js";
 
 /**
- * Regression test: a routine control-plane/relay DEPLOY briefly rejects a
- * reconnecting node's admission ("Unauthorized node"). The connector used to
+ * Regression test: a ticket that races a control-plane/relay DEPLOY can be
+ * briefly refused ("Unauthorized node"). The connector used to
  * treat that as permanently fatal — it set `closed` and never retried — so
  * every node stayed offline until manually restarted, on every update. See
  * relay-client.ts isAdmissionRelayError / scheduleReconnect.
@@ -36,7 +36,7 @@ function startRejectingRelay(): Promise<{ url: string; connections: () => number
     });
     wss.on("connection", (ws) => {
       connections += 1;
-      // Same shape services/relay emits when control-plane introspection fails.
+      // Same shape services/relay emits when the control plane refuses the ticket.
       ws.send(JSON.stringify({ t: "error", error: "Unauthorized node" }));
     });
   });
