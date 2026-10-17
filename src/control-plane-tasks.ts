@@ -255,6 +255,9 @@ export interface ControlPlaneTaskPollerOptions {
   sleep?: (ms: number) => Promise<void>;
   /** Lease heartbeat cadence. Primarily useful for deterministic focused tests. */
   leaseHeartbeatMs?: number;
+  /** Hand matching items to another machine before claiming them here
+   *  (src/runner-handoff.ts). `run` resolves false to keep the item here. */
+  handOff?: { applies(item: WorkItem): boolean; run(item: WorkItem): Promise<boolean> };
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
@@ -278,6 +281,10 @@ export class ControlPlaneTaskPoller {
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly leaseHeartbeatMs: number;
   private readonly outbox: WorkResultOutbox;
+  private readonly handOff?: ControlPlaneTaskPollerOptions["handOff"];
+  /** Items being handed off, and ones whose handoff failed (they run here). */
+  private readonly handingOff = new Set<string>();
+  private readonly keepHere = new Set<string>();
   private flushingResults?: Promise<void>;
 
   constructor(
@@ -291,6 +298,7 @@ export class ControlPlaneTaskPoller {
     this.policy = options.policy;
     this.sleep = options.sleep ?? defaultSleep;
     this.leaseHeartbeatMs = options.leaseHeartbeatMs ?? 30_000;
+    this.handOff = options.handOff;
     this.outbox = new WorkResultOutbox(options.resultDirectory, `${cfg.controlPlaneUrl}:${cfg.enrollmentToken}`);
   }
 
@@ -318,7 +326,8 @@ export class ControlPlaneTaskPoller {
   /** Include undelivered results so an ephemeral machine cannot tear down its
    * only durable outbox while completion reconciliation is still pending. */
   inFlightCount(): number {
-    return new Set([...this.inFlight.keys(), ...this.outbox.list().map(result => result.id)]).size;
+    // A handoff in progress keeps the machine up until the runner has the item.
+    return new Set([...this.inFlight.keys(), ...this.handingOff, ...this.outbox.list().map(result => result.id)]).size;
   }
 
   /**
@@ -354,7 +363,11 @@ export class ControlPlaneTaskPoller {
     const max = this.maxConcurrent?.() ?? 0;
     const running: Promise<void>[] = [];
     for (const item of items) {
-      if (this.inFlight.has(item.id) || this.outbox.has(item.id)) continue;
+      if (this.inFlight.has(item.id) || this.outbox.has(item.id) || this.handingOff.has(item.id)) continue;
+      if (this.handOff && !this.keepHere.has(item.id) && this.handOff.applies(item)) {
+        this.startHandOff(item);
+        continue;
+      }
       // Hard block: never contend for an item requiring a capability this
       // node hasn't declared. It stays pending for a node that has it (or
       // parks account-wide if the control plane found none at enqueue time).
@@ -375,6 +388,20 @@ export class ControlPlaneTaskPoller {
       running.push(this.runOne(item, run));
     }
     await Promise.all(running);
+  }
+
+  private startHandOff(item: WorkItem): void {
+    this.handingOff.add(item.id);
+    void this.handOff!.run(item)
+      .catch(() => false)
+      .then((handed) => {
+        this.handingOff.delete(item.id);
+        // Handed off: the item now waits on the runner's label, not ours.
+        if (!handed) {
+          this.keepHere.add(item.id);
+          this.poke();
+        }
+      });
   }
 
   private async runOne(item: WorkItem, reserved?: InFlightRun): Promise<void> {

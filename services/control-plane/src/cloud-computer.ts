@@ -44,6 +44,8 @@ export interface CloudComputerBootInput {
   awakeCapMinutes: number;
   relayUrl: string;
   controlPlaneUrl: string;
+  /** The deployment runs runners: hand sealed queued work to them. */
+  handOffToRunners?: boolean;
 }
 
 export interface CloudComputerBoot {
@@ -78,6 +80,7 @@ export async function bootCloudComputer(
     sleepOnIdle: true,
     // One machine serves the user's sessions and their automations.
     hostedTasks: true,
+    handOffToRunners: input.handOffToRunners,
     nodeLabel: ephemeralNodeLabel(nodeId),
     // Model credentials reach it like any node: end-to-end account vault sync
     // from the user's other machines, or a provider sign-in on the machine.

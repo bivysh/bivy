@@ -48,8 +48,10 @@ describe("bootstrap start.sh env", () => {
     expect(script).toContain("export BIVY_DATA_DIR=/data/bivy");
     expect(script).toContain("export BIVY_WORK_OWN_LABEL_ONLY=1");
     expect(script).toContain("export BIVY_OAUTH_REFRESH=0");
+    expect(script).toContain("export BIVY_RUNNER=1");
     expect(script).not.toContain("BIVY_EPHEMERAL_SLEEP");
     expect(start({ provider: "fly", sleepOnIdle: true })).not.toMatch(/BIVY_WORK_OWN_LABEL_ONLY|BIVY_OAUTH_REFRESH/);
+    expect(start({ provider: "fly", sleepOnIdle: true, handOffToRunners: true })).toContain("export BIVY_HANDOFF_TO_RUNNERS=1");
   });
 
   it("opts into hosted work only when asked", () => {

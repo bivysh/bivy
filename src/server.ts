@@ -58,6 +58,7 @@ import { attachAdoptedSessions, classifyAttachFailure } from "./runtime/adoption
 import { createCredentialStore, testProviderCredential } from "./runtime/credentials.js";
 import { decodeAutomationTemplate, type AutomationFilter } from "./automation-template.js";
 import { resealAutomationTemplates, type StoredTemplate } from "./automation-reseal.js";
+import { handOffApplies, handOffToRunner } from "./runner-handoff.js";
 import { passWebhookFilter } from "./automation-filter-gate.js";
 import { isModelAuthError, authProviderForSession, classifyModelAuthError } from "./runtime/auth-errors.js";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
@@ -5936,6 +5937,17 @@ function startControlPlaneTasksIfConfigured() {
         return queueRunPolicy;
       }
     },
+    // A cloud computer whose deployment runs runners hands sealed work to one.
+    handOff: process.env.BIVY_HANDOFF_TO_RUNNERS === "1" ? {
+      applies: (item) => handOffApplies(identity.nodeId, item),
+      run: (item) => handOffToRunner({
+        nodeId: identity.nodeId,
+        post: (pathname, body) => delegatedRunRequest(pathname, { method: "POST", body: JSON.stringify(body) }),
+        roomKeyOf: siblingRoomKey,
+        openSealed: (payload) => pairingStore.openSealed(payload),
+        seal,
+      }, item),
+    } : undefined,
   });
   controlPlanePoller.start();
 }

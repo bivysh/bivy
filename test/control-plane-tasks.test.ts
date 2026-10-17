@@ -149,6 +149,39 @@ test("poller: a node lacking a required capability never contends for that item,
   assert.ok(calls.includes("POST https://cp/node/work/plain-job/claim"));
 });
 
+test("handoff: an item handed to another machine is never claimed here; a failed handoff runs here", async () => {
+  const cfg = { controlPlaneUrl: "https://cp", enrollmentToken: "t", labels: ["bivy"], pollMs: 60_000 };
+  const pending: WorkItem[] = [{ id: "sealed-job", label: "bivy", source: "manual", status: "pending", title: "nightly", body: "bivy-room-v1:me:x" }];
+  const calls: string[] = [];
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (url: string, init?: { method?: string }) => {
+    calls.push(`${init?.method ?? "GET"} ${url}`);
+    if (url.includes("/node/work?")) return { ok: true, json: async () => ({ items: pending }) } as Response;
+    return { ok: true, json: async () => ({}) } as Response;
+  }) as typeof fetch;
+  let handed = true;
+  const attempts: string[] = [];
+  const ran: string[] = [];
+  const poller = new ControlPlaneTaskPoller(cfg, async (item) => { ran.push(item.id); }, undefined, {
+    handOff: { applies: (item) => item.body?.startsWith("bivy-room-v1:me:") === true, run: async (item) => { attempts.push(item.id); return handed; } },
+  });
+  const tick = () => (poller as unknown as { tick: () => Promise<void> }).tick();
+  try {
+    await tick();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(attempts, ["sealed-job"]);
+    assert.ok(!calls.some((c) => c.includes("/claim")), "a handed-off item is not claimed here");
+    handed = false;
+    // The failed handoff polls again by itself, and this time claims the item.
+    await tick();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  } finally {
+    globalThis.fetch = original;
+  }
+  assert.deepEqual(attempts, ["sealed-job", "sealed-job"], "each pending sighting tries once until a handoff fails");
+  assert.deepEqual(ran, ["sealed-job"], "after a failed handoff the item runs here");
+});
+
 test("poller: adopts renamed-node labels without a restart", async () => {
   const cfg: ControlPlaneTaskConfig = {
     controlPlaneUrl: "https://cp",

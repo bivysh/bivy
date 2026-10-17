@@ -1956,7 +1956,9 @@ function AutomationEditor({
       const input = {
         name: d.name.trim(),
         templateCiphertext: `${TEMPLATE_PREFIX}:${d.nodeId}:${encrypted}`,
-        nodeLabel: nodeName ? `bivy/${nodeName}` : undefined,
+        // Moving an existing automation to Bivy Cloud must clear its old
+        // machine label, or its work keeps routing to that machine.
+        nodeLabel: nodeName ? `bivy/${nodeName}` : (d.id ? "" : undefined),
         runtimeId: d.runtimeId.trim() || undefined,
         model: d.model.trim() || undefined,
         approvalMode: d.approvalMode,

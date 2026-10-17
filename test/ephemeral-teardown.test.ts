@@ -10,7 +10,7 @@ import {
   type EphemeralTeardownConfig,
 } from "../src/ephemeral-teardown.js";
 
-const base: EphemeralTeardownConfig = { enabled: true, provider: "fly", ttlMin: 60, onFinish: false, finishGraceMs: 10_000, idleGraceMs: 30 * 60_000, sleep: false };
+const base: EphemeralTeardownConfig = { enabled: true, provider: "fly", ttlMin: 60, onFinish: false, finishGraceMs: 10_000, idleGraceMs: 30 * 60_000, sleep: false, runner: false, unusedRunnerMs: 10 * 60_000 };
 const quiet = { everBusy: true, anyWorking: false, anyRemoteActive: false, inFlightWork: 0 };
 
 // Disabled (persistent node — env absent) → never self-teardown.
@@ -76,6 +76,13 @@ assert.equal(readEphemeralTeardownConfig({} as NodeJS.ProcessEnv).enabled, false
   assert.equal(readEphemeralTeardownConfig({ BIVY_EPHEMERAL: "1", BIVY_EPHEMERAL_SLEEP: "1" } as NodeJS.ProcessEnv).sleep, true);
   assert.equal(shouldSelfTeardown(sleeper, { ...quiet, everBusy: false, idleForMs: 29 * 60_000 }), false);
   assert.equal(shouldSelfTeardown(sleeper, { ...quiet, everBusy: false, idleForMs: 31 * 60_000 }), true);
+}
+// A runner whose work never arrived (its handoff failed) ends after ten quiet
+// minutes instead of running to its TTL.
+{
+  const runner = readEphemeralTeardownConfig({ BIVY_EPHEMERAL: "1", BIVY_EPHEMERAL_PROVIDER: "fly", BIVY_RUNNER: "1" } as NodeJS.ProcessEnv);
+  assert.equal(shouldSelfTeardown(runner, { ...quiet, everBusy: false, idleForMs: 9 * 60_000 }), false);
+  assert.equal(shouldSelfTeardown(runner, { ...quiet, everBusy: false, idleForMs: 11 * 60_000 }), true);
 }
 // Sleep exits WITHOUT signalling settled: the control plane must not reap it.
 {
