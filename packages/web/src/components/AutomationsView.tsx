@@ -62,7 +62,8 @@ import { RulesetsPanel } from "./Rulesets.js";
 import { QueueRoutingSection } from "./QueueRouting.js";
 import { takeAutomationsSetupFocus } from "../automationsRoute.js";
 import { requestSignIn } from "../signInRequest.js";
-import { openAccountAction, showAccountExtension } from "../packaged-client.js";
+import { showAccountExtension } from "../packaged-client.js";
+import { useAccountAction } from "./useAccountAction.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { AutomationsSection } from "../router.js";
 import type { GithubQueueItem } from "@bivy/core";
@@ -821,11 +822,10 @@ export function AutomationsView({
   }
 
   const cloudAutomationGate = useMemo(() => automationCloudGate(me), [me]);
-  const invokeCloudGateAction = useCallback((actionId: string) => {
-    controller.invokeAccountExtensionAction(actionId)
-      .then(({ url }) => openAccountAction(url))
-      .catch((e) => setError(String(e?.message || e)));
-  }, []);
+  const gateAction = useAccountAction({
+    onDone: (message) => { setNotice({ tone: "ok", title: message }); void refresh().catch(() => {}); },
+    onError: setError,
+  });
   const ghStatus = githubSourceStatus(sources.github);
   const linStatus = linearSourceStatus(sources.linear);
   const slackStatus = slackSourceStatus(sources.slack);
@@ -914,6 +914,7 @@ export function AutomationsView({
       </nav>}
 
       <div className="automations-view-body">
+        {gateAction.dialog}
         {cloudAutomationGate && (
           <div className="banner" data-tone="warn" role="status">
             <div className="banner-text">
@@ -927,9 +928,10 @@ export function AutomationsView({
                     type="button"
                     key={action.id}
                     className={`btn sm ${action.kind === "primary" ? "primary" : ""}`}
-                    onClick={() => invokeCloudGateAction(action.id)}
+                    disabled={gateAction.busy !== null}
+                    onClick={() => gateAction.run(action)}
                   >
-                    {action.label}
+                    {gateAction.busy === action.id ? "Working…" : action.label}
                   </button>
                 ))}
               </div>

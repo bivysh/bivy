@@ -25,6 +25,8 @@ export interface DeploymentDecisionAction {
   id: string;
   label: string;
   kind?: "primary" | "secondary";
+  /** Plain-text question the client asks before running the action. */
+  confirm?: string;
 }
 
 export interface DeploymentDecision {
@@ -71,11 +73,18 @@ export interface AccountExtensionView {
    *  window's oldest use expiring, or a fixed period resetting. */
   meter?: { label: string; used: number; limit: number; freesAt?: string };
   facts?: Array<{ id: string; label: string; value: string }>;
-  actions?: Array<{ id: string; label: string; kind?: "primary" | "secondary" }>;
+  /** `confirm` is a plain-text question the client asks before running it. */
+  actions?: Array<{ id: string; label: string; kind?: "primary" | "secondary"; confirm?: string }>;
   /** One line shown with the actions — e.g. what upgrading gets you. Hidden
    *  wherever the actions are hidden. */
   actionHint?: string;
 }
+
+/** What an account action did: hand back a page to open, or complete in place
+ *  with an optional short message for the user. */
+export type AccountActionResult = { url: string } | { done: true; message?: string };
+
+const ACCOUNT_ACTION_MESSAGE_MAX = 300;
 
 export class DeploymentExtension {
   constructor(
@@ -135,11 +144,15 @@ export class DeploymentExtension {
     await this.request("/v1/account/delete", { subject: { accountId, email } });
   }
 
-  async accountAction(accountId: string, email: string, action: string): Promise<{ url: string }> {
+  async accountAction(accountId: string, email: string, action: string): Promise<AccountActionResult> {
     if (!this.url) throw new Error("No deployment account extension is configured");
     if (!/^[a-z0-9-]{1,64}$/.test(action)) throw new Error("Invalid account action");
-    const result = await this.request(`/v1/account/actions/${action}`, { subject: { accountId, email } }) as { url?: unknown };
-    if (typeof result.url !== "string" || !/^https:\/\//.test(result.url)) throw new Error("Deployment extension returned an invalid action URL");
+    const result = await this.request(`/v1/account/actions/${action}`, { subject: { accountId, email } }) as { url?: unknown; done?: unknown; message?: unknown };
+    if (result.done === true) {
+      const message = typeof result.message === "string" ? result.message.trim().slice(0, ACCOUNT_ACTION_MESSAGE_MAX) : "";
+      return message ? { done: true, message } : { done: true };
+    }
+    if (typeof result.url !== "string" || !/^https:\/\//.test(result.url)) throw new Error("Deployment extension returned an invalid action result");
     return { url: result.url };
   }
 

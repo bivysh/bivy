@@ -832,7 +832,7 @@ export interface PresentationState {
   prResult: { sessionId?: string; url?: string; error?: string } | null;
   prRefreshAllResult: { scanned: number; changed: number; error?: string } | null;
   error: string | null;
-  errorActions: Array<{ id: string; label: string; kind?: "primary" | "secondary" }>;
+  errorActions: Array<{ id: string; label: string; kind?: "primary" | "secondary"; confirm?: string }>;
   notice: string | null;
 }
 
@@ -1788,7 +1788,7 @@ export class SessionStore {
     this.set({ forkProgress: progress });
   }
 
-  setError(message: string, actions: Array<{ id: string; label: string; kind?: "primary" | "secondary" }> = []): void {
+  setError(message: string, actions: Array<{ id: string; label: string; kind?: "primary" | "secondary"; confirm?: string }> = []): void {
     this.set({ error: message, errorActions: message ? actions : [] });
   }
 

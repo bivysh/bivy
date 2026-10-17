@@ -357,6 +357,8 @@ export interface ManagedLaunchAction {
   id: string;
   label: string;
   kind?: "primary" | "secondary";
+  /** Plain-text question the client asks before running the action. */
+  confirm?: string;
 }
 
 /** Structured admission failure; commercial meaning remains deployment-owned. */
@@ -384,7 +386,8 @@ function managedLaunchError(
     const label = typeof raw.label === "string" ? raw.label.trim() : "";
     if (!id || !label) return [];
     const kind: ManagedLaunchAction["kind"] = raw.kind === "primary" || raw.kind === "secondary" ? raw.kind : undefined;
-    return [{ id, label, ...(kind ? { kind } : {}) }];
+    const confirm = typeof raw.confirm === "string" ? raw.confirm.trim() : "";
+    return [{ id, label, ...(kind ? { kind } : {}), ...(confirm ? { confirm } : {}) }];
   }) : [];
   return new ManagedLaunchError(value.reason || value.error || fallback, status, value.code, actions);
 }
@@ -497,7 +500,8 @@ export interface AccountExtensionView {
    *  window's oldest use expiring, or a fixed period resetting. */
   meter?: { label: string; used: number; limit: number; freesAt?: string };
   facts?: Array<{ id: string; label: string; value: string }>;
-  actions?: Array<{ id: string; label: string; kind?: "primary" | "secondary" }>;
+  /** `confirm` is a plain-text question the client asks before running it. */
+  actions?: Array<{ id: string; label: string; kind?: "primary" | "secondary"; confirm?: string }>;
   /** Something worth moving to (e.g. a paid plan), shown as its own card
    *  wherever actions are allowed. `action` is the id of one of `actions`; its
    *  button lives in the card instead of the actions row. Facts whose label
@@ -530,16 +534,27 @@ export async function deleteAccount(store: LocalStore, fetchImpl: typeof fetch =
   if (!res.ok) throw new Error(data.error || `account deletion failed: ${res.status}`);
 }
 
+/** What an account extension action did: hand back a page to open, or
+ *  complete in place with an optional short message for the user. */
+export type AccountExtensionActionResult = { url: string } | { done: true; message?: string };
+
+const ACCOUNT_ACTION_MESSAGE_MAX = 300;
+
 /** Invoke an opaque action contributed by the deployment's account extension. */
-export async function invokeAccountExtensionAction(store: LocalStore, action: string, fetchImpl: typeof fetch = fetch): Promise<{ url: string }> {
+export async function invokeAccountExtensionAction(store: LocalStore, action: string, fetchImpl: typeof fetch = fetch): Promise<AccountExtensionActionResult> {
   const res = await fetchImpl(`${cpBase(store)}/account/extension/actions/${encodeURIComponent(action)}`, {
     method: "POST",
     headers: authHeaders(store),
     body: "{}",
   });
-  const data = await res.json().catch(() => ({})) as { url?: string; error?: string };
-  if (!res.ok || !data.url) throw new Error(data.error || `account action failed: ${res.status}`);
-  return { url: data.url };
+  const data = await res.json().catch(() => ({})) as { url?: unknown; done?: unknown; message?: unknown; error?: string };
+  if (!res.ok) throw new Error(data.error || `account action failed: ${res.status}`);
+  if (data.done === true) {
+    const message = typeof data.message === "string" ? data.message.trim().slice(0, ACCOUNT_ACTION_MESSAGE_MAX) : "";
+    return message ? { done: true, message } : { done: true };
+  }
+  if (typeof data.url === "string" && data.url) return { url: data.url };
+  throw new Error(`account action failed: ${res.status}`);
 }
 
 /** Remove an enrolled node from the account. */

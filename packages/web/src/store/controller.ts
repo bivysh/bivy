@@ -103,6 +103,7 @@ import {
   type PendingEphemeralLaunchStore,
   type SessionLaunchCheckpointId,
   type AccountMe,
+  type AccountExtensionActionResult,
   type NotificationPreferences,
   type AccountNode,
   type AccountSessionAdvert,
@@ -3386,7 +3387,7 @@ export class AppController {
 
   fetchMe(): Promise<AccountMe> { return this.accountCoordinator.fetchMe(); }
   deleteAccount(): Promise<void> { return apiDeleteAccount(this.local); }
-  invokeAccountExtensionAction(action: string): Promise<{ url: string }> {
+  invokeAccountExtensionAction(action: string): Promise<AccountExtensionActionResult> {
     if (!showAccountExtension()) return Promise.reject(new Error("Account service actions are unavailable in this app."));
     return invokeAccountExtensionAction(this.local, action);
   }

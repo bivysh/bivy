@@ -26,6 +26,7 @@ import {
   launchManagedSessionMachine,
   restoreManagedSessionMachine,
   fetchEphemeralConfigs,
+  invokeAccountExtensionAction,
 } from "../src/index.js";
 
 describe("recordProductMetric", () => {
@@ -129,6 +130,21 @@ describe("fetchAccountNodes", () => {
     expect(seenUrl).toBe("https://app.bivy.sh/nodes");
     expect(seenAuth).toBe("Bearer tok");
     expect(nodes).toEqual([{ id: "n1", name: "Laptop", online: true }]);
+  });
+});
+
+describe("invokeAccountExtensionAction", () => {
+  const reply = (body: unknown, ok = true) => (async () => ({ ok, status: ok ? 200 : 502, json: async () => body }) as Response) as unknown as typeof fetch;
+  const store = () => Object.assign(createLocalStore(mem(), mem()), { s: "tok", cp: "https://app.bivy.sh" });
+
+  it("returns the page to open, or the in-place result with its message", async () => {
+    await expect(invokeAccountExtensionAction(store(), "manage", reply({ url: "https://account.example/manage" }))).resolves.toEqual({ url: "https://account.example/manage" });
+    await expect(invokeAccountExtensionAction(store(), "reset", reply({ done: true, message: " Reset. " }))).resolves.toEqual({ done: true, message: "Reset." });
+  });
+
+  it("rejects a result that is neither, and surfaces the server's error", async () => {
+    await expect(invokeAccountExtensionAction(store(), "reset", reply({ done: "yes" }))).rejects.toThrow("account action failed: 200");
+    await expect(invokeAccountExtensionAction(store(), "reset", reply({ error: "Deployment extension returned an invalid action result" }, false))).rejects.toThrow("invalid action result");
   });
 });
 

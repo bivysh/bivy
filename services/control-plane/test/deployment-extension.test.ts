@@ -69,6 +69,24 @@ test("account presentation remains opaque to Core", async () => {
   });
 });
 
+test("account presentation keeps an action's confirm question", async () => {
+  const action = { id: "reset", label: "Reset", confirm: "Reset the allowance now?" };
+  const extension = new DeploymentExtension("https://policy.example", "secret", async () => new Response(JSON.stringify({
+    presentation: { actions: [action] },
+  }), { status: 200 }));
+  assert.deepEqual((await extension.account("a"))?.actions, [action]);
+});
+
+test("account actions open a page or complete in place", async () => {
+  const reply = (body: unknown) => new DeploymentExtension("https://policy.example", "secret", async () => new Response(JSON.stringify(body), { status: 200 }));
+  assert.deepEqual(await reply({ url: "https://account.example/manage" }).accountAction("a", "a@example.com", "manage"), { url: "https://account.example/manage" });
+  assert.deepEqual(await reply({ done: true, message: `  ${"x".repeat(400)}  ` }).accountAction("a", "a@example.com", "reset"), { done: true, message: "x".repeat(300) });
+  assert.deepEqual(await reply({ done: true, message: 42 }).accountAction("a", "a@example.com", "reset"), { done: true });
+  for (const body of [{}, { url: "http://account.example" }, { done: "yes" }]) {
+    await assert.rejects(() => reply(body).accountAction("a", "a@example.com", "reset"), /invalid action result/);
+  }
+});
+
 test("configured extension rejects malformed decisions instead of allowing", async () => {
   const extension = new DeploymentExtension("https://policy.example", "secret", async () => new Response("{}", { status: 200 }));
   await assert.rejects(() => extension.authorize("a", "relay.connect"), /invalid policy decision/);

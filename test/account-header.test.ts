@@ -24,6 +24,14 @@ test("account header nudges only once the allowance is nearly or fully used", ()
   assert.deepEqual([reached.meter?.used, reached.meter?.state, reached.action?.id], [10, "reached", "checkout"]);
 });
 
+test("an action's confirm question reaches the header and offer, trimmed and capped", () => {
+  const confirmed = { ...upgrade, confirm: `  ${"Switch now? ".repeat(60)}` };
+  const extension = { ...ext(9), actions: [confirmed], offer: { title: "More", action: "checkout" } };
+  const confirm = "Switch now? ".repeat(60).trim().slice(0, 500);
+  assert.equal(accountHeader(extension, visible).action?.confirm, confirm);
+  assert.equal(accountOffer(extension, visible)?.action.confirm, confirm);
+});
+
 test("account header follows the client's extension visibility", () => {
   assert.deepEqual(accountHeader(ext(10), parseClientConfiguration(JSON.stringify({ accountExtension: "hidden" }))), {});
   const facts = parseClientConfiguration(JSON.stringify({
