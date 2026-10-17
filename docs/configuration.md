@@ -572,7 +572,8 @@ dumb, end-to-end-encrypted pipe — it holds no database.
 | `RELAY_MAX_MESSAGES_PER_MINUTE` | integer | unset | **Deprecated.** Used only as a fallback for the client limit; explicitly ignored for node sockets, with a warning |
 | `RELAY_MAX_CONNECTIONS_PER_IP` | integer | `50` | |
 | `RELAY_IDLE_TIMEOUT_MS` | integer ms | `120000` | Heartbeat/idle timeout |
-| `RELAY_MAX_BUFFERED_BYTES` | integer bytes | `16777216` (16 MiB) | Outbound backpressure high-water mark; a socket above it is evicted |
+| `RELAY_MAX_BUFFERED_BYTES` | integer bytes | `16777216` (16 MiB) | Per-socket outbound backpressure mark; a socket above it is evicted |
+| `RELAY_MAX_TOTAL_BUFFERED_BYTES` | integer bytes | `268435456` (256 MiB) | Relay-wide outbound budget. Above it, every socket holding more than one max-size frame is evicted, so many stalled consumers at once cannot exhaust memory |
 
 ---
 
