@@ -18,6 +18,8 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
   "files.list": Type.Object({ ...request, ...session, path: Type.Optional(Type.String({ maxLength: 4096 })) }),
   "files.read": Type.Object({ ...request, ...session, path: Type.String({ minLength: 1, maxLength: 4096 }) }),
   "access.get": Type.Object(request),
+  "secrets.list": Type.Object(request),
+  "secrets.remove": Type.Object({ ...request, id: Type.String({ minLength: 1, maxLength: 64 }) }),
   "tailnet.machines": Type.Object(request),
   "session.fork.local": Type.Object({ ...request, ...session, model: Type.Optional(Type.Object({ provider: Type.Optional(Type.String({ maxLength: 200 })), id: Type.String({ maxLength: 200 }) })) }),
   "apps.publish": Type.Object({ ...request, ...session, manifest: Type.Unknown() }),

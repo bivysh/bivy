@@ -2524,6 +2524,19 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   async "tailnet.machines"(msg, ctx) {
     ctx.reply({ type: "tailnet.machines.ok", requestId: msg.requestId, machines: await tailnetMachines() });
   },
+  // Settings → Keys for agents: the keys agents asked for, never their values.
+  "secrets.list"(msg, ctx) {
+    ctx.reply({ type: "secrets.list.ok", requestId: msg.requestId, secrets: new SecretVault(appDir).agentSecrets() });
+  },
+  "secrets.remove"(msg, ctx) {
+    try {
+      const vault = new SecretVault(appDir);
+      const removed = vault.deleteAgentSecret(String(msg.id ?? ""));
+      ctx.reply({ type: "secrets.remove.ok", requestId: msg.requestId, removed, secrets: vault.agentSecrets() });
+    } catch (error) {
+      ctx.reply({ type: "secrets.remove.error", requestId: msg.requestId, httpStatus: 400, error: (error as Error).message });
+    }
+  },
   // How this machine can be reached and what the next setup would add (src/access.ts).
   "access.get"(msg, ctx) {
     ctx.reply({ type: "access.get.ok", requestId: msg.requestId, ...currentAccess() });

@@ -23,6 +23,15 @@ export type SecretRecord = {
   ciphertext?: string;
 };
 
+/** Names agents ask for (`bivy ask --secret`) and use (`bivy secrets exec`).
+ *  Env-var shaped, while the node's own entries are dotted (github.repo-token,
+ *  integration.<id>.api-key, …), so the two never collide and the app can list
+ *  and remove agents' keys without touching the node's. */
+export const AGENT_SECRET_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+
+/** An agent key as the app lists it: never the value. */
+export type AgentSecretInfo = { id: string; description?: string; backend: SecretBackend; updatedAt: string };
+
 export type SecretPublicRecord = Omit<SecretRecord, "ciphertext" | "tag"> & { configured: boolean };
 
 type SecretFile = { version: 1; records: Record<string, SecretRecord> };
@@ -115,6 +124,19 @@ export class SecretVault {
     return Object.values(this.data.records)
       .sort((a, b) => a.id.localeCompare(b.id))
       .map(({ ciphertext: _ciphertext, tag: _tag, ...record }) => ({ ...record, configured: true }));
+  }
+
+  agentSecrets(): AgentSecretInfo[] {
+    return this.list()
+      .filter((record) => AGENT_SECRET_NAME.test(record.id))
+      .map(({ id, description, backend, updatedAt }) => ({ id, backend, updatedAt, ...(description ? { description } : {}) }));
+  }
+
+  /** Removes an agent key. Refuses the node's own entries. */
+  deleteAgentSecret(id: string): boolean {
+    if (!AGENT_SECRET_NAME.test(String(id))) throw new Error("Only keys agents use can be removed here.");
+    this.reload();
+    return this.delete(id);
   }
 
   getRecord(id: string): SecretRecord | undefined {

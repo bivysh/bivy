@@ -24,6 +24,7 @@ import { CheckIcon, ChevronRightIcon, CloseIcon, CopyIcon } from "./UiIcons.js";
 import { writeClipboard } from "../clipboard.js";
 import { CredentialVault } from "./CredentialVault.js";
 import { AgentInstructionsPanel } from "./AgentInstructionsPanel.js";
+import { AgentKeysPanel } from "./AgentKeysPanel.js";
 import { Toggle } from "./Toggle.js";
 import { useMediaQuery } from "../useMediaQuery.js";
 import { nodePresence, PRESENCE } from "../cloudDestinations.js";
@@ -175,6 +176,7 @@ const TITLES: Record<View, string> = {
   notifications: "Notifications",
   import: "Import session",
   providers: "Models & keys",
+  "agent-keys": "Keys for agents",
   models: "Models & keys",
   instructions: "Agent instructions",
   voice: "Voice",
@@ -198,6 +200,7 @@ const SEARCH_TERMS: Record<View, string> = {
   import: "session transcript file upload migrate",
   providers: "model provider api key oauth openai anthropic google login credentials custom endpoint local ollama import claude codex grok machine",
   models: "model provider api key oauth ollama local custom endpoint",
+  "agent-keys": "secret api key token password vault connection revoke remove agent stripe service",
   instructions: "agents.md claude.md system prompt global instructions rules preferences memory",
   voice: "microphone speech transcription read aloud reader text to speech voice tone speed",
   share: "share sheet send android ios iphone ipad shortcut link url target",
@@ -282,6 +285,7 @@ export function Settings({
       label: "Models & keys",
       items: [
         { id: "providers", label: "Providers & credentials", icon: <IconKey /> },
+        { id: "agent-keys", label: "Keys for agents", icon: <IconKey /> },
       ],
     },
     {
@@ -438,6 +442,7 @@ export function Settings({
                 editor reachable without splitting the primary navigation. */}
             {activeView === "models" && <LocalModelsPanel state={state} onStartWork={onClose} />}
             {activeView === "instructions" && <AgentInstructionsPanel state={state} />}
+            {activeView === "agent-keys" && <AgentKeysPanel state={state} />}
             {activeView === "voice" && (
               <Suspense fallback={<div className="muted">Loading voice settings…</div>}>
                 <VoiceSettings

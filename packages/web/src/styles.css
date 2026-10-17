@@ -885,8 +885,8 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .question-other-input { box-sizing: border-box; resize: vertical; min-height: 40px; }
 .question-other-input:disabled { opacity: 0.6; }
 /* A secret request's fine print: where the value goes, and where to find it. */
-.question-note { margin: 0; font-size: 12px; color: var(--muted); }
-.question-note code { font-size: 12px; }
+.question-note { margin: 0; font-size: var(--text-xs); color: var(--muted); }
+.question-note code { font-size: var(--text-xs); }
 .question-note a { color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 .question-note a:hover { color: var(--accent-hover); }
 /* A step on another page (`bivy ask --url/--code`): the code to enter, then the
@@ -1468,6 +1468,13 @@ button.sheet-action:last-child { border-bottom: 0; }
 .vault-title-row h3 { margin: 0 0 4px; }
 .vault-empty { display: flex; min-height: 220px; flex-direction: column; align-items: center; justify-content: center; gap: 10px; border: 1px dashed var(--line-strong); border-radius: var(--radius-md); text-align: center; padding: 24px; }
 .vault-empty h4 { margin: 0; }
+/* Settings → Keys for agents: one row per key, its details and a Remove button. */
+.agent-keys { list-style: none; margin: 0; padding: 0; }
+.agent-key { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--line); }
+.agent-key:last-child { border-bottom: 0; }
+.agent-key-text { display: flex; min-width: 0; flex-direction: column; gap: var(--space-1); }
+.agent-key-name { font-family: var(--font-mono); font-size: var(--text-base); overflow-wrap: anywhere; }
+.agent-key-text small { color: var(--muted); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .vault-items .picker-item, .credential-vault > .picker-list .picker-item { justify-content: space-between; width: 100%; cursor: pointer; }
 .vault-items .picker-item > span:first-child, .credential-vault > .picker-list .picker-item > span:first-child { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
 .vault-items .picker-item small, .credential-vault > .picker-list .picker-item small { color: var(--muted); font-size: 12px; font-weight: 400; overflow-wrap: anywhere; }

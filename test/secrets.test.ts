@@ -24,6 +24,19 @@ assert.equal(await vault.resolve("env://BIVY_TEST_SECRET"), "from-env");
 assert.equal(vault.delete("github.repo-token"), true);
 assert.equal(await vault.resolve("github.repo-token"), undefined);
 
+{
+  // Keys for agents: the app lists and removes agents' keys, never the node's own.
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-secrets-agent-"));
+  const agentVault = new SecretVault(agentDir);
+  agentVault.setLocal("github.repo-token", "ghp_node_token");
+  agentVault.setLocal("STRIPE_API_KEY", "sk_test_value", "Paste your Stripe key");
+  assert.deepEqual(agentVault.agentSecrets().map((s) => [s.id, s.description]), [["STRIPE_API_KEY", "Paste your Stripe key"]]);
+  assert.ok(!JSON.stringify(agentVault.agentSecrets()).includes("sk_test_value"), "the list never carries a value");
+  assert.throws(() => agentVault.deleteAgentSecret("github.repo-token"), /agents/);
+  assert.equal(agentVault.deleteAgentSecret("STRIPE_API_KEY"), true);
+  assert.equal(await agentVault.resolve("github.repo-token"), "ghp_node_token");
+}
+
 // --- reliability: no silent data loss / regeneration on corruption ---
 
 {

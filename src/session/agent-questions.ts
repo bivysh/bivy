@@ -3,6 +3,7 @@
 import { randomUUID } from "node:crypto";
 import type { QuestionManager } from "../question.js";
 import type { UserQuestionItem } from "../runtime/types.js";
+import { AGENT_SECRET_NAME } from "../secrets.js";
 
 /**
  * Questions an agent asks with `bivy ask`. Any agent with a shell can raise
@@ -30,10 +31,6 @@ export const MAX_ASK_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const KEEP_SETTLED_MS = 24 * 60 * 60 * 1000;
 const KEEP_MAX = 200;
 
-/** Secret names are env-var shaped, so a request can never overwrite one of the
- *  node's own dotted vault ids (github.repo-token, integration.<id>.api-key, …). */
-const SECRET_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
-
 export const secretRef = (name: string) => `secret://${name}`;
 
 /** Validates `bivy ask` input: 1–4 questions, each with text, a short header and
@@ -58,7 +55,7 @@ export function askQuestionsFrom(value: unknown): UserQuestionItem[] | string {
     const secret = raw.secret as { name?: unknown } | undefined;
     if (secret !== undefined) {
       const name = typeof secret?.name === "string" ? secret.name.trim() : "";
-      if (!SECRET_NAME.test(name)) return "A secret name is a letter, then letters, digits or underscores (up to 64), like STRIPE_API_KEY.";
+      if (!AGENT_SECRET_NAME.test(name)) return "A secret name is a letter, then letters, digits or underscores (up to 64), like STRIPE_API_KEY.";
       if (labels.length) return "A secret question takes no options.";
       out.push({ question, header: typeof raw.header === "string" && raw.header.trim() ? header : "Secret", options: [], secret: { name }, ...extras });
       continue;

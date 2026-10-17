@@ -58,6 +58,8 @@ export interface Command extends CommandBase {
     | "session.resume"
     | "session.rewind"
     | "session.checkpoints"
+    | "secrets.list"
+    | "secrets.remove"
     | "session.question.answer"
     | "models.list"
     // Warm the per-runtime model-query scratch for the given `runtimeIds` so the
