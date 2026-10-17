@@ -672,6 +672,10 @@ export interface UserQuestionItem {
   /** A one-time code the user types or pastes on that page (`--code`), such
    *  as a device sign-in code. Shown with a copy button. */
   code?: string;
+  /** A command for the user to run themselves in a terminal on this machine
+   *  (`--run`), typically one needing their sudo password. The card opens a
+   *  terminal with it typed but not run. */
+  command?: string;
 }
 
 export interface UserQuestionSecret {

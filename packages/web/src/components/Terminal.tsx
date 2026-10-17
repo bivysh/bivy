@@ -358,6 +358,7 @@ export function TerminalOverlay({
   standalone,
   tui,
   embedded = false,
+  initialInput,
   onClose,
 }: {
   sessionId: string | null;
@@ -376,6 +377,9 @@ export function TerminalOverlay({
   /** Rendered inside the session pane (Chat | Terminal toggle) instead of as a
    *  full-screen overlay. The toggle replaces the close button. */
   embedded?: boolean;
+  /** Typed (not run) into a fresh shell once it opens: a command a question
+   *  card asked the user to run (`bivy ask --run`). */
+  initialInput?: string;
   onClose: () => void;
 }) {
   // Runtime capabilities (e.g. `sessionDiscovery`) drive whether a run-terminal
@@ -914,7 +918,17 @@ export function TerminalOverlay({
     };
 
     // Reattach to a shell we opened before (per scope), else open a fresh one.
-    const stored = attachTermId || sessionStorage.getItem(`bivy.next.term.${key}`);
+    // A command to type goes into a fresh shell, never into whatever an older
+    // one is running.
+    const stored = initialInput ? null : attachTermId || sessionStorage.getItem(`bivy.next.term.${key}`);
+    let pendingInput = initialInput;
+    // Typed once the shell has printed its prompt (its first output), so the
+    // command shows once, after the prompt, rather than echoed ahead of it.
+    const typePending = (termId: string) => {
+      if (!pendingInput) return;
+      controller.sendTerminal({ kind: "terminal.input", termId, data: pendingInput });
+      pendingInput = undefined;
+    };
     requestAnimationFrame(() => {
       doFit();
       if (stored) {
@@ -968,6 +982,7 @@ export function TerminalOverlay({
       if (attachOnly && e.type === "terminal.opened") return;
       switch (String(e.type)) {
         case "terminal.opened":
+          if (pendingInput) { const id = p.termId; setTimeout(() => typePending(id), 1500); }
           termIdRef.current = p.termId;
           setCurrentTermId(p.termId);
           setWorkspace(typeof p.workspace === "string" ? p.workspace : null);
@@ -1000,7 +1015,10 @@ export function TerminalOverlay({
           }
           break;
         case "terminal.output":
-          if (p.termId === termIdRef.current) term.write(p.data ?? "");
+          if (p.termId === termIdRef.current) {
+            term.write(p.data ?? "");
+            typePending(p.termId);
+          }
           break;
         case "terminal.exit":
           term.write(`\r\n\x1b[90m[process exited: ${p.code ?? 0}]\x1b[0m\r\n`);

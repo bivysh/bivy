@@ -37,7 +37,7 @@ Ask only when you can't reasonably decide yourself.
 
 `--secret` keeps the value out of your output (you get `secret://NAME`; use it
 with `bivy secrets exec`). `--url` puts an Open button on the card, `--code` a
-code to copy. `bivy guide connect` has the patterns: keys, device codes,
+code to copy, `--run` a command they run themselves in a terminal (for sudo). `bivy guide connect` has the patterns: keys, device codes,
 localhost sign-ins, a browser on this machine.
 
 ## Name the session: title

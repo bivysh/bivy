@@ -364,6 +364,8 @@ export interface UserQuestionItem {
   /** A page to open from the card, and a one-time code to use there. */
   url?: string;
   code?: string;
+  /** A command the user runs in a terminal on the machine (`--run`). */
+  command?: string;
 }
 
 /**

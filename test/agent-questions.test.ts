@@ -64,4 +64,5 @@ test("ask input: free text needs no options; duplicates and empty asks are refus
   assert.equal(typeof askQuestionsFrom([{ question: "Token?", secret: { name: "TOKEN" }, options: ["a", "b"] }]), "string");
   assert.deepEqual(askQuestionsFrom([{ question: "Signed in?", url: "https://github.com/login/device", code: " ABCD-1234 ", options: ["Done", "Failed"] }]), [{ question: "Signed in?", header: "Your step", options: [{ label: "Done" }, { label: "Failed" }], url: "https://github.com/login/device", code: "ABCD-1234" }]);
   assert.equal(typeof askQuestionsFrom([{ question: "Open?", url: "javascript:alert(1)" }]), "string", "a link the card opens must be https");
+  assert.equal(typeof askQuestionsFrom([{ question: "Run?", command: "sudo apt-get install -y ffmpeg\nrm -rf ~" }]), "string", "a command typed into a terminal can't carry a newline that would run it");
 });

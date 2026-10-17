@@ -21,24 +21,40 @@ function hostOf(url: string): string {
   try { return new URL(url).host.replace(/^www\./, ""); } catch { return url; }
 }
 
-/** The page a step happens on (`bivy ask --url`), and the one-time code to
- *  enter there (`--code`), with a copy button. */
-function QuestionStep({ url, code }: { url?: string; code?: string }) {
+/** A copy button that says "Copied" for a moment. */
+function CopyText({ text, label }: { text: string; label: string }) {
   const [copied, setCopied] = useState(false);
-  const copy = () => void writeClipboard(code ?? "").then((ok) => {
+  const copy = () => void writeClipboard(text).then((ok) => {
     if (!ok) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   });
+  return <button type="button" className="btn ghost" onClick={copy}>{copied ? "Copied" : label}</button>;
+}
+
+/** The page a step happens on (`bivy ask --url`) and the one-time code to
+ *  enter there (`--code`), or a command the user runs themselves in a terminal
+ *  on the machine (`--run`): the terminal opens with it typed, not run. */
+function QuestionStep({ url, code, command, onRunInTerminal }: { url?: string; code?: string; command?: string; onRunInTerminal?: (command: string) => void }) {
   return (
     <div className="question-step">
       {code && (
         <div className="question-code">
           <code aria-label="Code">{code}</code>
-          <button type="button" className="btn ghost" onClick={copy}>{copied ? "Copied" : "Copy code"}</button>
+          <CopyText text={code} label="Copy code" />
         </div>
       )}
       {url && <a className="btn primary" href={url} target="_blank" rel="noopener noreferrer">Open {hostOf(url)} ↗</a>}
+      {command && (
+        <>
+          <div className="question-command">
+            <code aria-label="Command">{command}</code>
+            <CopyText text={command} label="Copy" />
+          </div>
+          {onRunInTerminal && <button type="button" className="btn primary" onClick={() => onRunInTerminal(command)}>Open terminal</button>}
+          <p className="question-note">{onRunInTerminal ? "It opens with the command typed. Check it, press Enter, and type your password if asked. The agent doesn't see what you type." : "Run it in a terminal on this machine, then answer here."}</p>
+        </>
+      )}
     </div>
   );
 }
@@ -47,10 +63,12 @@ function QuestionCard({
   request,
   onAnswer,
   onCancel,
+  onRunInTerminal,
 }: {
   request: UserQuestionRequest;
   onAnswer: (id: string, sessionId: string | undefined, answers: Record<string, string>) => void;
   onCancel: (id: string, sessionId: string | undefined) => void;
+  onRunInTerminal?: (command: string) => void;
 }) {
   const [pending, setPending] = useState(false);
   const [stalled, setStalled] = useState(false);
@@ -162,7 +180,7 @@ function QuestionCard({
               <Badge tone="accent" variant="soft" upper>{q.header}</Badge>
             </div>
             <div className="question-text">{q.question}</div>
-            {!q.secret && (q.url || q.code) && <QuestionStep url={q.url} code={q.code} />}
+            {!q.secret && (q.url || q.code || q.command) && <QuestionStep url={q.url} code={q.code} command={q.command} onRunInTerminal={onRunInTerminal} />}
             {q.secret ? (
               <div className="question-options">
                 <input
@@ -255,16 +273,19 @@ export function QuestionStack({
   questions,
   onAnswer,
   onCancel,
+  onRunInTerminal,
 }: {
   questions: UserQuestionRequest[];
   onAnswer: (id: string, sessionId: string | undefined, answers: Record<string, string>) => void;
   onCancel: (id: string, sessionId: string | undefined) => void;
+  /** Opens a terminal with a `--run` command typed; without it the card offers Copy only. */
+  onRunInTerminal?: (command: string) => void;
 }) {
   if (questions.length === 0) return null;
   return (
     <div className="approval-stack">
       {questions.map((q) => (
-        <QuestionCard key={q.id} request={q} onAnswer={onAnswer} onCancel={onCancel} />
+        <QuestionCard key={q.id} request={q} onAnswer={onAnswer} onCancel={onCancel} onRunInTerminal={onRunInTerminal} />
       ))}
     </div>
   );
