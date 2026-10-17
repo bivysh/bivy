@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { createServer, type IncomingMessage } from "node:http";
+import http, { createServer, type IncomingMessage } from "node:http";
+import https from "node:https";
 import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import { BufferBudget, forwardOrEvict } from "./backpressure.js";
@@ -165,18 +166,39 @@ function send(ws: WebSocket, msg: unknown) {
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
 }
 
-async function introspect(path: string, body: unknown): Promise<any | null> {
-  try {
-    const res = await fetch(`${controlPlaneUrl}${path}`, {
+// Every admission makes one or two control-plane calls. fetch() opens a new
+// connection per concurrent request with no cap, so a reconnect storm of 3,000
+// nodes had the relay holding ~4,700 sockets to the control plane, each with its
+// own DNS lookup and handshake, while the control plane only runs a pool's worth
+// of queries at a time anyway. A small keep-alive pool queues them here instead.
+const controlPlaneHttp = controlPlaneUrl.startsWith("https:") ? https : http;
+const controlPlaneAgent = new controlPlaneHttp.Agent({ keepAlive: true, maxSockets: 32 });
+
+function introspect(path: string, body: unknown): Promise<any | null> {
+  return new Promise((resolve) => {
+    const payload = JSON.stringify(body);
+    const req = controlPlaneHttp.request(`${controlPlaneUrl}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${relaySecret}` },
-      body: JSON.stringify(body),
+      agent: controlPlaneAgent,
+      headers: { "content-type": "application/json", "content-length": Buffer.byteLength(payload), authorization: `Bearer ${relaySecret}` },
+    }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      res.on("error", () => resolve(null));
+      res.on("end", () => {
+        const ok = (res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300;
+        try {
+          resolve(ok ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null);
+        } catch {
+          resolve(null);
+        }
+      });
     });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch {
-    return null;
-  }
+    // Counts only once a pooled socket is assigned, so queueing in a storm never trips it.
+    req.setTimeout(60_000, () => req.destroy());
+    req.on("error", () => resolve(null));
+    req.end(payload);
+  });
 }
 
 async function setNodeStatus(nodeId: string, online: boolean) {
