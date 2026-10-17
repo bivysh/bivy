@@ -18,6 +18,8 @@ export interface RelayCounters {
   rejectedTooLarge: number;
   rejectedPerIp: number;
   evictedSlow: number;
+  clientWaitAdmitted: number;
+  clientWaitTimedOut: number;
   bufferedBytes: number;
 }
 
@@ -75,6 +77,10 @@ export function renderRelayMetrics(m: RelayCounters, rooms: number, shardId: str
     [{ ...shard, reason: "per_ip" }, m.rejectedPerIp],
   ]);
   metric("bivy_relay_buffered_bytes", "Forwarded bytes queued in the relay, not yet written to sockets.", "gauge", [[shard, m.bufferedBytes]]);
+  metric("bivy_relay_client_node_waits_total", "Clients held for a node that had not connected yet, by outcome.", "counter", [
+    [{ ...shard, outcome: "admitted" }, m.clientWaitAdmitted],
+    [{ ...shard, outcome: "timed_out" }, m.clientWaitTimedOut],
+  ]);
   metric("bivy_relay_evicted_slow_total", "Sockets evicted by slow-consumer backpressure since start.", "counter", [[shard, m.evictedSlow]]);
 
   if (preview) {

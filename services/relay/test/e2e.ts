@@ -106,14 +106,19 @@ function connect(url: string): Promise<WebSocket> {
   });
 }
 
-// The error the relay sends before closing an admission it refused.
-function firstError(url: string): Promise<string | null> {
+// The first message the relay sends on a connection (null if it closes first).
+function firstMessage(url: string): Promise<{ t?: string; error?: string } | null> {
   return new Promise((resolve) => {
     const ws = new WebSocket(url);
-    ws.once("message", (d) => resolve(JSON.parse(d.toString()).error ?? null));
+    ws.once("message", (d) => resolve(JSON.parse(d.toString())));
     ws.once("close", () => resolve(null));
     ws.once("error", () => resolve(null));
   });
+}
+
+// The error the relay sends before closing an admission it refused.
+async function firstError(url: string): Promise<string | null> {
+  return (await firstMessage(url))?.error ?? null;
 }
 
 function expect(cond: boolean, msg: string) {
@@ -128,6 +133,7 @@ async function main() {
     METRICS_PORT: String(RELAY_METRICS_PORT),
     RELAY_SECRET: SECRET,
     CONTROL_PLANE_URL: `http://localhost:${CP_PORT}`,
+    RELAY_CLIENT_NODE_WAIT_MS: "1500",
   });
   await waitForHttp(`http://localhost:${CP_PORT}/healthz`);
   await waitForHttp(`http://localhost:${RELAY_PORT}/healthz`);
@@ -248,6 +254,22 @@ async function main() {
   });
   await waitForHttp(`http://localhost:${orphanPort}/healthz`);
   expect((await firstError(`ws://localhost:${orphanPort}/node?ticket=tkt_any`)) === "Control plane unavailable", "an unreachable control plane is reported as unavailable, not unauthorized");
+
+  // 5. A client that arrives before its node (every relay restart) is held and
+  //    admitted when the node connects, instead of refused and left to retry.
+  const enroll2 = await http("/nodes/enroll", { nodeId: "node_test_2", name: "Second" }, sessA);
+  const early = firstMessage(`ws://localhost:${RELAY_PORT}/client?ticket=${(await http("/client/relay-ticket", {}, sessA)).json.ticket}&nodeId=node_test_2`);
+  const earlyIntruder = firstError(`ws://localhost:${RELAY_PORT}/client?ticket=${(await http("/client/relay-ticket", {}, sessB)).json.ticket}&nodeId=node_test_2`);
+  await delay(300);
+  const lateNode = await connect(`ws://localhost:${RELAY_PORT}/node?ticket=${(await http("/node/relay-ticket", {}, enroll2.json.enrollmentToken)).json.ticket}`);
+  expect((await early)?.t === "ready", "a client that arrives before its node is admitted when the node connects");
+  expect((await earlyIntruder) === "Forbidden", "a foreign account waiting for the node is refused when it connects");
+  lateNode.close();
+
+  // 6. If the node doesn't come within the wait, the client is refused as before.
+  const started = Date.now();
+  const never = await firstError(`ws://localhost:${RELAY_PORT}/client?ticket=${(await http("/client/relay-ticket", {}, sessA)).json.ticket}&nodeId=node_test_never`);
+  expect(never === "Node offline" && Date.now() - started >= 1400, "a client whose node never connects is refused as offline after the wait");
 
   console.log("\nAll relay e2e checks passed.");
 }
