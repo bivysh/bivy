@@ -2,8 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { createServer, type IncomingMessage } from "node:http";
 import { timingSafeEqual } from "node:crypto";
-import { WebSocketServer, WebSocket } from "ws";
-import { forwardOrEvict } from "./backpressure.js";
+import { WebSocketServer, WebSocket, type RawData } from "ws";
+import { BufferBudget, forwardOrEvict } from "./backpressure.js";
 import { PreviewRelay } from "./preview.js";
 import { renderRelayMetrics, PROMETHEUS_CONTENT_TYPE } from "./metrics.js";
 import { initSentry } from "./instrument.js";
@@ -118,9 +118,12 @@ const idleTimeoutMs = Number(process.env.RELAY_IDLE_TIMEOUT_MS ?? 120_000);
 // relay's own memory without bound — one stuck phone/node could OOM a shard and
 // take down every room on it. Frames are E2E-opaque and non-superseding, so we
 // cannot silently drop one; instead we evict a socket whose outbound buffer
-// crosses this high-water mark (it reconnects and re-syncs). A healthy socket
-// never approaches it. See backpressure.ts.
+// crosses this high-water mark (it reconnects and re-syncs). The relay-wide
+// budget covers many stuck sockets at once. A healthy socket never approaches
+// either. See backpressure.ts.
 const maxBufferedBytes = Number(process.env.RELAY_MAX_BUFFERED_BYTES ?? 16 * 1024 * 1024);
+const maxTotalBufferedBytes = Number(process.env.RELAY_MAX_TOTAL_BUFFERED_BYTES ?? 256 * 1024 * 1024);
+const buffers = new BufferBudget(maxBufferedBytes, maxTotalBufferedBytes, maxFrameBytes);
 
 // Operational counters only — never payloads. Exposed at /metrics for uptime
 // checks and dashboards.
@@ -182,9 +185,11 @@ async function setNodeStatus(nodeId: string, online: boolean) {
 
 /**
  * Forward a frame. Relay reads ONLY `msg.t`. For data frames the payload is
- * passed straight through as the original JSON text — never inspected.
+ * passed straight through as the original bytes — never inspected.
  */
-function isForwardable(text: string): boolean {
+const FRAME_PREFIX = Buffer.from('{"t":"frame"');
+const PAIR_PREFIX = Buffer.from('{"t":"pair"');
+function isForwardable(data: Buffer): boolean {
   // We forward opaque data frames (t === "frame") and pairing-handshake control
   // frames (t === "pair"). The `p` payload is never inspected — pairing frames
   // carry only public keys and an ECDH-wrapped room key, never the room key in
@@ -198,14 +203,24 @@ function isForwardable(text: string): boolean {
   // forward path just to read one field; at streaming rates that parse (and its
   // per-call AST build) was a primary relay CPU cost. Fall back to a full parse
   // only when the prefix doesn't match, so a serializer change can never
-  // silently drop frames.
-  if (text.startsWith('{"t":"frame"') || text.startsWith('{"t":"pair"')) return true;
+  // silently drop frames. The bytes themselves are forwarded, so a frame is
+  // never decoded to a string and re-encoded per recipient.
+  if (startsWith(data, FRAME_PREFIX) || startsWith(data, PAIR_PREFIX)) return true;
   try {
-    const env = JSON.parse(text) as { t?: unknown };
+    const env = JSON.parse(data.toString()) as { t?: unknown };
     return env.t === "frame" || env.t === "pair";
   } catch {
     return false;
   }
+}
+
+function startsWith(data: Buffer, prefix: Buffer): boolean {
+  return data.length >= prefix.length && data.compare(prefix, 0, prefix.length, 0, prefix.length) === 0;
+}
+
+function asBuffer(data: RawData): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  return Array.isArray(data) ? Buffer.concat(data) : Buffer.from(data);
 }
 
 async function readJsonBody(req: IncomingMessage, maxBytes = 64 * 1024): Promise<any | null> {
@@ -240,14 +255,14 @@ const previews = process.env.RELAY_PREVIEW_ORIGIN
 const metricsServer = createServer((req, res) => {
   if (req.url === "/metrics") {
     res.writeHead(200, { "content-type": PROMETHEUS_CONTENT_TYPE });
-    res.end(renderRelayMetrics(metrics, rooms.size, shardId, previews?.metrics()));
+    res.end(renderRelayMetrics({ ...metrics, bufferedBytes: buffers.queued }, rooms.size, shardId, previews?.metrics()));
     return;
   }
   if (req.url === "/metrics.json") {
     // Backcompat: the pre-Prometheus JSON counters, kept for any tooling that
     // still reads them.
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ ok: true, shardId, rooms: rooms.size, ...metrics, preview: previews?.metrics() }));
+    res.end(JSON.stringify({ ok: true, shardId, rooms: rooms.size, ...metrics, bufferedBytes: buffers.queued, preview: previews?.metrics() }));
     return;
   }
   res.writeHead(404);
@@ -498,7 +513,7 @@ async function handleConnection(role: "node" | "client", ws: WebSocket, url: URL
 
 function allowMessage(
   ws: WebSocket,
-  data: Buffer | ArrayBuffer | Buffer[],
+  data: RawData,
   maxMessagesPerMinute: number,
   meta: { role: "node" | "client"; nodeId: string; accountId: string },
 ): boolean {
@@ -550,12 +565,12 @@ function attachNode(ws: WebSocket, nodeId: string, accountId: string) {
 
   ws.on("message", (data) => {
     if (!allowMessage(ws, data, maxNodeMessagesPerMinute, { role: "node", nodeId, accountId })) return;
-    const text = data.toString();
+    const frame = asBuffer(data);
     // Node → all clients. Payload forwarded verbatim for frames.
-    if (isForwardable(text)) {
+    if (isForwardable(frame)) {
       metrics.framesForwarded += 1;
       for (const client of r.clients) {
-        if (forwardOrEvict(client, text, maxBufferedBytes) === "evicted") metrics.evictedSlow += 1;
+        if (forwardOrEvict(client, frame, buffers) === "evicted") metrics.evictedSlow += 1;
       }
     }
   });
@@ -595,11 +610,11 @@ function attachClient(ws: WebSocket, nodeId: string, accountId: string) {
 
   ws.on("message", (data) => {
     if (!allowMessage(ws, data, maxClientMessagesPerMinute, { role: "client", nodeId, accountId })) return;
-    const text = data.toString();
+    const frame = asBuffer(data);
     // Client → node. Payload forwarded verbatim for frames.
-    if (isForwardable(text) && r.node) {
+    if (isForwardable(frame) && r.node) {
       metrics.framesForwarded += 1;
-      if (forwardOrEvict(r.node, text, maxBufferedBytes) === "evicted") metrics.evictedSlow += 1;
+      if (forwardOrEvict(r.node, frame, buffers) === "evicted") metrics.evictedSlow += 1;
     }
   });
 
@@ -618,7 +633,7 @@ function attachClient(ws: WebSocket, nodeId: string, accountId: string) {
 for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, () => process.exit(0));
 
 httpServer.listen({ port, host: process.env.BIND_HOST || undefined }, () => {
-  console.log(`Relay listening on http://localhost:${port}  (control plane: ${controlPlaneUrl}, max frame: ${maxFrameBytes} bytes, max buffered: ${maxBufferedBytes} bytes, rate: client ${maxClientMessagesPerMinute}/min, node ${maxNodeMessagesPerMinute}/min)`);
+  console.log(`Relay listening on http://localhost:${port}  (control plane: ${controlPlaneUrl}, max frame: ${maxFrameBytes} bytes, max buffered: ${maxBufferedBytes} bytes per socket / ${maxTotalBufferedBytes} total, rate: client ${maxClientMessagesPerMinute}/min, node ${maxNodeMessagesPerMinute}/min)`);
 });
 const metricsPort = Number(process.env.METRICS_PORT ?? 9464);
 const metricsHost = process.env.METRICS_HOST || "127.0.0.1";
