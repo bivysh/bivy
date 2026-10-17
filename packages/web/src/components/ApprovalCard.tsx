@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
-import { Badge, type BadgeTone } from "./Badge.js";
 import { formatApproval, type ApprovalRequest } from "@bivy/core";
 
 // How long the "pending" state is given before it's treated as stalled and a
@@ -10,6 +9,14 @@ import { formatApproval, type ApprovalRequest } from "@bivy/core";
 // broadcasts `approval.resolved`, which can never arrive (dropped message,
 // node reconnect mid-flight, etc.), leaving no way out before this.
 const STALL_MS = 8000;
+
+// The risk label above the title; only high and critical are colored.
+const RISK: Record<ReturnType<typeof formatApproval>["severity"], { label: string; tone?: "danger" }> = {
+  critical: { label: "Permanent", tone: "danger" },
+  high: { label: "High risk", tone: "danger" },
+  medium: { label: "Medium risk" },
+  low: { label: "Low risk" },
+};
 
 export type ApprovalResolver = (id: string, approved: boolean, remember?: boolean) => void;
 
@@ -58,14 +65,11 @@ function ApprovalCard({
     onResolve(approval.id, lastChoice.current.approved, lastChoice.current.remember);
     armStallTimer();
   };
-  const badgeText = f.severity === "critical" ? "Permanent" : f.severity === "high" ? "High risk" : f.severity === "medium" ? "Medium risk" : "Low risk";
-  const badgeTone: BadgeTone = f.severity === "critical" || f.severity === "high" ? "danger" : f.severity === "medium" ? "warn" : "accent";
+  const risk = RISK[f.severity];
   return (
-    <div id={`attention-${encodeURIComponent(approval.id)}`} className={`card approval-card sev-${f.severity}${pending ? " pending" : ""}`} data-tone={f.severity === "critical" ? "danger" : "accent"} data-attention-card tabIndex={-1}>
-      <div className="approval-head">
-        <span className="approval-title">{f.title}</span>
-        <Badge tone={badgeTone} variant="soft" upper>{badgeText}</Badge>
-      </div>
+    <div id={`attention-${encodeURIComponent(approval.id)}`} className={`card approval-card sev-${f.severity}${pending ? " pending" : ""}`} data-tone={f.severity === "critical" ? "danger" : undefined} data-attention-card tabIndex={-1}>
+      <div className="card-eyebrow" data-tone={risk.tone}>{risk.label}</div>
+      <div className="approval-title">{f.title}</div>
       <div className="approval-consequence">{f.consequence}</div>
       {typeof approval.reason === "string" && approval.reason && <div className="approval-reason">{approval.reason}</div>}
       {f.command && <pre className="approval-command">{f.command}</pre>}
@@ -97,7 +101,7 @@ function ApprovalCard({
         </div>
       ) : (
         <div className="approval-actions">
-          <button className="btn danger-ghost" onClick={() => resolve(false)}>
+          <button className="btn ghost" onClick={() => resolve(false)}>
             Reject
           </button>
           {canRemember && (

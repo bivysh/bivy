@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
-import { Badge } from "./Badge.js";
 import { writeClipboard } from "../clipboard.js";
 import type { UserQuestionRequest } from "@bivy/core";
 
@@ -29,7 +28,7 @@ function CopyText({ text, label }: { text: string; label: string }) {
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   });
-  return <button type="button" className="btn ghost" onClick={copy}>{copied ? "Copied" : label}</button>;
+  return <button type="button" className="btn ghost sm" onClick={copy}>{copied ? "Copied" : label}</button>;
 }
 
 /** The page a step happens on (`bivy ask --url`) and the one-time code to
@@ -41,18 +40,18 @@ function QuestionStep({ url, code, command, onRunInTerminal }: { url?: string; c
       {code && (
         <div className="question-code">
           <code aria-label="Code">{code}</code>
-          <CopyText text={code} label="Copy code" />
+          <CopyText text={code} label="Copy" />
         </div>
       )}
-      {url && <a className="btn primary" href={url} target="_blank" rel="noopener noreferrer">Open {hostOf(url)} ↗</a>}
+      {url && <a className="btn sm" href={url} target="_blank" rel="noopener noreferrer">Open {hostOf(url)} ↗</a>}
       {command && (
         <>
           <div className="question-command">
             <code aria-label="Command">{command}</code>
             <CopyText text={command} label="Copy" />
           </div>
-          {onRunInTerminal && <button type="button" className="btn primary" onClick={() => onRunInTerminal(command)}>Open terminal</button>}
-          <p className="question-note">{onRunInTerminal ? "It opens with the command typed. Check it, press Enter, and type your password if asked. The agent doesn't see what you type." : "Run it in a terminal on this machine, then answer here."}</p>
+          {onRunInTerminal && <button type="button" className="btn sm" onClick={() => onRunInTerminal(command)}>Open terminal</button>}
+          <p className="question-note">{onRunInTerminal ? "The terminal opens with this typed; you press Enter. The agent doesn't see what you type there." : "Run it in a terminal on this machine, then answer here."}</p>
         </>
       )}
     </div>
@@ -146,12 +145,23 @@ function QuestionCard({
     return answers;
   };
 
-  const submit = () => {
+  const send = (answers: Record<string, string>) => {
     lastAction.current = "answer";
     setPending(true);
     setStalled(false);
-    onAnswer(request.id, request.sessionId, buildAnswers());
+    onAnswer(request.id, request.sessionId, answers);
     armStallTimer();
+  };
+  const submit = () => send(buildAnswers());
+  // One question, one pick from plain options: tapping an option is the answer,
+  // so there is no separate Send. "Other" still opens a box and a Send button.
+  const only = request.questions.length === 1 ? request.questions[0] : undefined;
+  const oneTap = !!only && !only.secret && !only.multiSelect && only.options.length > 0;
+  const pick = (qi: number, label: string, multiSelect: boolean | undefined) => {
+    if (!oneTap || !only) return toggle(qi, label, multiSelect);
+    setSelected({ [qi]: [label] });
+    setOtherActive({ [qi]: false });
+    send({ [only.question]: label });
   };
   const skip = () => {
     lastAction.current = "skip";
@@ -171,18 +181,16 @@ function QuestionCard({
   };
 
   return (
-    <div id={`attention-${encodeURIComponent(request.id)}`} className="card question-card" data-tone="accent" data-attention-card tabIndex={-1}>
+    <div id={`attention-${encodeURIComponent(request.id)}`} className="card question-card" data-attention-card tabIndex={-1}>
       {request.questions.map((q, qi) => {
         const picked = selected[qi] || [];
         return (
           <div className="question-item" key={qi}>
-            <div className="question-head">
-              <Badge tone="accent" variant="soft" upper>{q.header}</Badge>
-            </div>
-            <div className="question-text">{q.question}</div>
+            {q.header && <div className="card-eyebrow">{q.header}</div>}
+            <div className="question-text" id={`${request.id}-q${qi}`}>{q.question}</div>
             {!q.secret && (q.url || q.code || q.command) && <QuestionStep url={q.url} code={q.code} command={q.command} onRunInTerminal={onRunInTerminal} />}
             {q.secret ? (
-              <div className="question-options">
+              <div className="question-field">
                 <input
                   className="field"
                   type="password"
@@ -200,45 +208,47 @@ function QuestionCard({
                   {q.url && <> <a href={q.url} target="_blank" rel="noopener noreferrer">Where to find it</a></>}
                 </p>
               </div>
-            ) : (
-              <div className="question-options">
+            ) : q.options.length > 0 && (
+              <div className="question-options" role={q.multiSelect ? "group" : "radiogroup"} aria-labelledby={`${request.id}-q${qi}`}>
                 {q.options.map((opt) => (
                   <button
                     key={opt.label}
                     type="button"
-                    className={`question-option${picked.includes(opt.label) ? " selected" : ""}`}
-                    onClick={() => toggle(qi, opt.label, q.multiSelect)}
+                    role={q.multiSelect ? "checkbox" : "radio"}
+                    aria-checked={picked.includes(opt.label)}
+                    className="question-option"
+                    data-multi={q.multiSelect || undefined}
+                    onClick={() => pick(qi, opt.label, q.multiSelect)}
                     disabled={pending}
-                    title={opt.description}
                   >
                     <span className="question-option-label">{opt.label}</span>
                     {opt.description && <span className="question-option-desc">{opt.description}</span>}
                   </button>
                 ))}
-                {q.options.length > 0 && (
-                  <button
-                    type="button"
-                    className={`question-option${otherActive[qi] ? " selected" : ""}`}
-                    onClick={() => toggleOther(qi, q.multiSelect)}
-                    disabled={pending}
-                  >
-                    <span className="question-option-label">Other</span>
-                    <span className="question-option-desc">Write your own answer</span>
-                  </button>
-                )}
-                {otherActive[qi] && (
-                  <textarea
-                    className="field question-other-input"
-                    value={otherText[qi] || ""}
-                    onChange={(e) => setOtherText((prev) => ({ ...prev, [qi]: e.target.value }))}
-                    placeholder="Type your answer…"
-                    aria-label={q.question}
-                    rows={2}
-                    autoFocus={q.options.length > 0}
-                    disabled={pending}
-                  />
-                )}
+                <button
+                  type="button"
+                  role={q.multiSelect ? "checkbox" : "radio"}
+                  aria-checked={!!otherActive[qi]}
+                  className="question-option"
+                  data-multi={q.multiSelect || undefined}
+                  onClick={() => toggleOther(qi, q.multiSelect)}
+                  disabled={pending}
+                >
+                  <span className="question-option-label">Other…</span>
+                </button>
               </div>
+            )}
+            {!q.secret && otherActive[qi] && (
+              <textarea
+                className="field question-other-input"
+                value={otherText[qi] || ""}
+                onChange={(e) => setOtherText((prev) => ({ ...prev, [qi]: e.target.value }))}
+                placeholder="Type your answer…"
+                aria-label={q.question}
+                rows={2}
+                autoFocus={q.options.length > 0}
+                disabled={pending}
+              />
             )}
           </div>
         );
@@ -257,12 +267,12 @@ function QuestionCard({
         </div>
       ) : (
         <div className="approval-actions">
-          <button className="btn danger-ghost" onClick={skip}>
+          <button className="btn ghost" onClick={skip}>
             Skip
           </button>
-          <button className="btn primary" onClick={submit} disabled={!answered}>
+          {(!oneTap || otherActive[0]) && <button className="btn primary" onClick={submit} disabled={!answered}>
             {request.questions.every((q) => q.secret) ? "Save secret" : `Send answer${request.questions.length > 1 ? "s" : ""}`}
-          </button>
+          </button>}
         </div>
       )}
     </div>
