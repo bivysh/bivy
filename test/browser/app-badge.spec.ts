@@ -69,6 +69,7 @@ for (const theme of themes) {
     await expect(page.getByText("Approval waiting", { exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`attention-${theme}.png`), fullPage: true });
     // A local search must not clear real attention on other sessions/machines.
+    await page.getByRole("button", { name: "Search sessions", exact: true }).click();
     await page.getByRole("searchbox", { name: "Search sessions" }).fill("Reviewed session");
     await expect(page.getByText("Approval waiting", { exact: true })).toHaveCount(0);
     expect(await badgeCount()).toBe(2);
