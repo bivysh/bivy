@@ -134,6 +134,7 @@ const metrics = {
   framesForwarded: 0,
   workNotifications: 0,
   rejectedAuth: 0,
+  rejectedControlPlane: 0,
   rejectedRate: 0,
   rejectedTooLarge: 0,
   rejectedPerIp: 0,
@@ -174,7 +175,14 @@ function send(ws: WebSocket, msg: unknown) {
 const controlPlaneHttp = controlPlaneUrl.startsWith("https:") ? https : http;
 const controlPlaneAgent = new controlPlaneHttp.Agent({ keepAlive: true, maxSockets: 32 });
 
-function introspect(path: string, body: unknown): Promise<any | null> {
+// What a control-plane call came back with. "rejected" is the control plane
+// answering no (4xx: bad ticket, admission denied); "unavailable" is it not
+// answering at all (unreachable, 5xx, timeout, unreadable body). Callers that
+// only want the data can treat both as null via `introspect()`.
+type ControlPlaneReply = { status: "ok"; body: any } | { status: "rejected" } | { status: "unavailable" };
+
+function callControlPlane(path: string, body: unknown): Promise<ControlPlaneReply> {
+  const unavailable = { status: "unavailable" } as const;
   return new Promise((resolve) => {
     const payload = JSON.stringify(body);
     const req = controlPlaneHttp.request(`${controlPlaneUrl}${path}`, {
@@ -184,21 +192,39 @@ function introspect(path: string, body: unknown): Promise<any | null> {
     }, (res) => {
       const chunks: Buffer[] = [];
       res.on("data", (chunk: Buffer) => chunks.push(chunk));
-      res.on("error", () => resolve(null));
+      res.on("error", () => resolve(unavailable));
       res.on("end", () => {
-        const ok = (res.statusCode ?? 0) >= 200 && (res.statusCode ?? 0) < 300;
+        const code = res.statusCode ?? 0;
+        if (code >= 400 && code < 500) return resolve({ status: "rejected" });
+        if (code < 200 || code >= 300) return resolve(unavailable);
         try {
-          resolve(ok ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : null);
+          resolve({ status: "ok", body: JSON.parse(Buffer.concat(chunks).toString("utf8")) });
         } catch {
-          resolve(null);
+          resolve(unavailable);
         }
       });
     });
     // Counts only once a pooled socket is assigned, so queueing in a storm never trips it.
     req.setTimeout(60_000, () => req.destroy());
-    req.on("error", () => resolve(null));
+    req.on("error", () => resolve(unavailable));
     req.end(payload);
   });
+}
+
+async function introspect(path: string, body: unknown): Promise<any | null> {
+  const reply = await callControlPlane(path, body);
+  return reply.status === "ok" ? reply.body : null;
+}
+
+// Sent instead of "Unauthorized" when the control plane couldn't answer an
+// admission check. Nodes back off much more slowly after "Unauthorized", so a
+// control-plane restart reported that way kept them offline for minutes.
+const CONTROL_PLANE_UNAVAILABLE = "Control plane unavailable";
+
+function refuseUnavailable(ws: WebSocket) {
+  metrics.rejectedControlPlane += 1;
+  send(ws, { t: "error", error: CONTROL_PLANE_UNAVAILABLE });
+  ws.close(1013, "Try again later");
 }
 
 async function setNodeStatus(nodeId: string, online: boolean) {
@@ -506,7 +532,9 @@ async function handleConnection(role: "node" | "client", ws: WebSocket, url: URL
   }
 
   if (role === "node") {
-    const info = await introspect("/internal/introspect/node", { token: ticket });
+    const reply = await callControlPlane("/internal/introspect/node", { token: ticket });
+    if (reply.status === "unavailable") return refuseUnavailable(ws);
+    const info = reply.status === "ok" ? reply.body : null;
     if (!info?.nodeId) {
       metrics.rejectedAuth += 1;
       send(ws, { t: "error", error: "Unauthorized node" });
@@ -516,7 +544,9 @@ async function handleConnection(role: "node" | "client", ws: WebSocket, url: URL
     attachNode(ws, info.nodeId, info.accountId);
   } else {
     const nodeId = url.searchParams.get("nodeId");
-    const info = await introspect("/internal/introspect/session", { token: ticket });
+    const reply = await callControlPlane("/internal/introspect/session", { token: ticket });
+    if (reply.status === "unavailable") return refuseUnavailable(ws);
+    const info = reply.status === "ok" ? reply.body : null;
     if (!info?.accountId || !nodeId) {
       metrics.rejectedAuth += 1;
       send(ws, { t: "error", error: "Unauthorized client" });
