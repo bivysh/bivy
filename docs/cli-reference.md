@@ -104,7 +104,7 @@ First-run wizard. Not idempotent-hostile — safe to re-run.
 
 Steps, in order:
 
-1. Checks Node.js >= 22.19.0 and installs npm dependencies if needed.
+1. In a git checkout, checks Node.js >= 22.19.0 and installs dependencies if needed.
 2. Picks a workspace (defaults to `~/bivy-workspace`, created if absent) and a
    local port (default `4317`). Written to `<data-dir>/cli.json`.
 3. Asks for the default agent (Claude Code unless already set; Codex and the
@@ -1274,11 +1274,11 @@ bivy logs --lines 500
 
 ### `bivy update [--force|--no-wait] [--staging|--stable|--channel <name>]`
 
-Updates Bivy, reinstalls dependencies, installs known upstream agents, and restarts the
-service. Waits for busy sessions first unless `--force`/`--no-wait`.
+Updates Bivy and restarts the service. Waits for busy sessions first unless
+`--force`/`--no-wait`.
 
 **Release channel.** Update follows the channel recorded at install time — the
-npm dist-tag you installed from (`BIVY_CHANNEL`, default `latest`) — instead of
+release channel you installed from (`BIVY_CHANNEL`, default `latest`) — instead of
 always jumping to `latest`. So a box installed with `BIVY_CHANNEL=staging` stays
 on the `staging` build (published on every merge to core `main`) across updates.
 Switch channels deliberately with `--staging`, `--stable` (= `latest`), or
@@ -1288,12 +1288,15 @@ not.)
 
 What it actually does depends on how Bivy was installed (`<ch>` = the channel):
 
+- **release archive** (what `install.sh` installs) — downloads `<ch>`'s archive
+  from GitHub beside the running version, checks its sha256 and that it runs,
+  points `~/.local/share/bivy/current` at it and restarts. If the node doesn't
+  come up, `current` goes back to the previous version, which stays on disk.
 - **git checkout** — `git pull --ff-only`, then `pnpm install --frozen-lockfile`.
-- **`npm i -g @bivy/bivy`** — `npm install -g @bivy/bivy@<ch>`.
-- **`npx bivy`** — nothing; explains that npx always fetches the latest.
-- **installer tarball** — re-runs `curl -fsSL https://bivy.sh/install.sh | bash`
-  with `BIVY_CHANNEL=<ch>` and `BIVY_HOME` pointing at the current install. The
-  restart happens inside the installer.
+- **an older npm or tarball install** — runs the installer from `main` with
+  `BIVY_CHANNEL=<ch>`, which moves it to the release archive (keeping
+  `~/.bivy`) and restarts.
+- **`npx bivy`** — nothing to update.
 
 Inside a Bivy web/PWA terminal (`BIVY_TERMINAL=1`) the update re-execs itself
 detached, logs to `<data-dir>/update.log`, and mirrors live progress into the

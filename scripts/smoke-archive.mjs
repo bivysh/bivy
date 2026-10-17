@@ -5,7 +5,10 @@
  * written by `build-release.mjs --archives <dir>`. It runs with no system Node
  * on PATH, so anything that still leans on one fails here.
  *
- *   node scripts/smoke-archive.mjs <archives-dir>
+ *   node scripts/smoke-archive.mjs <archives-dir> [--bridges]
+ *
+ * --bridges also installs the agent SDK bridges through the archive's own npm
+ * (from the registry, so slower) and checks Pi is found through them.
  */
 import fs from "node:fs";
 import os from "node:os";
@@ -18,6 +21,7 @@ import { hostTarget } from "./release-archives.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const dir = process.argv[2];
+const withBridges = process.argv.includes("--bridges");
 if (!dir) throw new Error("Usage: node scripts/smoke-archive.mjs <archives-dir>");
 const manifest = JSON.parse(fs.readFileSync(path.join(dir, "manifest.json"), "utf8"));
 const target = hostTarget();
@@ -95,7 +99,19 @@ try {
     if (fs.existsSync(path.join(install, "app", "node_modules", scope))) throw new Error(`archive ships ${scope} packages; agent bridges install on demand`);
   }
   await daemonServes(node, path.join(install, "app"));
-  console.log(`archive smoke passed: ${entry.file} (${(entry.size / 1e6).toFixed(1)} MB), Node ${manifest.node}, daemon serves, no system Node`);
+  if (withBridges) {
+    run(link, ["agents:install", "--bridges"], { timeout: 600_000 });
+    // As the node does, look for bridge CLIs (Pi's `pi`) in the bridges' bin.
+    const bridgeEnv = { ...env, PATH: `${path.join(env.BIVY_DATA_DIR, "bridges", "node_modules", ".bin")}:${env.PATH}` };
+    const agents = JSON.parse(run(link, ["agents", "--json"], { env: bridgeEnv }));
+    const pi = (Array.isArray(agents) ? agents : agents.agents ?? []).find((agent) => agent.id === "pi");
+    if (!pi?.installed) throw new Error("the archive's CLI did not find Pi through its installed bridge");
+    // Bridges drive the operator's own agent CLI, so the Claude SDK's bundled
+    // per-platform binary (~200 MB) must not be installed.
+    const anthropic = fs.readdirSync(path.join(env.BIVY_DATA_DIR, "bridges", "node_modules", "@anthropic-ai"));
+    if (anthropic.some((name) => name.startsWith("claude-agent-sdk-"))) throw new Error(`bridge install pulled in the Claude SDK's bundled binary: ${anthropic.join(", ")}`);
+  }
+  console.log(`archive smoke passed: ${entry.file} (${(entry.size / 1e6).toFixed(1)} MB), Node ${manifest.node}, daemon serves${withBridges ? ", bridges install" : ""}, no system Node`);
 } finally {
   fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 }

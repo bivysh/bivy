@@ -46,15 +46,12 @@ The CLI-only path below does not require an account.
 
 ## Prerequisites
 
-- **Node.js 20 or newer.** Check with `node -v`. `npm` ships with it.
-- **macOS or Linux.** The installer is a bash script, and the background service
-  supports launchd (macOS) and `systemd --user` (Linux) only. Windows is not
-  supported.
+- **macOS or Linux**, x64 or arm64. Bivy brings its own Node runtime. The
+  installer is a bash script, and the background service supports launchd
+  (macOS) and `systemd --user` (Linux) only. Windows is not supported.
 - **git** — recommended. Repo-backed sessions, worktrees, and `--clone` need it.
-- **No build tools.** The terminal dependency ships prebuilt binaries for
-  macOS and glibc Linux (x64 and arm64), so nothing compiles at install time.
-
-On Debian/Ubuntu the installer can install Node.js 22 for you if it is missing.
+- **No build tools.** Each release archive is prebuilt for its platform, so
+  nothing compiles at install time.
 
 ## 1. Install
 
@@ -62,10 +59,9 @@ On Debian/Ubuntu the installer can install Node.js 22 for you if it is missing.
 curl -fsSL https://bivy.sh/install.sh | bash
 ```
 
-This ensures a supported Node.js is present (installing it for you if needed —
-the README's [Install](../README.md#install) section lists exactly when it uses
-`sudo`), runs `npm install -g @bivy/bivy`, then launches the `bivy setup`
-wizard. Node state lives at `~/.bivy`.
+This downloads the release archive for your machine from GitHub, checks it,
+installs it under `~/.local/share/bivy` with no `sudo`, then launches the
+`bivy setup` wizard. Node state lives at `~/.bivy`.
 
 If `~/.local/bin` is not on your `PATH` the installer warns you; add
 `export PATH="$HOME/.local/bin:$PATH"` to your shell profile.

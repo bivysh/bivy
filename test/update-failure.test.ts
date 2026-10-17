@@ -60,6 +60,7 @@ function setup(kind: string, codes: number[]) {
     console: { log: (line: string) => output.push(line) },
     c: { dim: String, cyan: String, yellow: String, green: String, red: String },
     repoRoot: "/test/bivy",
+    INSTALLER_URL: "https://installer.test/install.sh",
     os: { homedir: () => "/test/home" },
     npmGlobalPrefix: () => "/test/prefix",
     detectInstallKind: () => kind,
@@ -112,15 +113,8 @@ test("successful checkout update restarts without installing agents", async () =
   assert.ok(state.output.some((line) => line.includes("Updated and restarted")));
 });
 
-test("npm-global update restarts without installing agents", async () => {
-  const state = setup("npm-global", [0]);
-  await state.update();
-  assert.equal(state.proc.exitCode, 0);
-  assert.deepEqual(state.calls, ["npm", "restart"]);
-});
-
-test("packaged update propagates a failed download through the shell pipeline", async () => {
-  const state = setup("packaged", []);
+test("an npm install moves over through the installer, and a failed download stops it", async () => {
+  const state = setup("npm-global", []);
   await assert.rejects(state.update(), /exit:22/);
   assert.deepEqual(state.calls, ["bash"]);
 });

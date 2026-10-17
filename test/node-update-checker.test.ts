@@ -8,16 +8,12 @@ import { createNodeUpdateChecker, updateRegistryUrl, type NodeUpdateState } from
 test("checks the install's recorded channel, with safe defaults and override", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-channel-"));
   try {
-    assert.ok(updateRegistryUrl(dir).endsWith("/latest"));
+    assert.equal(updateRegistryUrl(dir), "https://github.com/bivysh/bivy/releases/latest/download/manifest.json");
     fs.writeFileSync(path.join(dir, "channel"), "staging\n");
-    assert.ok(updateRegistryUrl(dir).endsWith("/staging"));
+    assert.equal(updateRegistryUrl(dir), "https://github.com/bivysh/bivy/releases/download/staging/manifest.json");
     assert.equal(updateRegistryUrl(dir, "https://example.test/release"), "https://example.test/release");
     fs.writeFileSync(path.join(dir, "channel"), "../bad");
-    assert.ok(updateRegistryUrl(dir).endsWith("/latest"));
-    // Archive installs ask the channel's GitHub release manifest instead.
-    assert.equal(updateRegistryUrl(dir, undefined, true), "https://github.com/bivysh/bivy/releases/latest/download/manifest.json");
-    fs.writeFileSync(path.join(dir, "channel"), "staging\n");
-    assert.equal(updateRegistryUrl(dir, undefined, true), "https://github.com/bivysh/bivy/releases/download/staging/manifest.json");
+    assert.ok(updateRegistryUrl(dir).endsWith("/latest/download/manifest.json"));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
