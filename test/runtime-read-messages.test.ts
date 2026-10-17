@@ -117,6 +117,21 @@ try {
     "a recovered auth error and its re-sent prompt are dropped",
   );
 
+  // A torn line mid-file (a write cut short by a full disk) is skipped; the
+  // turns after it still load.
+  const tornId = "11111111-2222-3333-4444-777777777777";
+  const torn = [
+    JSON.stringify({ type: "user", message: { role: "user", content: "first" }, timestamp: "2026-01-01T00:00:00Z" }),
+    `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","te`,
+    JSON.stringify({ type: "user", message: { role: "user", content: "after the tear" }, timestamp: "2026-01-01T00:00:02Z" }),
+  ].join("\n");
+  fs.writeFileSync(path.join(projectDir, `${tornId}.jsonl`), `${torn}\n`);
+  assert.deepEqual(
+    claude.readMessages(tornId)!.map((m) => (m as { content: unknown }).content),
+    ["first", "after the tear"],
+    "a torn line is skipped instead of ending the transcript",
+  );
+
   // An unknown session id reads empty (no throw) — the uniform fall-back signal.
   assert.deepEqual(
     claude.readMessages("00000000-0000-0000-0000-000000000000"),

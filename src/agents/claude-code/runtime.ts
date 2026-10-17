@@ -581,7 +581,11 @@ function loadClaudeTranscript(sessionId: string): RuntimeMessage[] {
   try {
     for (const line of fs.readFileSync(file, "utf8").split(/\r?\n/)) {
       if (!line.trim()) continue;
-      const entry = JSON.parse(line);
+      // A torn line (a write cut short by a full disk) is skipped, not the end of
+      // the transcript: stopping there dropped every later turn from a reopened
+      // session, and the chat then showed a stale reply as the newest one.
+      let entry;
+      try { entry = JSON.parse(line); } catch { continue; }
       const rawRole = entry?.message?.role ?? entry?.role;
       const rawContent = entry?.message?.content ?? entry?.content;
       // Interrupt markers aren't dropped — surface them as a system notice,
