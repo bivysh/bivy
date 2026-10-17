@@ -126,6 +126,14 @@ const maxBufferedBytes = Number(process.env.RELAY_MAX_BUFFERED_BYTES ?? 16 * 102
 const maxTotalBufferedBytes = Number(process.env.RELAY_MAX_TOTAL_BUFFERED_BYTES ?? 256 * 1024 * 1024);
 const buffers = new BufferBudget(maxBufferedBytes, maxTotalBufferedBytes, maxFrameBytes);
 
+// After a relay restart every node and phone redials at once, and a phone that
+// arrives before its node used to be refused ("Node offline") and retry with
+// backoff: about 40% of client attempts in a storm. Instead hold such a client
+// this long for its node, then refuse it exactly as before. 0 restores the
+// immediate refusal. A held client sends nothing and is not forwarded anything.
+const clientNodeWaitMs = Number(process.env.RELAY_CLIENT_NODE_WAIT_MS ?? 5000);
+const MAX_WAITING_CLIENTS_PER_ROOM = 16;
+
 // Operational counters only — never payloads. Exposed at /metrics for uptime
 // checks and dashboards.
 const metrics = {
@@ -139,6 +147,8 @@ const metrics = {
   rejectedTooLarge: 0,
   rejectedPerIp: 0,
   evictedSlow: 0,
+  clientWaitAdmitted: 0,
+  clientWaitTimedOut: 0,
 };
 const ipConnections = new Map<string, number>();
 
@@ -150,6 +160,8 @@ interface Room {
   node?: WebSocket;
   nodeAccountId?: string;
   clients: Set<WebSocket>;
+  /** Clients held for a node that hasn't connected yet, with their account. */
+  waiting: Map<WebSocket, { accountId: string; timer: ReturnType<typeof setTimeout> }>;
 }
 
 const rooms = new Map<string, Room>();
@@ -157,10 +169,16 @@ const rooms = new Map<string, Room>();
 function room(nodeId: string): Room {
   let r = rooms.get(nodeId);
   if (!r) {
-    r = { clients: new Set() };
+    r = { clients: new Set(), waiting: new Map() };
     rooms.set(nodeId, r);
   }
   return r;
+}
+
+function dropRoomIfEmpty(nodeId: string, r: Room) {
+  if (r.node || r.clients.size > 0 || r.waiting.size > 0) return;
+  rooms.delete(nodeId);
+  roomTokens.delete(nodeId);
 }
 
 function send(ws: WebSocket, msg: unknown) {
@@ -614,6 +632,17 @@ function attachNode(ws: WebSocket, nodeId: string, accountId: string) {
     send(ws, { t: "peer.online", clients: r.clients.size });
     for (const client of r.clients) send(client, { t: "peer.online", clients: r.clients.size });
   }
+  // Clients that arrived first are admitted now, with the same ownership check.
+  for (const [client, { accountId: clientAccountId, timer }] of r.waiting) {
+    clearTimeout(timer);
+    r.waiting.delete(client);
+    if (clientAccountId !== accountId) {
+      refuseClient(client, "Forbidden");
+      continue;
+    }
+    metrics.clientWaitAdmitted += 1;
+    admitClient(client, r, nodeId, clientAccountId);
+  }
 
   ws.on("message", (data) => {
     if (!allowMessage(ws, data, maxNodeMessagesPerMinute, { role: "node", nodeId, accountId })) return;
@@ -633,32 +662,49 @@ function attachNode(ws: WebSocket, nodeId: string, accountId: string) {
       void setNodeStatus(nodeId, false);
       for (const client of r.clients) send(client, { t: "peer.offline" });
     }
-    if (!r.node && r.clients.size === 0) {
-      rooms.delete(nodeId);
-      roomTokens.delete(nodeId);
-    }
+    dropRoomIfEmpty(nodeId, r);
   });
+}
+
+function refuseClient(ws: WebSocket, error: "Forbidden" | "Node offline") {
+  send(ws, { t: "error", error });
+  ws.close(1008, "Not available");
 }
 
 function attachClient(ws: WebSocket, nodeId: string, accountId: string) {
   const r = room(nodeId);
 
-  // Ownership: a client may only reach a node owned by the same account.
-  // We learn the node's account when it connects. If it is not connected we
-  // cannot verify ownership, so we refuse (and report offline).
-  if (!r.node || r.nodeAccountId !== accountId) {
-    send(ws, { t: "error", error: r.node ? "Forbidden" : "Node offline" });
-    ws.close(1008, "Not available");
-    if (!r.node && r.clients.size === 0) {
-      rooms.delete(nodeId);
-      roomTokens.delete(nodeId);
-    }
-    return;
+  // Ownership: a client may only reach a node owned by the same account. We
+  // learn the node's account when it connects, so a client that arrives first
+  // waits for it (see clientNodeWaitMs) and is checked then.
+  if (r.node) {
+    if (r.nodeAccountId !== accountId) return refuseClient(ws, "Forbidden");
+    return admitClient(ws, r, nodeId, accountId);
   }
+  if (clientNodeWaitMs <= 0 || r.waiting.size >= MAX_WAITING_CLIENTS_PER_ROOM) {
+    refuseClient(ws, "Node offline");
+    return dropRoomIfEmpty(nodeId, r);
+  }
+  const timer = setTimeout(() => {
+    if (!r.waiting.delete(ws)) return;
+    metrics.clientWaitTimedOut += 1;
+    refuseClient(ws, "Node offline");
+    dropRoomIfEmpty(nodeId, r);
+  }, clientNodeWaitMs);
+  r.waiting.set(ws, { accountId, timer });
+  ws.once("close", () => {
+    const held = r.waiting.get(ws);
+    if (!held) return;
+    clearTimeout(held.timer);
+    r.waiting.delete(ws);
+    dropRoomIfEmpty(nodeId, r);
+  });
+}
 
+function admitClient(ws: WebSocket, r: Room, nodeId: string, accountId: string) {
   r.clients.add(ws);
   send(ws, { t: "ready", role: "client", nodeId });
-  send(r.node, { t: "peer.online", clients: r.clients.size });
+  if (r.node) send(r.node, { t: "peer.online", clients: r.clients.size });
 
   ws.on("message", (data) => {
     if (!allowMessage(ws, data, maxClientMessagesPerMinute, { role: "client", nodeId, accountId })) return;
@@ -673,10 +719,7 @@ function attachClient(ws: WebSocket, nodeId: string, accountId: string) {
   ws.on("close", () => {
     r.clients.delete(ws);
     if (r.node) send(r.node, { t: "peer.offline", clients: r.clients.size });
-    if (!r.node && r.clients.size === 0) {
-      rooms.delete(nodeId);
-      roomTokens.delete(nodeId);
-    }
+    dropRoomIfEmpty(nodeId, r);
   });
 }
 

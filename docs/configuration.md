@@ -574,6 +574,7 @@ dumb, end-to-end-encrypted pipe — it holds no database.
 | `RELAY_IDLE_TIMEOUT_MS` | integer ms | `120000` | Heartbeat/idle timeout |
 | `RELAY_MAX_BUFFERED_BYTES` | integer bytes | `16777216` (16 MiB) | Per-socket outbound backpressure mark; a socket above it is evicted |
 | `RELAY_MAX_TOTAL_BUFFERED_BYTES` | integer bytes | `268435456` (256 MiB) | Relay-wide outbound budget. Above it, every socket holding more than one max-size frame is evicted, so many stalled consumers at once cannot exhaust memory |
+| `RELAY_CLIENT_NODE_WAIT_MS` | integer ms | `5000` | How long a client that arrives before its node is held for it (up to 16 per node) before it is refused with `Node offline`. `0` refuses immediately |
 
 ---
 
