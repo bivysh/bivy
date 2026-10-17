@@ -9,6 +9,9 @@ export interface BootstrapOpts {
   relayUrl: string;
   controlPlaneUrl: string;
   enrollmentToken: string;
+  /** The id the control plane enrolled the node as. The daemon adopts it, so
+   *  work and templates sealed to that id are its own. */
+  nodeId?: string;
   /** Seed for the node's room key, used only when its data dir has no
    *  pairing.json yet. Omit it and the node generates its own key, which never
    *  leaves the machine; devices then get it by pairing. */

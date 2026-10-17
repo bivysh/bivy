@@ -54,6 +54,7 @@ export async function bootRunner(
     relayUrl: input.relayUrl,
     controlPlaneUrl: input.controlPlaneUrl,
     enrollmentToken,
+    nodeId,
     ttlMinutes: input.awakeCapMinutes,
     provider: "fly",
     runner: true,

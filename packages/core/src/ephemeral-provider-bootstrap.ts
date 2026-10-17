@@ -14,6 +14,7 @@ export function bivyRelayJson(opts: BootstrapOpts): string {
   return JSON.stringify({
     url: opts.relayUrl,
     enrollmentToken: opts.enrollmentToken,
+    ...(opts.nodeId ? { nodeId: opts.nodeId } : {}),
     ...(opts.e2eKeyB64 ? { e2eKey: opts.e2eKeyB64 } : {}),
     controlPlaneUrl: opts.controlPlaneUrl,
     clientBaseUrl: opts.controlPlaneUrl,
