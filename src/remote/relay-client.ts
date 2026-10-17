@@ -28,6 +28,9 @@ import type { PairingStore, RotateDelivery } from "../device-registry.js";
 
 export interface RelayConfig {
   url: string;
+  // The node id the control plane enrolled this machine as, when it enrolled
+  // it on the user's behalf (a cloud computer or a runner).
+  nodeId?: string;
   // Present for the hosted (control-plane) admission path. Absent in solo mode,
   // where `room`+`roomToken` authorize the relay connection instead.
   enrollmentToken?: string;
@@ -74,6 +77,7 @@ export function loadRelayConfig(appDir: string): RelayConfig | null {
     e2eKey?: string;
     room?: string;
     roomToken?: string;
+    nodeId?: string;
   } = {};
   if (fs.existsSync(filePath)) {
     try {
@@ -94,7 +98,8 @@ export function loadRelayConfig(appDir: string): RelayConfig | null {
   const controlPlaneUrl = process.env.BIVY_CONTROL_PLANE_URL ?? raw.controlPlaneUrl;
   const clientBaseUrl = process.env.BIVY_CLIENT_BASE_URL ?? raw.clientBaseUrl ?? controlPlaneUrl;
   const e2eKey = process.env.BIVY_ROOM_KEY ?? raw.e2eKey;
-  return { url, enrollmentToken, controlPlaneUrl, clientBaseUrl, e2eKey, room: solo?.room, roomToken: solo?.roomToken };
+  const nodeId = typeof raw.nodeId === "string" && raw.nodeId ? raw.nodeId : undefined;
+  return { url, enrollmentToken, controlPlaneUrl, clientBaseUrl, e2eKey, room: solo?.room, roomToken: solo?.roomToken, nodeId };
 }
 
 export interface RelayConnectorOptions {

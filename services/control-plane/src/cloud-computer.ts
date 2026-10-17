@@ -73,6 +73,7 @@ export async function bootCloudComputer(
     relayUrl: input.relayUrl,
     controlPlaneUrl: input.controlPlaneUrl,
     enrollmentToken,
+    nodeId,
     ttlMinutes: input.awakeCapMinutes,
     provider: "fly",
     // Sleep after the idle window, not when a turn ends: previews, a reopened

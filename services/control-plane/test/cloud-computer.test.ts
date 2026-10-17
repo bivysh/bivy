@@ -107,6 +107,7 @@ async function main() {
   const start = Buffer.from(boot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/start.sh").raw_value, "base64").toString("utf8");
   expect(typeof relay.enrollmentToken === "string" && relay.enrollmentToken.startsWith("enr_"), "the payload carries a fresh enrollment token");
   expect(!("e2eKey" in relay), "the payload carries no room key: the machine generates its own");
+  expect(relay.nodeId === nodeId, "the payload names the id the machine was enrolled as, so it answers to it");
   expect(!/BIVY_HOSTED_CREDENTIAL|BIVY_RESTORE/.test(start), "the machine is no credential-custody guest and rebuilds nothing from snapshots");
   expect(/BIVY_EPHEMERAL_SLEEP=1/.test(start) && /BIVY_DATA_DIR=\/data\/bivy/.test(start), "the node sleeps instead of being destroyed, with its state on the volume");
   expect(boot.json.init.exec.includes("21600"), "each awake period is bounded by the awake cap");
@@ -190,6 +191,7 @@ async function main() {
   const runnerStart = Buffer.from(runnerBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/start.sh").raw_value, "base64").toString("utf8");
   expect(/BIVY_WORK_OWN_LABEL_ONLY=1/.test(runnerStart) && /BIVY_OAUTH_REFRESH=0/.test(runnerStart) && /BIVY_TEARDOWN_ON_FINISH=1/.test(runnerStart), "it works only its own label, never refreshes sign-ins and ends when done");
   expect(!/BIVY_EPHEMERAL_SLEEP/.test(runnerStart), "a runner never sleeps");
+  expect(JSON.parse(Buffer.from(runnerBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/relay.json").raw_value, "base64").toString("utf8")).nodeId === runnerId, "a runner answers to its enrolled id");
   const runnerRelay = JSON.parse(Buffer.from(runnerBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/relay.json").raw_value, "base64").toString("utf8"));
   expect((await req(port, "POST", "/node/settled", {}, runnerRelay.enrollmentToken)).status === 200, "a finished runner reports settled");
   await waitFor(() => calls.some((c) => c.path === "/v1/compute/runners/release" && c.body.nodeId === runnerId), "runner release");

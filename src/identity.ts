@@ -128,6 +128,20 @@ export class NodeIdentity {
     return this.config.name;
   }
 
+  /**
+   * Take the id the control plane enrolled this machine as. A machine enrolled
+   * on the user's behalf (a cloud computer, a runner) gets its id from the
+   * control plane, not from this file; work and templates are sealed to that
+   * id, so the machine must answer to it. Paired devices are unaffected: they
+   * know the machine by its enrolled id already.
+   */
+  adoptNodeId(nodeId: string): boolean {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(nodeId) || nodeId === this.config.nodeId) return false;
+    this.config.nodeId = nodeId;
+    this.persist();
+    return true;
+  }
+
   setName(name: string) {
     const clean = name.trim().replace(/\s+/g, " ").slice(0, 80);
     if (!clean) throw new Error("Node name cannot be empty");

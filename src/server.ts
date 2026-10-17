@@ -380,6 +380,13 @@ const piModelsProjectionPath = path.join(piDir, "models.json");
 // Machine identity is needed here so loopback model entries can be scoped before
 // they are projected into Pi. Loading is idempotent and remains part of boot.
 const identity = NodeIdentity.load(appDir);
+// A machine the control plane enrolled on the user's behalf (a cloud computer,
+// a runner) is known by the id it was enrolled as; work and automation
+// templates are sealed to that id, so adopt it before anything reads ours.
+{
+  const enrolledAs = loadRelayConfig(appDir)?.nodeId;
+  if (enrolledAs && identity.adoptNodeId(enrolledAs)) console.log(`[identity] adopted enrolled node id ${enrolledAs}`);
+}
 
 // The local-model provider domain lives in its own controller. server.ts wires
 // it with the node dirs, broadcast, and the session-refresh / control-plane-sync

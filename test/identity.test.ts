@@ -79,4 +79,16 @@ test("persist() writes atomically: no leftover .tmp file, private permissions", 
   }
 });
 
+test("a machine enrolled by the control plane answers to its enrolled id, across restarts", () => {
+  const dir = tmpDir();
+  const first = NodeIdentity.load(dir);
+  first.createDevice("Phone");
+  assert.equal(first.adoptNodeId("eph-managed-auto-0123456789abcdef"), true);
+  assert.equal(first.adoptNodeId("eph-managed-auto-0123456789abcdef"), false, "already adopted");
+  assert.equal(first.adoptNodeId("bad id!"), false, "only a plain id is taken");
+  const again = NodeIdentity.load(dir);
+  assert.equal(again.nodeId, "eph-managed-auto-0123456789abcdef");
+  assert.equal(again.listDevices().length, 1, "paired devices are kept");
+});
+
 console.log(`\nAll ${passed} identity tests passed.`);
