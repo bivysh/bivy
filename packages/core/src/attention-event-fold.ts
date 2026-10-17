@@ -8,7 +8,7 @@ import { validUserQuestions } from "./store-normalize.js";
 
 export interface AttentionApproval { id: string; sessionId?: string; [key: string]: unknown }
 export interface AttentionQuestion { id: string; sessionId?: string; questions: AttentionQuestionItem[]; createdAt?: number }
-export interface AttentionQuestionItem { question: string; header: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; secret?: { name: string; url?: string } }
+export interface AttentionQuestionItem { question: string; header: string; options: Array<{ label: string; description?: string; preview?: string }>; multiSelect?: boolean; secret?: { name: string }; url?: string; code?: string }
 export interface AttentionTurn { sessionId: string; trigger: "stalled" | "wedged"; idleMs: number; at: number; message: string }
 export interface AttentionValue { approvals: AttentionApproval[]; questions: AttentionQuestion[]; turnAttentions: AttentionTurn[] }
 export interface AttentionRowCommand { sessionId: string; status: "needs_action" | "idle" | "working"; needsAction: boolean; updatedAt?: number }

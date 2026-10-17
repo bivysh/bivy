@@ -151,7 +151,7 @@ bivy help --json | jq '.commands[] | select(.scope == "session") | .usage'
 ### `bivy guide [topic] [--json]`
 
 Short playbooks for agents working in Bivy, one screen each: `show-the-user`,
-`talk-to-the-user`, `long-work`, `more-hands`, `automate` and `add-an-agent`. Without a topic it
+`talk-to-the-user`, `connect`, `long-work`, `more-hands`, `automate` and `add-an-agent`. Without a topic it
 lists them. They are markdown files in `bin/guides/`, and `bivy mcp-serve` also
 serves them as MCP resources (`bivy://guide/<topic>`).
 
@@ -517,7 +517,8 @@ so it works for any agent with a shell.
 | `--timeout <duration>` | How long to wait: seconds or `90s`, `10m`, `2h` (default 10m, up to 24h). The card closes then. |
 | `--async` | Return the question's id at once instead of waiting |
 | `--secret <NAME>` | Ask for an API key, token or password. The card takes a hidden value, the node stores it in its vault as `NAME` (a letter, then letters, digits or `_`), and the command prints only `secret://NAME`. No options. |
-| `--url <https://…>` | With `--secret`: the page where the user finds the value |
+| `--url <https://…>` | An **Open** button for a page the user has to visit: a sign-in, a settings page, where to find a key |
+| `--code <code>` | A one-time code to enter on that page (a device sign-in code), shown with a copy button |
 
 `bivy ask wait <id> [--timeout …]` waits for an earlier `--async` question, and
 `bivy ask status <id>` checks it without waiting. Answers are kept for a day.
@@ -533,6 +534,7 @@ id=$(bivy ask "Ship it tonight?" --option Yes --option No --async --json | jq -r
 bivy ask wait "$id"
 bivy ask "Paste your Stripe secret key so I can create the products" --secret STRIPE_API_KEY --url https://dashboard.stripe.com/apikeys
 bivy secrets exec --env STRIPE_API_KEY -- stripe products list
+bivy ask "Sign in to GitHub" --url https://github.com/login/device --code ABCD-1234 --option Done --option "It didn't work"
 ```
 
 ### `bivy app <subcommand>`

@@ -50,17 +50,21 @@ export function askQuestionsFrom(value: unknown): UserQuestionItem[] | string {
     const labels = options.map((o) => (typeof o === "string" ? o : (o as { label?: unknown })?.label)).map((l) => (typeof l === "string" ? l.trim() : ""));
     if (labels.some((l) => !l || l.length > 200)) return "Each option needs a label (up to 200 characters).";
     if (new Set(labels).size !== labels.length) return "Options must be different.";
-    const secret = raw.secret as { name?: unknown; url?: unknown } | undefined;
+    const url = typeof raw.url === "string" ? raw.url.trim() : "";
+    if (url && !/^https:\/\/\S+$/.test(url)) return "A link must be an https:// URL.";
+    const code = typeof raw.code === "string" ? raw.code.trim() : "";
+    if (code.length > 64) return "A code is up to 64 characters.";
+    const extras = { ...(url ? { url } : {}), ...(code ? { code } : {}) };
+    const secret = raw.secret as { name?: unknown } | undefined;
     if (secret !== undefined) {
       const name = typeof secret?.name === "string" ? secret.name.trim() : "";
       if (!SECRET_NAME.test(name)) return "A secret name is a letter, then letters, digits or underscores (up to 64), like STRIPE_API_KEY.";
       if (labels.length) return "A secret question takes no options.";
-      const url = typeof secret.url === "string" ? secret.url.trim() : "";
-      if (url && !/^https:\/\/\S+$/.test(url)) return "The secret's link must be an https:// URL.";
-      out.push({ question, header: typeof raw.header === "string" && raw.header.trim() ? header : "Secret", options: [], secret: { name, ...(url ? { url } : {}) } });
+      out.push({ question, header: typeof raw.header === "string" && raw.header.trim() ? header : "Secret", options: [], secret: { name }, ...extras });
       continue;
     }
-    out.push({ question, header, options: labels.map((label) => ({ label })), ...(raw.multiSelect === true ? { multiSelect: true } : {}) });
+    const stepHeader = url && !(typeof raw.header === "string" && raw.header.trim()) ? "Your step" : header;
+    out.push({ question, header: stepHeader, options: labels.map((label) => ({ label })), ...(raw.multiSelect === true ? { multiSelect: true } : {}), ...extras });
   }
   if (new Set(out.map((q) => q.question)).size !== out.length) return "Questions must be different.";
   return out;
