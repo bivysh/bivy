@@ -142,6 +142,18 @@ export class SecretVault {
     return undefined;
   }
 
+  /** Every value stored in this vault itself (not references), for redaction.
+   *  A record that no longer decrypts is skipped. */
+  localValues(): string[] {
+    this.reload();
+    const values: string[] = [];
+    for (const record of Object.values(this.data.records)) {
+      if (record.backend !== "local") continue;
+      try { const value = this.decryptRecord(record); if (value) values.push(value); } catch {}
+    }
+    return values;
+  }
+
   setReference(id: string, ref: string, description?: string) {
     const normalized = normalizeSecretId(id);
     const trimmed = String(ref || "").trim();
@@ -296,6 +308,24 @@ function modeIsPrivate(file: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** `--env NAME` or `--env NAME=<secret://…|op://…|env://…|cmd://…|id>` pairs before `--`. */
+export function secretExecPlan(args: string[]): { env: Array<[string, string]>; command: string[] } {
+  const split = args.indexOf("--");
+  if (split < 0 || split === args.length - 1) throw new Error("Usage: bivy secrets exec --env NAME[=ref]… -- <command> [args…]");
+  const env: Array<[string, string]> = [];
+  const own = args.slice(0, split);
+  for (let i = 0; i < own.length; i++) {
+    const spec = own[i] === "--env" ? own[++i] : own[i].startsWith("--env=") ? own[i].slice("--env=".length) : undefined;
+    if (!spec) throw new Error(`Unexpected argument ${own[i]}; pass secrets as --env NAME[=ref].`);
+    const eq = spec.indexOf("=");
+    const name = eq < 0 ? spec : spec.slice(0, eq);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) throw new Error(`${name || "(empty)"} is not an environment variable name.`);
+    env.push([name, eq < 0 ? `secret://${name}` : spec.slice(eq + 1)]);
+  }
+  if (!env.length) throw new Error("Name at least one secret: --env NAME.");
+  return { env, command: args.slice(split + 1) };
 }
 
 export async function resolveSecret(value: string, appDir?: string): Promise<string | undefined> {

@@ -884,6 +884,11 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    and anything below 16px makes iOS Safari auto-zoom the viewport on focus. */
 .question-other-input { box-sizing: border-box; resize: vertical; min-height: 40px; }
 .question-other-input:disabled { opacity: 0.6; }
+/* A secret request's fine print: where the value goes, and where to find it. */
+.question-note { margin: 0; font-size: 12px; color: var(--muted); }
+.question-note code { font-size: 12px; }
+.question-note a { color: var(--accent); font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
+.question-note a:hover { color: var(--accent-hover); }
 
 /* ---- GitHub pill + action sheet ---- */
 .github-pill { flex: none; background: transparent; font: inherit; cursor: pointer; }

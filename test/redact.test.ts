@@ -1,5 +1,5 @@
 import assert from "node:assert";
-import { redactSecrets } from "../src/redact.js";
+import { redactSecrets, registerSecretValue } from "../src/redact.js";
 
 function run() {
   // GitHub token shapes.
@@ -110,6 +110,14 @@ function run() {
   // A short `sk-` fragment is not a key and must not be over-redacted.
   assert.equal(redactSecrets("use the sk-foo flag"), "use the sk-foo flag", "leaves short sk- fragments alone");
   assert.equal(redactSecrets(""), "", "empty passthrough");
+
+  // A value the vault holds is masked by value, raw or JSON-escaped, whatever its shape.
+  registerSecretValue("correct\"horse battery");
+  registerSecretValue("short");
+  const persisted = JSON.stringify({ text: 'echo "correct\"horse battery" short' });
+  assert.ok(!redactSecrets(persisted).includes("horse"), "masks a registered value inside JSON");
+  assert.ok(redactSecrets(persisted).includes("short"), "values too short to be safe to mask are left alone");
+  assert.ok(!redactSecrets('pw=correct"horse battery').includes("horse"), "masks the raw value");
 
   console.log("redact: all tests passed");
 }

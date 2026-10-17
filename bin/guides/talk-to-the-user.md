@@ -30,6 +30,19 @@ dismissed it (use your judgment), exit 5 that `--timeout` (default 10m) passed.
 For long waits use `--async`, keep working, and later `bivy ask wait <id>`.
 Ask only when you can't reasonably decide yourself.
 
+## You need a key or password: ask for a secret
+
+    bivy ask "Paste your Stripe secret key so I can create the products" \
+      --secret STRIPE_API_KEY --url https://dashboard.stripe.com/apikeys
+    bivy secrets exec --env STRIPE_API_KEY -- stripe products list
+
+The card takes a hidden value and stores it in this machine's vault; you get
+back `secret://STRIPE_API_KEY`, never the value. Use it through
+`bivy secrets exec`, which puts it in the command's environment. It stays
+stored for later sessions, so try `bivy secrets exec` first and ask only when
+it says the secret is missing. Never ask for a secret with a plain `bivy ask`
+or in chat, and never print it: the answer would land in the transcript.
+
 ## Name the session: title
 
     bivy title "Fix login redirect loop"

@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+import { spawn } from "node:child_process";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { SecretVault } from "./secrets.js";
+import { SecretVault, secretExecPlan } from "./secrets.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
@@ -45,6 +46,9 @@ Commands:
   bivy secrets delete <id>
   bivy secrets doctor
   bivy secrets resolve <id>           Verify a secret resolves without printing it
+  bivy secrets exec --env NAME[=ref]… -- <command> [args…]
+                                      Run a command with secrets in its environment
+                                      (NAME alone means secret://NAME), never printing them
 
 Common ids:
   github.repo-token
@@ -54,8 +58,24 @@ Common ids:
 `);
 }
 
+async function exec(args: string[]): Promise<number> {
+  const plan = secretExecPlan(args);
+  const env = { ...process.env };
+  for (const [name, ref] of plan.env) {
+    const value = await vault.resolve(ref);
+    if (!value) throw new Error(`${ref} did not resolve. Ask the user for it with: bivy ask "<what to paste>" --secret ${name}`);
+    env[name] = value;
+  }
+  return new Promise((resolve, reject) => {
+    const child = spawn(plan.command[0], plan.command.slice(1), { stdio: "inherit", env });
+    child.on("error", reject);
+    child.on("exit", (code, signal) => resolve(code ?? (signal ? 128 : 1)));
+  });
+}
+
 async function main() {
   const [cmd, id, ...rest] = process.argv.slice(2);
+  if (cmd === "exec") { process.exitCode = await exec(process.argv.slice(3)); return; }
   if (!cmd || cmd === "help" || cmd === "--help") { usage(); return; }
 
   if (cmd === "list") {

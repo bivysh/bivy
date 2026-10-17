@@ -2685,6 +2685,7 @@ finish: Bivy already pushes when a turn ends while the user is away. --json prin
 // Blocks until the user answers (printing the answer), or with --async returns
 // an id to read later with `bivy ask status|wait <id>`.
 const ASK_USAGE = `Usage: bivy ask "<question>" [--option <label>]… [--multi] [--header <label>] [--timeout 10m] [--async] [--json]
+       bivy ask "<question>" --secret <NAME> [--url <https://…>] [--timeout 10m] [--json]
        bivy ask status <id> [--json]
        bivy ask wait <id> [--timeout 10m] [--json]`;
 
@@ -2697,6 +2698,11 @@ Ask the user a question in the chat and wait for the answer. Their devices get a
 several with --multi) or write their own; without options they type an answer.
 --header is the short label on the card.
 
+--secret NAME asks for an API key, token or password instead: the card takes a
+hidden value, the node stores it in its vault as NAME, and this prints only
+secret://NAME, never the value. --url is where the user finds it. Use it with
+'bivy secrets exec --env NAME -- <command>'.
+
 Prints the answer and exits 0. Exits 1 if the user dismissed the question and 5
 if --timeout (default 10m, up to 24h) passes first; the card closes then.
 --async returns the question's id at once; 'bivy ask wait <id>' blocks for the
@@ -2706,7 +2712,7 @@ answer later and 'bivy ask status <id>' checks without waiting.
   }
   const json = wantsJson(args);
   const fail = (error) => cliError(error, { json, paint: c.red });
-  const parsed = parseSessionArgs(args, ["--session", "--option", "--header", "--timeout"]);
+  const parsed = parseSessionArgs(args, ["--session", "--option", "--header", "--timeout", "--secret", "--url"]);
   if (parsed.error) return fail({ code: "usage", message: parsed.error, exit: EXIT.usage });
   const sessionId = resolveAttachSessionId({ sessionFlag: parsed.one("--session"), env: process.env });
   if (!sessionId) return fail({ code: "no_session", message: "No session id.", hint: "Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.", next: "bivy sessions --json", exit: EXIT.usage });
@@ -2729,6 +2735,7 @@ answer later and 'bivy ask status <id>' checks without waiting.
   };
   const answerText = (result) => Object.values(result.answers ?? {}).join("\n");
   const finish = (result) => {
+    if (result.status === "answered" && !answerText(result)) return fail({ code: "failed", message: "The secret was not stored on this node.", next: "bivy secrets doctor", exit: EXIT.failed });
     const out = { id: result.id, status: result.status, ...(result.status === "answered" ? { answer: answerText(result) } : {}) };
     if (result.status === "answered") { console.log(json ? JSON.stringify(out) : out.answer); return; }
     if (result.status === "pending") { console.log(json ? JSON.stringify(out) : `Still waiting for an answer. Check again with: bivy ask wait ${result.id}`); process.exit(EXIT.timeout); }
@@ -2755,8 +2762,10 @@ answer later and 'bivy ask status <id>' checks without waiting.
   if (!question) return fail({ code: "usage", message: ASK_USAGE, exit: EXIT.usage });
   const options = parsed.values["--option"] ?? [];
   if (options.length === 1) return fail({ code: "usage", message: "Offer at least two --option values, or none for a free-text answer.", exit: EXIT.usage });
+  const secretName = parsed.one("--secret");
+  if (parsed.one("--url") !== undefined && secretName === undefined) return fail({ code: "usage", message: "--url goes with --secret.", exit: EXIT.usage });
   const started = await call("", {
-    questions: [{ question, header: parsed.one("--header"), options, multiSelect: parsed.has("--multi") }],
+    questions: [{ question, header: parsed.one("--header"), options, multiSelect: parsed.has("--multi"), ...(secretName !== undefined ? { secret: { name: secretName, url: parsed.one("--url") } } : {}) }],
     timeoutSeconds: timeout,
   });
   if (parsed.has("--async")) {
@@ -6806,8 +6815,10 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       // secrets-cli.ts only recognizes "--help"/"help" as the FIRST argument, so
       // a subcommand-position --help (e.g. 'bivy secrets list --help') would
       // otherwise be ignored and the live action would run anyway (#113).
-      const forwardArgs = (args.includes("-h") || args.includes("--help")) ? ["--help"] : args;
-      process.exit(await run(nodeBin, [...nodeScriptArgs(secretsEntry), ...forwardArgs], { cwd: repoRoot, env: process.env }));
+      // Words after `--` belong to `secrets exec`'s command, not to us.
+      const own = args.includes("--") ? args.slice(0, args.indexOf("--")) : args;
+      const forwardArgs = (own.includes("-h") || own.includes("--help")) ? ["--help"] : args;
+      process.exit(await run(nodeBin, [...nodeScriptArgs(secretsEntry), ...forwardArgs], { cwd: own[0] === "exec" ? process.cwd() : repoRoot, env: process.env }));
       break;
     }
     case "voice": {

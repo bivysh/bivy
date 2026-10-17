@@ -28,6 +28,7 @@ get shell completion. Agents in a session should start with `bivy context`.
 | Rename the session an agent runs in | `bivy title "<title>"` |
 | Bring the user back to a session (phone push) | `bivy notify` |
 | Ask the user a question and wait for the answer | `bivy ask "<question>" --option A --option B` |
+| Ask the user for an API key without seeing it | `bivy ask "<what to paste>" --secret NAME` |
 | Stop a session | `bivy kill <id>` |
 | Sign this machine into my Bivy account | `bivy login` |
 | Sign this machine out | `bivy logout` |
@@ -39,6 +40,7 @@ get shell completion. Agents in a session should start with `bivy context`.
 | Keep the node running in the background | `bivy service install` |
 | See why something is broken | `bivy doctor`, then `bivy logs -f` |
 | Store an API token safely | `bivy secrets set <id>` |
+| Run a command with stored secrets in its environment | `bivy secrets exec --env NAME -- <command>` |
 | Inspect or edit typed node configuration | `bivy config show`, `bivy config set …`, `bivy config explain …` |
 | Create repository safety/check policy | `bivy config init --project` |
 | Turn on voice input | `bivy voice key groq` |
@@ -514,6 +516,8 @@ so it works for any agent with a shell.
 | `--header <label>` | Short label on the card (default "Question") |
 | `--timeout <duration>` | How long to wait: seconds or `90s`, `10m`, `2h` (default 10m, up to 24h). The card closes then. |
 | `--async` | Return the question's id at once instead of waiting |
+| `--secret <NAME>` | Ask for an API key, token or password. The card takes a hidden value, the node stores it in its vault as `NAME` (a letter, then letters, digits or `_`), and the command prints only `secret://NAME`. No options. |
+| `--url <https://…>` | With `--secret`: the page where the user finds the value |
 
 `bivy ask wait <id> [--timeout …]` waits for an earlier `--async` question, and
 `bivy ask status <id>` checks it without waiting. Answers are kept for a day.
@@ -527,6 +531,8 @@ bivy ask "Which database should the new service use?" --option Postgres --option
 bivy ask "What should the release be called?"
 id=$(bivy ask "Ship it tonight?" --option Yes --option No --async --json | jq -r .id)
 bivy ask wait "$id"
+bivy ask "Paste your Stripe secret key so I can create the products" --secret STRIPE_API_KEY --url https://dashboard.stripe.com/apikeys
+bivy secrets exec --env STRIPE_API_KEY -- stripe products list
 ```
 
 ### `bivy app <subcommand>`
@@ -1054,6 +1060,7 @@ The node's secret vault. Local secrets are AES-256-GCM encrypted in
 | `bivy secrets delete <id>` | Remove it (alias `rm`) |
 | `bivy secrets resolve <id>` | Verify it resolves; prints the byte length, not the value |
 | `bivy secrets doctor` | Run vault health checks. Exits non-zero on failure |
+| `bivy secrets exec --env NAME[=ref]… -- <command>` | Run a command with secrets in its environment. `NAME` alone means `secret://NAME`; a ref can be any `secret://`, `op://`, `env://` or `cmd://` reference. Exits with the command's code |
 
 Well-known ids: `github.repo-token`, `model.anthropic`, `model.openai`,
 `integration.github`.
