@@ -31,6 +31,7 @@ export type SettingsView =
   | "notifications"
   | "import"
   | "providers"
+  | "agent-keys"
   | "models"
   | "instructions"
   | "voice"
@@ -50,6 +51,7 @@ const SETTINGS_VIEWS: readonly SettingsView[] = [
   "notifications",
   "import",
   "providers",
+  "agent-keys",
   "models",
   "instructions",
   "voice",

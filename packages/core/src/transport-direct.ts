@@ -365,6 +365,8 @@ export class DirectTransport implements Transport {
         case "files.list":
         case "files.read":
         case "access.get":
+        case "secrets.list":
+        case "secrets.remove":
         case "tailnet.machines": {
           const requestId = String(obj.requestId ?? "");
           try {

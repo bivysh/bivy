@@ -214,6 +214,9 @@ export function isDirectMode(store = createLocalStore(clientStorage())): boolean
   return LOOPBACK.test(location.hostname) && !store.s && !location.hash.includes("payload=");
 }
 
+/** One key in Settings → Keys for agents (node: SecretVault.agentSecrets). */
+export interface AgentSecretInfo { id: string; description?: string; backend: string; updatedAt: string }
+
 export class AppController {
   readonly store = new SessionStore();
   readonly local = createLocalStore(clientStorage());
@@ -3434,6 +3437,15 @@ export class AppController {
   async listTailnetMachines(): Promise<TailnetMachine[]> {
     const reply = await this.awaitAck({ kind: "tailnet.machines" }, 15_000) as unknown as { machines?: TailnetMachine[] };
     return Array.isArray(reply.machines) ? reply.machines : [];
+  }
+  /** Keys agents asked for on the connected machine (`bivy ask --secret`), never their values. */
+  async listAgentSecrets(): Promise<AgentSecretInfo[]> {
+    const reply = await this.awaitAck({ kind: "secrets.list" }, 15_000) as unknown as { secrets?: AgentSecretInfo[] };
+    return Array.isArray(reply.secrets) ? reply.secrets : [];
+  }
+  async removeAgentSecret(id: string): Promise<AgentSecretInfo[]> {
+    const reply = await this.awaitAck({ kind: "secrets.remove", id }, 15_000) as unknown as { secrets?: AgentSecretInfo[] };
+    return Array.isArray(reply.secrets) ? reply.secrets : [];
   }
   /** How the connected machine can be reached, and what the next setup adds (node: src/access.ts). */
   async getAccess(): Promise<AccessReport> {
