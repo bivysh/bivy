@@ -64,11 +64,12 @@ async function main() {
       calls.push({ path: request.url ?? "", body });
       const nodeId = body.subject?.accountId ? `eph-managed-auto-${createHash("sha256").update(body.subject.accountId).digest("hex").slice(0, 16)}` : "";
       const answers: Record<string, unknown> = {
-        "/v1/compute/profile": { profile: { provider: "fly", image: "runner:test", ttlMinutes: 60, accountMachine: true } },
+        "/v1/compute/profile": { profile: { provider: "fly", image: "runner:test", ttlMinutes: 60, accountMachine: true, runners: true } },
         "/v1/compute/acquire": deny ? { allowed: false, code: "trial_exhausted", reason: "Trial used up." } : { nodeId, state: "launching" },
         "/v1/compute/wake": { state: "waking" },
         "/v1/compute/machines": { machines: [{ id: "fly-1", nodeId, provider: "fly", region: "iad", state: "asleep", createdAt: "2026-10-06T00:00:00Z" }] },
         "/v1/compute/release": { released: true },
+        "/v1/compute/runners/release": { released: true },
         "/v1/policy/check": { allowed: true },
         "/v1/account": { presentation: {} },
       };
@@ -164,6 +165,22 @@ async function main() {
   const released = await req(port, "DELETE", `/account/hosted-machines/${nodeId}`, undefined, token);
   expect(released.status === 200, "release destroys the cloud computer through the extension");
 
+  // A runner: its own node for one piece of work, booted to work alone and
+  // forgotten once the deployment deletes it.
+  const runnerBoot = await req(port, "POST", "/internal/compute/runner-bootstrap", { accountId, runnerId: "work:w1", awakeCapMinutes: 180 }, EXTENSION_TOKEN);
+  const runnerId = runnerBoot.json?.nodeId as string;
+  expect(runnerBoot.status === 200 && /^eph-runner-[0-9a-f]{16}$/.test(runnerId), "a runner boots as its own node");
+  const runnerStart = Buffer.from(runnerBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/start.sh").raw_value, "base64").toString("utf8");
+  expect(/BIVY_WORK_OWN_LABEL_ONLY=1/.test(runnerStart) && /BIVY_OAUTH_REFRESH=0/.test(runnerStart) && /BIVY_TEARDOWN_ON_FINISH=1/.test(runnerStart), "it works only its own label, never refreshes sign-ins and ends when done");
+  expect(!/BIVY_EPHEMERAL_SLEEP/.test(runnerStart), "a runner never sleeps");
+  const runnerRelay = JSON.parse(Buffer.from(runnerBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/relay.json").raw_value, "base64").toString("utf8"));
+  expect((await req(port, "POST", "/node/settled", {}, runnerRelay.enrollmentToken)).status === 200, "a finished runner reports settled");
+  await waitFor(() => calls.some((c) => c.path === "/v1/compute/runners/release" && c.body.nodeId === runnerId), "runner release");
+  console.log("✓ a settled runner is released at once");
+  expect((await req(port, "POST", "/internal/compute/retired", { accountId, nodeId: runnerId }, EXTENSION_TOKEN)).status === 200, "the deployment reports the runner gone");
+  expect(!((await req(port, "GET", "/nodes", undefined, token)).json ?? []).some((n: { id: string }) => n.id === runnerId), "a retired runner's node is removed");
+  expect(((await req(port, "GET", "/nodes", undefined, token)).json ?? []).some((n: { id: string }) => n.id === nodeId), "the cloud computer's node stays");
+
   console.log("\nAll cloud-computer HTTP checks passed.");
 }
 
@@ -199,6 +216,20 @@ async function routing() {
   const items = await store.listWorkItems(account.id, 10);
   expect(items.find((i) => i.id === laptopItem.id)?.label === label, "the waiting work moves to the cloud computer's label");
   expect(items.find((i) => i.id === item.id)?.label !== label, "work for another route is left alone");
+
+  // Runners: work the cloud gets goes to its own runner when one is free.
+  const { placeWorkOnRunner, runnerNodeId } = await import("../src/runners.js");
+  await store.setQueueRouting(account.id, { primary: { kind: "config", configId: cloud.id } });
+  const issue = await store.enqueueWorkItem(account.id, { source: "github:issue", title: "fix it", repo: "o/r", issueNumber: 7 });
+  const launched: string[] = [];
+  expect(await placeWorkOnRunner(store, account.id, issue.id, async (runnerId) => { launched.push(runnerId); return { allowed: true }; }), "cloud-routed work is placed on a runner");
+  const runnerLabelFor = (id: string) => `bivy/${runnerNodeId(account.id, `work:${id}`).replace(/^eph-/, "")}`;
+  expect(launched[0] === `work:${issue.id}` && (await store.listWorkItems(account.id, 20)).find((i) => i.id === issue.id)?.label === runnerLabelFor(issue.id), "the item waits on that runner's own label");
+  const busy = await store.enqueueWorkItem(account.id, { source: "github:issue", title: "another", repo: "o/r", issueNumber: 8 });
+  expect(!(await placeWorkOnRunner(store, account.id, busy.id, async () => ({ allowed: false }))), "no free runner: the caller falls back");
+  expect((await store.listWorkItems(account.id, 20)).find((i) => i.id === busy.id)?.label === "bivy", "a refused item goes back where it was");
+  const sealed = await store.enqueueWorkItem(account.id, { source: "manual", title: "nightly", body: `bivy-room-v1:${cloudComputerNodeId(account.id)}:abc` });
+  expect(!(await placeWorkOnRunner(store, account.id, sealed.id, async () => { throw new Error("must not launch"); })), "work sealed to the cloud computer stays with it");
 }
 
 try {

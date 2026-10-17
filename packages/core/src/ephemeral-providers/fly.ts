@@ -35,10 +35,11 @@ export function flyInit(opts: BootstrapOpts): {
     "chmod 600 /etc/bivy/relay.json /etc/bivy/start.sh",
     "export BIVY_DATA_DIR=/etc/bivy",
     "export BIVY_WORKSPACE=/workspace",
-    // A sleeping machine keeps its state on the volume. relay.json is always
-    // replaced: the control plane is the source of truth for enrollment, and a
-    // machine recreated onto an existing volume is issued a fresh token.
-    ...(opts.sleepOnIdle ? [
+    // A sleeping machine keeps its state on the volume, and a runner works on
+    // its own. relay.json is always replaced: the control plane is the source
+    // of truth for enrollment, and a machine recreated onto an existing volume
+    // is issued a fresh token.
+    ...(opts.sleepOnIdle || opts.runner ? [
       `mkdir -p ${PERSISTENT_ROOT}/bivy ${PERSISTENT_ROOT}/workspace ${PERSISTENT_ROOT}/home`,
       `chmod 700 ${PERSISTENT_ROOT}/bivy`,
       `install -m 600 /etc/bivy/relay.json ${PERSISTENT_ROOT}/bivy/relay.json`,

@@ -28,6 +28,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createCredentialVault } from "./credential-store.js";
+import { oauthRefreshAllowed } from "./oauth/refresh-policy.js";
 
 // Codex's own OAuth app — verified identical to the app Pi's `openai-codex` login
 // uses, so a refresh grant minted here is honored by Codex's backend.
@@ -81,6 +82,9 @@ interface RefreshedTokens {
 
 /** Exchange a refresh token for a fresh token set (incl. the `id_token`). */
 async function refreshCodexTokens(refreshToken: string): Promise<RefreshedTokens | undefined> {
+  // Minting auth.json spends the rotating refresh token, so a machine that
+  // must not refresh gets no Codex login from the vault.
+  if (!oauthRefreshAllowed()) return undefined;
   let res: Response;
   try {
     res = await fetch(CODEX_TOKEN_URL, {

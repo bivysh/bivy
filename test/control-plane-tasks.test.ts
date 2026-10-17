@@ -56,6 +56,13 @@ test("config: per-node label is added to the served set", () => {
     { BIVY_GITHUB_TASKS: "1", BIVY_NODE_LABEL: "laptop" },
   );
   assert.deepEqual(bare!.labels, ["bivy", "bivy/laptop"]);
+  // A runner serves only the label its work was placed on.
+  const runner = resolveControlPlaneTaskConfig(
+    { controlPlaneUrl: "https://cp", enrollmentToken: "t" },
+    { BIVY_NODE_LABEL: "runner-ab12", BIVY_WORK_OWN_LABEL_ONLY: "1" },
+    "runner-ab12cd34",
+  );
+  assert.deepEqual(runner!.labels, ["bivy/runner-ab12"]);
 });
 
 test("config: the node auto-serves bivy/<its-name> without any manual label", () => {

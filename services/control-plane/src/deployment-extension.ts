@@ -178,6 +178,23 @@ export class DeploymentExtension {
     return Array.isArray(result.machines) ? result.machines.filter((m): m is Record<string, unknown> => Boolean(m) && typeof m === "object") : [];
   }
 
+  /** Ask the deployment for a runner for one piece of work. A refusal (no
+   * free runner, nothing left to run on) comes back as a policy decision. */
+  async runnerLaunch(accountId: string, input: { runnerId: string; requestId: string }): Promise<CloudComputerAcquire> {
+    if (!this.url) throw new Error("No deployment compute is configured");
+    const result = await this.request("/v1/compute/runners/launch", { subject: { accountId }, ...input }, ACQUIRE_TIMEOUT_MS) as Partial<DeploymentDecision> & { nodeId?: unknown; state?: unknown };
+    if (result.allowed === false) return { allowed: false, decision: result as DeploymentDecision };
+    if (typeof result.nodeId !== "string" || !result.nodeId) throw new Error("Deployment extension returned an invalid runner launch");
+    return { allowed: true, nodeId: result.nodeId, state: typeof result.state === "string" ? result.state : "launching" };
+  }
+
+  /** A runner's work is done: delete its machine now rather than at the deployment's next sweep. */
+  async runnerRelease(accountId: string, nodeId: string): Promise<boolean> {
+    if (!this.url) return false;
+    const result = await this.request("/v1/compute/runners/release", { subject: { accountId }, nodeId }) as { released?: unknown };
+    return result.released === true;
+  }
+
   /** Destroy the account's cloud computer and its disk. */
   async computeRelease(accountId: string, nodeId: string): Promise<boolean> {
     if (!this.url) return false;

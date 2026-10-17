@@ -56,6 +56,13 @@ export interface BootstrapOpts {
    *  dir, the workspace and HOME (agent sign-ins, package caches, user-installed
    *  tools) live on that disk at `PERSISTENT_ROOT`. */
   sleepOnIdle?: boolean;
+  /** A runner: a disposable machine for one piece of work, beside the account's
+   *  other machines. Its data dir, workspace and HOME live on its disk at
+   *  `PERSISTENT_ROOT` (deleted with it); it serves only its own `nodeLabel`,
+   *  never the shared queue; and it uses the account's sign-ins without ever
+   *  refreshing them, so it can't rotate a refresh token out from under the
+   *  machine that owns the login. */
+  runner?: boolean;
 }
 
 /** Mount point of a sleeping machine's persistent disk. */

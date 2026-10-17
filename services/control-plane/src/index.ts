@@ -23,6 +23,7 @@ import { listAppInstallations, listInstallationRepositories, listInstallationBra
 import { countActiveAccountSessions } from "./session-count.js";
 import { DeploymentCompute, deploymentCompute, managedComputeEnabled, setDeploymentCompute } from "./deployment-compute.js";
 import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, isCloudComputerNode, isEphemeralMilestone, routeWorkToCloudComputer } from "./cloud-computer.js";
+import { bootRunner, isRunnerNode, placeWorkOnRunner } from "./runners.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
 import { configureProxyTrust } from "./proxy-trust.js";
@@ -317,6 +318,16 @@ async function notifyRelaysWorkAvailable(
   if (options.autoProvision !== false) {
     void (async () => {
       if (!(await accountMachineMode(accountId))) return;
+      // Work a runner can do gets its own machine; anything else (sealed to
+      // the cloud computer, or no runner free) waits for the cloud computer.
+      if (await runnersMode(accountId)) {
+        const launch = async (runnerId: string) => {
+          const launched = await deploymentExtension.runnerLaunch(accountId, { runnerId, requestId: runnerId });
+          if (!launched.allowed) console.warn(`[runners] launch refused for ${accountId}: ${launched.decision.code ?? launched.decision.reason ?? "denied"}`);
+          return launched;
+        };
+        if (await placeWorkOnRunner(store, accountId, item.id, launch)) return;
+      }
       if (!(await routeWorkToCloudComputer(store, accountId))) return;
       const acquired = await deploymentExtension.computeAcquire(accountId, { purpose: "automation", requestId: `work:${item.id}` });
       if (!acquired.allowed) console.warn(`[cloud-computer] automation launch refused for ${accountId}: ${acquired.decision.code ?? acquired.decision.reason ?? "denied"}`);
@@ -1275,6 +1286,10 @@ async function accountMachineMode(accountId: string): Promise<boolean> {
   return (await deploymentCompute().profile("interactive", accountId).catch(() => null))?.accountMachine === true;
 }
 
+async function runnersMode(accountId: string): Promise<boolean> {
+  return (await deploymentCompute().profile("interactive", accountId).catch(() => null))?.runners === true;
+}
+
 /** Ask the deployment for the account's cloud computer and answer with the
  * node to connect to. No key: the device pairs with the machine itself. */
 async function respondCloudComputer(
@@ -1689,9 +1704,14 @@ app.put("/session-correlation/:sessionId", requireUser, asyncHandler(async (req,
 }));
 
 // An ephemeral machine's daemon calls this once it has gone idle. Core launches
-// no machines itself, so there is nothing to reap; the deployment owns the
-// cloud computer's lifecycle. Kept so daemons that still signal get a clean 200.
-app.post("/node/settled", requireNode, (_req, res) => {
+// no machines itself; the deployment owns their lifecycle. A runner that
+// settled is done, so the deployment is told to delete it now.
+app.post("/node/settled", requireNode, (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  if (isRunnerNode(node.id)) {
+    void deploymentExtension.runnerRelease(node.accountId, node.id)
+      .catch((error) => console.warn(`[runners] release of ${node.id} failed:`, error instanceof Error ? error.message : error));
+  }
   res.json({ ok: true, reaped: false });
 });
 
@@ -3863,6 +3883,7 @@ app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
     status: typeof m.status === "string" ? m.status : undefined,
     createdAt: typeof m.createdAt === "string" ? m.createdAt : "",
     purpose: "interactive",
+    kind: m.kind === "runner" ? "runner" : "computer",
     lifecycleState: typeof m.state === "string" ? m.state : undefined,
   })));
 }));
@@ -3874,10 +3895,11 @@ app.delete("/account/hosted-machines/:nodeId", asyncHandler(async (req, res) => 
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const nodeId = String(req.params.nodeId || "").trim();
   if (!nodeId) return res.status(400).json({ error: "nodeId is required" });
-  if (!isCloudComputerNode(client.accountId, nodeId) || !(await accountMachineMode(client.accountId))) {
+  const runner = isRunnerNode(nodeId);
+  if ((!runner && !isCloudComputerNode(client.accountId, nodeId)) || !(await accountMachineMode(client.accountId))) {
     return res.status(404).json({ error: "Hosted machine not found" });
   }
-  const released = await deploymentExtension.computeRelease(client.accountId, nodeId).catch(() => false);
+  const released = await (runner ? deploymentExtension.runnerRelease(client.accountId, nodeId) : deploymentExtension.computeRelease(client.accountId, nodeId)).catch(() => false);
   if (!released) return res.status(502).json({ error: "The cloud machine couldn't be released; it remains tracked for retry" });
   res.json({ ok: true, nodeId });
 }));
@@ -4807,11 +4829,31 @@ app.post("/internal/compute/bootstrap", requireDeploymentExtension, asyncHandler
   }));
 }));
 
-// The deployment destroyed the machine (and its disk). The node stays enrolled
-// so its sessions remain listed and rebuildable from their snapshots.
+// Boot payload for a runner: enrolls the node for one piece of work and
+// returns the Fly files + init that start it. Its own endpoint, so asking a
+// Core without runners can never re-enroll (and so revoke) the cloud computer.
+app.post("/internal/compute/runner-bootstrap", requireDeploymentExtension, asyncHandler(async (req, res) => {
+  const accountId = typeof req.body?.accountId === "string" ? req.body.accountId : "";
+  const runnerId = typeof req.body?.runnerId === "string" ? req.body.runnerId.slice(0, 200) : "";
+  if (!runnerId) return res.status(400).json({ error: "runnerId is required" });
+  if (!accountId || !(await store.getAccount(accountId))) return res.status(404).json({ error: "Account not found" });
+  const awakeCapMinutes = Math.max(5, Math.min(24 * 60, Number(req.body?.awakeCapMinutes) || 180));
+  res.setHeader("cache-control", "no-store");
+  res.json(await bootRunner(store, {
+    accountId, runnerId, awakeCapMinutes,
+    relayUrl: provisionEnv().relayUrl, controlPlaneUrl: provisionEnv().cpBaseUrl,
+  }));
+}));
+
+// The deployment destroyed the machine (and its disk). A cloud computer's node
+// stays enrolled so its sessions remain listed; a runner's node is gone with it.
 app.post("/internal/compute/retired", requireDeploymentExtension, asyncHandler(async (req, res) => {
   const accountId = typeof req.body?.accountId === "string" ? req.body.accountId : "";
   const nodeId = typeof req.body?.nodeId === "string" ? req.body.nodeId : "";
+  if (isRunnerNode(nodeId)) {
+    await store.removeNode(accountId, nodeId);
+    return res.json({ ok: true });
+  }
   if (!isCloudComputerNode(accountId, nodeId)) return res.status(404).json({ error: "Not a cloud computer" });
   await store.setNodeOnline(nodeId, false);
   res.json({ ok: true });

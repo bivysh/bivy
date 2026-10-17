@@ -131,7 +131,9 @@ export function resolveControlPlaneTaskConfig(
   // BIVY_NODE_LABEL may be a full label ("bivy/x") or a bare suffix ("x").
   const rawEnvLabel = env.BIVY_NODE_LABEL?.trim();
   const envLabel = rawEnvLabel ? (rawEnvLabel.includes("/") ? rawEnvLabel : `${base}/${rawEnvLabel}`) : undefined;
-  const labels = Array.from(new Set([base, nameLabel, envLabel].filter(Boolean) as string[]));
+  // A runner works only what was placed on it, never the shared queue.
+  const ownOnly = env.BIVY_WORK_OWN_LABEL_ONLY === "1" && envLabel;
+  const labels = ownOnly ? [envLabel] : Array.from(new Set([base, nameLabel, envLabel].filter(Boolean) as string[]));
   return {
     controlPlaneUrl: relay.controlPlaneUrl.replace(/\/$/, ""),
     enrollmentToken: relay.enrollmentToken,
