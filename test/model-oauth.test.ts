@@ -269,6 +269,22 @@ await check("concurrent refresh is single-flight — only one network exchange",
   assert.equal(a, b, "both callers see the same fresh token");
 });
 
+await check("a runner never spends the refresh token: an expired sign-in stays with its owner", async () => {
+  const dir = tmpDir();
+  const store = createCredentialVault(dir);
+  await store.modify("anthropic", async () => ({ type: "oauth", access: "old", refresh: "rt", expires: Date.now() - 1000 }));
+  let exchanges = 0;
+  stubFetch(() => { exchanges += 1; return { json: { access_token: "new", refresh_token: "rt-2", expires_in: 3600 } }; });
+  process.env.BIVY_OAUTH_REFRESH = "0";
+  try {
+    assert.equal((await refreshModelOAuthState(dir, "anthropic")).state, "transient_failure");
+  } finally {
+    delete process.env.BIVY_OAUTH_REFRESH;
+  }
+  assert.equal(exchanges, 0, "no token exchange");
+  assert.equal((await store.read("anthropic"))?.refresh, "rt", "the stored refresh token is untouched");
+});
+
 if (failures > 0) {
   console.error(`model-oauth: ${failures} test(s) failed`);
   process.exit(1);

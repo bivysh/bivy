@@ -16,6 +16,7 @@ import { createPkce } from "../../integrations/oauth.js";
 import { createCredentialVault, type OAuthCredential } from "../credential-store.js";
 import { DEFAULT_LABEL, type SyncPolicy } from "../../credentials/records.js";
 import { getModelOAuthProvider, type ModelOAuthProvider } from "./model-oauth-providers.js";
+import { oauthRefreshAllowed } from "./refresh-policy.js";
 
 // --- Bivy-owned login interaction (same shape Pi used, now ours) -------------
 
@@ -444,6 +445,7 @@ export async function loginModelOAuth(credsDir: string, providerId: string, inte
 
 /** Exchange the refresh token for a fresh credential (network call; throws on failure). */
 async function refreshTokens(provider: ModelOAuthProvider, current: OAuthCredential): Promise<OAuthTokens> {
+  if (!oauthRefreshAllowed()) throw new Error(`This machine doesn't refresh sign-ins; "${provider.id}" is refreshed by the machine that owns the login`);
   const refresh = typeof current.refresh === "string" ? current.refresh : "";
   if (!refresh) throw new Error(`No refresh token stored for "${provider.id}"`);
   const payload = await postToken(provider.tokenUrl, provider.tokenEncoding, {

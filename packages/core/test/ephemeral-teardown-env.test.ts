@@ -43,6 +43,15 @@ describe("bootstrap start.sh env", () => {
     expect(start({ provider: "fly" })).toContain("export BIVY_DATA_DIR=/etc/bivy");
   });
 
+  it("gives a runner its own disk, its own label only, and no sign-in refresh", () => {
+    const script = start({ provider: "fly", runner: true, teardownOnAgentFinish: true });
+    expect(script).toContain("export BIVY_DATA_DIR=/data/bivy");
+    expect(script).toContain("export BIVY_WORK_OWN_LABEL_ONLY=1");
+    expect(script).toContain("export BIVY_OAUTH_REFRESH=0");
+    expect(script).not.toContain("BIVY_EPHEMERAL_SLEEP");
+    expect(start({ provider: "fly", sleepOnIdle: true })).not.toMatch(/BIVY_WORK_OWN_LABEL_ONLY|BIVY_OAUTH_REFRESH/);
+  });
+
   it("opts into hosted work only when asked", () => {
     expect(start()).not.toMatch(/BIVY_GITHUB_HOSTED_TASKS|BIVY_NODE_LABEL|BIVY_GITHUB_TOKEN/);
     const script = start({ repo: "owner/repo", hostedTasks: true, nodeLabel: "ab12cd34", hostedMint: true });

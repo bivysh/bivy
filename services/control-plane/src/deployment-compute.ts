@@ -29,6 +29,9 @@ export interface ComputeProfile {
   /** The deployment runs the account's cloud computer. Without it the account
    * is offered no managed compute. */
   accountMachine?: boolean;
+  /** The deployment also runs disposable per-work runners beside the cloud
+   * computer (see runners.ts). */
+  runners?: boolean;
 }
 
 /** The deployment's answers. Implemented by the deployment extension; absent

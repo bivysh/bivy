@@ -27,7 +27,7 @@ function bivyBootstrapExports(opts: BootstrapOpts): string[] {
   // Every supported ephemeral provider is a destroy lane. The daemon learns
   // that it is disposable so it can snapshot and end the machine once idle.
   const ephemeral = Boolean(opts.provider);
-  const persistent = ephemeral && opts.sleepOnIdle;
+  const persistent = ephemeral && (opts.sleepOnIdle || opts.runner);
   return [
     persistent ? `export BIVY_DATA_DIR=${PERSISTENT_ROOT}/bivy` : "export BIVY_DATA_DIR=/etc/bivy",
     persistent ? `export BIVY_WORKSPACE=${PERSISTENT_ROOT}/workspace` : "",
@@ -42,7 +42,9 @@ function bivyBootstrapExports(opts: BootstrapOpts): string[] {
     ephemeral ? `export BIVY_EPHEMERAL_TTL_MIN=${clampTtlMinutes(opts.ttlMinutes)}` : "",
     ephemeral && opts.teardownOnAgentFinish ? `export BIVY_TEARDOWN_ON_FINISH=1` : "",
     ephemeral && opts.restoreSessionId ? `export BIVY_RESTORE=${shq(opts.restoreSessionId)}` : "",
-    persistent ? "export BIVY_EPHEMERAL_SLEEP=1" : "",
+    ephemeral && opts.sleepOnIdle ? "export BIVY_EPHEMERAL_SLEEP=1" : "",
+    opts.runner ? "export BIVY_WORK_OWN_LABEL_ONLY=1" : "",
+    opts.runner ? "export BIVY_OAUTH_REFRESH=0" : "",
   ].filter(Boolean);
 }
 

@@ -67,15 +67,6 @@ export async function bootCloudComputer(
   const { accountId } = input;
   const nodeId = cloudComputerNodeId(accountId);
   const { enrollmentToken } = await store.enrollNode(accountId, nodeId, "Bivy Cloud");
-  // With an app identity the machine mints short-lived installation tokens per
-  // git op; with only a stored PAT it carries that token, as before.
-  const hosted = await store.getHostedProvisioning(accountId);
-  const central = centralGithubAppConfig();
-  const identity = resolveGithubIdentity({
-    hosted,
-    central,
-    centralInstallations: central ? await store.listCentralGithubInstallations(accountId) : [],
-  });
   const bootstrap: BootstrapOpts = {
     relayUrl: input.relayUrl,
     controlPlaneUrl: input.controlPlaneUrl,
@@ -90,10 +81,25 @@ export async function bootCloudComputer(
     nodeLabel: ephemeralNodeLabel(nodeId),
     // Model credentials reach it like any node: end-to-end account vault sync
     // from the user's other machines, or a provider sign-in on the machine.
-    hostedMint: identity?.kind === "app",
-    githubToken: identity?.kind === "token" ? identity.token : undefined,
+    ...await githubBootIdentity(store, accountId),
   };
   return { nodeId, ...flyMachineBoot(bootstrap) };
+}
+
+/** How a deployment-run machine gets GitHub access. With an app identity it
+ * mints short-lived installation tokens per git op; with only a stored PAT it
+ * carries that token. */
+export async function githubBootIdentity(
+  store: Pick<HostedMachineRepository, "getHostedProvisioning"> & Pick<CentralGithubAppRepository, "listCentralGithubInstallations">,
+  accountId: string,
+): Promise<Pick<BootstrapOpts, "hostedMint" | "githubToken">> {
+  const central = centralGithubAppConfig();
+  const identity = resolveGithubIdentity({
+    hosted: await store.getHostedProvisioning(accountId),
+    central,
+    centralInstallations: central ? await store.listCentralGithubInstallations(accountId) : [],
+  });
+  return { hostedMint: identity?.kind === "app", githubToken: identity?.kind === "token" ? identity.token : undefined };
 }
 
 export interface CloudComputerReadiness { ready: boolean; reason: string; configId?: string }
@@ -126,6 +132,27 @@ export async function cloudComputerReadiness(
 }
 
 /**
+ * The label of queued work that the account's automation routing sends to the
+ * deployment's cloud right now (as primary, or as fallback while the chosen
+ * machine is offline), or undefined when routing keeps work elsewhere.
+ */
+export async function cloudRouteSourceLabel(
+  store: Pick<EphemeralConfigurationRepository, "getQueueRouting" | "getEphemeralConfigs"> & Pick<NodeRepository, "listNodes">,
+  accountId: string,
+): Promise<string | undefined> {
+  const routing = await store.getQueueRouting(accountId);
+  const clouds = new Set((await store.getEphemeralConfigs(accountId)).filter((c) => c.computeSource === "managed").map((c) => c.id));
+  let needed = false;
+  if (routing.primary.kind === "config") needed = clouds.has(routing.primary.configId);
+  else if (routing.primary.kind === "node" && routing.fallback && clouds.has(routing.fallback.configId)) {
+    const primaryNode = routing.primary.node;
+    needed = !(await store.listNodes(accountId)).some((n) => (n.name || n.id) === primaryNode && n.online);
+  }
+  if (!needed) return undefined;
+  return routing.primary.kind === "node" ? `bivy/${routing.primary.node}` : "bivy";
+}
+
+/**
  * When the account's automation routing points at the deployment's cloud
  * (as primary, or as fallback while the chosen machine is offline), move the
  * queued work waiting on that route to the cloud computer's own label. Returns
@@ -135,16 +162,8 @@ export async function routeWorkToCloudComputer(
   store: Pick<EphemeralConfigurationRepository, "getQueueRouting" | "getEphemeralConfigs"> & Pick<NodeRepository, "listNodes"> & Pick<WorkQueueRepository, "listWorkItems" | "assignWorkItem">,
   accountId: string,
 ): Promise<boolean> {
-  const routing = await store.getQueueRouting(accountId);
-  const clouds = new Set((await store.getEphemeralConfigs(accountId)).filter((c) => c.computeSource === "managed").map((c) => c.id));
-  let needed = false;
-  if (routing.primary.kind === "config") needed = clouds.has(routing.primary.configId);
-  else if (routing.primary.kind === "node" && routing.fallback && clouds.has(routing.fallback.configId)) {
-    const primaryNode = routing.primary.node;
-    needed = !(await store.listNodes(accountId)).some((n) => (n.name || n.id) === primaryNode && n.online);
-  }
-  if (!needed) return false;
-  const sourceLabel = routing.primary.kind === "node" ? `bivy/${routing.primary.node}` : "bivy";
+  const sourceLabel = await cloudRouteSourceLabel(store, accountId);
+  if (sourceLabel === undefined) return false;
   const targetLabel = `bivy/${ephemeralNodeLabel(cloudComputerNodeId(accountId))}`;
   const pending = (await store.listWorkItems(accountId, 100)).filter((item) => item.status === "pending" && item.label === sourceLabel);
   for (const item of pending) {
