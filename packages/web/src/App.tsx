@@ -4,6 +4,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useS
 import { activationFromState, authProviderForRuntime, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionAppsResult, type SessionSummary } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
+import { BivyMark } from "./components/BivyMark.js";
 import { ChatView } from "./components/ChatView.js";
 import { SessionLaunchProgressView } from "./components/SessionLaunchProgress.js";
 import { Composer } from "./components/Composer.js";
@@ -49,7 +50,6 @@ import { Spinner } from "./components/Spinner.js";
 import { StatusDot } from "./components/StatusDot.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
 import { GetStarted, FIRST_CHANGE_PROMPT, openAppPrompt } from "./components/GetStarted.js";
-import { NotifyOffer } from "./components/NotifyOffer.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
 import { ConnectAI } from "./components/ConnectAI.js";
@@ -79,7 +79,7 @@ import { useEdgeSwipe } from "./useEdgeSwipe.js";
 import { useModalEscape } from "./modalStack.js";
 import { SessionViewToggle, type SessionPaneView } from "./components/SessionViewToggle.js";
 import { readSessionView, writeSessionView, type SessionView } from "./sessionView.js";
-import { CloseIcon, PanelRightIcon } from "./components/UiIcons.js";
+import { CloseIcon, PanelRightIcon, SearchIcon } from "./components/UiIcons.js";
 import { SidePane } from "./components/SidePane.js";
 import { useSidePane, type SidePaneTabId } from "./useSidePane.js";
 import { controller } from "./store/useStore.js";
@@ -103,6 +103,8 @@ export function App() {
   const appIconBadgeEnabled = useSyncExternalStore(subscribeNotificationSettings, getAppIconBadgeEnabled);
   const notificationPreferences = useSyncExternalStore(subscribeNotificationSettings, getNotificationPreferencesSnapshot);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  // Session search + filter stay out of the sidebar until asked for.
+  const [sessionSearchOpen, setSessionSearchOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   const mainRef = useRef<HTMLElement>(null);
   const burgerRef = useRef<HTMLButtonElement>(null);
@@ -111,7 +113,6 @@ export function App() {
   // answer), consume it immediately so it cannot follow them into later turns
   // or sessions. Keep the old key for backwards compatibility with users who
   // already dismissed it.
-  const [automationNextStepDismissed, setAutomationNextStepDismissed] = useState(() => localStorage.getItem("bivy:automation-next-step") === "done");
   // Settings is URL-backed (#78) — `settingsRoute` mirrors the `/settings` /
   // `/settings/:view` route the same way useAppState mirrors the session
   // store, and is null whenever the URL is on anything else (Settings closed).
@@ -327,14 +328,6 @@ export function App() {
     const stopObserving = onAppVisible(refresh);
     return () => { clearInterval(id); stopObserving(); };
   }, [awaitingNode]);
-  const [focusView, setFocusView] = useState(() => localStorage.getItem("bivy.focusView") === "1");
-  const toggleFocusView = useCallback(() => {
-    setFocusView((current) => {
-      const next = !current;
-      localStorage.setItem("bivy.focusView", next ? "1" : "0");
-      return next;
-    });
-  }, []);
   const online = state.connection.status === "online";
   useEffect(() => setTurnActive(state.activeSession.working), [state.activeSession.working]);
   useEffect(() => { if (online) clearQueuedPrompts(); }, [online]);
@@ -345,15 +338,6 @@ export function App() {
     runtimes: state.catalogs.runtimes,
     readiness: state.catalogs.activationReadiness,
   }), [state.catalogs.activationReadiness, state.catalogs.runtimes, state.connection.signedIn, state.connection.status]);
-  const agentAnswered = state.activeSession.transcript.some((entry) => entry.role === "assistant" && Boolean(entry.text) && !entry.tool);
-  // Shown once: remembered as seen as soon as it appears, but it stays on
-  // screen until answered rather than vanishing on the render that showed it.
-  useEffect(() => {
-    if (!agentAnswered || !state.activeSession.activeSessionId || automationNextStepDismissed) return;
-    localStorage.setItem("bivy:automation-next-step", "done");
-  }, [agentAnswered, state.activeSession.activeSessionId, automationNextStepDismissed]);
-  // One next-step card at a time: the notification offer goes first.
-  const [notifyOfferOpen, setNotifyOfferOpen] = useState(false);
   // Latch: has this client ever had a live connection this run? Once true, we
   // treat the WHOLE transient reconnect window as still-composable — not just the
   // brief "reconnecting" beat, but the redial's "connecting" and any re-pair
@@ -868,21 +852,31 @@ export function App() {
     <div className={`app${paneTab ? " has-pane" : ""}`}>
       <div
         ref={drawerRef}
-        className={`sidebar${drawerOpen ? " open" : ""}`}
+        className={`sidebar${drawerOpen ? " open" : ""}${sessionSearchOpen ? " is-searching" : ""}`}
         role={drawerOpen ? "dialog" : "complementary"}
         aria-modal={drawerOpen ? "true" : undefined}
         aria-label="Sessions and workspace"
         tabIndex={drawerOpen ? -1 : undefined}
       >
         <div className="sidebar-head">
-          <span className="brand">Bivy</span>
+          <span className="brand"><BivyMark className="brand-mark" />Bivy</span>
           <div className="sidebar-head-actions">
+            <button
+              className="btn ghost icon sidebar-search-toggle"
+              onClick={() => setSessionSearchOpen(true)}
+              aria-label="Search sessions"
+              title="Search sessions"
+            >
+              <SearchIcon size={18} aria-hidden />
+            </button>
             <button className="btn ghost icon only-mobile sidebar-close" onClick={closeDrawer} aria-label="Close sessions">
               <CloseIcon />
             </button>
           </div>
         </div>
         <SessionList
+          searchOpen={sessionSearchOpen}
+          onSearchOpenChange={setSessionSearchOpen}
           runEvidence={runEvidence}
           sessionSources={sessionSources}
           automationsActive={Boolean(automationsOpen)}
@@ -993,24 +987,24 @@ export function App() {
             </div>
             {/* Node stays below the title as a plain subtitle line — but it's
                 still the real switcher button underneath, so it's selectable
-                on a brand-new/draft session exactly as it is on a live one.
-                The Chat | Terminal switch shares that line, so the title keeps
-                the full first line on a phone. */}
-            {(showNodeSwitcher || paneViews.length > 1) && (
+                on a brand-new/draft session exactly as it is on a live one. */}
+            {showNodeSwitcher && (
               <div className="topbar-subline">
-                {showNodeSwitcher && (showTailnetSwitcher ? <TailnetSwitcher /> : <NodeSwitcher />)}
-                {paneViews.length > 1 && (
-                  <SessionViewToggle
-                    views={paneViews}
-                    value={showChangesView ? "changes" : canToggleSessionView ? sessionView : "chat"}
-                    onChange={pickPaneView}
-                    changes={changedFiles}
-                  />
-                )}
+                {showTailnetSwitcher ? <TailnetSwitcher /> : <NodeSwitcher />}
               </div>
             )}
           </div>
           <div className="topbar-actions">
+            {/* The view switch (chat / terminal / app / changes) sits with the
+                session's other controls, so the title keeps one line. */}
+            {paneViews.length > 1 && (
+              <SessionViewToggle
+                views={paneViews}
+                value={showChangesView ? "changes" : canToggleSessionView ? sessionView : "chat"}
+                onChange={pickPaneView}
+                changes={changedFiles}
+              />
+            )}
             {sidePane.wide && activeSession && !needsNode && (
               <button
                 className="btn ghost icon side-pane-toggle"
@@ -1020,24 +1014,6 @@ export function App() {
                 title={paneTab ? "Hide side pane" : "Show changes, files, apps, artifacts and terminal"}
               >
                 <PanelRightIcon size={18} />
-              </button>
-            )}
-            {state.activeSession.activeSessionId && !showSessionTerminal && !showChangesView && (
-              <button
-                className="btn ghost focus-view-btn"
-                onClick={toggleFocusView}
-                title={focusView ? "Focus view on — show full transcript" : "Focus view — show only prompts and final answers"}
-                aria-label={focusView ? "Show full transcript" : "Show only prompts and final answers"}
-                aria-pressed={focusView}
-              >
-                {focusView ? (
-                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                    <path d="M9.88 9.88a3 3 0 1 0 4.24 4.24" /><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c7 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68" /><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3 7 10 7a9.74 9.74 0 0 0 5.39-1.61" /><line x1="2" x2="22" y1="2" y2="22" />
-                  </svg>
-                ) : (
-                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7z" /><circle cx="12" cy="12" r="3" /></svg>
-                )}
-                <span className="focus-view-label">{focusView ? "Focused" : "Focus"}</span>
               </button>
             )}
             {state.activeSession.activeSessionId && (
@@ -1207,7 +1183,6 @@ export function App() {
               greeting={state.sessionIndex.sessions.length > 0 ? "What should we work on?" : undefined}
               opening={state.activeSession.opening}
               sessionKey={state.activeSession.activeSessionId}
-              focusView={focusView}
               onAction={runCommand}
               authAction={authAction}
               header={activeSession?.launchProgress ? <SessionLaunchProgressView
@@ -1247,33 +1222,7 @@ export function App() {
               }
             />
 
-            {activeSession && (
-              <NotifyOffer
-                working={state.activeSession.working}
-                machineName={activeSessionNode?.name || undefined}
-                onOpenChange={setNotifyOfferOpen}
-              />
-            )}
 
-            {agentAnswered && activeSession && !automationNextStepDismissed && !notifyOfferOpen && (
-              <section className="card next-step" aria-label="Next step">
-                <div>
-                  <strong>Make this repeatable</strong>
-                  <p>Create an automation to run work without you.</p>
-                </div>
-                <div className="next-step-actions">
-                  <button type="button" className="btn sm primary" onClick={() => {
-                    localStorage.setItem("bivy:automation-next-step", "done");
-                    setAutomationNextStepDismissed(true);
-                    openAutomations();
-                  }}>Open Automations</button>
-                  <button type="button" className="btn sm ghost" aria-label="Dismiss" onClick={() => {
-                    localStorage.setItem("bivy:automation-next-step", "done");
-                    setAutomationNextStepDismissed(true);
-                  }}>Dismiss</button>
-                </div>
-              </section>
-            )}
 
 
             {filesSheetOpen && !sidePane.wide && activeSession && (

@@ -10,13 +10,14 @@ import { PinCard } from "./PinCard.js";
 import { NoticeCard } from "./NoticeCard.js";
 import { DelegationCard } from "./DelegationCard.js";
 import { ToolGroup } from "./ToolGroup.js";
+import { TurnWork } from "./TurnWork.js";
+import { entryTurnKind, noteSnippet, rowsBefore, splitTurn, startBefore, turnSpans, turnStartOf, type TurnItemKind } from "../turnWork.js";
 import { PlanCard } from "./PlanCard.js";
 import { HandoffSeedLine } from "./HandoffSeedLine.js";
 import { MessageAttachments } from "./AttachmentChip.js";
 import { ImageGallery } from "./ImageGallery.js";
 import { base64ToBlobUrl } from "../attachmentUrl.js";
 import { MessageComponent, placementOf } from "./MessageComponent.js";
-import { focusEntries } from "../focusTranscript.js";
 import { clearMessageJump, pendingJumpIndex } from "../messageJump.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
 import { renderMermaidDiagrams } from "../mermaid.js";
@@ -563,10 +564,29 @@ function groupEntries(entries: TranscriptEntry[]): RenderItem[] {
   return items;
 }
 
+/** Tool calls and thinking are work; agent output (files, apps, plans, notices)
+ *  stays in view; other assistant prose is narration or the answer. */
+function turnItemKind(item: RenderItem): TurnItemKind {
+  if (item.kind === "tools") return "work";
+  if (item.kind === "plan") return "output";
+  return entryKind(item.entry);
+}
+
+function entryKind(entry: TranscriptEntry): TurnItemKind {
+  return entryTurnKind(entry, isPlanTool);
+}
+
+/** How an entry places in a turn; mirrors groupTurns. */
+function entryTurnRole(entry: TranscriptEntry): "prompt" | "notice" | "response" {
+  if (entry.role === "user") return "prompt";
+  return entry.role === "system" || entry.role === "error" ? "notice" : "response";
+}
+
 // Limit the initial mount, not the live transcript. Sliding this window on
 // every append removes the passage being read and remounts tool groups (closing
 // their inspectors). Keep its start fixed until the reader loads more history
-// or switches sessions/views.
+// or switches sessions/views. Both sizes count rows as the reader sees them
+// (a turn's whole work line is one), and the window always opens on a turn.
 const INITIAL_WINDOW = 20;
 const WINDOW_STEP = 40;
 
@@ -577,7 +597,6 @@ export function ChatView({
   draftRoute,
   opening,
   sessionKey,
-  focusView,
   onAction,
   authAction,
   header,
@@ -598,8 +617,6 @@ export function ChatView({
   opening?: boolean;
   /** Identity of the open session; used to preserve its window and reading position. */
   sessionKey: string | null;
-  /** Show only user prompts, final assistant answers, and essential notices. */
-  focusView?: boolean;
   /** Run a slash command from an inline notice action button (e.g. "/new"). */
   onAction?: (action: string) => void;
   /** The action that takes the user to the sign-in for this session's agent
@@ -621,31 +638,32 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
-  const source = useMemo(() => focusView ? focusEntries(entries, working) : entries, [entries, focusView, working]);
+  const source = entries;
   const total = source.length;
+  const spans = useMemo(() => turnSpans(source, entryTurnRole, entryKind), [source]);
   const scrollMemory = useRef(new Map<string, ChatScrollMemory>());
   const [historyWindow, setHistoryWindow] = useState(() => ({
-    sessionKey, focusView, initialized: total > 0, start: Math.max(0, total - INITIAL_WINDOW),
+    sessionKey, initialized: total > 0, start: startBefore(spans, total, INITIAL_WINDOW),
   }));
   // A refreshed/filtered transcript can shrink beneath the fixed cutoff. Keep
   // a tail of messages mounted, and persist the corrected cutoff so subsequent
   // appends cannot hide them again. Ordinary appends leave the window fixed.
-  const latestStart = Math.max(0, total - INITIAL_WINDOW);
-  let start = Math.min(historyWindow.start, latestStart);
+  const latestStart = startBefore(spans, total, INITIAL_WINDOW);
+  let start = turnStartOf(spans, Math.min(historyWindow.start, latestStart));
   // Reset before committing a different session/view, or its first snapshot.
   // Ordinary appends must not move the start or change mounted group identities.
-  if (historyWindow.sessionKey !== sessionKey || historyWindow.focusView !== focusView || (!historyWindow.initialized && total > 0)) {
+  if (historyWindow.sessionKey !== sessionKey || (!historyWindow.initialized && total > 0)) {
     const remembered = scrollMemory.current.get(sessionKey ?? "new");
-    start = Math.max(0, total - Math.max(INITIAL_WINDOW, remembered?.limit ?? INITIAL_WINDOW));
-    setHistoryWindow({ sessionKey, focusView, initialized: total > 0, start });
+    start = turnStartOf(spans, Math.min(latestStart, remembered ? Math.max(0, total - remembered.limit) : total));
+    setHistoryWindow({ sessionKey, initialized: total > 0, start });
   } else if (start !== historyWindow.start || (historyWindow.initialized && total === 0)) {
     setHistoryWindow({ ...historyWindow, initialized: total > 0, start });
   }
   // A message asked for from the Artifacts/Apps pages may sit above the window.
   const jumpIndex = pendingJumpIndex(sessionKey, source);
   if (jumpIndex !== null && jumpIndex < start) {
-    start = jumpIndex;
-    setHistoryWindow({ sessionKey, focusView, initialized: true, start });
+    start = turnStartOf(spans, jumpIndex);
+    setHistoryWindow({ sessionKey, initialized: true, start });
   }
   const limitRef = useRef(total - start);
   useLayoutEffect(() => { limitRef.current = total - start; }, [total, start]);
@@ -657,6 +675,10 @@ export function ChatView({
     pinnedRef.current = v;
     setPinned(v);
   }, []);
+
+  // Opening something in the transcript means the reader is reading there: stop
+  // following the bottom so it opens downward instead of scrolling the view.
+  const stopFollowing = useCallback(() => setPinnedState(false), [setPinnedState]);
 
   const atBottom = useCallback(() => {
     const el = scrollRef.current;
@@ -725,8 +747,8 @@ export function ChatView({
   }, [atBottom, sessionKey, setPinnedState]);
 
   const showEarlier = useCallback(() => {
-    setHistoryWindow((current) => ({ ...current, start: Math.max(0, current.start - WINDOW_STEP) }));
-  }, []);
+    setHistoryWindow((current) => ({ ...current, start: startBefore(spans, Math.min(current.start, start), WINDOW_STEP) }));
+  }, [spans, start]);
 
   // Keep the view pinned to the newest line as content grows — streamed tool
   // cards, the working row, an assistant reply landing, an inline approval card.
@@ -762,6 +784,31 @@ export function ChatView({
   // reserve the generic dots for the gap before the agent emits anything.
   const tailShowsProgress = Boolean(tail?.role === "assistant" || tail?.tool);
 
+  const lastTurn = blocks.findLast((block) => block.kind === "turn");
+  // One work line per turn between the prompt and the answer (see TurnWork).
+  const renderResponse = (response: RenderItem[], live: boolean) => {
+    const { work, outputs, answer } = splitTurn(response, turnItemKind);
+    if (!work.length) return response.map(renderItem);
+    const tools = work.flatMap((item) => item.kind === "tools" ? item.tools : []);
+    const notes = work.filter((item) => item.kind === "entry" && item.entry.role === "assistant");
+    const lastNote = notes.at(-1);
+    const running = tools.some((tool) => tool.status === "running") || (live && answer.length === 0);
+    return [
+      <TurnWork
+        key={`work-${work[0]!.key}`}
+        tools={tools}
+        notes={notes.length}
+        note={lastNote?.kind === "entry" ? noteSnippet(lastNote.entry.text || "") : undefined}
+        running={running}
+        onExpand={stopFollowing}
+      >
+        {work.map(renderItem)}
+      </TurnWork>,
+      ...outputs.map(renderItem),
+      ...answer.map(renderItem),
+    ];
+  };
+
   const renderItem = (it: RenderItem) => it.kind === "tools"
     ? <ToolGroup key={it.key} tools={it.tools} />
     : it.kind === "plan"
@@ -796,7 +843,7 @@ export function ChatView({
               className="load-earlier"
               onClick={showEarlier}
             >
-              ↑ Show earlier messages ({start} more)
+              ↑ Show earlier messages ({rowsBefore(spans, start)} more)
             </button>
           )}
           {blocks.map((block) => block.kind === "standalone" ? (
@@ -804,7 +851,7 @@ export function ChatView({
           ) : (
             <div className="transcript-turn" key={block.key}>
               {block.user?.kind === "entry" && <EntryView entry={block.user.entry} onAction={onAction} sessionId={sessionKey} />}
-              {block.response.length > 0 && <div className="turn-response-body">{block.response.map(renderItem)}</div>}
+              {block.response.length > 0 && <div className="turn-response-body">{renderResponse(block.response, working && block === lastTurn)}</div>}
             </div>
           ))}
           {working && !tailShowsProgress && (

@@ -9,7 +9,7 @@ import { EventLog } from "../src/session/event-log.js";
 import { renderHistory } from "../packages/core/src/store-render.js";
 import { SessionStore } from "../packages/core/src/store.js";
 import { foldTranscriptEvent, freshTranscriptDraft, type TranscriptFoldValue } from "../packages/core/src/transcript-event-fold.js";
-import { focusEntries } from "../packages/web/src/focusTranscript.js";
+import { entryTurnKind } from "../packages/web/src/turnWork.js";
 
 const app = { appId: "a".repeat(32), sessionId: "s", name: "Invoice workbench" };
 test("app launchers survive history replay without persisting any access grants", () => {
@@ -28,15 +28,14 @@ test("app launchers survive history replay without persisting any access grants"
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
-test("live app publications deduplicate and stay visible in Focus mode", () => {
+test("live app publications deduplicate and stay visible beside the work line", () => {
   const initial: TranscriptFoldValue = { transcript: [], draft: freshTranscriptDraft(), working: true, workingLabel: "Working" };
   const event = { type: "app_published", app };
   const first = foldTranscriptEvent(initial, event, 1).value;
   const second = foldTranscriptEvent(first, event, 2).value;
   assert.equal(second.transcript.length, 1);
   assert.equal(foldTranscriptEvent(initial, { type: "app_published", app: { name: "invalid" } }, 1).value.transcript.length, 0);
-  const entries = [...second.transcript, { id: "final", role: "assistant" as const, text: "Your app is ready." }];
-  for (const working of [true, false]) assert.deepEqual(focusEntries(entries, working).find((entry) => entry.app)?.app, app);
+  assert.equal(entryTurnKind(second.transcript[0]!, () => false), "output");
 });
 
 test("session envelopes deliver launchers to the focused chat without starting a turn", () => {

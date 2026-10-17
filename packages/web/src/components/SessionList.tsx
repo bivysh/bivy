@@ -12,7 +12,7 @@ import { StatusDot } from "./StatusDot.js";
 import { SourceMark } from "./SourceMark.js";
 import { rowHint } from "../runEvidence.js";
 import { sessionDateGroup } from "../sessionPresentation.js";
-import { CheckIcon, SearchIcon } from "./UiIcons.js";
+import { CheckIcon, CloseIcon, SearchIcon } from "./UiIcons.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { nestDelegatedSessions } from "../sessionNesting.js";
 
@@ -165,7 +165,7 @@ const LIBRARY_NAV: { view: LibraryView; label: string; icon: ReactNode }[] = [
   { view: "apps", label: "Apps", icon: <><rect x="4" y="4" width="6.5" height="6.5" rx="1.5" /><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5" /><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5" /><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5" /></> },
 ];
 
-export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSources, onOpenAutomations, automationsActive, onOpenLibrary, libraryActive, onOpenTerminal, terminalDisabled }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem>; sessionSources?: Map<string, SourceInfo>; onOpenAutomations?: () => void; automationsActive?: boolean; onOpenLibrary?: (view: LibraryView) => void; libraryActive?: LibraryView | null; onOpenTerminal?: () => void; terminalDisabled?: boolean }) {
+export function SessionList({ searchOpen = false, onSearchOpenChange, onPick, onPickTerminal, runEvidence, sessionSources, onOpenAutomations, automationsActive, onOpenLibrary, libraryActive, onOpenTerminal, terminalDisabled }: { onPick: (sessionId: string, path?: string, nodeId?: string) => void; onPickTerminal: (termId: string, nodeId?: string) => void; runEvidence?: Map<string, GithubQueueItem>; sessionSources?: Map<string, SourceInfo>; onOpenAutomations?: () => void; automationsActive?: boolean; onOpenLibrary?: (view: LibraryView) => void; libraryActive?: LibraryView | null; onOpenTerminal?: () => void; terminalDisabled?: boolean; /** Show the search + filter row (toggled from the sidebar head). */ searchOpen?: boolean; onSearchOpenChange?: (open: boolean) => void }) {
   const { sessionIndex: { sessions, runTerminals }, activeSession: { activeSessionId }, connection: { nodes, currentNodeId } } = useAppState();
   const [query, setQuery] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<{ sessionId: string; name: string } | null>(null);
@@ -175,6 +175,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
   const [filterOpen, setFilterOpen] = useState(false);
   const [visibleCount, setVisibleCount] = useState(PAGE);
   const filterRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     if (!filterOpen) return;
@@ -290,6 +291,17 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
   }, [query, repoFilter, nodeFilter]);
 
   const activeFilterCount = (repoFilter ? 1 : 0) + (nodeFilter ? 1 : 0);
+  const shown = filtered.length + filteredRuns.length;
+  const resultLabel = searching || activeFilterCount
+    ? `${shown} of ${sessions.length + runTerminals.length} sessions`
+    : `${shown} ${shown === 1 ? "session" : "sessions"}`;
+  const leaveSearch = () => {
+    setQuery("");
+    setRepoFilter("");
+    setNodeFilter("");
+    setFilterOpen(false);
+    onSearchOpenChange?.(false);
+  };
   const filterSummary = [nodeFilter ? nodeName(nodeFilter) : !controller.direct ? "All machines" : null, repoFilter || null].filter(Boolean).join(" · ");
   const emptyText = query.trim() || repoFilter || nodeFilter
     ? "No matching sessions."
@@ -315,7 +327,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
           void controller.deleteSession(id).catch(() => controller.store.setError("Couldn't delete the session.")).finally(() => setDeletingId(null));
         }}
       />}
-      {(onOpenAutomations || onOpenLibrary || onOpenTerminal) && (
+      {!searchOpen && (onOpenAutomations || onOpenLibrary || onOpenTerminal) && (
         <nav className="sidebar-nav" aria-label="Workspace">
           {onOpenAutomations && (
             <button className={`sidebar-nav-item${automationsActive ? " active" : ""}`} onClick={onOpenAutomations} aria-current={automationsActive ? "page" : undefined}>
@@ -345,7 +357,11 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
           )}
         </nav>
       )}
-      <div className="session-list-tools">
+      {/* Search mode: replaces the sidebar head (App hides it) with the field and
+          Cancel; filters and the live count sit right under it. Leaving clears
+          the query and filters, so the list is never filtered out of sight. */}
+      {searchOpen && <div className="sidebar-search" role="search">
+        <div className="session-search-bar">
         <label className="session-search-wrap">
           <SearchIcon size={17} aria-hidden />
           <input
@@ -353,10 +369,22 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
             type="search"
             aria-label="Search sessions"
             placeholder={sessions.length > 1 ? `Search ${sessions.length} sessions` : "Search sessions"}
+            ref={searchRef}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
+            autoFocus
+            enterKeyHint="search"
+            onKeyDown={(e) => { if (e.key === "Escape") leaveSearch(); }}
           />
+          {query && (
+            <button type="button" className="session-search-clear" aria-label="Clear search" onClick={() => { setQuery(""); searchRef.current?.focus(); }}>
+              <CloseIcon size={14} />
+            </button>
+          )}
         </label>
+        <button type="button" className="btn ghost sm session-search-cancel" onClick={leaveSearch}>Cancel</button>
+        </div>
+        <div className="session-search-meta">
         <div className="session-filter" ref={filterRef}>
           <button
             className={`session-filter-btn${activeFilterCount ? " active" : ""}`}
@@ -373,6 +401,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               <path d="M3 5h18l-7 8v6l-4-2v-4z" />
             </svg>
+            <span>Filter</span>
             {activeFilterCount > 0 && <Badge tone="accent" variant="solid" className="session-filter-count">{activeFilterCount}</Badge>}
           </button>
           {filterOpen && (
@@ -451,7 +480,9 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
             </div>
           )}
         </div>
-      </div>
+        <span className="session-search-count" aria-live="polite">{resultLabel}</span>
+        </div>
+      </div>}
       {filtered.length === 0 && filteredRuns.length === 0 && <div className="session-empty">{emptyText}</div>}
       <ul>
         {filteredRuns.length > 0 && <li className="session-group-label">Running</li>}
@@ -465,6 +496,7 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
                   <span className="session-title-row">
                     <RowMark status="working" srLabel={`${CLI_SOURCE.label} · Running in terminal`} />
                     <span className="session-name">{title}</span>
+                    {rowNodeName(t.nodeId || currentNodeId || undefined) && <span className="session-machine">{rowNodeName(t.nodeId || currentNodeId || undefined)}</span>}
                     {relTime(t.lastActivityAt ?? t.createdAt) && (
                       <span className="session-age" title="Running in terminal">
                         {relTime(t.lastActivityAt ?? t.createdAt)}
@@ -486,7 +518,8 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
           const groupHeading = group && group !== previousGroup
             ? <li className="session-group-label">{group}</li>
             : null;
-          const meta = sessionMeta(s, rowNodeName(s.nodeId) || s.pendingNodeName || null);
+          const machine = rowNodeName(s.nodeId) || s.pendingNodeName || null;
+          const meta = sessionMeta(s, machine);
           const label = statusLabel(s);
           const src = sessionSources?.get(s.sessionId) ?? classifySource(s.source);
           // A one-word exception hint on failed / waiting-on-you runs, so those
@@ -518,6 +551,9 @@ export function SessionList({ onPick, onPickTerminal, runEvidence, sessionSource
                     <RowMark status={statusDotState(s)} srLabel={`${src.label} · ${label}`} />
                     <span className="session-name">{s.name}</span>
                     <PrBadge prs={s.prs} />
+                    {/* Desktop rows are one line (the meta line is hidden), so the
+                        machine rides along before the age when there's more than one. */}
+                    {machine && <span className="session-machine">{machine}</span>}
                     {relTime(s.updatedAt) && (
                       <span className="session-age" title={label}>
                         {relTime(s.updatedAt)}

@@ -48,7 +48,7 @@ async function mount(page: import("@playwright/test").Page, theme: string) {
       requestMessageJump('s1', target);
       const entries = Array.from({length: 60}, (_, i) => ({id:'e'+i, role: i % 2 ? 'assistant' : 'user', text:'Message '+i}));
       entries[3] = {id:'e3', role:'assistant', text:'Here is the chart.', attachments:[{kind:'image',name:'revenue-chart.png',size:48000,mimeType:'image/png',hash:'h1'}]};
-      root.render(React.createElement(ChatView, {entries, working:false, workingLabel:'', draftRoute:false, sessionKey:'s1', focusView:false}));
+      root.render(React.createElement(ChatView, {entries, working:false, workingLabel:'', draftRoute:false, sessionKey:'s1'}));
     };
   </script></body></html>`);
   await page.route(`${origin}/library-test`, (route) => route.fulfill({ contentType: "text/html", body: html }));
