@@ -360,7 +360,10 @@ export interface UserQuestionItem {
   multiSelect?: boolean;
   /** A secret request: a hidden input whose value goes to the node's vault,
    *  never to the agent (mirrors the node's UserQuestionSecret). */
-  secret?: { name: string; url?: string };
+  secret?: { name: string };
+  /** A page to open from the card, and a one-time code to use there. */
+  url?: string;
+  code?: string;
 }
 
 /**

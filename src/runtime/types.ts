@@ -664,13 +664,18 @@ export interface UserQuestionItem {
   multiSelect?: boolean;
   /** Ask for a secret (`bivy ask --secret`): the card takes a hidden value, the
    *  node stores it in its vault under `name`, and the agent gets back only
-   *  `secret://<name>`. `url` is where the user finds the value. */
+   *  `secret://<name>`. */
   secret?: UserQuestionSecret;
+  /** An https:// page the user opens from the card (`--url`): a sign-in, a
+   *  settings page, where to find a key. */
+  url?: string;
+  /** A one-time code the user types or pastes on that page (`--code`), such
+   *  as a device sign-in code. Shown with a copy button. */
+  code?: string;
 }
 
 export interface UserQuestionSecret {
   name: string;
-  url?: string;
 }
 
 /** The host's answer to a pending `user_question`, keyed by each item's `question` text. */

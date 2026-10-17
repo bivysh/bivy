@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
 import { Badge } from "./Badge.js";
+import { writeClipboard } from "../clipboard.js";
 import type { UserQuestionRequest } from "@bivy/core";
 
 // A blocking, multiple-choice clarifying question the agent raised mid-turn
@@ -14,6 +15,33 @@ import type { UserQuestionRequest } from "@bivy/core";
 // for an answer/cancel send, so a dropped resolution otherwise leaves the
 // card pending forever with no way out.
 const STALL_MS = 8000;
+
+/** "github.com" for the Open button; the whole URL if it doesn't parse. */
+function hostOf(url: string): string {
+  try { return new URL(url).host.replace(/^www\./, ""); } catch { return url; }
+}
+
+/** The page a step happens on (`bivy ask --url`), and the one-time code to
+ *  enter there (`--code`), with a copy button. */
+function QuestionStep({ url, code }: { url?: string; code?: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => void writeClipboard(code ?? "").then((ok) => {
+    if (!ok) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  });
+  return (
+    <div className="question-step">
+      {code && (
+        <div className="question-code">
+          <code aria-label="Code">{code}</code>
+          <button type="button" className="btn ghost" onClick={copy}>{copied ? "Copied" : "Copy code"}</button>
+        </div>
+      )}
+      {url && <a className="btn primary" href={url} target="_blank" rel="noopener noreferrer">Open {hostOf(url)} ↗</a>}
+    </div>
+  );
+}
 
 function QuestionCard({
   request,
@@ -134,6 +162,7 @@ function QuestionCard({
               <Badge tone="accent" variant="soft" upper>{q.header}</Badge>
             </div>
             <div className="question-text">{q.question}</div>
+            {!q.secret && (q.url || q.code) && <QuestionStep url={q.url} code={q.code} />}
             {q.secret ? (
               <div className="question-options">
                 <input
@@ -150,7 +179,7 @@ function QuestionCard({
                 />
                 <p className="question-note">
                   Saved on this machine as <code>{q.secret.name}</code>. The agent gets a reference to it, never the value.
-                  {q.secret.url && <> <a href={q.secret.url} target="_blank" rel="noopener noreferrer">Where to find it</a></>}
+                  {q.url && <> <a href={q.url} target="_blank" rel="noopener noreferrer">Where to find it</a></>}
                 </p>
               </div>
             ) : (

@@ -43,7 +43,7 @@ test("a secret answer goes to the store and the agent reads back only its refere
   const manager = new QuestionManager();
   const stored: Array<[string, string]> = [];
   const asks = new AgentQuestions(manager, Date.now, (name, value) => { stored.push([name, value]); });
-  const [item] = askQuestionsFrom([{ question: "Stripe key?", secret: { name: "STRIPE_API_KEY", url: "https://dashboard.stripe.com/apikeys" } }]) as never[];
+  const [item] = askQuestionsFrom([{ question: "Stripe key?", secret: { name: "STRIPE_API_KEY" }, url: "https://dashboard.stripe.com/apikeys" }]) as never[];
   const { id } = asks.ask("s", [item], 60_000);
   manager.resolve(id, { behavior: "completed", answers: { "Stripe key?": " sk_live_abc123 " } });
   assert.deepEqual((await asks.wait("s", id, 1_000))?.answers, { "Stripe key?": "secret://STRIPE_API_KEY" });
@@ -62,4 +62,6 @@ test("ask input: free text needs no options; duplicates and empty asks are refus
   assert.equal(typeof askQuestionsFrom([]), "string");
   assert.equal(typeof askQuestionsFrom([{ question: "Token?", secret: { name: "github.repo-token" } }]), "string", "a secret can't overwrite the node's own vault ids");
   assert.equal(typeof askQuestionsFrom([{ question: "Token?", secret: { name: "TOKEN" }, options: ["a", "b"] }]), "string");
+  assert.deepEqual(askQuestionsFrom([{ question: "Signed in?", url: "https://github.com/login/device", code: " ABCD-1234 ", options: ["Done", "Failed"] }]), [{ question: "Signed in?", header: "Your step", options: [{ label: "Done" }, { label: "Failed" }], url: "https://github.com/login/device", code: "ABCD-1234" }]);
+  assert.equal(typeof askQuestionsFrom([{ question: "Open?", url: "javascript:alert(1)" }]), "string", "a link the card opens must be https");
 });

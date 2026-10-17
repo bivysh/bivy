@@ -30,18 +30,15 @@ dismissed it (use your judgment), exit 5 that `--timeout` (default 10m) passed.
 For long waits use `--async`, keep working, and later `bivy ask wait <id>`.
 Ask only when you can't reasonably decide yourself.
 
-## You need a key or password: ask for a secret
+## You need a key, a sign-in or a step only they can do
 
-    bivy ask "Paste your Stripe secret key so I can create the products" \
-      --secret STRIPE_API_KEY --url https://dashboard.stripe.com/apikeys
-    bivy secrets exec --env STRIPE_API_KEY -- stripe products list
+    bivy ask "Paste your Stripe secret key" --secret STRIPE_API_KEY --url https://dashboard.stripe.com/apikeys
+    bivy ask "Sign in to GitHub" --url https://github.com/login/device --code ABCD-1234 --option Done --option "It didn't work"
 
-The card takes a hidden value and stores it in this machine's vault; you get
-back `secret://STRIPE_API_KEY`, never the value. Use it through
-`bivy secrets exec`, which puts it in the command's environment. It stays
-stored for later sessions, so try `bivy secrets exec` first and ask only when
-it says the secret is missing. Never ask for a secret with a plain `bivy ask`
-or in chat, and never print it: the answer would land in the transcript.
+`--secret` keeps the value out of your output (you get `secret://NAME`; use it
+with `bivy secrets exec`). `--url` puts an Open button on the card, `--code` a
+code to copy. `bivy guide connect` has the patterns: keys, device codes,
+localhost sign-ins, a browser on this machine.
 
 ## Name the session: title
 
