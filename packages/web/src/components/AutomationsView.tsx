@@ -1803,13 +1803,16 @@ function AutomationEditor({
 
   /** Wake Bivy Cloud and pair this device with it. Resolves false (with the
    *  reason shown in the runner card) when it can't be reached. */
-  function pairCloudComputer(): Promise<boolean> {
-    if (!managedTarget || controller.local.keys()[managedTarget.nodeId]) return Promise.resolve(true);
+  /** `fresh` pairs again even with a key on this device: instructions saved for
+   *  Bivy Cloud must be sealed with its current key, and a key held from before
+   *  the computer was rebuilt would leave them unreadable there. */
+  function pairCloudComputer(fresh = false): Promise<boolean> {
+    if (!managedTarget || (!fresh && controller.local.keys()[managedTarget.nodeId])) return Promise.resolve(true);
     const target = managedTarget;
     cloudPairingRun.current ??= (async () => {
       setCloudPairing({ state: "waking" });
       try {
-        await controller.connectCloudComputer(target.config.id);
+        await controller.connectCloudComputer(target.config.id, { replace: fresh });
         setCloudPairing({ state: "idle" });
         return true;
       } catch (cause) {
@@ -1930,7 +1933,7 @@ function AutomationEditor({
     setBusy(true);
     setError("");
     // The runner card shows why pairing failed; don't repeat it here.
-    if (selectedManaged && !(await pairCloudComputer())) {
+    if (selectedManaged && !(await pairCloudComputer(true))) {
       setBusy(false);
       return;
     }

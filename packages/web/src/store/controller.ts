@@ -894,10 +894,13 @@ export class AppController {
    * room key the machine generated for itself, so a device needs that key —
    * from pairing, never from the control plane — before it can save one.
    */
-  async connectCloudComputer(configId: string): Promise<string> {
+  /** Wake the cloud computer and get its room key. `replace` fetches the
+   *  current key even when this device holds one: the computer gets a new
+   *  disk, and with it a new key, when the deployment rebuilds it. */
+  async connectCloudComputer(configId: string, { replace = false }: { replace?: boolean } = {}): Promise<string> {
     const machine = await launchManagedSessionMachine(this.local, configId, { requestId: `pair:${Date.now()}` });
     if (!machine.nodeId) throw new Error("Bivy Cloud started without a node id.");
-    await pairWithMachine(this.local, machine.nodeId, (store, handlers) => new RelayTransport({ store, pairingOnly: true, handlers }));
+    await pairWithMachine(this.local, machine.nodeId, (store, handlers) => new RelayTransport({ store, pairingOnly: true, handlers }), { replace });
     return machine.nodeId;
   }
 
