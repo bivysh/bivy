@@ -11,10 +11,25 @@ const NEAR_LIMIT = 0.8;
 
 export type MeterState = "ok" | "near" | "reached";
 
+/** An extension action as the client runs it: `confirm` is asked first. */
+export interface AccountAction {
+  id: string;
+  label: string;
+  confirm?: string;
+}
+
+const CONFIRM_MAX = 500;
+
+/** The action's id and label, plus its confirm question when it has a usable one. */
+export function accountAction(action: { id: string; label: string; confirm?: unknown }): AccountAction {
+  const confirm = typeof action.confirm === "string" ? action.confirm.trim().slice(0, CONFIRM_MAX) : "";
+  return { id: action.id, label: action.label, ...(confirm ? { confirm } : {}) };
+}
+
 export interface AccountHeader {
   summary?: string;
   meter?: { label: string; used: number; limit: number; state: MeterState; freesNote?: string };
-  action?: { id: string; label: string };
+  action?: AccountAction;
 }
 
 export function accountHeader(extension: AccountExtensionView | undefined, config: ClientConfiguration = clientConfiguration, now = new Date()): AccountHeader {
@@ -34,7 +49,7 @@ export function accountHeader(extension: AccountExtensionView | undefined, confi
     const freesAt = m.freesAt ? new Date(m.freesAt) : null;
     if (state !== "ok" && freesAt && freesAt > now) header.meter.freesNote = `A slot frees up ${formatWhen(freesAt, now)}`;
     const primary = extension.actions?.find((a) => a.kind === "primary");
-    if (state !== "ok" && primary && showAccountExtension(config)) header.action = { id: primary.id, label: primary.label };
+    if (state !== "ok" && primary && showAccountExtension(config)) header.action = accountAction(primary);
   }
   return header;
 }
@@ -60,7 +75,7 @@ export interface AccountOffer {
   price?: string;
   description?: string;
   points: string[];
-  action: { id: string; label: string };
+  action: AccountAction;
 }
 
 /** The extension's offer card, if it names one of its own actions and this
@@ -76,7 +91,7 @@ export function accountOffer(extension: AccountExtensionView | undefined, config
     price: text(o.price),
     description: text(o.description),
     points: Array.isArray(o.points) ? o.points.map(text).filter((p): p is string => !!p) : [],
-    action: { id: action.id, label: action.label },
+    action: accountAction(action),
   };
 }
 

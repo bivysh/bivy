@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { useAppState, controller } from "../store/useStore.js";
 import { StatusIcon, Toast } from "./Toast.js";
 import { accountUnavailableMessage, accountPresentationMessage } from "../client-config.js";
-import { openAccountAction, showAccountExtension } from "../packaged-client.js";
+import { showAccountExtension } from "../packaged-client.js";
+import { useAccountAction } from "./useAccountAction.js";
 
 // A non-blocking error toast pinned above the composer. Keep verbose command
 // output collapsed initially so one failure cannot cover most of a phone screen;
@@ -20,7 +21,10 @@ function dismissDelay(raw: string): number {
 export function ErrorToast() {
   const { presentation: { error, errorActions } } = useAppState();
   const [expanded, setExpanded] = useState(false);
-  const [openingAction, setOpeningAction] = useState<string | null>(null);
+  const accountAction = useAccountAction({
+    onDone: (message) => { controller.store.setError(""); controller.store.setNotice(message); },
+    onError: (message) => controller.store.setError(message),
+  });
 
   useEffect(() => {
     setExpanded(false);
@@ -37,6 +41,7 @@ export function ErrorToast() {
   return (
     <Toast tone="danger" className={`error-toast${expanded ? " expanded" : ""}`} role="alert">
       <StatusIcon tone="danger">!</StatusIcon>
+      {accountAction.dialog}
       <div className="error-toast-content">
         <span className="error-toast-text">{message}</span>
         {hasDetails && (
@@ -49,18 +54,9 @@ export function ErrorToast() {
             key={action.id}
             className={`btn small${action.kind === "primary" ? " primary" : ""}`}
             type="button"
-            disabled={openingAction !== null}
-            onClick={() => {
-              setOpeningAction(action.id);
-              controller.invokeAccountExtensionAction(action.id)
-                .then(async ({ url }) => {
-                  if (url) await openAccountAction(url);
-                  else controller.store.setError("");
-                })
-                .catch((cause) => controller.store.setError(cause instanceof Error ? cause.message : String(cause)))
-                .finally(() => setOpeningAction(null));
-            }}
-          >{openingAction === action.id ? "Opening…" : action.label}</button>)}
+            disabled={accountAction.busy !== null}
+            onClick={() => accountAction.run(action)}
+          >{accountAction.busy === action.id ? "Working…" : action.label}</button>)}
         </div>}
       </div>
       <button className="error-toast-close" onClick={() => controller.store.setError("")} aria-label="Dismiss">

@@ -18,7 +18,8 @@ import { useModalBack, useModalEscape } from "../modalStack.js";
 import type { SettingsView } from "../router.js";
 import { clientConfiguration } from "../client-config.js";
 import { accountHeader, accountOffer, planFacts, type AccountHeader as AccountHeaderView, type MeterState } from "../accountHeader.js";
-import { accountExtensionFacts, accountOrigin, hasNativeSubscriptions, isPackagedClient, openAccountAction, openNativeSubscriptions, showAccountExtension } from "../packaged-client.js";
+import { accountExtensionFacts, accountOrigin, hasNativeSubscriptions, isPackagedClient, openNativeSubscriptions, showAccountExtension } from "../packaged-client.js";
+import { useAccountAction } from "./useAccountAction.js";
 import { getAppIconBadgeEnabled, setAppIconBadgeEnabled, setNotificationPreferencesSnapshot, subscribeNotificationSettings } from "../notificationSettings.js";
 import { CheckIcon, ChevronRightIcon, CloseIcon, CopyIcon } from "./UiIcons.js";
 import { writeClipboard } from "../clipboard.js";
@@ -111,24 +112,26 @@ type NavItem = { id: View; label: string; icon: ReactNode };
 
 /** The signed-in account for the Settings account card; null until loaded (or
  *  when not hosted / the fetch fails — the card then just reads "Account"). */
-function useAccountMe(hosted: boolean): AccountMe | null {
+function useAccountMe(hosted: boolean): { me: AccountMe | null; reload: () => void } {
   const [me, setMe] = useState<AccountMe | null>(null);
+  const [generation, setGeneration] = useState(0);
   useEffect(() => {
     if (!hosted) return;
     let live = true;
     controller.fetchMe().then((next) => { if (live) setMe(next); }).catch(() => {});
     return () => { live = false; };
-  }, [hosted]);
-  return me;
+  }, [hosted, generation]);
+  return { me, reload: () => setGeneration((n) => n + 1) };
 }
 
 const METER_NOTE: Record<MeterState, string | null> = { ok: null, near: "Almost used up", reached: "Limit reached" };
 
 /** The account card's allowance meter, with the deployment's primary action
  *  (e.g. upgrade) once the allowance is nearly or fully used. */
-function AccountUsage({ meter, action }: { meter: NonNullable<AccountHeaderView["meter"]>; action?: AccountHeaderView["action"] }) {
-  const [busy, setBusy] = useState(false);
+function AccountUsage({ meter, action, onChanged }: { meter: NonNullable<AccountHeaderView["meter"]>; action?: AccountHeaderView["action"]; onChanged?: () => void }) {
   const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const run = useAccountAction({ onDone: (message) => { setDone(message); onChanged?.(); }, onError: setErr });
   const note = METER_NOTE[meter.state];
   return (
     <div className="settings-account-usage" data-state={meter.state}>
@@ -145,21 +148,20 @@ function AccountUsage({ meter, action }: { meter: NonNullable<AccountHeaderView[
           {meter.freesNote && <span>{meter.freesNote}</span>}
         </span>
       )}
+      {run.dialog}
       {action && (
         <button
           type="button"
           className="btn primary block"
-          disabled={busy}
+          disabled={run.busy !== null}
           onClick={() => {
-            setBusy(true);
             setErr(null);
-            controller.invokeAccountExtensionAction(action.id)
-              .then(({ url }) => openAccountAction(url))
-              .catch((e) => setErr(String(e?.message || e)))
-              .finally(() => setBusy(false));
+            setDone(null);
+            run.run(action);
           }}
-        >{busy ? "Opening…" : action.label}</button>
+        >{run.busy ? "Working…" : action.label}</button>
       )}
+      {done && <div className="banner inline" data-tone="ok" role="status">{done}</div>}
       {err && <div className="banner inline" data-tone="danger">{err}</div>}
     </div>
   );
@@ -319,7 +321,7 @@ export function Settings({
   ];
   // Hosted accounts get an identity card pinned to the top of the menu (the
   // Claude / ChatGPT pattern) instead of a group buried below App.
-  const accountMe = useAccountMe(hosted);
+  const { me: accountMe, reload: reloadAccountMe } = useAccountMe(hosted);
   const accountEmail = accountMe?.account?.email ?? null;
   const header = accountHeader(accountMe?.extension);
   const accountItem: NavItem = { id: "account", label: accountEmail ?? "Account", icon: <IconUser /> };
@@ -381,7 +383,7 @@ export function Settings({
                   </span>
                   <span className="settings-nav-chevron"><ChevronRightIcon size={18} /></span>
                 </button>
-                {header.meter && <AccountUsage meter={header.meter} action={header.action} />}
+                {header.meter && <AccountUsage meter={header.meter} action={header.action} onChanged={reloadAccountMe} />}
               </div>
             )}
             {groups.map((group) => {
@@ -1557,15 +1559,17 @@ function AccountPanel() {
   const usage = accountHeader(me?.extension);
   const offer = accountOffer(me?.extension);
   const otherActions = (showAccountExtension() ? me?.extension?.actions ?? [] : []).filter((a) => a.id !== offer?.action.id);
-  const runAction = (id: string) => {
-    setAccountAction(id);
-    controller.invokeAccountExtensionAction(id)
-      .then(({ url }) => openAccountAction(url))
-      .catch((e) => setErr(String(e?.message || e)))
-      .finally(() => setAccountAction(null));
+  const [done, setDone] = useState<string | null>(null);
+  const extensionAction = useAccountAction({ onDone: (message) => { setDone(message); void reloadMe(); }, onError: setErr });
+  const actionsBusy = accountAction !== null || extensionAction.busy !== null;
+  const runAction = (action: { id: string; label: string; confirm?: string }) => {
+    setErr(null);
+    setDone(null);
+    extensionAction.run(action);
   };
   return (
     <div className="settings-form">
+      {extensionAction.dialog}
       {confirm && (
         <ConfirmDialog
           title={confirm.title}
@@ -1577,6 +1581,7 @@ function AccountPanel() {
         />
       )}
       {err && <div className="banner inline" data-tone="danger">{err}</div>}
+      {done && <div className="banner inline" data-tone="ok" role="status">{done}</div>}
       {me?.account?.email && (
         <div className="settings-toggle-row">
           <span className="muted">Signed in as</span>
@@ -1586,7 +1591,7 @@ function AccountPanel() {
       {hasNativeSubscriptions() && (
         <div className="settings-section">
           <h4 className="settings-subhead">Subscriptions</h4>
-          <button type="button" className="btn" disabled={accountAction !== null} onClick={() => {
+          <button type="button" className="btn" disabled={actionsBusy} onClick={() => {
             setAccountAction("native-subscriptions");
             openNativeSubscriptions(controller.local.s)
               .then(reloadMe)
@@ -1618,9 +1623,9 @@ function AccountPanel() {
                 type="button"
                 key={action.id}
                 className={`btn ${action.kind === "primary" ? "primary" : ""}`}
-                disabled={accountAction !== null}
-                onClick={() => runAction(action.id)}
-              >{accountAction === action.id ? "Opening…" : action.label}</button>
+                disabled={actionsBusy}
+                onClick={() => runAction(action)}
+              >{extensionAction.busy === action.id ? "Working…" : action.label}</button>
             ))}
           </div>}
         </div>
@@ -1642,9 +1647,9 @@ function AccountPanel() {
           <button
             type="button"
             className="btn primary block"
-            disabled={accountAction !== null}
-            onClick={() => runAction(offer.action.id)}
-          >{accountAction === offer.action.id ? "Opening…" : offer.action.label}</button>
+            disabled={actionsBusy}
+            onClick={() => runAction(offer.action)}
+          >{extensionAction.busy === offer.action.id ? "Working…" : offer.action.label}</button>
         </section>
       )}
       <div className="settings-section">
