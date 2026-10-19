@@ -515,6 +515,7 @@ const bootstrapSecret = randomBytes(32).toString("base64url");
 function publishBootstrapSecret() {
   try {
     const file = path.join(appDir, "bootstrap.json");
+    if (publishedBootstrapOwner(file) === process.pid) return;
     fs.writeFileSync(
       file,
       `${JSON.stringify({ secret: bootstrapSecret, pid: process.pid, createdAt: new Date().toISOString() }, null, 2)}\n`,
@@ -524,6 +525,40 @@ function publishBootstrapSecret() {
   } catch (error) {
     console.warn("Failed to write bootstrap secret file", error);
   }
+}
+
+// Who published bootstrap.json: process.pid when it carries this process's
+// secret, else the pid recorded in it (null when missing or unreadable).
+function publishedBootstrapOwner(file: string): number | null {
+  try {
+    const published = JSON.parse(fs.readFileSync(file, "utf8")) as { secret?: string; pid?: number };
+    if (published.secret === bootstrapSecret) return process.pid;
+    return typeof published.pid === "number" ? published.pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0); // signal 0 = liveness probe, kills nothing
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+// Another node started against this data dir (a dev or sandboxed run that could
+// bind the port in its own network namespace) overwrites bootstrap.json and the
+// git credential endpoint with ITS secret, then exits. This node keeps serving,
+// but every loopback caller — the git credential helper above all — is then
+// refused, so clones and pushes fail with "could not read Username". Re-publish
+// once the overwriting process is gone; never fight a node that is still alive.
+function reclaimPublishedSecrets(publish: () => void) {
+  const owner = publishedBootstrapOwner(path.join(appDir, "bootstrap.json"));
+  if (owner !== process.pid && owner !== null && processAlive(owner)) return;
+  if (owner !== process.pid) console.warn("[bootstrap] Published secret was overwritten by another process; re-publishing.");
+  publish();
 }
 
 const approvals = new ApprovalManager();
@@ -12253,10 +12288,15 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
 });
 
 const server = app.listen(port, host, async () => {
-  publishBootstrapSecret();
-  // Publish the loopback endpoint (+ bootstrap secret) the git credential helper
-  // calls to fetch fresh per-repo tokens on demand.
-  writeGitCredentialEndpoint(`http://127.0.0.1:${port}`, bootstrapSecret);
+  // Publish the bootstrap secret, and the loopback endpoint (+ secret) the git
+  // credential helper calls to fetch fresh per-repo tokens on demand. Both
+  // writes are no-ops while the files already carry this node's secret.
+  const publishSecrets = () => {
+    publishBootstrapSecret();
+    writeGitCredentialEndpoint(`http://127.0.0.1:${port}`, bootstrapSecret);
+  };
+  publishSecrets();
+  setInterval(() => reclaimPublishedSecrets(publishSecrets), 10_000).unref();
   console.log(`Bivy node: http://localhost:${port} (data plane — API + WebSocket; no local UI)`);
   console.log("Open the app via your control plane: run 'bivy open' (or 'bivy relay:setup' first).");
   console.log(`Agent data dir: ${piDir}`);
