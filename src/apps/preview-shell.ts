@@ -310,6 +310,18 @@ function pageState(){
   });
 }
 let stateWaiter=null;
+/** The page as it looks now, for the machine to draw the marks on (see the
+ *  inspector's snapshot). Null when the page can't say: then it is retaken. */
+function pageSnapshot(){
+  if(metadata.inspect===false)return Promise.resolve(null);
+  return new Promise(resolve=>{
+    const done=html=>{clearTimeout(timer);if(snapshotWaiter===done)snapshotWaiter=null;resolve(typeof html==='string'?html:null);};
+    const timer=setTimeout(()=>done(null),2000);
+    snapshotWaiter=done;
+    frame.contentWindow?.postMessage({type:'bivy:snapshot'},metadata.origin);
+  });
+}
+let snapshotWaiter=null;
 /** Take the version the agent just built, on the page in view. */
 async function takeUpdate(){
   const at=await pageState();
@@ -435,7 +447,12 @@ $('draft-add').onclick=async()=>{
   const list=notes;
   const text=list.length&&d?composeText(d,list):(words?words+'\\n\\n':'')+$('draft-context').textContent;
   // Marks go to the Bivy client, which adds a numbered picture from the machine.
-  if(list.length&&d&&embedded){const mark=markPayload(d,list);$('draft').hidden=true;endDraw();return toBivy({type:'annotation',text,mark});}
+  if(list.length&&d&&embedded){
+    $('draft-add').disabled=true;
+    const mark=markPayload(d,list),html=d.target==='frame'?await pageSnapshot():null;
+    $('draft-add').disabled=false;$('draft').hidden=true;endDraw();
+    return toBivy({type:'annotation',text,mark:html?{...mark,html}:mark});
+  }
   if(metadata.returnTo){$('draft').hidden=true;endDraw();return toChat(text);}
   try{await navigator.clipboard.writeText(text);$('draft-add').textContent='Copied';}catch{$('draft-text').select();}
 };
@@ -952,6 +969,7 @@ addEventListener('message',e=>{
     else if((d.type==='step'||d.type==='steps-done')&&runner&&d.run===runner.run&&d.load===loads)stepReport(d);
     else if(d.type==='console'&&(d.level==='error'||d.level==='warn')){entries.push({level:d.level,text:String(d.text).slice(0,500)});if(entries.length>50)entries.shift();renderConsole();}
     else if(d.type==='release'&&heldAt){heldAt=0;stopListening();}
+    else if(d.type==='snapshot'&&snapshotWaiter)snapshotWaiter(d.html);
     else if(d.type==='draw-state'){if(draw&&draw.waiting)draw.waiting(d);else if(stateWaiter)stateWaiter(d);}
     else if(d.type==='scrolled'&&draw&&draw.target==='frame'){draw.scroll=pos(d.scroll);renderInk();}
     else if(d.type==='marked'&&draw){

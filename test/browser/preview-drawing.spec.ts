@@ -36,6 +36,8 @@ for (const theme of themes) test(`preview marking captures gestures (${theme})`,
   await checkTargets();
   await page.screenshot({ path: info.outputPath(`controls-${theme}.png`) });
   await shell.frameLocator('#app').locator('#panel').evaluate(el => { el.scrollTop = 220; });
+  // State only this browser has: the picture must show it, not a reload.
+  await shell.frameLocator('#app').locator('h1').evaluate(el => { el.textContent = 'Opened on this device'; });
   await openMenu();
   await checkTargets();
   await page.screenshot({ path: info.outputPath(`menu-${theme}.png`) });
@@ -101,6 +103,9 @@ for (const theme of themes) test(`preview marking captures gestures (${theme})`,
   await shell.getByRole('button', { name: 'Add to chat', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as any).annotation?.mark.strokes)).toMatchObject([{ tool: 'pen' }]);
   expect(await page.evaluate(() => (window as any).annotation.mark.elementScrolls)).toEqual([{ selector: '#panel', x: 0, y: 220 }]);
+  const html: string = await page.evaluate(() => (window as any).annotation.mark.html);
+  expect(html).toContain('<h1>Opened on this device</h1>');
+  expect(html).not.toContain('<script');
   expect(await page.evaluate(() => (window as any).annotation.text)).toContain('Keep these pen marks');
   await expect(ink).toBeHidden();
 

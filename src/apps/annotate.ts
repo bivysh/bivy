@@ -67,14 +67,19 @@ export function readStrokes(input: unknown): Stroke[] {
   });
 }
 
-/** Whether a picture retaken on the machine may not match what the user saw:
- * the page kept state a fresh browser doesn't have (storage, cookies, typed
- * input, an open menu or dialog, anything the user did since it loaded), or
- * the retake couldn't scroll to where they were. A Compare screenshot or a
- * desktop app's frame is the exact picture, so never approximate. */
-export function approximate(source: "retake" | "exact", signals: PageSignals = {}, scrolledTo = true): boolean {
+/** The largest page snapshot (characters of HTML) a mark may carry. */
+export const MAX_SNAPSHOT = 4_000_000;
+
+/** Whether a picture made on the machine may not match what the user saw.
+ * A retake loads the page in a fresh browser, so it may differ when the page
+ * kept state that browser doesn't have (storage, cookies, typed input, an
+ * open menu or dialog, anything the user did since it loaded). A snapshot is
+ * the page's own DOM as they saw it, so only where it scrolled to can differ,
+ * as with a retake. A Compare screenshot or a desktop app's frame is the
+ * exact picture, so never approximate. */
+export function approximate(source: "retake" | "snapshot" | "exact", signals: PageSignals = {}, scrolledTo = true): boolean {
   if (source === "exact") return false;
-  return !scrolledTo || Object.values(signals).some(Boolean);
+  return !scrolledTo || (source === "retake" && Object.values(signals).some(Boolean));
 }
 
 /** The annotation colours, read from the design tokens (single source). */
