@@ -440,7 +440,7 @@ test("draw on the preview: marks freeze the app, name what's under them, and rea
   const gateway = new AppGateway(registry, "https://{app}.preview.example.net", () => [webApp.origin]);
   gateway.server.listen(0, "127.0.0.1"); await once(gateway.server, "listening");
   const port = (gateway.server.address() as { port: number }).port;
-  const requests: { scroll?: { x: number; y: number } }[] = [];
+  const requests: { scroll?: { x: number; y: number }; html?: string }[] = [];
   const take = async (views: { view: { id: string; name: string } }[], request: { widths: number[]; height: number; scale: number; scroll?: { x: number; y: number } }, outDir: string) => {
     requests.push(request);
     await fs.mkdir(outDir, { recursive: true });
@@ -515,7 +515,8 @@ test("draw on the preview: marks freeze the app, name what's under them, and rea
     expect(inkPixels).toBeGreaterThan(100);
 
 
-    // A page holding state a fresh browser won't have: the picture is approximate.
+    // State a fresh browser on the machine won't have travels with the marks:
+    // the picture is drawn on the page as it is, so it isn't approximate.
     await frame.getByRole("textbox", { name: "Promo code" }).fill("SPRING");
     await fromMenu(shell, "Mark something");
     // A tap in marking means the element under it, boxed.
@@ -525,9 +526,12 @@ test("draw on the preview: marks freeze the app, name what's under them, and rea
     await shell.getByRole("button", { name: "Add to chat" }).click();
     await expect.poll(() => page.evaluate(() => (window as any).drafts.length)).toBe(2);
     const second = (await page.evaluate(() => (window as any).drafts))[1];
-    expect(second.attachments[0].name).toBe("Checkout marked (approximate).png");
-    expect(second.text).toMatch(/^In the app preview[\s\S]*- #pay \("Pay now"\)\n {3}Marks \(page px\): box [\s\S]*\nPicture: retaken on the machine/);
+    expect(second.attachments[0].name).toBe("Checkout marked.png");
+    expect(second.text).toMatch(/^In the app preview[\s\S]*- #pay \("Pay now"\)\n {3}Marks \(page px\): box /);
+    expect(second.text).not.toContain("approximate");
     expect(requests.at(-1)?.scroll).toEqual({ x: 0, y: 0 });
+    expect(requests.at(-1)?.html).toContain('value="SPRING"');
+    expect(requests.at(-1)?.html).not.toContain("<script");
 
     // Compare: mark the "after" screenshot itself — the exact frame, no retake.
     const grey = (v: number) => ({ revision: v, at: v, png: encodePng(780, 1688, Buffer.alloc(780 * 1688 * 3, 100 + v * 50)) });
