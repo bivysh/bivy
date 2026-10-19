@@ -39,7 +39,7 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
     elementScrolls: Type.Optional(Type.Array(Type.Object({ selector: Type.String({ minLength: 1, maxLength: 2048 }), x: Type.Number({ minimum: -100000, maximum: 100000 }), y: Type.Number({ minimum: -100000, maximum: 100000 }) }), { maxItems: 50 })),
     dpr: Type.Optional(Type.Number()), theme: Type.Optional(Type.Union([Type.Literal("light"), Type.Literal("dark")])), compare: Type.Optional(Type.Integer({ minimum: 0 })),
     strokes: Type.Array(Type.Object({ tool: Type.Union([Type.Literal("pen"), Type.Literal("box")]), points: Type.Array(Type.Array(Type.Number(), { minItems: 2, maxItems: 2 }), { maxItems: 10000 }) }), { minItems: 1, maxItems: 50 }),
-    signals: Type.Optional(Type.Record(Type.String(), Type.Boolean())) }),
+    signals: Type.Optional(Type.Record(Type.String(), Type.Boolean())), html: Type.Optional(Type.String({ maxLength: 4_000_000 })) }),
   "apps.clearNotes": Type.Object({ ...request, ...session, appId: Type.String(), viewId: Type.String() }),
   "apps.agentNotes": Type.Object({ ...request, ...session, appId: Type.String(), enabled: Type.Boolean() }),
   "apps.notes": Type.Object({ ...request, ...session, appId: Type.Optional(Type.String({ maxLength: 200 })), view: Type.Optional(Type.String({ maxLength: 200 })), since: Type.Optional(Type.Number()) }),

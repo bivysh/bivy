@@ -21,6 +21,10 @@ export interface ShotRequest {
   /** Ask whether these CSS selectors still match anything on the page. Used to
    * tell a pin whose element is gone from one whose element merely moved. */
   selectors?: string[];
+  /** The page as the person saw it (see the inspector's snapshot): served in
+   * place of the page's own HTML, at its own URL so styles and images load.
+   * Scripts in it are off. */
+  html?: string;
 }
 /** Desktop apps are shot as they are on screen: `theme` is "native" for them.
  * `scroll`: where the page actually scrolled to, when asked to scroll. */
@@ -84,6 +88,10 @@ class Cdp {
   send(method: string, params: object = {}, sessionId?: string): Promise<any> {
     const id = ++this.next;
     return new Promise((resolve, reject) => { this.pending.set(id, { resolve, reject }); this.ws.send(JSON.stringify({ id, method, params, sessionId })); });
+  }
+  on(fn: (method: string, params: any, sessionId?: string) => void): () => void {
+    this.listeners.add(fn);
+    return () => { this.listeners.delete(fn); };
   }
   once(method: string, sessionId: string, ms: number): Promise<void> {
     return new Promise((resolve) => {
@@ -156,8 +164,26 @@ export async function takeShots(views: RegisteredView[], request: ShotRequest, o
         await cdp.send("Emulation.setDeviceMetricsOverride", { width, height: request.height ?? (mobile ? 844 : 800), deviceScaleFactor: request.scale ?? (mobile ? 2 : 1), mobile }, sessionId);
         await cdp.send("Emulation.setEmulatedMedia", { features: [{ name: "prefers-color-scheme", value: theme }] }, sessionId);
         const loaded = cdp.once("Page.loadEventFired", sessionId, 15_000);
-        await cdp.send("Page.navigate", { url: origin + request.path }, sessionId);
-        await loaded;
+        // A snapshot answers the page's own request, with its scripts blocked
+        // whatever it says; everything else (styles, images, fonts, frames)
+        // comes from the app as usual.
+        let served = !request.html;
+        const off = request.html ? cdp.on((method, params, from) => {
+          if (method !== "Fetch.requestPaused" || from !== sessionId) return;
+          const html = !served && params.resourceType === "Document";
+          served ||= html;
+          void (html
+            ? cdp.send("Fetch.fulfillRequest", { requestId: params.requestId, responseCode: 200, responseHeaders: [{ name: "content-type", value: "text/html; charset=utf-8" }, { name: "content-security-policy", value: "script-src 'none'" }], body: Buffer.from(request.html!).toString("base64") }, sessionId)
+            : cdp.send("Fetch.continueRequest", { requestId: params.requestId }, sessionId)).catch(() => {});
+        }) : undefined;
+        if (request.html) await cdp.send("Fetch.enable", { patterns: [{ urlPattern: "*", resourceType: "Document", requestStage: "Request" }] }, sessionId);
+        try {
+          await cdp.send("Page.navigate", { url: origin + request.path }, sessionId);
+          await loaded;
+        } finally {
+          off?.();
+          if (request.html) await cdp.send("Fetch.disable", {}, sessionId).catch(() => {});
+        }
         await new Promise((r) => setTimeout(r, 400)); // let fonts and first effects settle
         // Match scrolling inside app panels as well as the document. Marks are
         // viewport positions within these panels; subtract only document scroll.

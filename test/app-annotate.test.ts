@@ -60,6 +60,8 @@ test("a retaken picture is approximate when the page held state or couldn't scro
   for (const signal of ["storage", "cookies", "interacted", "open", "edited"]) assert.equal(approximate("retake", { [signal]: true }, true), true, signal);
   assert.equal(approximate("retake", {}, false), true);
   assert.equal(approximate("exact", { storage: true, interacted: true }, false), false);
+  assert.equal(approximate("snapshot", { storage: true }, true), false);
+  assert.equal(approximate("snapshot", {}, false), true);
 });
 
 test("drawing on a preview: a retake with the page's state is labelled approximate; Compare is exact; screenshots off sends no picture", async () => {
@@ -138,5 +140,23 @@ test("annotated screenshots of a smooth-scrolling page keep the marks on what wa
     assert.deepEqual(pixel(png, 150, 250), [0, 0, 255], "the picture is at the scroll the user drew at");
     assert.deepEqual(pixel(png, 150, 180), INK, "the box surrounds the marked content");
     assert.equal(result.approximate, false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The page's own snapshot, not a reload: a fresh browser on the machine has
+// none of the state (data kept on the device) that decided what was on screen.
+test("a page snapshot is drawn on instead of a reload, with its scripts off", { skip: !findChrome() && "no Chrome/Chromium on this machine" }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-snapshot-annotation-"));
+  try {
+    const page = (color: string, script = "") => `<!doctype html><meta name="viewport" content="width=device-width"><style>body { margin:0; } #note { position:absolute; left:100px; top:100px; width:100px; height:100px; background:${color}; }</style><div id="note"></div>${script}`;
+    fs.writeFileSync(path.join(dir, "index.html"), page("blue"));
+    const service = new AppService(new AppRegistry(), undefined, { start: async () => "t", has: () => true, close: () => {} }, { screenshots: { enabled: () => true } });
+    const app = service.publish("s", dir, { version: 1, name: "Notes", views: [{ kind: "web", name: "App", source: { kind: "static", directory: "." } }] });
+    const result = await service.annotate("s", { appId: app.id, viewId: app.views[0]!.id, path: "/#/n/abc", viewport: { width: 400, height: 400 }, dpr: 1,
+      signals: { storage: true }, strokes: [{ tool: "box", points: [[80, 80], [220, 220]] }],
+      html: page("red", "<script>document.getElementById('note').style.background='blue'</script>") });
+    const png = Buffer.from(result.image!.data, "base64");
+    assert.deepEqual(pixel(png, 150, 150), [255, 0, 0], "what the person saw, untouched by the page's scripts");
+    assert.equal(result.approximate, false, "a snapshot holds the page's state");
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

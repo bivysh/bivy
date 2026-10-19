@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
+import { MAX_SNAPSHOT } from "./annotate.js";
 
 /** Served on the app's own origin and injected into its HTML. It reports only
  * to the trusted shell that frames it, and everything it reports is untrusted
@@ -103,6 +104,43 @@ const elementScrolls=()=>[...document.querySelectorAll('*')].filter(el=>el!==doc
 });
 const drawState=()=>({type:'draw-state',scroll:{x:Math.round(scrollX),y:Math.round(scrollY)},viewport:{width:innerWidth,height:innerHeight},dpr:devicePixelRatio,
   theme:matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light',path:location.pathname+location.search+location.hash,elementScrolls:elementScrolls(),signals:signals()});
+// Add to chat: the page as it is now, for the machine to render instead of
+// loading the URL again. A fresh browser there has none of this page's state
+// (data kept on this device, a signed-in view, an open menu), so a reload can
+// show a different screen. Live values are written into the copy, CSS-in-JS
+// rules and canvases are kept, and scripts are left out: it only has to look
+// right (the machine also blocks any that remain). Typed passwords become
+// dots of the same length.
+const snapshot=()=>{
+  try{
+    const live=[...document.querySelectorAll('*')],copy=document.documentElement.cloneNode(true),copies=[copy,...copy.querySelectorAll('*')];
+    if(live.length!==copies.length)return null;
+    const rules=sheet=>{try{return [...sheet.cssRules].map(r=>r.cssText).join(' ');}catch{return null;}};
+    const drop=[];
+    live.forEach((el,i)=>{
+      const c=copies[i],tag=el.localName;
+      if(el===layer||el===box||el===host||tag==='script'){drop.push(c);return;}
+      for(const a of [...c.attributes])if(a.name.startsWith('on'))c.removeAttribute(a.name);
+      if(tag==='input'){
+        if(el.type==='checkbox'||el.type==='radio')c.toggleAttribute('checked',el.checked);
+        else if(el.type==='password')c.setAttribute('value','\\u2022'.repeat(el.value.length));
+        else if(el.type!=='file')c.setAttribute('value',el.value);
+      }
+      else if(tag==='textarea')c.textContent=el.value;
+      else if(tag==='option')c.toggleAttribute('selected',el.selected);
+      else if(tag==='style'&&el.sheet){const text=rules(el.sheet);if(text!==null)c.textContent=text;}
+      else if(tag==='canvas'){try{c.style.background='url('+el.toDataURL()+') 0 0 / 100% 100% no-repeat';}catch{}}
+      else if(tag==='img'&&el.currentSrc.startsWith('blob:')&&el.complete&&el.naturalWidth){
+        try{const k=document.createElement('canvas');k.width=el.naturalWidth;k.height=el.naturalHeight;k.getContext('2d').drawImage(el,0,0);c.removeAttribute('srcset');c.src=k.toDataURL();}catch{}
+      }
+    });
+    drop.forEach(c=>c.remove());
+    const adopted=[...(document.adoptedStyleSheets||[])].map(rules).filter(Boolean).join(' ');
+    if(adopted){const style=document.createElement('style');style.textContent=adopted;(copy.querySelector('head')||copy).append(style);}
+    const html=(document.doctype?'<!doctype html>':'')+copy.outerHTML;
+    return html.length<=${MAX_SNAPSHOT}?html:null;
+  }catch{return null;}
+};
 /** Elements inside a mark (viewport rect): a grid sample, then the largest
  * element under each hit that sits mostly inside the mark — circling a
  * button names the button, not the bar it's in. A line through something
@@ -193,6 +231,7 @@ addEventListener('message',e=>{
       .then(result=>post({type:'note-sent',id:d.id,screenshot:result.screenshot===true}),error=>post({type:'note-sent',id:d.id,error:error.message}));
   }
   else if(d.type==='bivy:draw')post(drawState());
+  else if(d.type==='bivy:snapshot')post({type:'snapshot',html:snapshot()});
   else if(d.type==='bivy:scroll'){scrollBy({left:n(d.dx),top:n(d.dy),behavior:'instant'});post({type:'scrolled',scroll:{x:Math.round(scrollX),y:Math.round(scrollY)}});}
   // Where the reader was before they took a new version. The page may still be
   // laying out (or fetching what makes it long enough), so try again briefly.

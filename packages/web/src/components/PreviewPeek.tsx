@@ -14,7 +14,9 @@ type Mark = { path?: string; viewport: { width: number; height: number }; scroll
   /** What the marks named, so a pin can look for them again later. */
   selectors?: string[];
   /** One entry per note, each with its own words: one pin each. */
-  notes?: { n: number; words: string; selectors: string[]; strokes: unknown[] }[] };
+  notes?: { n: number; words: string; selectors: string[]; strokes: unknown[] }[];
+  /** The page's DOM as it looked, so the picture shows that rather than a reload. */
+  html?: string };
 type Annotated = { image?: { data: string; mimeType: string; name: string }; approximate: boolean; screenshotsOff?: boolean };
 const APPROXIMATE = "Picture: retaken on the machine, so it may not show this page’s state (a cart, a sign-in, an open menu). The marks and elements are exact.";
 

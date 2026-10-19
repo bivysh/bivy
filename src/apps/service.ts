@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { scanListeners, scanMachineListeners } from "./listeners.js";
 import { takeShots, type Shot, type ShotRequest } from "./screenshot.js";
-import { approximate, composite, crop, noteAnchor, readNotes, readStrokes, readElementScrolls, type ElementScroll, type MarkNote, type PageSignals, type Stroke } from "./annotate.js";
+import { approximate, composite, crop, MAX_SNAPSHOT, noteAnchor, readNotes, readStrokes, readElementScrolls, type ElementScroll, type MarkNote, type PageSignals, type Stroke } from "./annotate.js";
 import { captureFrame, encodePng, sendInput } from "./rfb.js";
 import { inputEvents, readAction } from "./input.js";
 import { pressMenu, readMenuPath, readMenus, type AppMenu } from "./menu.js";
@@ -563,9 +563,10 @@ export class AppService {
   }
   /** Draw on the preview: the user's marks on a picture of what they saw.
    * The picture is the Compare screenshot they drew on, a desktop app's
-   * current frame, or a web page retaken at their viewport, pixel ratio and
-   * scroll — "approximate" when the page may hold state a fresh browser
-   * doesn't. Returned to the client (over the session channel) as a PNG. */
+   * current frame, or a web page rendered at their viewport, pixel ratio and
+   * scroll: from the page's own snapshot when it sent one, else retaken —
+   * "approximate" when the page may hold state a fresh browser doesn't.
+   * Returned to the client (over the session channel) as a PNG. */
   async annotate(sessionId: string, input: {
     appId: string; viewId: string; path?: string; viewport: { width: number; height: number };
     scroll?: { x: number; y: number }; elementScrolls?: ElementScroll[]; dpr?: number; theme?: "light" | "dark"; strokes: unknown; compare?: number; signals?: PageSignals;
@@ -574,6 +575,8 @@ export class AppService {
     /** One entry per note: its number, its words, and the strokes it owns. When
      * present it is the source of both the strokes and the numbers drawn. */
     notes?: unknown;
+    /** The page's DOM as the person saw it. Untrusted; rendered with scripts off. */
+    html?: unknown;
   }): Promise<{ image?: { data: string; mimeType: "image/png"; name: string; width: number; height: number }; approximate: boolean; screenshotsOff?: true }> {
     const entry = this.registry.requireView(sessionId, input.appId, input.viewId);
     if (entry.view.kind !== "web") throw new Error("Only previews can be drawn on.");
@@ -623,7 +626,8 @@ export class AppService {
     }
     const outDir = path.join(os.tmpdir(), "bivy-shots", "annotate", entry.view.id);
     const dpr = whole(input.dpr, 1, 3) ? Math.round(input.dpr! * 4) / 4 : 2;
-    const run = this.shooting.catch(() => {}).then(() => this.screenshots.take([entry], { widths: [viewport.width], themes: [input.theme === "dark" ? "dark" : "light"], path: page, height: viewport.height, scale: dpr, scroll, ...(elementScrolls.length ? { elementScrolls } : {}) }, outDir));
+    const html = typeof input.html === "string" && input.html.length <= MAX_SNAPSHOT ? input.html : undefined;
+    const run = this.shooting.catch(() => {}).then(() => this.screenshots.take([entry], { widths: [viewport.width], themes: [input.theme === "dark" ? "dark" : "light"], path: page, height: viewport.height, scale: dpr, scroll, ...(elementScrolls.length ? { elementScrolls } : {}), ...(html ? { html } : {}) }, outDir));
     this.shooting = run;
     const [shot] = await run;
     if (!shot) throw new Error("Couldn't take a picture of the page.");
@@ -632,7 +636,7 @@ export class AppService {
     const landed = shot.scroll ?? scroll;
     const scrolledTo = Math.abs(landed.x - scroll.x) <= 2 && Math.abs(landed.y - scroll.y) <= 2;
     // Marks stay on the content they were drawn on, wherever the retake scrolled.
-    return finish(base, landed, approximate("retake", input.signals, scrolledTo && shot.elementScrollsRestored !== false));
+    return finish(base, landed, approximate(html ? "snapshot" : "retake", input.signals, scrolledTo && shot.elementScrollsRestored !== false));
   }
   /** A pin: the marks the person just sent, kept as a thing with a state
    * rather than a paragraph in a message. Made only when the message is
