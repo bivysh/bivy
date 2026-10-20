@@ -201,6 +201,20 @@ test("mergeBases takes the runtime whole when it holds every logged message, rep
   assert.deepEqual(mergeBases(scrambled, ordered), ordered);
 });
 
+test("mergeBases keeps a prompt sent again mid-turn where it was sent, not at the first copy", () => {
+  // A retry tapped twice: the second copy arrives mid-turn. Matched to the first
+  // copy, it pulled every later message in ahead of the work between them.
+  const logged = [baseMsg("user", "earlier", 50), baseMsg("user", "retry", 100), baseMsg("assistant", "working", 200)];
+  const runtime = [logged[1]!, logged[2]!, baseMsg("user", "retry", 250), baseMsg("assistant", "done", 300)];
+  assert.deepEqual(mergeBases(logged, runtime), [...logged, ...runtime.slice(2)]);
+});
+
+test("mergeBases repairs a log an earlier merge left out of order from the runtime's order", () => {
+  const logged = [baseMsg("user", "earlier", 50), baseMsg("user", "go", 100), baseMsg("assistant", "final", 400), baseMsg("assistant", "working", 200)];
+  const runtime = [logged[1]!, logged[3]!, logged[2]!, baseMsg("user", "next", 500)];
+  assert.deepEqual(mergeBases(logged, runtime), [logged[0], ...runtime]);
+});
+
 test("mergeBases moves subagent messages a reload dropped back before the turns that followed them", () => {
   // Claude's reloaded transcript has no subagent sidechain, so the log alone holds
   // it. New turns used to go in ahead of it, leaving it below the final reply.

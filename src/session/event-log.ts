@@ -170,6 +170,14 @@ export function mergeBases(logged: RuntimeMessage[], runtime: readonly RuntimeMe
     for (const id of atoms.toolIds) loggedToolIds.add(id);
     for (const text of atoms.texts) loggedTexts.set(text, (loggedTexts.get(text) ?? 0) + 1);
   }
+  // A runtime message the base holds verbatim claims its own text first. Else a
+  // later prompt with the same text (a retry sent twice, the second mid-turn)
+  // matched that already-claimed copy, was anchored back at the first one, and
+  // every later message was placed ahead of the turn that ran in between.
+  for (const m of runtime) {
+    if (!known.has(JSON.stringify(m))) continue;
+    for (const text of messageContentAtoms(m).texts) loggedTexts.set(text, (loggedTexts.get(text) ?? 0) - 1);
+  }
   const coveredByLogged = (m: RuntimeMessage): boolean => {
     const atoms = messageContentAtoms(m);
     if (!atoms.toolIds.length && !atoms.texts.length) return false; // opaque → keep
@@ -216,7 +224,38 @@ export function mergeBases(logged: RuntimeMessage[], runtime: readonly RuntimeMe
     }
     if (add(m)) sequence.push({ fresh: m }); // not in the logged base
   }
-  return placeLoggedOnly(placeFresh(merged, sequence), sequence);
+  return placeLoggedOnly(followRuntimeOrder(placeFresh(merged, sequence), sequence), sequence);
+}
+
+/**
+ * Put the messages the runtime shares with the log in the runtime's order. The
+ * runtime's list is the agent's own record; a log an earlier merge wrote out of
+ * order (a turn's tool run stored below its final reply) is repaired from it on
+ * the next merge. A run only the log has travels with the shared message before it.
+ */
+function followRuntimeOrder(list: RuntimeMessage[], sequence: ReadonlyArray<{ anchor: RuntimeMessage } | { fresh: RuntimeMessage }>): RuntimeMessage[] {
+  const order = new Map<RuntimeMessage, number>();
+  for (const item of sequence) {
+    const m = "anchor" in item ? item.anchor : item.fresh;
+    if (!order.has(m)) order.set(m, order.size);
+  }
+  let last = -1;
+  const inOrder = list.every((m) => {
+    const at = order.get(m);
+    if (at === undefined) return true;
+    if (at < last) return false;
+    last = at;
+    return true;
+  });
+  if (inOrder) return list;
+  const lead: RuntimeMessage[] = [];
+  const groups: RuntimeMessage[][] = [];
+  for (const m of list) {
+    if (order.has(m)) groups.push([m]);
+    else (groups.at(-1) ?? lead).push(m);
+  }
+  groups.sort((a, b) => order.get(a[0]!)! - order.get(b[0]!)!);
+  return [...lead, ...groups.flat()];
 }
 
 function timeOf(m: RuntimeMessage): number | undefined {

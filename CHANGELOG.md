@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An agent's final reply no longer ends up inside its tool activity.** If you sent the same message twice and the second copy reached a running turn (a retry tapped twice, "Continue" sent again), Bivy took the second copy for the first. Everything the agent wrote after it was then saved ahead of the work done in between, so the reply showed above tool calls it came after. Each later turn put its reply in the same wrong place. The second message now stays where it was sent, and sessions already stored out of order are put back in order from the agent's own transcript the next time they're saved.
 - **"Rate limit exceeded" no longer interrupts long sessions.** Every app connected to a machine received every large response and downloaded it page by page, including transcripts another device had asked for. In a long session with screenshots, a few opens across a phone and a laptop could push one app past the relay's 600 messages a minute, and the relay closed its connection. Machines now tag transcript replies with the request they answer, and an app only downloads its own. The app also keeps under the relay's limit itself: messages beyond 500 in a minute wait for the next minute instead of getting the connection dropped.
 
 ## [0.21.2] - 2026-10-20
