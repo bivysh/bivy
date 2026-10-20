@@ -2115,7 +2115,7 @@ export class AppController {
     // transcript. Without this the previous session's messages linger (or the
     // pane blanks) until the network answers.
     this.store.beginOpen(sessionId);
-    this.send({ kind: "session.open", sessionId, path });
+    this.send({ kind: "session.open", requestId: requestId(), sessionId, path });
     // beginOpen deliberately clears the New-session draft model. Resolve the
     // opened session's actual model in session scope immediately, rather than
     // leaving the draft selection in the shared composer (or waiting for the
@@ -2239,7 +2239,7 @@ export class AppController {
   /** Request canonical history, echoing the append cursor we hold for the session. */
   private requestHistory(sessionId: string): void {
     const cursor = this.store.getHistoryCursor(sessionId);
-    this.send({ kind: "history", sessionId, ...cursor });
+    this.send({ kind: "history", requestId: requestId(), sessionId, ...cursor });
   }
 
   /** Draft repo/branch/agent/model to thread into the next session.new. */

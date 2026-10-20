@@ -315,6 +315,19 @@ describe("RelayTransport pairing rejection recovery", () => {
     expect(sessionsListCount).toBe(1); // one refresh despite six link-ready events
   });
 
+  it("holds frames past the per-minute budget instead of tripping the relay limiter", async () => {
+    const { transport } = makeTransport();
+    const store = (transport as unknown as { store: ReturnType<typeof createLocalStore> }).store;
+    store.addKey("node-1", b64url(crypto.getRandomValues(new Uint8Array(32))));
+    await transport.connect();
+    const ws = FakeWS.instances[0];
+    ws.emit({ t: "ready" });
+    await settle();
+    for (let i = 0; i < 700; i++) await transport.send({ kind: "ping", requestId: `r-${i}` });
+    expect(ws.sent.filter((raw) => JSON.parse(raw).t === "frame").length).toBe(500);
+    transport.close();
+  });
+
   it("stops immediately (no retry) on a permanent rejection and shows the reason", async () => {
     const { transport, statuses, errors } = makeTransport();
     await transport.connect();

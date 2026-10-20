@@ -124,6 +124,23 @@ test("reconnect discards unfinished snapshots and ignores late pages", () => {
   assert.deepEqual(output, [{ type: "session.history", messages: ["fresh"] }]);
 });
 
+test("a client pulls only the large responses it requested, plus unrequested live events", () => {
+  const store = new EventTransferStore(Date.now, TRANSFER_PAGE_BYTES);
+  const reads: Record<string, unknown>[] = [];
+  const receiver = new EventTransferReceiver({
+    send: async c => { reads.push(c); }, emit: () => {}, fault: m => assert.fail(m), ours: id => id === "mine",
+  });
+  const big = ["x".repeat(TRANSFER_PAGE_BYTES)];
+  receiver.accept(store.offer({ type: "session.history", requestId: "other-client", messages: big }) as ServerEvent);
+  assert.equal(reads.length, 0);
+  receiver.accept(store.offer({ type: "session.history", requestId: "mine", messages: big }) as ServerEvent);
+  assert.equal(reads.length, 1);
+  receiver.reset();
+  receiver.accept(store.offer({ type: "session.event", sessionId: "s", event: { text: big[0] } }) as ServerEvent);
+  assert.equal(reads.length, 2);
+  receiver.reset();
+});
+
 test("the real relay connector serves authenticated pages without recursively transferring page replies", { timeout: 15_000 }, async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-transfer-relay-"));
   const pairing = PairingStore.load(dir);

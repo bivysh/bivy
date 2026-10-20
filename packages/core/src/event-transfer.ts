@@ -31,6 +31,10 @@ export class EventTransferReceiver {
     send(command: Command): Promise<void>;
     emit(event: ServerEvent): void;
     fault(message: string): void;
+    /** Whether this client sent the request. Every client in the room sees every
+     *  response; pulling another client's large answer page by page only spends
+     *  this socket's relay frame budget. */
+    ours?(requestId: string): boolean;
     timeoutMs?: number;
   }) {}
 
@@ -51,6 +55,7 @@ export class EventTransferReceiver {
 
   private deliver(event: ServerEvent): void {
     if (event.code !== "transfer_required") { this.deps.emit(event); return; }
+    if (typeof event.requestId === "string" && this.deps.ours && !this.deps.ours(event.requestId)) return;
     const offer = event.transfer as Offer | undefined;
     if (!offer || !/^[a-f0-9]{48}$/.test(offer.id) || !/^[a-f0-9]{64}$/.test(offer.key) || !/^[a-f0-9]{24}$/.test(offer.iv) ||
         !Number.isSafeInteger(offer.bytes) || offer.bytes <= 0 || offer.bytes > MAX_TRANSFER_BYTES || offer.pageBytes !== TRANSFER_PAGE_BYTES) {
