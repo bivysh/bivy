@@ -53,6 +53,16 @@ const CONNECT_FAILURES_BEFORE_ALERT = 4;
 // rejection recovers on retry; a genuine mismatch fails every time and we
 // bail out instead of spinning in "linking…" forever.
 const MAX_PAIR_ATTEMPTS = 3;
+// The relay closes a client socket that sends more than its per-minute frame
+// limit (600 by default), counted in fixed windows from the socket's first
+// frame. Pulling a large transcript costs one frame per page, so a few session
+// opens can reach it. Stay under it ourselves: frames past this budget wait for
+// the next window instead of getting the whole socket dropped.
+const FRAMES_PER_MINUTE = 500;
+const FRAME_WINDOW_MS = 60_000;
+// Request ids this client sent recently, so it only pulls the large responses
+// it asked for (see EventTransferReceiver.ours).
+const OWN_REQUESTS = 256;
 
 function freshNonce(): string {
   return b64(crypto.getRandomValues(new Uint8Array(12)));
@@ -94,6 +104,9 @@ export class RelayTransport implements Transport {
   private curKey: RoomKey | null = null;
   private devicePromise: Promise<DeviceKeypair> | null = null;
   private readonly sendQueue: string[] = [];
+  private window = { ws: null as WebSocket | null, start: 0, frames: 0 };
+  private paceTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly ownRequests = new Set<string>();
   private readonly reassemble = createFrameReassembler({ onReject: message => {
     this.handlers.onError?.(message);
     // An older node will resend the same over-limit response on every
@@ -117,6 +130,7 @@ export class RelayTransport implements Transport {
     this.transfers = new EventTransferReceiver({
       send: command => this.send(command),
       emit: event => this.handlers.onEvent(event),
+      ours: requestId => this.ownRequests.has(requestId),
       fault: message => { this.handlers.onError?.(message); this.ws?.close(); },
     });
   }
@@ -439,7 +453,7 @@ export class RelayTransport implements Transport {
         if (this.pairingOnly) return;
         this.flush();
         await this.send({ kind: "sessions.list" });
-        await this.send({ kind: "history" });
+        await this.send({ kind: "history", requestId: `r-${crypto.randomUUID()}` });
         await this.send({ kind: "models.list" });
         await this.send({ kind: "runtimes.list" });
         // Mirror the already-paired burst in onLinkReady(): without this, a
@@ -511,15 +525,28 @@ export class RelayTransport implements Transport {
   }
 
   private rawSend(text: string): void {
-    if (this.connected && this.ws?.readyState === 1) this.ws.send(text);
-    else this.sendQueue.push(text);
+    this.sendQueue.push(text);
+    if (this.connected) this.flush();
   }
 
   private flush(): void {
-    while (this.sendQueue.length && this.ws?.readyState === 1) {
-      const next = this.sendQueue.shift();
-      if (next !== undefined) this.ws.send(next);
+    const ws = this.ws;
+    while (this.sendQueue.length && ws?.readyState === 1) {
+      if (!this.takeFrame(ws)) {
+        if (!this.paceTimer) this.paceTimer = setTimeout(() => { this.paceTimer = null; this.flush(); }, this.window.start + FRAME_WINDOW_MS - Date.now());
+        return;
+      }
+      ws.send(this.sendQueue.shift()!);
     }
+  }
+
+  /** Count one frame against this socket's relay window; false when it is spent. */
+  private takeFrame(ws: WebSocket): boolean {
+    const now = Date.now();
+    if (this.window.ws !== ws || now - this.window.start >= FRAME_WINDOW_MS) this.window = { ws, start: now, frames: 0 };
+    if (this.window.frames >= FRAMES_PER_MINUTE) return false;
+    this.window.frames += 1;
+    return true;
   }
 
   /** Seal a command into an anti-replay frame and deliver it (or queue it). */
@@ -527,6 +554,10 @@ export class RelayTransport implements Transport {
     if (!this.curKey) return;
     const wrapped = { v: 1, ts: Date.now(), nonce: freshNonce(), data: command };
     const sealed = await seal(this.curKey, JSON.stringify(wrapped));
+    if (typeof command.requestId === "string") {
+      this.ownRequests.add(command.requestId);
+      if (this.ownRequests.size > OWN_REQUESTS) this.ownRequests.delete(this.ownRequests.values().next().value!);
+    }
     if (sealed.length > MAX_REASSEMBLY_BYTES) {
       const message = "This request is too large to send. Reduce the attachments and retry.";
       this.handlers.onError?.(message);
@@ -538,6 +569,8 @@ export class RelayTransport implements Transport {
 
   close(): void {
     this.transfers.reset();
+    if (this.paceTimer) clearTimeout(this.paceTimer);
+    this.paceTimer = null;
     this.reassemble.reset();
     this.closedByUs = true;
     this.connected = false;

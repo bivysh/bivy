@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **"Rate limit exceeded" no longer interrupts long sessions.** Every app connected to a machine received every large response and downloaded it page by page, including transcripts another device had asked for. In a long session with screenshots, a few opens across a phone and a laptop could push one app past the relay's 600 messages a minute, and the relay closed its connection. Machines now tag transcript replies with the request they answer, and an app only downloads its own. The app also keeps under the relay's limit itself: messages beyond 500 in a minute wait for the next minute instead of getting the connection dropped.
+
 ## [0.21.2] - 2026-10-20
 
 ### Changed

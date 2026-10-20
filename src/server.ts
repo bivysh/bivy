@@ -2118,6 +2118,13 @@ const NATIVE_RESUME_CLI_BY_RUNTIME: Record<string, (id: string) => string> = {
 // Pull an incremental-history cursor (count + opaque token) off a client
 // command, if present. Clients send these to backfill only what they don't
 // already have cached locally.
+// Every relay client in the room receives every event. Echoing the request id
+// lets the other clients skip a large history snapshot they never asked for
+// instead of each pulling it page by page.
+function answering<T extends object>(msg: ClientMessage, event: T): T {
+  return typeof msg.requestId === "string" ? { ...event, requestId: msg.requestId } : event;
+}
+
 function historyCursorFrom(msg: ClientMessage): HistoryCursor {
   return {
     have: typeof msg.have === "number" ? msg.have : undefined,
@@ -2887,7 +2894,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     if (!record) {
       const early = fastHistoryEvent(msg);
       if (early) {
-        relay?.sendEvent(early);
+        relay?.sendEvent(answering(msg, early));
         return;
       }
       // A named session that's still resuming (fastHistoryEvent had nothing to
@@ -2902,7 +2909,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       if (requestedSessionId) return;
     }
     const agent = record?.runtimeId ?? defaultRuntimeId;
-    relay?.sendEvent(transcripts.buildHistoryEvent({
+    relay?.sendEvent(answering(msg, transcripts.buildHistoryEvent({
       sessionId: record?.id ?? null,
       workspace: record?.workspace ?? defaultWorkspace,
       source: record?.source,
@@ -2910,7 +2917,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       isStreaming: record ? sessionBusy(record) : false,
       messages: record ? transcripts.conversationMessages(record) : [],
       cursor: historyCursorFrom(msg),
-    }));
+    })));
     // Reconnect recovery (onReconnected re-requests history): re-emit any
     // pending question/approval card the client missed while disconnected.
     if (record) replayPendingInteractions(record.id);
@@ -2973,7 +2980,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     // resume below, so the pane fills in near-instantly. Best-effort; the
     // canonical history event still follows once the session is open.
     const early = fastHistoryEvent(msg);
-    if (early) relay?.sendEvent(early);
+    if (early) relay?.sendEvent(answering(msg, early));
     let record: SessionRecord | undefined;
     try {
       // Opening a session from the remote/PWA changes that client's focus,
@@ -2993,7 +3000,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       relay?.sendEvent({ type: "session.error", sessionId: sid || undefined, error: "Session not found" });
       return;
     }
-    relay?.sendEvent(transcripts.buildHistoryEvent({
+    relay?.sendEvent(answering(msg, transcripts.buildHistoryEvent({
       sessionId: record.id,
       workspace: record.workspace,
       source: record.source,
@@ -3001,7 +3008,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       isStreaming: sessionBusy(record),
       messages: transcripts.conversationMessages(record),
       cursor: historyCursorFrom(msg),
-    }));
+    })));
     // A client opening this session after the TUI was already live (a deep link
     // or reload on another device) missed the original terminal.tui broadcast,
     // so its composer would render unlocked and every send would be refused
