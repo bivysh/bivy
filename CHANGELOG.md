@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.2] - 2026-10-20
+
 ### Changed
 
 - **After a relay restart, phones wait for their machine instead of being turned away.** When every machine and phone redials at once, a phone often reaches the relay before its machine does. It used to get "Node offline" and retry with backoff; now the relay holds it for up to 5 seconds (`RELAY_CLIENT_NODE_WAIT_MS`) and connects it as soon as the machine arrives. If the machine doesn't come, the phone gets "Node offline" as before, and the app shows the same "connecting" state while it waits. `bivy_relay_client_node_waits_total` counts how holds end.
