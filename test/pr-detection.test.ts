@@ -90,6 +90,24 @@ test("refreshPullRequests bails without a repo-backed worktree", async () => {
   assert.deepEqual(persisted, []);
 });
 
+test("a second detection waits for the one in flight instead of reporting no PR", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  let lookups = 0;
+  const { deps } = harness([pr({ number: 9, state: "open" })], {
+    resolveTokenForRepo: async () => { lookups++; await gate; return "t"; },
+  });
+  const slow = createPrDetection(deps);
+  const record: PrSession = { id: "s4", session: { getMessages: () => [] } };
+  const afterTurn = slow.maybeDetectPullRequest(record);
+  const pipeline = slow.maybeDetectPullRequest(record);
+  release();
+  await pipeline;
+  assert.equal(record.prUrl, "https://github.com/o/r/pull/9", "the waiting caller sees the PR");
+  await afterTurn;
+  assert.equal(lookups, 1, "one lookup, not two");
+});
+
 test("maybeDetectPullRequest guards against re-entrancy via prDetecting", async () => {
   const { detect } = harness([]);
   const record: PrSession = { id: "s3", prDetecting: true, session: { getMessages: () => [] } };

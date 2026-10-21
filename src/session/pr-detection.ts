@@ -226,14 +226,23 @@ export function createPrDetection(deps: PrDetectionDeps): PrDetection {
    * UI, plus state changes on ones already known. Runs after each turn; a single
    * cheap GitHub lookup. Keeps refreshing so the badge tracks the PR through merge.
    */
+  // A detection already running for the session. A caller that needs the
+  // answer (the issue pipeline deciding whether a PR was opened) waits for it
+  // rather than returning before it lands and reporting no PR.
+  const inFlight = new WeakMap<PrSession, Promise<void>>();
+
   async function maybeDetectPullRequest(record: PrSession): Promise<void> {
-    if (!deps.repoSessionParts(record) || record.prDetecting) return;
+    if (!deps.repoSessionParts(record)) return;
+    const running = inFlight.get(record);
+    if (running) return running;
+    if (record.prDetecting) return;
     record.prDetecting = true;
-    try {
-      await refreshPullRequests(record);
-    } finally {
+    const detection = refreshPullRequests(record).then(() => {}).finally(() => {
       record.prDetecting = false;
-    }
+      inFlight.delete(record);
+    });
+    inFlight.set(record, detection);
+    return detection;
   }
 
   return { refreshPullRequests, refreshAllPullRequestStatuses, maybeDetectPullRequest };

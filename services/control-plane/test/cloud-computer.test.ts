@@ -198,6 +198,7 @@ async function main() {
   console.log("✓ a settled runner is released at once");
   expect((await req(port, "POST", "/internal/compute/retired", { accountId, nodeId: runnerId }, EXTENSION_TOKEN)).status === 200, "the deployment reports the runner gone");
   expect(!((await req(port, "GET", "/nodes", undefined, token)).json ?? []).some((n: { id: string }) => n.id === runnerId), "a retired runner's node is removed");
+  expect((await req(port, "PUT", "/node/model-auth-key/wrapped", { targetNodeId: runnerId, wrappedKey: "k", wrappedByPublicKey: "p" }, relay.enrollmentToken)).status === 404, "a key wrapped for a machine that is gone is a 404, not a server error");
   expect(((await req(port, "GET", "/nodes", undefined, token)).json ?? []).some((n: { id: string }) => n.id === nodeId), "the cloud computer's node stays");
 
   console.log("\nAll cloud-computer HTTP checks passed.");

@@ -2041,6 +2041,11 @@ app.put("/node/model-auth-key/wrapped", requireNode, asyncHandler(async (req, re
   const wrappedKey = String(req.body?.wrappedKey ?? "").trim();
   const wrappedByPublicKey = String(req.body?.wrappedByPublicKey ?? "").trim();
   if (!targetNodeId || !wrappedKey || !wrappedByPublicKey) return res.status(400).json({ error: "Missing targetNodeId, wrappedByPublicKey, or wrappedKey" });
+  // A machine can be gone by the time a peer answers its request (a runner
+  // finishes in minutes): that's a 404 for the peer, not a server error.
+  if (!(await store.listNodes(node.accountId)).some((candidate) => candidate.id === targetNodeId)) {
+    return res.status(404).json({ error: "That machine no longer exists" });
+  }
   const rec = await store.setModelAuthWrappedKey(node.accountId, targetNodeId, node.id, wrappedByPublicKey, wrappedKey);
   res.json({ ok: true, wrappedKey: rec });
 }));
