@@ -90,3 +90,27 @@ for (const theme of themes) test(`Cloud model selection before any machine exist
   await expect(pill).toBeDisabled();
   await expect(pill).toHaveAttribute("data-pending-model", "true");
 });
+
+test("picking Bivy Cloud starts the computer once, before the first message", async ({ page }) => {
+  const url = "/cloud-warm-start";
+  const html = await server.transformIndexHtml(url, `<html><body><script type="module">
+    import { controller } from '/src/store/useStore.ts';
+    controller.direct = false; controller.local.cur = ''; controller.local.s = 'test';
+    const config = { id: 'managed-default', name: 'Bivy Cloud', computeSource: 'managed' };
+    globalThis.pick = warm => controller.pickDraftEphemeralRunner(config, { warm });
+  </script></body></html>`);
+  const launches: Array<{ configId?: string; requestId?: string }> = [];
+  await page.route("**/account/managed-machines", (route) => {
+    launches.push(route.request().postDataJSON());
+    return route.fulfill({ status: 201, contentType: "application/json", body: JSON.stringify({ machine: { nodeId: "eph-managed-auto-1", status: "launching" } }) });
+  });
+  await page.route(`${origin}${url}`, route => route.fulfill({ contentType: "text/html", body: html }));
+  await page.goto(`${origin}${url}`);
+  await page.waitForFunction("typeof globalThis.pick === 'function'");
+  // A draft that restores Cloud on its own doesn't spend machine time.
+  await page.evaluate("globalThis.pick(false)");
+  await page.evaluate("globalThis.pick(true)");
+  await page.evaluate("globalThis.pick(true)");
+  await expect.poll(() => launches.length).toBe(1);
+  expect(launches[0]).toMatchObject({ configId: "managed-default", requestId: expect.stringMatching(/^warm:/) });
+});

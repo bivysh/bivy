@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A new cloud computer starts as soon as you pick it.** Choosing a cloud machine that doesn't exist yet used to wait for your first message before creating it, so the whole boot sat between Send and the first reply. It now starts when you pick it and boots while you type; the first message finds it starting or already up. A computer that already exists still wakes when the app connects to it.
 - **The README and "Why Bivy" describe cloud computers.** They no longer say agents only run on your own machines. They describe the account's cloud computer, which sleeps when the work stops and keeps its disk, along with its hours on each plan and what its operator can and cannot see. The "not available at launch" section about ephemeral machines is removed.
 
 ### Security
