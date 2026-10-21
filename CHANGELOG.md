@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The README and "Why Bivy" describe cloud computers.** They no longer say agents only run on your own machines. They describe the account's cloud computer, which sleeps when the work stops and keeps its disk, along with its hours on each plan and what its operator can and cannot see. The "not available at launch" section about ephemeral machines is removed.
+
 ### Security
 
 - **MCP SDK 1.32.0.** It fixes GHSA-22jm-h49p-29qw, where experimental tasks weren't tied to the session that created them, and GHSA-46jr-4wx8-v453, where a single request within the size limit could exhaust memory during validation.
