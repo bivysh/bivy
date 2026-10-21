@@ -68,7 +68,15 @@ export async function handOffToRunner(deps: HandOffDeps, item: HandOffItem): Pro
       await sleep(deps.retryMs ?? 5_000);
     }
   }
-  const instructions = deps.openSealed(item.body!.slice(sealedPrefix(deps.nodeId).length));
+  let instructions: string;
+  try {
+    instructions = deps.openSealed(item.body!.slice(sealedPrefix(deps.nodeId).length));
+  } catch {
+    // Sealed with a key this machine no longer has: re-saving the automation
+    // seals it again. The runner, given no work, ends itself.
+    log(`${item.id} can't be handed off: this machine can't open its instructions`);
+    return false;
+  }
   try {
     await deps.post(`/node/work/${encodeURIComponent(item.id)}/handoff`, {
       nodeId: runner,

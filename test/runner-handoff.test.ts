@@ -42,6 +42,9 @@ function deps(overrides: Partial<HandOffDeps> & { offlineFor?: number } = {}) {
 {
   assert.equal(await handOffToRunner(deps({ post: async () => { throw new Error("no free runner"); } }).d, item), false);
   assert.equal(await handOffToRunner(deps({ offlineFor: Infinity, waitMs: 0 }).d, item), false);
+  const logged: string[] = [];
+  assert.equal(await handOffToRunner(deps({ openSealed: () => { throw new Error("bad key"); }, log: (m) => logged.push(m) }).d, item), false);
+  assert.match(logged.join("\n"), /can't open its instructions/, "an unreadable template says why it stays here");
   const refused = deps({ post: async (path) => { if (path.endsWith("/handoff")) throw new Error("moved"); return { nodeId: "eph-runner-1" }; } });
   assert.equal(await handOffToRunner(refused.d, item), false);
 }
