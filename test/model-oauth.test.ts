@@ -285,6 +285,19 @@ await check("a runner never spends the refresh token: an expired sign-in stays w
   assert.equal((await store.read("anthropic"))?.refresh, "rt", "the stored refresh token is untouched");
 });
 
+await check("a token that would expire within the asked window is refreshed ahead of time", async () => {
+  const dir = tmpDir();
+  const store = createCredentialVault(dir);
+  await store.modify("anthropic", async () => ({ type: "oauth", access: "soon", refresh: "rt", expires: Date.now() + 30 * 60_000 }));
+  let exchanges = 0;
+  stubFetch(() => { exchanges += 1; return { json: { access_token: "fresh", refresh_token: "rt-2", expires_in: 8 * 3600 } }; });
+  assert.equal((await refreshModelOAuthState(dir, "anthropic")).state, "fresh", "still valid: no refresh by default");
+  assert.equal(exchanges, 0);
+  assert.equal((await refreshModelOAuthState(dir, "anthropic", undefined, undefined, 4 * 3600_000)).state, "expired");
+  assert.equal(exchanges, 1);
+  assert.equal((await store.read("anthropic"))?.access, "fresh");
+});
+
 if (failures > 0) {
   console.error(`model-oauth: ${failures} test(s) failed`);
   process.exit(1);

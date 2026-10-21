@@ -471,6 +471,8 @@ export async function refreshModelOAuthState(
   providerId: string,
   label: string = DEFAULT_LABEL,
   rejectedAccess?: string,
+  /** Also refresh a token that would expire within this long (ms). */
+  minValidityMs = 0,
 ): Promise<OAuthRefreshResult> {
   const provider = getModelOAuthProvider(providerId);
   if (!provider) return { state: "reconnect_required", error: "Provider does not support OAuth refresh" };
@@ -480,7 +482,7 @@ export async function refreshModelOAuthState(
     const result = await createCredentialVault(credsDir).modifyRecord(providerId, label, async (current) => {
       if (!current || current.type !== "oauth") return current;
       found = true;
-      const expired = Number(current.expires) <= Date.now();
+      const expired = Number(current.expires) <= Date.now() + minValidityMs;
       // Normal reads refresh on expiry. A 401 may revoke an otherwise unexpired
       // access token, so refresh that exact rejected token too. If another
       // process already replaced it while we waited for the lock, keep the
