@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **MCP SDK 1.32.0.** It fixes GHSA-22jm-h49p-29qw, where experimental tasks weren't tied to the session that created them, and GHSA-46jr-4wx8-v453, where a single request within the size limit could exhaust memory during validation.
+
 ### Fixed
 
 - **An agent's final reply no longer ends up inside its tool activity.** If you sent the same message twice and the second copy reached a running turn (a retry tapped twice, "Continue" sent again), Bivy took the second copy for the first. Everything the agent wrote after it was then saved ahead of the work done in between, so the reply showed above tool calls it came after. Each later turn put its reply in the same wrong place. The second message now stays where it was sent, and sessions already stored out of order are put back in order from the agent's own transcript the next time they're saved.
