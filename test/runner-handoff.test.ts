@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { open, seal } from "../src/e2e.js";
-import { handOffToRunner, type HandOffDeps } from "../src/runner-handoff.js";
+import { freshenSignInsForRunner, handOffToRunner, type HandOffDeps } from "../src/runner-handoff.js";
 
 const own = randomBytes(32);
 const runnerKey = randomBytes(32);
@@ -52,6 +52,35 @@ function deps(overrides: Partial<HandOffDeps> & { offlineFor?: number } = {}) {
   assert.equal(await handOffToRunner(d, { id: "w2", body: "bivy-room-v1:other:x" }), false);
   assert.equal(await handOffToRunner(d, { ...item, targetKind: "existing_session" }), false);
   assert.equal(posts.length, 0);
+}
+
+// Before a handoff, sign-ins that would expire during the runner's life are
+// refreshed here (the runner never refreshes) and published once.
+{
+  const now = 1_000_000;
+  const refreshed: string[] = [];
+  let published = 0;
+  const done = await freshenSignInsForRunner({
+    signIns: async () => [
+      { provider: "anthropic", label: "default", expires: now + 30 * 60_000 },
+      { provider: "openai-codex", label: "default", expires: now + 24 * 3600_000 },
+    ],
+    refresh: async (provider) => { refreshed.push(provider); return true; },
+    publish: async () => { published++; },
+    now: () => now,
+  }, 4 * 3600_000);
+  assert.deepEqual(done, ["anthropic"], "only the one expiring within the window");
+  assert.deepEqual(refreshed, ["anthropic"]);
+  assert.equal(published, 1);
+  const idle = await freshenSignInsForRunner({ signIns: async () => [], refresh: async () => true, publish: async () => { published++; } }, 1);
+  assert.deepEqual(idle, []);
+  assert.equal(published, 1, "nothing refreshed, nothing published");
+}
+
+// A failing preparation doesn't stop the handoff.
+{
+  const { d } = deps({ prepare: async () => { throw new Error("offline"); } });
+  assert.equal(await handOffToRunner(d, item), true);
 }
 
 console.log("runner-handoff: all tests passed");

@@ -26,6 +26,9 @@ export interface HandOffDeps {
   roomKeyOf(nodeId: string): Promise<Buffer>;
   openSealed(payload: string): string;
   seal(key: Buffer, plaintext: string): string;
+  /** Runs before the runner is asked for: e.g. freshen the sign-ins it will use.
+   *  A failure is logged and the handoff goes ahead. */
+  prepare?: () => Promise<void>;
   sleep?: (ms: number) => Promise<void>;
   /** How long to wait for a runner to come online. */
   waitMs?: number;
@@ -46,6 +49,7 @@ export async function handOffToRunner(deps: HandOffDeps, item: HandOffItem): Pro
   const log = deps.log ?? ((message: string) => console.log(`[runner-handoff] ${message}`));
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   if (!handOffApplies(deps.nodeId, item)) return false;
+  await deps.prepare?.().catch((error) => log(`preparing sign-ins for a runner failed: ${error instanceof Error ? error.message : String(error)}`));
   let runner: string;
   try {
     const launched = await deps.post("/node/runners", { itemId: item.id });
@@ -80,4 +84,32 @@ export async function handOffToRunner(deps: HandOffDeps, item: HandOffItem): Pro
   }
   log(`${item.id} handed to runner ${runner}`);
   return true;
+}
+
+export interface FreshenDeps {
+  /** The account-synced subscription sign-ins: provider, label, access-token expiry (epoch ms). */
+  signIns(): Promise<Array<{ provider: string; label: string; expires: number }>>;
+  /** Refresh one if it expires within `withinMs`; true when it was refreshed. */
+  refresh(provider: string, label: string, withinMs: number): Promise<boolean>;
+  /** Publish the vault to the account's other machines. */
+  publish(): Promise<void>;
+  now?: () => number;
+}
+
+/**
+ * Make the sign-ins a runner will use last as long as the runner can. A runner
+ * never refreshes (a second machine spending a rotating refresh token signs the
+ * owner out), so before handing work to one, the machine that owns the logins
+ * refreshes any that would expire within the runner's lifetime and publishes
+ * the vault the runner reads when it starts. Returns the providers refreshed.
+ */
+export async function freshenSignInsForRunner(deps: FreshenDeps, withinMs: number): Promise<string[]> {
+  const now = (deps.now ?? Date.now)();
+  const refreshed: string[] = [];
+  for (const signIn of await deps.signIns()) {
+    if (signIn.expires > now + withinMs) continue;
+    if (await deps.refresh(signIn.provider, signIn.label, withinMs)) refreshed.push(signIn.provider);
+  }
+  if (refreshed.length) await deps.publish();
+  return refreshed;
 }

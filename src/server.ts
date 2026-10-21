@@ -58,7 +58,11 @@ import { attachAdoptedSessions, classifyAttachFailure } from "./runtime/adoption
 import { createCredentialStore, testProviderCredential } from "./runtime/credentials.js";
 import { decodeAutomationTemplate, type AutomationFilter } from "./automation-template.js";
 import { resealAutomationTemplates, type StoredTemplate } from "./automation-reseal.js";
-import { handOffApplies, handOffToRunner } from "./runner-handoff.js";
+import { freshenSignInsForRunner, handOffApplies, handOffToRunner } from "./runner-handoff.js";
+
+/** A runner lives at most its awake cap (3 h by default); sign-ins handed to it
+ *  must outlast that, with room to spare. */
+const RUNNER_SIGN_IN_WINDOW_MS = 4 * 60 * 60 * 1000;
 import { passWebhookFilter } from "./automation-filter-gate.js";
 import { isModelAuthError, authProviderForSession, classifyModelAuthError } from "./runtime/auth-errors.js";
 import { createCredentialVault, migrateVaultDir } from "./runtime/credential-store.js";
@@ -75,7 +79,7 @@ import { createClientProjection } from "./session/client-projection.js";
 import { createTranscriptPersistence } from "./session/transcript-persistence.js";
 import { createRunTerminals } from "./session/run-terminal.js";
 import { createRunLogStore } from "./session/run-log-store.js";
-import { isNativeOAuthProvider, loginModelOAuth, type AuthEvent, type AuthPrompt } from "./runtime/oauth/model-oauth.js";
+import { isNativeOAuthProvider, loginModelOAuth, refreshModelOAuthState, type AuthEvent, type AuthPrompt } from "./runtime/oauth/model-oauth.js";
 import { decideOAuthLoginSweep } from "./runtime/oauth/oauth-login-sweep.js";
 import { listCodexSessions, loadCodexTranscript, discoverCodexSessionForCwd } from "./runtime/codex-sessions.js";
 import { discoverGrokSessionForCwd } from "./runtime/grok-sessions.js";
@@ -5995,6 +5999,17 @@ function startControlPlaneTasksIfConfigured() {
         roomKeyOf: siblingRoomKey,
         openSealed: (payload) => pairingStore.openSealed(payload),
         seal,
+        prepare: async () => {
+          const refreshed = await freshenSignInsForRunner({
+            signIns: async () => (await createCredentialVault(credsDir).listRecords()).flatMap((record) =>
+              record.sync === "account" && record.source.kind === "stored" && record.source.cred.type === "oauth"
+                ? [{ provider: record.provider, label: record.label, expires: Number(record.source.cred.expires) || 0 }]
+                : []),
+            refresh: async (provider, label, withinMs) => (await refreshModelOAuthState(credsDir, provider, label, undefined, withinMs)).state === "expired",
+            publish: () => pushModelAuthToControlPlane(),
+          }, RUNNER_SIGN_IN_WINDOW_MS);
+          if (refreshed.length) console.log(`[runner-handoff] refreshed ${refreshed.join(", ")} for a runner`);
+        },
       }, item),
     } : undefined,
   });
