@@ -78,10 +78,10 @@ export function NodeSwitcher() {
     setOpen(false);
     // Someone who runs on Bivy Cloud keeps their sign-ins with the account.
     rememberRunPlace("cloud");
-    // A running Machine is reused as-is; otherwise the profile launches one
-    // when the first message is sent.
+    // An existing computer wakes when this device connects to it; a new one
+    // starts now, so it boots while the first message is typed.
     if (row.nodeId) controller.switchNode(row.nodeId);
-    else controller.pickDraftEphemeralRunner(row.config);
+    else controller.pickDraftEphemeralRunner(row.config, { warm: true });
   };
   // A draft may choose its node. Once the session exists, its owning node is
   // immutable: this control becomes a label rather than a global node switcher.

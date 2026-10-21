@@ -1411,9 +1411,22 @@ export class AppController {
    * binds the session (see `launchDraftRunnerAndBind`). Selecting an actual node
    * (switchNode) clears this.
    */
-  pickDraftEphemeralRunner(config: EphemeralNodeConfig): void {
+  pickDraftEphemeralRunner(config: EphemeralNodeConfig, { warm = false }: { warm?: boolean } = {}): void {
     this.store.setDraftEphemeralConfig(config);
     this.listModels();
+    if (warm && config.computeSource === "managed") this.warmCloudComputer(config.id);
+  }
+
+  private cloudWarmedAt = 0;
+  /** Start the cloud computer when someone picks it, so it boots while they
+   *  type. The first message acquires the same machine and finds it starting or
+   *  awake. A picked computer that gets no message sleeps on its idle rule. */
+  private warmCloudComputer(configId: string): void {
+    if (Date.now() - this.cloudWarmedAt < 5 * 60_000) return;
+    this.cloudWarmedAt = Date.now();
+    void launchManagedSessionMachine(this.local, configId, { requestId: `warm:${this.cloudWarmedAt}` })
+      // The send path reports a launch that can't start; a warm start stays quiet.
+      .catch(() => { this.cloudWarmedAt = 0; });
   }
 
   /** Switch to another node without a full reload. Selecting a concrete node
