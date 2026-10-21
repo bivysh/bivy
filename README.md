@@ -4,22 +4,25 @@
 [![license: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-2b6cb0)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-2b6cb0)](https://nodejs.org)
 
-**Local coding agents that show their work. Anywhere.**
+**Your agent. Your sign-ins. On your machines or a cloud computer.**
 
-Bivy is the open-source workspace for coding agents. It runs Claude Code, Codex,
-Pi, OpenCode and other agents on your own machine. Reach them from a browser or
-your phone, with the live session, its terminal, its approvals, and the app
-they're building right in the chat. Try it, mark what's wrong, and send it back.
+Bivy is the open-source workspace for coding agents. It runs the real Claude
+Code, Codex, Pi, OpenCode and other agent CLIs, with your own subscriptions,
+on your own machines or on a cloud computer that sleeps when the work stops.
+Reach them from a browser or your phone, with the live session, its terminal,
+its approvals, and the app they're building right in the chat. Try it, mark
+what's wrong, and send it back.
 
 <p align="center">
   <img src="docs/images/preview-feedback-loop.gif" width="360"
        alt="On a phone: open the app an agent built, circle the packed items, send a note, and compare the result before and after the agent's fix.">
 </p>
 
-Bivy is not another coding agent and not a cloud development machine. The agent
-stays local and does the coding with your model provider. Your repos, tools,
-databases, and services stay where they are. Bivy gives you remote access to all
-of it, plus live previews, automations, and review.
+Bivy is not another coding agent. Your chosen agent does the coding with your
+model provider, and Bivy runs it where the work should happen: on your laptop or
+server, where your repos, databases and services already are, or on a cloud
+computer that keeps its disk between sessions. Bivy gives you remote access to
+all of it, plus live previews, automations, and review.
 
 - **Live previews.** The running app beside the chat. Mark it, send it back,
   share it with someone who has no Bivy account.
@@ -27,9 +30,13 @@ of it, plus live previews, automations, and review.
   webhooks start the work. It comes back as a preview link or a pull request.
 - **Any agent.** Hit a usage limit? Fork the session to another agent, or let
   Bivy retry when the limit resets.
-- **Your machine, anywhere.** Start at your desk, pick the session up on your
-  phone. The machine dials out, so there are no ports to open, and session
-  traffic is end-to-end encrypted.
+- **Sign in once.** Claude and ChatGPT sign-ins and API keys can sync to every
+  machine you add, end-to-end encrypted. When an agent needs a key, it asks in
+  the chat and gets a reference, never the value.
+- **Your machine, or a cloud one, anywhere.** Start at your desk, pick the
+  session up on your phone, move it to the cloud computer when you close the
+  laptop. Machines dial out, so there are no ports to open, and session traffic
+  is end-to-end encrypted.
 
 **[Start free on Bivy Cloud](https://app.bivy.sh)** ·
 **[Quickstart](docs/quickstart.md)** ·
@@ -52,8 +59,10 @@ bivy run claude                            # or codex, pi, opencode
 bivy open                                  # continue in the web app (needs remote setup)
 ```
 
-Bivy Cloud hosts the app, control plane, and relay—not the machines running your
-agents. Connect a Mac, Linux computer, or existing server and bring your own
+Bivy Cloud hosts the app, control plane, and relay, and can run one cloud
+computer per account: a persistent machine that sleeps when the work stops and
+wakes when you send, open a preview, or an automation fires. You can also
+connect a Mac, Linux computer, or existing server. Either way you bring your own
 agent subscription, model API key, or local model. You can also self-host the
 entire remote-access stack.
 
@@ -247,7 +256,9 @@ the machine for each session or pin it in an automation. Repository runs can
 use isolated Git worktrees without rebuilding the whole development environment.
 
 **The execution machine must stay awake and online.** To close your laptop and
-leave work running, run the agent on a different, always-on machine.
+leave work running, fork the session to an always-on server or to the cloud
+computer, which wakes for the work and sleeps again after it. See
+[Cloud machines](docs/ephemeral-sessions.md).
 
 [Environment and multi-machine recipes →](docs/capability-recipes.md)
 
@@ -352,13 +363,14 @@ and [Remote access](docs/remote-access.md).
 
 | Option | What you get |
 |---|---|
-| **Free Cloud — $0** | Every launch feature, including automations; 10 new remote sessions per rolling seven days. No credit card required. |
-| **Cloud — $15/month** | The same features with unlimited remote sessions. |
+| **Free Cloud — $0** | Every launch feature, including automations; 10 new remote sessions per rolling seven days; 5 hours on a cloud computer. No credit card required. |
+| **Cloud — $15/month** | The same features with unlimited remote sessions and 120 cloud computer hours a month. |
 | **Self-hosted Core** | Operate the app, control plane, and relay yourself, with no Bivy usage limits. |
 
 Manual and automated sessions share the Cloud allowance. Resuming existing
-sessions and viewing history do not consume it. Agent subscriptions and model
-provider charges are separate. See [current pricing](https://bivy.sh#pricing).
+sessions and viewing history do not consume it. A cloud computer counts hours
+only while it is awake. Agent subscriptions and model provider charges are
+separate. See [current pricing](https://bivy.sh#pricing).
 
 **Self-host anywhere:** deploy the public control-plane (including the web app)
 and relay images with Postgres and [a small set of environment variables](docs/deploy-images.md).
@@ -392,7 +404,7 @@ version or full commit SHA.
 Your environment, with clear security boundaries:
 
 ```text
-Your machine                         Hosted or self-hosted
+Your machine or cloud computer       Hosted or self-hosted
 ┌──────────────────────┐             ┌──────────────────────┐
 │ Node daemon          │──outbound──▶│ Relay                │
 │ Agents, repos, tools │             │ Encrypted frames     │
@@ -403,8 +415,14 @@ Your machine                         Hosted or self-hosted
                                     (app, accounts, metadata)
 ```
 
-- **Execution stays on your machine.** Bivy Cloud does not run your agents.
-  Your model provider still sees whatever the agent sends it.
+- **Execution happens on a machine you pick.** On your own computer or server,
+  the agent runs there and nowhere else. On a hosted cloud computer, the
+  machine generates and keeps its own keys and receives model credentials only
+  through the end-to-end vault or a sign-in on the machine itself, so the
+  control plane and relay can't read its sessions. The operator still runs its
+  host and could read what the machine reads; see
+  [the security model](docs/security-model.md). Your model provider still sees
+  whatever the agent sends it.
 - **Interactive session traffic is end-to-end encrypted** between the node and
   paired devices. The relay forwards opaque session frames; your node dials out,
   so no inbound public port is required.
@@ -502,14 +520,6 @@ are published from CI with provenance attestations; see
 **Found a security issue?** Use
 [GitHub private vulnerability reporting](https://github.com/bivysh/bivy/security/advisories/new),
 not a public issue. See [SECURITY.md](SECURITY.md).
-
-### In development—not available at launch
-
-Automatically provisioned, short-lived **ephemeral machines** are in development
-for hosted and bring-your-own-cloud deployments. Neither path is ready or
-supported for this launch. Use an existing computer or server you operate.
-Experimental provisioning has different credential-custody and encryption
-boundaries; see the [provisioning trust model](docs/hosted-provisioning-trust-model.md).
 
 ## License
 

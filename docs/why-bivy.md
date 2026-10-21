@@ -1,13 +1,14 @@
 # Why Bivy
 
-> **Run agents where your environment lives. Reach, automate, and govern them
-> from anywhere.**
+> **Run your agents, with your sign-ins, where the work should happen. Reach,
+> automate, and review them from anywhere.**
 
-Bivy makes coding agents on your infrastructure available from anywhere. They
-can use the repositories, tools, services, caches, networks, and compute already
-present in your development environment; you can continue their Sessions from a
-phone, leave work running, and review checked outcomes without surrendering
-control of the Machine.
+Bivy makes coding agents available from anywhere, on your own machines or on a
+cloud computer. On your machines they use the repositories, tools, services,
+caches, networks, and compute already present in your development environment.
+The cloud computer keeps its own disk, so tools and logins set up once are
+still there for the next agent. Either way you can continue Sessions from a
+phone, leave work running, and review checked outcomes.
 
 ## The problem
 
@@ -23,8 +24,8 @@ Bivy closes that gap:
 - **Reach:** reconnect, steer, stop, and approve from another device.
 - **Autonomy:** turn live work into background Runs and Automations.
 - **Safety:** show effective protection, checks, outcomes, and Receipts.
-- **Sovereignty:** keep control of execution on your own Machines, with your own
-  model accounts.
+- **Sovereignty:** use your own model accounts, keep execution on your own
+  Machines when you want to, and self-host the whole stack.
 
 ## The product loop
 
@@ -40,8 +41,8 @@ Install Bivy
 A **Session** is live agent work that can be steered and resumed. A **Run** is
 delegated work with checks and an explicit outcome. An **Automation** creates
 Runs from GitHub, Linear, Slack, a schedule, or a webhook. Work executes on a
-**Machine** (the node daemon on a computer you control, or a cloud Machine your
-Bivy deployment provides). The **Inbox**
+**Machine** (the node daemon on a computer you control, or the account's cloud
+computer when your Bivy deployment provides one). The **Inbox**
 collects questions, approvals, failures, and completed work. A **Receipt** reports what Bivy observed and enforced, what
 changed, which checks passed, and what it could not observe.
 
@@ -91,9 +92,11 @@ Bivy describes three execution profiles:
 - **Trusted workstation:** maximum context and capability in your real
   environment. Work runs with your OS permissions; Bivy is not an OS
   isolation boundary.
-- **Isolated cloud Machine:** stronger isolation and reproducibility in a VM or
-  container you control and pay for. Provider support is experimental until a
-  path is live-certified.
+- **Cloud computer:** one persistent machine per account, run by the
+  deployment, that sleeps when quiet and wakes for messages, previews and
+  automations. It keeps its home folder, so agents, logins and caches persist.
+  It is isolated from your workstation, but the deployment operator runs its
+  host; see [Cloud machines](ephemeral-sessions.md).
 - **Restricted/read-only:** narrowly scoped investigation where the selected
   runtime or OS mechanism can enforce the restriction.
 
@@ -108,8 +111,11 @@ confused with machine isolation.
 > enabled hosted-provisioning paths.**
 
 Interactive traffic and workspace content remain encrypted across the relay.
-However, unattended hosted provisioning can require the control plane to store
-encrypted repository credentials that the service can technically access. Third-party sources such as Slack and generic webhooks also
+A hosted cloud computer generates and keeps its own keys, so the control plane
+can't read its sessions either, but the deployment operator runs its host and
+could read what the machine reads. Unattended hosted work can require the
+control plane to store encrypted repository credentials that the service can
+technically access. Third-party sources such as Slack and generic webhooks also
 send their bounded instructions to the control plane in plaintext. These are
 explicit trust modes, not cryptographic blindness.
 
@@ -122,13 +128,13 @@ current implementation boundaries.
 ## Who Bivy is for
 
 Bivy is built first for individual developers already using Claude Code, Codex,
-or Pi locally who want persistent remote access, unattended Runs, Automations,
-notifications, recovery, and coordination across several Machines — without
-giving up the environment they already have.
+or Pi who want persistent remote access, unattended Runs, Automations,
+notifications, recovery, and coordination across several Machines — on the
+environment they already have, a cloud computer, or both.
 
 Shared policy, approver routing, budgets, evidence retention, and signed audit
 are not part of Bivy today; treat any mention of them as direction, not a
 current claim.
 
-In one line: keep the environment you have, reach it from anywhere, leave work
-running, and see what happened.
+In one line: bring your agent and your sign-ins, run them on your machines or
+a cloud computer, reach them from anywhere, and see what happened.
