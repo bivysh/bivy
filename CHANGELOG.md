@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Pi offers only the models your ChatGPT plan includes.** Pi's built-in list has ChatGPT models a plan can't use, and it could start on one, so every turn failed with "not supported when using Codex with a ChatGPT account". Bivy now reads the plan's model list from ChatGPT (the list Codex shows), filters Pi's models to it, and moves a session off a model the plan refuses.
 - **An expired sign-in can be started again.** After a Claude or ChatGPT sign-in expired, its sheet kept showing the dead code with no way to retry short of reloading the app. It now offers "Start sign-in again".
 - **Sign-ins wait as long as the provider does.** Bivy gave up on an unfinished sign-in after 10 minutes, while ChatGPT's device codes stay valid for 15, so a code entered late could never complete.
 
