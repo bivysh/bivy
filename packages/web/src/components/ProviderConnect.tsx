@@ -63,9 +63,20 @@ export function OauthStep() {
     }
   };
 
+  // A failed or expired login is over: its code and link are dead, so offer a
+  // fresh start instead (the picker otherwise keeps showing this stale step).
+  if (oauth.error) {
+    const restart = () => controller.startOauth(String(oauth.provider ?? ""), undefined, signInSync(controller.store.getState().connection.currentNodeId));
+    return (
+      <div className="settings-form">
+        <div className="banner inline" data-tone="danger" role="alert">{oauth.error}</div>
+        <button type="button" className="btn primary block" onClick={restart}>Start sign-in again</button>
+      </div>
+    );
+  }
+
   return (
     <div className="settings-form">
-      {oauth.error && <div className="banner inline" data-tone="danger" role="alert">{oauth.error}</div>}
       {openError && <div className="banner inline" data-tone="danger" role="alert">{openError}</div>}
 
       {deviceCode && url && <a className="btn primary block" href={url} target="_blank" rel="noopener">Continue on this device</a>}
