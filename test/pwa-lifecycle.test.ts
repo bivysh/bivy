@@ -132,6 +132,9 @@ assert.equal(describeAvailability("online", true, { ...idle, locallyQueuedPrompt
 assert.match(describeAvailability("offline", true, idle, "macbook").detail, /Machine macbook is offline/);
 assert.match(describeAvailability("offline", true, idle, "macbook").detail, /bivy status/);
 assert.match(describeAvailability("offline", false, idle).detail, /The Machine is offline/);
+// Nobody can run a command on a cloud computer; it starts on demand instead.
+assert.doesNotMatch(describeAvailability("offline", true, idle, "Bivy Cloud", true).detail, /bivy status/);
+assert.doesNotMatch(describeAvailability("reconnecting", false, idle, "Bivy Cloud", true).detail, /bivy status/);
 assert.equal(describeAvailability("reconnecting", true, idle, "macbook").label, "Reconnecting to macbook");
 assert.equal(describeAvailability("reconnecting", true, idle).label, "Reconnecting Machine");
 

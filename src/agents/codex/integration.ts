@@ -131,7 +131,7 @@ export function codexIntegration(origin: AgentIntegrationOrigin) {
         id: "codex-approvals",
         executionMode: "protocol",
         displayName: "Codex",
-        description: "The operator-installed Codex CLI connected through its app-server protocol for governed tool calls and native thread resume.",
+        description: "OpenAI's Codex, using the Codex CLI on this machine. Sign in with ChatGPT or an API key.",
         status: installed ? "available" : "external",
         packageName: "@openai/codex",
         language: "Rust",

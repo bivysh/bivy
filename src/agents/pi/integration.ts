@@ -74,8 +74,14 @@ export class LazyPiRuntime implements AgentRuntime {
 
   private async runtime(): Promise<AgentRuntime> {
     if (!nodeSupportsPi()) throw new Error(unsupportedNodeMessage());
+    // Node keeps a module whose import failed, so importing while the bridge is
+    // still being installed would break Pi until the node restarts.
+    if (!piBridgeInstalled()) throw new Error("Pi is still being installed on this machine. Try again in a moment.");
     enableBridgeResolution();
-    this.inner ??= import("./runtime.js").then(({ PiRuntime }) => new PiRuntime(this.options));
+    this.inner ??= import("./runtime.js").then(
+      ({ PiRuntime }) => new PiRuntime(this.options),
+      (error: unknown) => { this.inner = undefined; throw error; },
+    );
     return this.inner;
   }
 
@@ -110,7 +116,7 @@ export function piIntegration(origin: AgentIntegrationOrigin) {
         id: "pi",
         executionMode: "protocol",
         displayName: "Pi",
-        description: "The operator-installed Pi coding agent connected to Bivy for durable sessions, governance, packages, and model selection.",
+        description: "Pi, the open-source coding agent. Works with most model providers and your API keys.",
         status: installed ? "available" : "external",
         packageName: "@earendil-works/pi-coding-agent",
         language: "TypeScript",

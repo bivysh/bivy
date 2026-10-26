@@ -279,6 +279,10 @@ else
   info "Launching setup…"
   if ( : </dev/tty ) 2>/dev/null; then
     "$BIVY_BIN" setup </dev/tty || die "Setup did not complete. Re-run: bivy setup"
+  elif [ -n "${BIVY_ACCOUNT_TOKEN:-}${BIVY_NODE_CLAIM_CODE:-}" ]; then
+    # The app's command carries everything setup needs, so it asks nothing and
+    # can finish without a terminal (a script, CI, or an agent running it).
+    "$BIVY_BIN" setup </dev/null || die "Setup did not complete. Re-run: bivy setup"
   else
     warn "No interactive terminal detected. Finish setup by running:"
     echo "  bivy setup"

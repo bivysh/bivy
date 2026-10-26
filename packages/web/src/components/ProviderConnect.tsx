@@ -88,7 +88,7 @@ export function OauthStep() {
         <button className="btn primary" disabled={!code.trim()} onClick={() => controller.submitOauthCode(oauth.id, code.trim())}>Submit</button>
       </>}
 
-      <p className="muted" role="status">{oauth.status || "Waiting for sign-in…"}</p>
+      {!oauth.error && <p className="muted" role="status">{oauth.status || "Waiting for sign-in…"}</p>}
     </div>
   );
 }

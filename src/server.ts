@@ -1267,6 +1267,8 @@ function sweepOauthLogins(now = Date.now()): void {
     if (abort) {
       login.cancelled = true;
       try { login.abort.abort(); } catch { /* already settled */ }
+      // The card is still showing "Waiting for sign-in…"; say why it stopped.
+      broadcast({ type: "auth.oauth.error", id, provider: login.provider, error: "This sign-in expired. Start it again." });
     }
     oauthLogins.delete(id);
   }
@@ -3414,7 +3416,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   "provider.oauth.code"(msg) {
     const state = oauthLogins.get(String(msg.id ?? ""));
     if (!state?.manualCodeResolve) {
-      relay?.sendEvent({ type: "session.error", error: "That login session is no longer waiting for a code." });
+      broadcast({ type: "auth.oauth.error", id: String(msg.id ?? ""), error: "This sign-in is no longer waiting for a code. Start it again." });
       return;
     }
     state.manualCodeResolve(String(msg.code ?? "").trim());

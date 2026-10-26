@@ -1221,7 +1221,13 @@ export class AppController {
    * new draft.
    */
   private applyRoute(route: Route, opts: { navigate?: boolean } = {}): void {
-    if (route.kind === "session") this.openSession(route.id, undefined, opts);
+    if (route.kind === "session") {
+      // A link or reload onto another machine's session opens it on that
+      // machine, as a sidebar tap does, instead of asking the current one.
+      const row = this.store.getState().sessionIndex.sessions.find((session) => session.sessionId === route.id);
+      if (row?.nodeId && row.nodeId !== this.local.cur && !this.direct) this.openSessionOnNode(route.id, row.path, row.nodeId);
+      else this.openSession(route.id, undefined, opts);
+    }
     // Settings, Automations, Artifacts/Apps, and a Run detail (/runs/:runId) are overlays layered
     // on top of whichever session is open behind them — none should reset the
     // active session to a draft, so a deep link / reload / Back onto them keeps

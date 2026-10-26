@@ -3136,7 +3136,7 @@ Manifest: {"version":1,"name":"My app","views":[
   {"kind":"terminal","name":"Console","command":"bin/rails","args":["console"]}
 ]}
 
-Static web source: {"kind":"static","directory":"./dist"}
+Static web source: {"kind":"static","directory":"./dist"} (relative to the manifest file)
 Server Bivy runs: {"kind":"service","port":5173,"start":{"command":"pnpm","args":["dev"]}}
 Desktop GUI app (Linux with TigerVNC's Xvnc, or macOS 13+):
   {"kind":"display","name":"Editor","command":"cargo","args":["run"],"restartOnChange":true}
@@ -3292,7 +3292,11 @@ Web previews require operator setup; see docs/apps.md.`);
     if (!manifest || typeof manifest !== "object") throw new Error("App manifest must be a JSON object.");
     if (Array.isArray(manifest.views)) for (const view of manifest.views) {
       if (view?.kind === "web" && view.source?.kind === "static" && typeof view.source.directory === "string") {
-        view.source.directory = path.resolve(path.dirname(file), view.source.directory);
+        const written = view.source.directory;
+        view.source.directory = path.resolve(path.dirname(file), written);
+        if (!fs.statSync(view.source.directory, { throwIfNoEntry: false })?.isDirectory()) {
+          throw new Error(`Static directory "${written}" isn't a folder at ${view.source.directory}. It is relative to the manifest's folder.`);
+        }
       }
     }
     body.manifest = manifest;
@@ -4654,6 +4658,12 @@ async function cmdTokenSetup() {
   const started = await installService(config);
   if (!started) {
     console.log(`Finish with ${c.cyan("bivy service install")} or start it with ${c.cyan("bivy start")}.`);
+    return;
+  }
+  // The service manager accepting the unit isn't the node answering: check it.
+  if (!(await waitForNode(config, 20_000))) {
+    console.log(c.yellow(`\nThe machine is added, but its node isn't answering on port ${config.port} yet.`));
+    console.log(`Check it with ${c.cyan("bivy status")} and ${c.cyan("bivy logs")}, or start it with ${c.cyan("bivy start")}.`);
     return;
   }
   console.log(c.bold(c.green("\n✓ Machine added and running. No interactive setup was needed.")));

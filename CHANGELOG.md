@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Links in chat keep their query parameters.** Message text was escaped before its URLs became links, and the link was escaped again, so `?a=1&b=2` reached the browser as a parameter named `amp;b`. Sign-in links lost their `client_id` this way.
+- **Links in questions are tappable, and long ones wrap.** A question from `bivy ask` showed its text as plain text, so a URL could neither be tapped nor fully seen on a phone.
+- **Links in an app preview open in a normal tab.** A preview's new tab inherited the preview's sandbox, which can break sign-in pages. It now opens as an ordinary page.
+- **An expired sign-in says so.** A Claude or ChatGPT sign-in is dropped after 10 minutes, but the card kept saying "Waiting for sign-in…" and ignored a pasted code. The card now says the sign-in expired, and so does pasting a code for one.
+- **A link to another machine's session opens it.** Opening or reloading a session URL while a different machine was selected asked the wrong machine and showed "Session not found". It now switches to the machine that has the session, as tapping it in the sidebar does.
+- **Add a Machine notices the new machine.** The sheet stayed on "Waiting for it to come online…" after the install finished, and the machine list showed it only after a reload. The sheet now watches for the machine, switches to it and closes.
+- **Pi recovers from a request made while it was installing.** A request that reached Pi before its packages finished installing broke Pi until the node restarted. Pi now says it is still installing, and a later request loads it.
+- **The install command finishes without a terminal.** Run from a script, CI or an agent, the app's one-line command installed Bivy but stopped before connecting the machine. With an account token or claim code it now completes setup, which asks nothing in that case.
+- **Setup checks the node is answering before saying it is running.** It used to print "Machine added and running" as soon as the service manager accepted the unit.
+- **A cloud computer that is starting isn't treated like a broken machine.** While Bivy Cloud booted, the app said to run `bivy status` "on that machine", which nobody can do on a cloud computer. It now says the computer is starting and that a first start takes about a minute.
+- **The model pill no longer says "unknown".** A node with no model set reports the id `unknown`; the composer now shows "Choose a model".
+- **`bivy app publish` names the static folder it can't find.** A static directory is relative to the manifest's folder; a wrong path used to fail with "Could not read the app directory".
+
+### Changed
+
+- **Plainer agent descriptions in the picker.** Claude Code, Codex and Pi say which sign-ins they use instead of "operator-installed … governed tool calls".
+- **A shorter update notice.** "Reload to use it. Unsent text is kept; attached files need adding again." replaces a sentence about browser storage.
+- **The sign-in page uses the Bivy wordmark** and says agents can run on your own computer or, where offered, a cloud computer.
+
 ## [0.21.4] - 2026-10-26
 
 ### Security

@@ -49,7 +49,7 @@ export function claudeCodeIntegration(origin: AgentIntegrationOrigin) {
         id: "claude-code-sdk",
         executionMode: "protocol",
         displayName: "Claude Code",
-        description: "The operator-installed Claude Code agent, connected through Anthropic's SDK bridge for streaming, model selection, and governed tool calls.",
+        description: "Anthropic's Claude Code, using the Claude Code CLI on this machine. Sign in with Claude or an API key.",
         status: installed ? "available" : "external",
         packageName: "@anthropic-ai/claude-code",
         language: "TypeScript",
@@ -67,7 +67,7 @@ export function claudeCodeIntegration(origin: AgentIntegrationOrigin) {
             : "Install and sign in to Claude Code on this node; Bivy will connect to that existing agent.",
         install: installed || agentInstalled ? undefined : {
           label: "Install Claude Code",
-          description: "Installs Anthropic's Claude Code agent on this node.",
+          description: "Installs Anthropic's Claude Code agent on this machine.",
           command: "npm install --global @anthropic-ai/claude-code",
         },
       };

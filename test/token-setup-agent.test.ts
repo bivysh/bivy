@@ -26,7 +26,7 @@ async function selected(installed: string[], authed: string[], saved?: string) {
     nativeAgentAuthDetected: (choice: { command: string }) => authed.includes(choice.command),
     saveConfig: () => {},
     nodeScriptArgs: (entry: string) => [entry], startEnv: () => ({}),
-    run: async () => 0, installService: async () => true,
+    run: async () => 0, installService: async () => true, waitForNode: async () => true,
     c: { dim: String, bold: String, green: String },
     console: { log: (message: string) => messages.push(message) },
   };

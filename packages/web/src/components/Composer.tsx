@@ -575,7 +575,10 @@ export function Composer({
 
   const modelLabel = destinationCatalogPending
     ? "Choose model"
-    : state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Choose a model";
+    // A node with no model set reports the id "unknown"; that is a choice still to make.
+    : state.catalogs.currentModel?.id === "unknown"
+      ? "Choose a model"
+      : state.catalogs.currentModel?.label || state.catalogs.currentModel?.id || "Choose a model";
   const agentLabel = String(currentRuntime?.displayName || currentRuntime?.name || currentRuntime?.id || state.catalogs.currentAgentName || "Choose an agent");
   // The repo pill also carries the chosen remote branch (#466) — picked from
   // the arrow on a repo row in the repo picker, not a separate pill. A blank
