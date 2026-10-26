@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.8] - 2026-10-26
+
 ### Fixed
 
 - **API keys stored as references work with Pi.** A key added as `op://`, `env://` or `cmd://` (`bivy credentials add`) was invisible to Pi, which only read keys stored in the vault itself. Pi now reads a reference when it needs the key.
