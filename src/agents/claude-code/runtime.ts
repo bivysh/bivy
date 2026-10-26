@@ -757,6 +757,12 @@ class ClaudeSession implements RuntimeSession {
   private models: ModelInfo[] = [];
   private currentModel?: ModelInfo;
   private desiredModel?: string;
+  /** Reasoning-effort levels per model id, from supportedModels(). */
+  private modelEfforts = new Map<string, string[]>();
+  /** The user's effort pick; unset runs the model at its own default. */
+  private effort?: string;
+  /** The effort the CLI reports it will send next (init frame), if it says. */
+  private appliedEffort?: string;
 
   /** Token used to `resume` an existing session; undefined for a fresh one. */
   private readonly resumeId?: string;
@@ -954,6 +960,7 @@ class ClaudeSession implements RuntimeSession {
     if (resumeId) options.resume = resumeId;
     else options.sessionId = this.id;
     if (this.desiredModel) options.model = this.desiredModel;
+    if (this.effort) options.effort = this.effort;
     // Native attach_to_chat tool (issue #291) — the stronger, tool-based sibling
     // of the Bivy note's `bivy attach` line. Wired only when the daemon handed us a
     // callback (see ClaudeCodeRuntimeOptions.attachToChat); absent in a few
@@ -997,7 +1004,10 @@ class ClaudeSession implements RuntimeSession {
         q.supportedModels(),
         new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), 1500); }),
       ]);
-      if (Array.isArray(models) && models.length) this.models = models.map((m) => brandClaudeModel(toModelInfo(m)));
+      if (Array.isArray(models) && models.length) {
+        this.models = models.map((m) => brandClaudeModel(toModelInfo(m)));
+        this.modelEfforts = new Map(models.map((m) => [toModelInfo(m).id, Array.isArray(m?.supportedEffortLevels) ? m.supportedEffortLevels.filter((l: unknown): l is string => typeof l === "string") : []]));
+      }
     } catch {
       // Keep the last-known list (getModels() falls back to FALLBACK_MODELS if empty).
     } finally {
@@ -1353,6 +1363,7 @@ class ClaudeSession implements RuntimeSession {
         // They're only known once init arrives (after the first turn starts), so
         // emit `runtime.commands` to let the daemon re-advertise capabilities.
         if (message?.subtype === "init") {
+          if (typeof message.effort === "string") this.appliedEffort = message.effort;
           const next = claudeCommandsFromInit(message);
           if (next.length && !sameCommands(next, this.commands)) {
             this.commands = next;
@@ -1479,7 +1490,34 @@ class ClaudeSession implements RuntimeSession {
   async setModel(provider: string, id: string): Promise<void> {
     this.desiredModel = id;
     this.currentModel = toModelInfo({ provider, id });
+    // The CLI runs an effort the new model lacks at a lower one; the picker
+    // shows the new model's own levels.
+    if (this.effort && !this.modelEfforts.get(id)?.includes(this.effort)) this.effort = undefined;
+    this.appliedEffort = undefined;
     if (this.query?.setModel) await this.query.setModel(id);
+  }
+
+  /** Effort levels of the session's model (the account default until one is picked). */
+  getAvailableThinkingLevels(): string[] {
+    const id = this.currentModel?.id ?? this.desiredModel;
+    return (id && this.modelEfforts.get(id)) || this.modelEfforts.get("default") || [];
+  }
+
+  supportsThinking(): boolean {
+    return this.getAvailableThinkingLevels().length > 0;
+  }
+
+  getThinkingLevel(): string | undefined {
+    return this.effort ?? this.appliedEffort;
+  }
+
+  /** Same picker as the other agents' reasoning effort: applied to the running
+   *  query as a session-only flag setting, and passed at the next spawn. */
+  setThinkingLevel(level: string): void {
+    if (!this.getAvailableThinkingLevels().includes(level)) return;
+    this.effort = level;
+    this.appliedEffort = undefined;
+    void Promise.resolve(this.query?.applyFlagSettings?.({ effortLevel: level })).catch(() => {});
   }
 
   /**

@@ -992,8 +992,15 @@ class ProtocolSession implements RuntimeSession {
       this.emit({ type: existing ? "tool_execution_update" : "tool_call", toolName, input: msg.input, toolCallId, ...(detail ? { detail } : {}), ...parent });
       if (type === "tool.call" && this.capabilitiesRef.toolInterception && this.toolInterceptor) {
         const decision = await this.toolInterceptor({ sessionId: this.id, toolName, input: msg.input });
+        // A call Bivy serviced itself (an answered AskUserQuestion) must not run:
+        // it goes back as a deny whose reason is the result, like the SDK
+        // runtimes' deny channel, plus `handled` and the structured answers for a
+        // shim that can return them natively.
+        const reply = decision?.handled
+          ? { decision: "deny", reason: decision.result, handled: true, ...(decision.answers ? { answers: decision.answers } : {}) }
+          : { decision: decision?.block ? "deny" : "allow", reason: decision?.reason };
         try {
-          this.write({ id: randomUUID(), type: "tool.decision", sessionId: this.id, toolCallId, decision: decision?.block ? "deny" : "allow", reason: decision?.reason });
+          this.write({ id: randomUUID(), type: "tool.decision", sessionId: this.id, toolCallId, ...reply });
         } catch {
           // The child exited before we could answer (aborted/disposed mid-turn).
           // There is nowhere to deliver the decision; drop it rather than throw out

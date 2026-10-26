@@ -144,7 +144,9 @@ export function validQuestions(value: unknown): UserQuestionItem[] | null {
   if (!Array.isArray(value) || !value.length) return null;
   for (const q of value as Array<Record<string, unknown>>) {
     if (typeof q?.question !== "string" || typeof q?.header !== "string") return null;
-    if (!Array.isArray(q.options) || q.options.length < 2) return null;
+    // No options is a free-text question (the card shows a text box, as for
+    // `bivy ask`); a single option is not a choice.
+    if (!Array.isArray(q.options) || q.options.length === 1) return null;
     for (const opt of q.options as Array<Record<string, unknown>>) {
       if (typeof opt?.label !== "string") return null;
     }

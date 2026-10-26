@@ -43,6 +43,10 @@ session default with:
 BIVY_CLAUDE_MODEL=claude-opus-4-8
 ```
 
+The effort picker lists the levels the selected model supports (from the same
+`supportedModels()` rows). A pick applies to the running session right away, as
+a session-only setting, and isn't written to your Claude Code settings.
+
 ## Resume and governance
 
 Sessions use Claude Code's native session ids and `~/.claude/projects` store, so
