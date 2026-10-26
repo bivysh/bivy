@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Test sign-in for automated end-to-end tests.** A deployment that sets `TEST_SIGN_IN_SECRET` and `TEST_SIGN_IN_DOMAIN` accepts `POST /auth/test-login` for addresses on that one reserved domain, so an agent or CI can sign up, onboard and clean up a fresh account without an emailed link. It is off by default and can never sign in a real person's address.
+
 ## [0.21.10] - 2026-10-26
 
 ### Added

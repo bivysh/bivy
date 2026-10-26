@@ -63,6 +63,7 @@ import {
   type PreflightSignalContext,
   type SourceTriggerKind,
 } from "./automation-match.js";
+import { isTestEmail, testSecretMatches, testSignInConfig } from "./test-sign-in.js";
 import { gateFromChecks, runPreflightChecks, type EvaluationEvent, type GithubEventName as EvaluationGithubEventName } from "@bivy/automation-core";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -265,6 +266,8 @@ const Sentry = await initSentry();
 
 const port = Number(process.env.PORT ?? 4400);
 const relayPublicUrl = process.env.RELAY_PUBLIC_URL ?? "ws://localhost:4500";
+// Automated test sign-in (/auth/test-login); null when the deployment leaves it off.
+const testSignIn = testSignInConfig();
 // Relay shard URLs. Defaults to the single relayPublicUrl, so
 // behavior is unchanged until RELAY_SHARD_URLS lists more than one relay. A node
 // and all its clients are routed to the same shard by hashing the nodeId.
@@ -945,7 +948,8 @@ app.post("/account/product-events", requireUser, (req, res) => {
   if (!(PRODUCT_EVENT_VALUES as readonly string[]).includes(event) || !(PRODUCT_CLIENT_VALUES as readonly string[]).includes(productClient)) {
     return res.status(400).json({ error: "Invalid product event" });
   }
-  recordProductEvent(event, productClient);
+  // Automated test accounts never count as product use.
+  if (!isTestEmail((req as Request & { account: Account }).account.email, testSignIn)) recordProductEvent(event, productClient);
   res.status(204).end();
 });
 
@@ -1131,6 +1135,26 @@ app.post("/auth/dev-login", asyncHandler(async (req, res) => {
   const token = await store.createSession(account.id);
   recordFunnelEvent("sign_in_completed", "dev");
   res.json({ ok: true, token, account: { id: account.id, email: account.email } });
+}));
+
+// Sign-in for automated end-to-end tests: off unless the deployment sets
+// TEST_SIGN_IN_SECRET and TEST_SIGN_IN_DOMAIN, and only for addresses on that
+// reserved domain. Returns a session token and a link that signs a browser in
+// (the same fragment hand-off the GitHub callback uses). Test accounts send no
+// sign-in event (nothing real to welcome) and count under their own source.
+app.post("/auth/test-login", asyncHandler(async (req, res) => {
+  if (!testSignIn) return res.status(404).json({ error: "Not found" });
+  if (await store.rateLimitExceeded("auth-test-ip", clientIp(req), 30, 60_000)) {
+    return res.status(429).json({ error: "Too many requests. Please wait a minute and try again." });
+  }
+  const email = String(req.body?.email ?? "").trim().toLowerCase();
+  if (!testSecretMatches(String(req.body?.secret ?? ""), testSignIn)) return res.status(401).json({ error: "Unauthorized" });
+  if (!validEmail(email) || !isTestEmail(email, testSignIn)) return res.status(400).json({ error: `Test sign-in only accepts addresses @${testSignIn.domain}` });
+  const account = await store.findOrCreateAccount(email);
+  const token = await store.createSession(account.id);
+  recordFunnelEvent("sign_in_completed", "test");
+  const signInUrl = `${baseUrl(req)}/#${b64urlJson({ session: token, controlPlane: baseUrl(req), relay: relayPublicUrl })}`;
+  res.json({ ok: true, token, signInUrl, account: { id: account.id, email: account.email } });
 }));
 
 // Sign out: revoke the presented account session so a lost/compromised device

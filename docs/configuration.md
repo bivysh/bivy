@@ -515,6 +515,8 @@ unauthenticated dev login enabled.
 | `GITHUB_OAUTH_CLIENT_SECRET` | string | unset | |
 | `DISABLE_DEV_LOGIN` | `1` | **unset — dev login is enabled outside production** | Hard kill switch for `POST /auth/dev-login`, which mints a full account session for any email with no verification. **Set this to `1`** |
 | `ALLOW_DEV_LOGIN` | `1` | unset | Re-enables dev login under `NODE_ENV=production`. Setting it in production makes the service exit 1 |
+| `TEST_SIGN_IN_SECRET` | 32+ random characters | unset — test sign-in is off | With `TEST_SIGN_IN_DOMAIN`, turns on `POST /auth/test-login {email, secret}` for automated end-to-end tests. It returns a session token and a `signInUrl` that signs a browser in. It only accepts addresses on that one domain, so it can't reach a real person's account; test accounts send no sign-in event and count under their own funnel source. Delete each one after a run with `DELETE /account` |
+| `TEST_SIGN_IN_DOMAIN` | e.g. `agents.example.com` | unset | The reserved domain test sign-in accepts. Use one that receives no mail |
 
 Core treats the deployment extension as an opaque policy/account contract: it
 contains no plans or billing vocabulary. Bivy Cloud's implementation and all
