@@ -37,6 +37,7 @@
 
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
+import { exitWithParent } from "./shim-lifecycle.mjs";
 
 const CODEX_BIN = process.env.BIVY_CODEX_BIN || "codex";
 // Force Codex to ask before every model-proposed action so Bivy governs each one.
@@ -332,6 +333,8 @@ as.stderr.on("data", (d) => {
   // Bubblewrap-missing is a benign warning; surface anything else for debugging.
   if (!/bubblewrap|configWarning/.test(s)) process.stderr.write(`[codex-app-server] ${s}`);
 });
+// The node is gone (crash, OOM kill, restart): take the app-server down with us.
+exitWithParent(as);
 as.on("close", (code) => {
   bivy({ type: "session.error", error: `codex app-server exited (${code})` });
   process.exit(code ?? 1);

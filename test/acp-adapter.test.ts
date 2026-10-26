@@ -672,6 +672,26 @@ await check("acp: agents without a native ACP mode are not promotable", () => {
   }
 });
 
+// A node that dies (crash, OOM kill) closes the shim's stdin and nothing else.
+// The agent here ignores EOF and SIGTERM, like some real ACP servers do, so only
+// the shim's own cleanup can stop it.
+await check("acp: shim takes its agent down when the node goes away", async () => {
+  const { spawn } = await import("node:child_process");
+  const pidFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "acp-shim-")), "agent.pid");
+  const stubborn = `require("fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); process.on("SIGTERM", () => {}); setInterval(() => {}, 1000)`;
+  const shim = spawn(process.execPath, [path.join(__dirname, "../bin/acp-shim.mjs"), "--agent", process.execPath, "--", "-e", stubborn], { stdio: ["pipe", "pipe", "ignore"] });
+  const started = Date.now();
+  while (!fs.existsSync(pidFile) && Date.now() - started < 5000) await new Promise((resolve) => setTimeout(resolve, 20));
+  const agentPid = Number(fs.readFileSync(pidFile, "utf8"));
+  assert.ok(agentPid > 0, "shim spawned its agent");
+  const exited = new Promise<number | null>((resolve) => shim.once("exit", (code) => resolve(code)));
+  shim.stdin.end();
+  const code = await Promise.race([exited, new Promise<string>((resolve) => setTimeout(() => resolve("still running"), 8000))]);
+  if (code === "still running") { shim.kill("SIGKILL"); try { process.kill(agentPid, "SIGKILL"); } catch {} }
+  assert.equal(code, 0, "shim exits once its node is gone");
+  assert.throws(() => process.kill(agentPid, 0), /ESRCH/, "the agent is gone too");
+});
+
 if (failures > 0) {
   console.error(`\n${failures} acp-adapter test(s) failed`);
   process.exit(1);

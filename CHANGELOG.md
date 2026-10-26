@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Agents stop when their node does.** If the node crashed or was killed mid-session, the Codex app-server and every ACP agent (OpenCode, Grok, Gemini and others) kept running with no owner, each holding hundreds of MB. The shim now stops its agent and exits as soon as the node is gone.
+- **A failed message shows the reason, not a stack trace.** When an agent rejected a prompt (for example Pi with no model login), chat and `bivy exec` got the raw stack with internal file paths. They now get the same short message or sign-in card as any other failed turn.
+
+### Changed
+
+- Claude Agent SDK 0.3.311, tested with Claude Code 2.1.311.
+
 ## [0.21.12] - 2026-10-26
 
 ### Fixed
