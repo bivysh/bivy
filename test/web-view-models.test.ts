@@ -16,7 +16,7 @@ import { attentionRank, isUnseen, statusClass, statusLabel } from "../packages/w
 import { modelAccountChoice } from "../packages/web/src/modelAccounts.js";
 import { githubInstallationSettings, githubMentionHandles, githubSourceStatus } from "../packages/web/src/components/githubSource.js";
 import { standbyCopyOf } from "../packages/web/src/standby.js";
-import { cloudDestinations, nodePresence } from "../packages/web/src/cloudDestinations.js";
+import { cloudComputerToWake, cloudDestinations, nodePresence } from "../packages/web/src/cloudDestinations.js";
 import { agentForProviders, signInSync } from "../packages/web/src/onboarding.js";
 
 test("account routing follows project, active, default and ambiguity rules", () => {
@@ -155,7 +155,7 @@ test("a managed cloud profile is one destination that reuses the account's cloud
   assert.deepEqual(up.map((row) => [row.label, row.nodeId]), [["Bivy Cloud", nodeId]], "only the cloud computer is reused, by its node id");
 
   const sleeping = cloudDestinations([config], machines, [{ id: nodeId, online: false }]);
-  assert.deepEqual(sleeping.map((row) => [row.nodeId, row.asleep]), [[undefined, true]], "a sleeping cloud computer wakes on send");
+  assert.deepEqual(sleeping.map((row) => [row.nodeId, row.asleep]), [[nodeId, true]], "a sleeping cloud computer is connected to (which wakes it), not launched again");
   const none = cloudDestinations([config], [], []);
   assert.deepEqual(none.map((row) => [row.nodeId, row.asleep]), [[undefined, false]], "no cloud computer yet: one starts on send");
   assert.deepEqual(
@@ -175,4 +175,16 @@ test("first run: own-computer sign-ins stay on that machine, and the agent follo
   const codex = { id: "codex", credentialRequirements: { owner: "agent" as const, strategy: "one-of" as const, providers: ["openai-codex", "openai"] } };
   assert.equal(agentForProviders([claude, codex], "claude-code", ["openai-codex"])?.id, "codex");
   assert.equal(agentForProviders([claude, codex], "claude-code", ["anthropic", "openai-codex"]), undefined, "the selected agent can already run");
+});
+
+test("presence wakes the sleeping cloud computer only for someone who works on it", () => {
+  const computer = { id: "eph-managed-auto-abc", online: false };
+  const laptop = { id: "node-laptop", online: true };
+  assert.equal(cloudComputerToWake([computer], "", null), computer.id, "a new device with no machine of its own");
+  assert.equal(cloudComputerToWake([computer, laptop], "", "cloud"), computer.id, "picked Bivy Cloud");
+  assert.equal(cloudComputerToWake([computer, laptop], computer.id, "own"), computer.id, "it's the current machine");
+  assert.equal(cloudComputerToWake([computer, laptop], laptop.id, null), undefined, "works on their own machine");
+  assert.equal(cloudComputerToWake([computer], "", "own"), undefined, "chose their own computer");
+  assert.equal(cloudComputerToWake([{ ...computer, online: true }], "", "cloud"), undefined, "already up");
+  assert.equal(cloudComputerToWake([laptop], laptop.id, "cloud"), undefined, "no cloud computer");
 });

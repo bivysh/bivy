@@ -28,6 +28,7 @@ import {
   ensureManagedSessionDefaults,
   ensureManagedAutomationTarget,
   launchManagedSessionMachine,
+  signalCloudComputerPresence,
   ManagedLaunchError,
   restoreManagedSessionMachine,
   createAccountNodeClaim,
@@ -142,6 +143,8 @@ import { EphemeralCoordinator } from "./coordinators/ephemeral-coordinator.js";
 import { AutomationsAccountCoordinator } from "./coordinators/automations-account-coordinator.js";
 import type { ReviewCardMode, SessionPresence } from "@bivy/core";
 import { thisDevice } from "../device.js";
+import { cloudComputerToWake, isCloudComputerNodeId } from "../cloudDestinations.js";
+import { readRunPlace } from "../onboarding.js";
 
 /**
  * Bounded discovery metadata for a provider-native session Bivy did not start
@@ -1435,6 +1438,18 @@ export class AppController {
     if (warm && config.computeSource === "managed") this.warmCloudComputer(config.id);
   }
 
+  private presenceSentAt = 0;
+  /** Someone is here and may be about to work: wake the account's sleeping
+   *  cloud computer now, so it is up before they send (cloudComputerToWake says
+   *  whose presence counts; the deployment decides whether to start it).
+   *  Throttled, since focus and visibility fire often. */
+  signalPresence(reason: "app-open" | "app-visible" | "composer"): void {
+    if (this.direct || !this.local.s || Date.now() - this.presenceSentAt < 60_000) return;
+    if (!cloudComputerToWake(this.store.getState().connection.nodes, this.local.cur, readRunPlace())) return;
+    this.presenceSentAt = Date.now();
+    void signalCloudComputerPresence(this.local, reason).catch(() => { this.presenceSentAt = 0; });
+  }
+
   private cloudWarmedAt = 0;
   /** Start the cloud computer when someone picks it, so it boots while they
    *  type. The first message acquires the same machine and finds it starting or
@@ -2333,7 +2348,9 @@ export class AppController {
     // A disposable Machine is a concrete session runtime, not the default for
     // the next session. Resolve its profile asynchronously and target a fresh
     // Machine; a deliberate Machine/profile choice made meanwhile always wins.
-    if (!departingNodeId?.startsWith("eph-")) return;
+    // The account's cloud computer is a machine like any other: the next
+    // session stays on it, waking it if it fell asleep.
+    if (!departingNodeId?.startsWith("eph-") || isCloudComputerNodeId(departingNodeId)) return;
     void this.listEphemeralConfigs().then((configs) => {
       const state = this.store.getState();
       if (state.activeSession.activeSessionId || state.draft.ephemeralConfig || this.local.cur !== departingNodeId) return;

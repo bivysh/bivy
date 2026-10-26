@@ -783,7 +783,7 @@ export function Composer({
             hidden={Boolean(recording)}
             value={text}
             disabled={disabled}
-            onFocus={() => { wantsFocusRef.current = true; }}
+            onFocus={() => { wantsFocusRef.current = true; controller.signalPresence("composer"); }}
             // A genuine user blur clears the intent; a disable-induced blur leaves
             // `disabled` true here, so we keep the intent and refocus on recovery.
             onBlur={() => { if (!disabled) wantsFocusRef.current = false; }}

@@ -411,6 +411,21 @@ export async function ensureManagedSessionDefaults(store: LocalStore, fetchImpl:
   return coerceConfig(value.config);
 }
 
+/** Someone is in the app and may be about to work (see the control plane's
+ * CLOUD_COMPUTER_PRESENCE): wake their sleeping cloud computer early. Best
+ * effort; resolves whether a wake was started. */
+export async function signalCloudComputerPresence(
+  store: LocalStore,
+  reason: "app-open" | "app-visible" | "composer",
+  fetchImpl: typeof fetch = fetch,
+): Promise<boolean> {
+  const res = await fetchImpl(`${cpBase(store)}/account/cloud-computer/presence`, {
+    method: "POST", headers: authHeaders(store), body: JSON.stringify({ reason }),
+  });
+  const value = await res.json().catch(() => ({})) as { waking?: boolean };
+  return res.ok && value.waking === true;
+}
+
 /** Acquire (create or wake) the account's cloud computer. The device pairs
  * with it on connect; no key comes back from the control plane. */
 export async function launchManagedSessionMachine(

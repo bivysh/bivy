@@ -141,6 +141,13 @@ async function main() {
   expect(ticket.status === 200, "a client can still get a relay ticket for a sleeping node");
   await waitFor(() => calls.some((c) => c.path === "/v1/compute/wake" && c.body.nodeId === nodeId), "wake on connect");
   console.log("✓ connecting to a sleeping cloud computer wakes it");
+  expect(calls.find((c) => c.path === "/v1/compute/wake")?.body.reason === "connect", "a connection wake says so");
+
+  // Being in the app wakes it too, before any connection, and says why.
+  expect((await req(port, "POST", "/account/cloud-computer/presence", { reason: "typing" }, token)).status === 400, "only known presence reasons are accepted");
+  const present = await req(port, "POST", "/account/cloud-computer/presence", { reason: "composer" }, token);
+  expect(present.status === 200 && present.json?.waking === true, "presence in the app wakes a sleeping cloud computer");
+  await waitFor(() => calls.some((c) => c.path === "/v1/compute/wake" && c.body.reason === "composer"), "presence wake");
 
   // Opening a preview link for it wakes it too (asked by the relay).
   const wakesBefore = calls.filter((c) => c.path === "/v1/compute/wake").length;
@@ -155,6 +162,10 @@ async function main() {
   // The node reports this boot's milestones; the launch reads them back.
   const reported = await req(port, "POST", "/node/ephemeral-milestone", { milestone: "credentialsReadyAt" }, relay.enrollmentToken);
   expect(reported.status === 200, "the cloud computer reports its milestones");
+  expect(!calls.some((c) => c.path === "/v1/compute/used"), "being up is not being used");
+  await req(port, "POST", "/node/ephemeral-milestone", { milestone: "firstAgentEventAt" }, relay.enrollmentToken);
+  await waitFor(() => calls.some((c) => c.path === "/v1/compute/used" && c.body.nodeId === nodeId && typeof c.body.at === "string"), "used event");
+  console.log("✓ the first agent event tells the deployment the computer is in use");
   const withMilestones = await req(port, "GET", "/account/hosted-machines", undefined, token);
   expect(typeof withMilestones.json?.[0]?.milestones?.credentialsReadyAt === "string", "the launch sees credentials ready for this boot");
   await req(port, "POST", "/account/managed-machines", { configId: cloud.id, requestId: "r4" }, token);

@@ -19,6 +19,16 @@ export function cloudComputerNodeId(accountId: string): string {
   return `eph-managed-auto-${createHash("sha256").update(accountId).digest("hex").slice(0, 16)}`;
 }
 
+/** What the app reports when someone is present and may be about to work: it
+ * opened, came back into view, or the composer got focus. Each is a reason to
+ * wake a sleeping cloud computer before any message is sent. */
+export const CLOUD_COMPUTER_PRESENCE = ["app-open", "app-visible", "composer"] as const;
+export type CloudComputerPresence = (typeof CLOUD_COMPUTER_PRESENCE)[number];
+
+export function isCloudComputerPresence(value: string): value is CloudComputerPresence {
+  return (CLOUD_COMPUTER_PRESENCE as readonly string[]).includes(value);
+}
+
 /** Boot milestones a cloud computer reports for its current awake period. */
 export const EPHEMERAL_MILESTONES = [
   "nodeReadyAt",

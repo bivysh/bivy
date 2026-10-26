@@ -44,7 +44,10 @@ gets the room key by account pairing when it connects.
    app shows them as launch progress.
 
 Connecting to the sleeping node, or opening one of its preview links, calls
-`/v1/compute/wake`.
+`/v1/compute/wake`. So does someone who works on it being present in the app
+(`POST /account/cloud-computer/presence`): opening it, returning to it, or
+focusing the composer, so the machine is up before the first message. The first
+agent event of each boot is reported to the deployment as `/v1/compute/used`.
 
 ## Runner image
 
