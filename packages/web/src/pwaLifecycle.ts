@@ -232,8 +232,11 @@ export function describeAvailability(
   hasCachedTranscript: boolean,
   value = state,
   machineName?: string,
+  /** A Bivy cloud computer: nobody can run `bivy status` on it, and it starts on demand. */
+  cloud = false,
 ): AvailabilityMessage {
   const who = machineName ? `Machine ${machineName}` : "The Machine";
+  const hint = cloud ? "It starts when you send, and a first start takes about a minute." : OFFLINE_MACHINE_HINT;
   if (value.locallyQueuedPrompts > 0) {
     return {
       kind: "local-queue",
@@ -247,28 +250,30 @@ export function describeAvailability(
       label: machineName ? `Reconnecting to ${machineName}` : "Reconnecting Machine",
       detail: hasCachedTranscript
         ? "Showing the cached transcript. Keep drafting — sending resumes once the connection is back."
-        : `Waiting for ${machineName ? `Machine ${machineName}` : "the Machine"} to answer. If this sticks, run \`bivy status\` on that machine.`,
+        : cloud
+          ? `Waiting for ${machineName ?? "the cloud computer"} to start. A first start takes about a minute.`
+          : `Waiting for ${machineName ? `Machine ${machineName}` : "the Machine"} to answer. If this sticks, run \`bivy status\` on that machine.`,
     };
   }
   if (status === "offline" && hasCachedTranscript) {
     return {
       kind: "cached-transcript",
       label: "Cached transcript",
-      detail: `${who} is offline — this copy may be behind, and prompts can't send until it reconnects. ${OFFLINE_MACHINE_HINT}`,
+      detail: `${who} is offline — this copy may be behind, and prompts can't send until it reconnects. ${hint}`,
     };
   }
   if (status === "offline" && value.shellCached) {
     return {
       kind: "cached-shell",
       label: "Machine offline",
-      detail: `${who} is offline, so there is no transcript or live control yet. Your draft is kept here. ${OFFLINE_MACHINE_HINT}`,
+      detail: `${who} is offline, so there is no transcript or live control yet. Your draft is kept here. ${hint}`,
     };
   }
   if (status === "offline") {
     return {
       kind: "offline-page",
       label: "Offline",
-      detail: `${who} is unreachable. Your draft is kept on this device. ${OFFLINE_MACHINE_HINT}`,
+      detail: `${who} is unreachable. Your draft is kept on this device. ${hint}`,
     };
   }
   return {

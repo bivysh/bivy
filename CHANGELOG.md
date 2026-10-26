@@ -18,11 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pi recovers from a request made while it was installing.** A request that reached Pi before its packages finished installing broke Pi until the node restarted. Pi now says it is still installing, and a later request loads it.
 - **The install command finishes without a terminal.** Run from a script, CI or an agent, the app's one-line command installed Bivy but stopped before connecting the machine. With an account token or claim code it now completes setup, which asks nothing in that case.
 - **Setup checks the node is answering before saying it is running.** It used to print "Machine added and running" as soon as the service manager accepted the unit.
+- **A cloud computer that is starting isn't treated like a broken machine.** While Bivy Cloud booted, the app said to run `bivy status` "on that machine", which nobody can do on a cloud computer. It now says the computer is starting and that a first start takes about a minute.
+- **The model pill no longer says "unknown".** A node with no model set reports the id `unknown`; the composer now shows "Choose a model".
 - **`bivy app publish` names the static folder it can't find.** A static directory is relative to the manifest's folder; a wrong path used to fail with "Could not read the app directory".
 
 ### Changed
 
 - **Plainer agent descriptions in the picker.** Claude Code, Codex and Pi say which sign-ins they use instead of "operator-installed … governed tool calls".
+- **A shorter update notice.** "Reload to use it. Unsent text is kept; attached files need adding again." replaces a sentence about browser storage.
 - **The sign-in page uses the Bivy wordmark** and says agents can run on your own computer or, where offered, a cloud computer.
 
 ## [0.21.4] - 2026-10-26

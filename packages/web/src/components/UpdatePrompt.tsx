@@ -32,7 +32,7 @@ export function UpdatePrompt() {
         <strong>A Bivy update is ready.</strong>{" "}
         {blockers.length
           ? `Reload is available after ${blockers.join(", ")}.`
-          : "Draft text and attachment names are stored in this browser; cached transcripts remain when browser storage is available. File contents must be re-selected."}
+          : "Reload to use it. Unsent text is kept; attached files need adding again."}
       </span>
       {error && <span role="alert">{error}</span>}
       <div className="update-toast-actions">

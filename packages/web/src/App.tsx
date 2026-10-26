@@ -1312,6 +1312,7 @@ export function App() {
               status={state.connection.status}
               hasCachedTranscript={state.activeSession.transcript.length > 0}
               machineName={activeSessionNode?.name || undefined}
+              cloud={Boolean(activeSessionNode?.id.startsWith("eph-"))}
             />
             <Composer
               state={state}

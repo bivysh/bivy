@@ -5,7 +5,7 @@ import type { ConnectionStatus } from "@bivy/core";
 import { isPackagedClient } from "../packaged-client.js";
 import { describeAvailability, dismissInstall, getPwaLifecycleState, requestInstall, subscribePwaLifecycle } from "../pwaLifecycle.js";
 
-export function PwaLifecycleNotice({ status, hasCachedTranscript, machineName }: { status: ConnectionStatus; hasCachedTranscript: boolean; machineName?: string }) {
+export function PwaLifecycleNotice({ status, hasCachedTranscript, machineName, cloud = false }: { status: ConnectionStatus; hasCachedTranscript: boolean; machineName?: string; cloud?: boolean }) {
   const lifecycle = useSyncExternalStore(subscribePwaLifecycle, getPwaLifecycleState);
   const [guidance, setGuidance] = useState(false);
   const [browserOffline, setBrowserOffline] = useState(() => typeof navigator !== "undefined" && !navigator.onLine);
@@ -19,7 +19,7 @@ export function PwaLifecycleNotice({ status, hasCachedTranscript, machineName }:
       window.removeEventListener("online", cameOnline);
     };
   }, []);
-  const availability = describeAvailability(browserOffline ? "offline" : status, hasCachedTranscript, lifecycle, machineName);
+  const availability = describeAvailability(browserOffline ? "offline" : status, hasCachedTranscript, lifecycle, machineName, cloud);
   const showStatus = availability.kind !== "live-control";
   const showInstall = !isPackagedClient && lifecycle.installChoice !== null && !lifecycle.standalone;
   if (!showStatus && !showInstall) return null;
