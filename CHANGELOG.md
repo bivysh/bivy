@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.11] - 2026-10-26
+
 ### Fixed
 
 - **A ChatGPT plan works with Codex on a cloud computer.** The chat's Codex never received the sign-in Bivy stored, so it said it had no OpenAI credential while the sign-in sheet said ChatGPT was connected. Codex now gets Codex's own login file from the ChatGPT sign-in before each turn, and OpenAI API keys too.
