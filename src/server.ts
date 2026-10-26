@@ -1259,7 +1259,8 @@ const oauthLogins = new Map<string, OAuthLoginState>();
 // ephemeral node. Sweep periodically: abort (which closes the callback server,
 // see startCallbackServer) + drop any in-flight login past its TTL, and drop a
 // finished one after a short grace so clients can still read the final status.
-const OAUTH_LOGIN_TTL_MS = 10 * 60_000;
+// Device codes (ChatGPT) stay valid for 15 minutes; never give up before the provider does.
+const OAUTH_LOGIN_TTL_MS = 15 * 60_000;
 const OAUTH_LOGIN_DONE_GRACE_MS = 2 * 60_000;
 function sweepOauthLogins(now = Date.now()): void {
   for (const [id, login] of oauthLogins.entries()) {
