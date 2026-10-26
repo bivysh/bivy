@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **undici 8.12.3, zod 4.6.7, body-parser 2.4.0 and DOMPurify 3.4.17.** They fix GHSA-xjj6-f33q-929c (undici: denial of service through an unhandled error on excessive content-encodings), GHSA-mrhx-c7xc-m3w5 (zod: memory exhaustion validating oversized constrained collections), GHSA-27r3-jxmh-p828 (body-parser: denial of service through trailing bytes after a compressed body), and GHSA-cg2g-xh64-v4q7 and GHSA-mrv2-3pqr-j5jr (DOMPurify: a SAFE_FOR_TEMPLATES bypass in shadow-root content, and event handlers left armed after an IN_PLACE hook removes a parent).
 
+### Fixed
+
+- **The Pi agent works again on fresh installs.** `pi-coding-agent` 1.0.4 accepts any 1.x of its sibling packages, and `pi-codemode` 1.4.0 removed an export it imports, so every bridge install since 2026-10-21 failed to load Pi with "does not provide an export named 'MCP_TYPESCRIPT_PREAMBLE'". Other features that load Pi failed with it: picking an agent did nothing, a confirmation said Bivy "couldn't check which sign-in this agent will use", and a first message could be dropped without an error. The sibling packages are now pinned to the version `pi-coding-agent` is built against.
+- **Connecting your AI on your own computer says where the sign-in is kept.** After choosing Bivy Cloud and then picking your own computer, the card still said the sign-in stays "on this cloud computer". It now follows the selected machine.
+
 ## [0.21.3] - 2026-10-22
 
 ### Changed
