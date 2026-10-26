@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { describe, expect, it } from "vitest";
 import {
+  looksLikeModelFailure,
   b64,
   unb64,
   b64url,
@@ -449,5 +450,22 @@ describe("linking", () => {
     const encoded = b64url(new TextEncoder().encode(JSON.stringify(payload)));
     expect(base64UrlToJson(encoded)).toEqual(payload);
     expect(linkPayloadFromText(`https://x/#${encoded}`)).toEqual(payload);
+  });
+});
+
+describe("looksLikeModelFailure", () => {
+  it("recognises errors about the chosen model, and nothing else", () => {
+    for (const text of [
+      "Model unavailable for this account",
+      "The model `gpt-9` does not exist or you do not have access to it.",
+      "Error: unknown model 'claude-x'",
+      "model_not_found",
+      "Your organization does not have access to model o5",
+    ]) expect(looksLikeModelFailure(text), text).toBe(true);
+    for (const text of [
+      "Failed to authenticate: OAuth session expired",
+      "Codex reached its usage limit. It resets at 4:00 PM.",
+      "The file was not found.",
+    ]) expect(looksLikeModelFailure(text), text).toBe(false);
   });
 });

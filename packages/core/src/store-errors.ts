@@ -64,6 +64,23 @@ export function looksLikeAuthFailure(text: string): boolean {
   return /\b401\b|\b403\b|unauthori[sz]ed|authenticat|oauth|subscription|invalid x-api-key|(missing|no|expired|invalid)[\s\S]*(bearer|api[\s_-]?key|token|credential)/i.test(t);
 }
 
+/**
+ * True when a failure is about the chosen model rather than the work or the
+ * sign-in — the account can't use it, it doesn't exist, or the plan doesn't
+ * cover it. Callers offer "Choose another model" next to the error. Like
+ * looksLikeAuthFailure, only ever applied to text already classified as an error.
+ */
+const MODEL_FAILURE_PATTERNS: readonly RegExp[] = [
+  /\bmodel\b[^.]*\b(unavailable|not available|not found|not supported|does not exist|is not allowed)\b/i,
+  /\b(unknown|invalid|unsupported) model\b/i,
+  /\bmodel_not_found\b/i,
+  /does not have access to (the )?model/i,
+];
+export function looksLikeModelFailure(text: string): boolean {
+  const t = String(text ?? "");
+  return MODEL_FAILURE_PATTERNS.some((pattern) => pattern.test(t));
+}
+
 /** Agent family → the credential provider its sign-in targets. Matched by id
  *  prefix so versioned/variant ids (claude-code-sdk, codex-approvals) need no
  *  row of their own. Agents that are not tied to one provider (pi, opencode,

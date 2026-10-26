@@ -310,6 +310,7 @@ export class AppController {
   private composerPrefillListeners = new Set<(text: string, attachments: PromptAttachment[]) => void>();
   /** Subscribers that want the composer's slash-command menu opened (the "/" pill). */
   private slashOpenListeners = new Set<() => void>();
+  private modelPickerOpenListeners = new Set<() => void>();
   /** Product milestones are aggregate and content-free. Once-only activation
    *  events are latched in this browser so reconnect/history replay cannot
    *  inflate them; the in-flight guard also closes double-emission races. */
@@ -1168,6 +1169,17 @@ export class AppController {
     for (const fn of this.composerPrefillListeners) fn(text, attachments);
     this.focusComposer();
     return this.composerPrefillListeners.size > 0;
+  }
+
+  /** Subscribe to model-picker-open requests (an error card's "Choose another
+   *  model"); the Composer owns the picker. Returns an unsubscribe fn. */
+  onOpenModelPicker(fn: () => void): () => void {
+    this.modelPickerOpenListeners.add(fn);
+    return () => this.modelPickerOpenListeners.delete(fn);
+  }
+
+  openModelPicker(): void {
+    for (const fn of this.modelPickerOpenListeners) fn();
   }
 
   /** Subscribe to slash-menu-open requests (the Composer wires its "/" popover

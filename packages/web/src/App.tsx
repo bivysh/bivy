@@ -506,6 +506,7 @@ export function App() {
       return;
     }
     if (name.startsWith("retry-at-reset:")) { controller.setLimitRetry(true); return; }
+    if (name === "choose-model") { controller.openModelPicker(); return; }
     switch (name) {
       case "/new": controller.newSession(); break;
       case "fork": setForkSheetOpen(true); break;
