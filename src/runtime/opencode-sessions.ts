@@ -17,6 +17,10 @@
 // to the model — and `opencode session list` / `opencode export` read the same
 // snapshot, so those three rows are all a replay fork needs.
 //
+// OpenCode 2 moved sessions to new tables; every function below hands a v2
+// store to opencode-v2-store.ts, which reads those tables and writes through
+// OpenCode's own CLI.
+//
 // IMPORTANT — best-effort, verified against opencode 1.18.23 (the version
 // pin in AGENT_PROFILES): the schema is version-variable, so the writer checks
 // for the `session`/`message`/`part` tables and throws (never corrupts) when a
@@ -31,6 +35,17 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import type { ForkHistoryMessage, ForkImportContext, ForkNativePayload, RuntimeMessage } from "./types.js";
+import {
+  OPENCODE_V2_PAYLOAD,
+  deleteOpenCodeV2Session,
+  discoverOpenCodeV2Session,
+  exportOpenCodeV2Session,
+  forkOpenCodeV2Document,
+  importOpenCodeV2Document,
+  isOpenCodeV2Store,
+  loadOpenCodeV2Transcript,
+  openCodeV2DocumentFromHistory,
+} from "./opencode-v2-store.js";
 
 type DatabaseSync = {
   exec(sql: string): void;
@@ -116,6 +131,24 @@ function openOpenCodeDb(readWrite: boolean): DatabaseSync {
   return db;
 }
 
+/** Run `read` against the node's store when it is an OpenCode 2 store (read-only);
+ *  undefined when it is an OpenCode 1 store, or there is none. */
+function readV2Store<T>(read: (db: DatabaseSync) => T): { value: T } | undefined {
+  const file = opencodeDbPath();
+  if (!fs.existsSync(file)) return undefined;
+  let db: DatabaseSync;
+  try {
+    db = new (loadDatabaseSync())(file, { readOnly: true });
+  } catch {
+    return undefined;
+  }
+  try {
+    return isOpenCodeV2Store(db) ? { value: read(db) } : undefined;
+  } finally {
+    db.close();
+  }
+}
+
 /** The OpenCode version string to stamp on a fork session — learn it from the
  *  newest session in the store (matches the installed binary), else a fallback. */
 function openCodeVersion(db: DatabaseSync): string {
@@ -149,11 +182,12 @@ function resolveModel(ctx: ForkImportContext): { modelID: string; providerID: st
 export function writeOpenCodeHistory(
   history: ForkHistoryMessage[],
   ctx: ForkImportContext,
-): { sessionFile: string; id: string } {
+): { sessionFile: string; id: string } | Promise<{ sessionFile: string; id: string }> {
   if (process.env.BIVY_OPENCODE_NO_FORK_REPLAY === "1") {
     throw new Error("OpenCode fork replay disabled (BIVY_OPENCODE_NO_FORK_REPLAY=1)");
   }
   if (history.length === 0) throw new Error("Nothing to replay: fork history is empty");
+  if (readV2Store(() => true)) return importOpenCodeV2Document(openCodeV2DocumentFromHistory(history, ctx));
 
   const db = openOpenCodeDb(true);
   try {
@@ -290,6 +324,8 @@ function insertRow(db: DatabaseSync, table: string, row: Row): void {
  * is missing (the engine then degrades to replayed/seeded).
  */
 export function exportOpenCodeSession(sessionRef: string): ForkNativePayload | undefined {
+  const v2 = readV2Store((store) => exportOpenCodeV2Session(store, sessionRef));
+  if (v2) return v2.value;
   let db: DatabaseSync;
   try {
     db = openOpenCodeDb(false);
@@ -316,10 +352,11 @@ export function exportOpenCodeSession(sessionRef: string): ForkNativePayload | u
  * kind, missing session row, incompatible store) so the fork engine degrades to
  * the replayed/seeded tiers. Honors BIVY_OPENCODE_NO_FORK_REPLAY.
  */
-export function importOpenCodeSession(payload: ForkNativePayload, ctx: ForkImportContext): { sessionFile: string; id: string } {
+export function importOpenCodeSession(payload: ForkNativePayload, ctx: ForkImportContext): { sessionFile: string; id: string } | Promise<{ sessionFile: string; id: string }> {
   if (process.env.BIVY_OPENCODE_NO_FORK_REPLAY === "1") {
     throw new Error("OpenCode fork transport disabled (BIVY_OPENCODE_NO_FORK_REPLAY=1)");
   }
+  if (payload.kind === OPENCODE_V2_PAYLOAD) return importOpenCodeV2Document(forkOpenCodeV2Document(payload, ctx));
   if (payload.kind !== "opencode-rows") throw new Error(`Unexpected OpenCode fork payload kind: ${payload.kind}`);
   const data = payload.data as { session?: Row; messages?: Row[]; parts?: Row[] } | undefined;
   const srcSession = data?.session;
@@ -393,6 +430,8 @@ export function importOpenCodeSession(payload: ForkNativePayload, ctx: ForkImpor
  * unknown session yields an empty list, never a throw.
  */
 export function loadOpenCodeTranscript(sessionRef: string): RuntimeMessage[] {
+  const v2 = readV2Store((store) => loadOpenCodeV2Transcript(store, sessionRef));
+  if (v2) return v2.value;
   const messages: RuntimeMessage[] = [];
   let db: DatabaseSync;
   try {
@@ -444,7 +483,8 @@ export function loadOpenCodeTranscript(sessionRef: string): RuntimeMessage[] {
  * missing store or unknown id is not an error. The write-side counterpart to
  * loadOpenCodeTranscript.
  */
-export function deleteOpenCodeSession(sessionRef: string): boolean {
+export function deleteOpenCodeSession(sessionRef: string): boolean | Promise<boolean> {
+  if (readV2Store(() => true)) return deleteOpenCodeV2Session(sessionRef);
   let db: DatabaseSync;
   try {
     db = openOpenCodeDb(true);
@@ -478,6 +518,13 @@ export function deleteOpenCodeSession(sessionRef: string): boolean {
  * (`directory`, `time_created`, `parent_id`).
  */
 export function discoverOpenCodeSessionForCwd(cwd: string, since = 0): { id: string } | undefined {
+  const skewMs = 5_000;
+  try {
+    const v2 = readV2Store((store) => discoverOpenCodeV2Session(store, cwd, since - skewMs));
+    if (v2) return v2.value;
+  } catch {
+    return undefined;
+  }
   let db: DatabaseSync;
   try {
     db = openOpenCodeDb(false);
@@ -485,7 +532,6 @@ export function discoverOpenCodeSessionForCwd(cwd: string, since = 0): { id: str
     return undefined;
   }
   try {
-    const skewMs = 5_000;
     const row = db
       .prepare("SELECT id FROM session WHERE directory = ? AND parent_id IS NULL AND time_created >= ? ORDER BY time_created ASC, id LIMIT 1")
       .get(path.resolve(cwd), since - skewMs) as { id?: string } | undefined;

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **OpenCode 2 keeps forks, imports and terminal takeover.** OpenCode 2 moved its sessions to new tables, so forking an OpenCode session, forking another agent's chat into OpenCode, taking a `bivy run opencode` terminal over as chat, and deleting its session all quietly stopped working. Bivy now reads OpenCode 2's sessions and writes them through `opencode session import` and `delete`. OpenCode 1 works as before.
 - **Agents stop when their node does.** If the node crashed or was killed mid-session, the Codex app-server and every ACP agent (OpenCode, Grok, Gemini and others) kept running with no owner, each holding hundreds of MB. The shim now stops its agent and exits as soon as the node is gone.
 - **A failed message shows the reason, not a stack trace.** When an agent rejected a prompt (for example Pi with no model login), chat and `bivy exec` got the raw stack with internal file paths. They now get the same short message or sign-in card as any other failed turn.
 

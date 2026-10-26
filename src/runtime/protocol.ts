@@ -130,7 +130,7 @@ export interface ProtocolRuntimeOptions {
    * `loadHistory`. Best-effort — the fork engine falls back to a seeded prompt if
    * this throws. Absent = no history import for this agent.
    */
-  writeHistory?: (history: ForkHistoryMessage[], ctx: ForkImportContext) => { sessionFile: string; id: string };
+  writeHistory?: (history: ForkHistoryMessage[], ctx: ForkImportContext) => { sessionFile: string; id: string } | Promise<{ sessionFile: string; id: string }>;
   /**
    * Optional: NATIVE same-runtime fork transport (fidelity "full", byte-exact) —
    * export a session's own on-disk store as an opaque payload, and import that

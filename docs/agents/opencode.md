@@ -6,7 +6,7 @@ streaming, native resume, and a model picker populated from the providers you
 have actually signed into.
 
 - **Runtime id:** `opencode` · **Tier:** Supported · **In picker:** Yes
-- **Release-tested against:** OpenCode 1.19.4
+- **Release-tested against:** OpenCode 1.19.4 (OpenCode 2.1.4 also checked; see below)
 
 ## Install
 
@@ -65,6 +65,23 @@ resumes it and the model opens on the full conversation instead of a summary
 prompt. Best-effort like Codex's replay: if the node's OpenCode store is missing
 or on an unknown schema, the fork degrades to the seeded continuation prompt;
 `BIVY_OPENCODE_NO_FORK_REPLAY=1` forces that fallback.
+
+## OpenCode 2
+
+OpenCode 2 is a separate install (`opencode upgrade --major`, or the
+`@opencode/cli` package); `opencode-ai` on npm stays on 1.x. Bivy drives both
+through `opencode acp`.
+
+OpenCode 2 keeps sessions in new tables (`session_v2`, `session_message`). Bivy
+detects that store and reads it directly, but writes only through OpenCode's own
+CLI: a fork or a cross-agent replay becomes `opencode session import
+--standalone`, and deleting a session in the app runs `opencode session delete
+--standalone`. `--standalone` keeps these commands from starting OpenCode's
+background service.
+
+OpenCode 2 no longer reads `auth.json` or `OPENCODE_AUTH_CONTENT`, so a ChatGPT
+plan connected in Bivy does not reach it. Sign in with `opencode auth login` on
+the node. API keys in Bivy's vault still arrive as environment variables.
 
 ## How it runs (and the version fallback)
 
