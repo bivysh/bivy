@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Saving an automation for Bivy Cloud is instant again.** Every save woke the cloud computer and paired with it before saving, so the button sat on "Waking Bivy Cloud…" even when this device already held its key. Saving now uses the held key right away. The current key is checked in the background afterwards, and the instructions are re-sealed if the computer was rebuilt with a new one. Bivy only waits for the cloud computer first when this device has no key for it, or its instructions were flagged unreadable.
+- **Automations managed by `.bivy/automations.yaml` say so in the editor.** Saving one from the app was refused by the server, and only after any wait for the machine. The editor now explains that the file owns it and disables Save.
+
 ## [0.21.6] - 2026-10-26
 
 ### Fixed

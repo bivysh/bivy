@@ -405,6 +405,24 @@ async function openAutomationTemplate(nodeId: string, payload: string, flagged?:
   return current && current !== held ? openTemplate(current, payload) : undefined;
 }
 
+/** Instructions for Bivy Cloud are saved under the key this device holds, so
+ *  saving doesn't wait for it to wake. The computer gets a new key when the
+ *  deployment rebuilds it, so fetch its current key afterwards and re-seal them
+ *  if it changed; otherwise its runs couldn't open them. */
+async function resealIfCloudKeyChanged(configId: string, nodeId: string, id: string, template: string, sealedWith: string): Promise<void> {
+  try {
+    await controller.connectCloudComputer(configId, { replace: true });
+    const current = controller.local.keys()[nodeId];
+    if (!current || current === sealedWith) return;
+    const encrypted = await seal(await importRoomKey(unb64url(current)), template);
+    await updateAutomation(controller.local, id, { templateCiphertext: `${TEMPLATE_PREFIX}:${nodeId}:${encrypted}` });
+  } catch (cause) {
+    // The cloud computer flags instructions it can't open, and the list asks
+    // for them again, so a check that can't finish is safe to drop.
+    console.warn("[automations] couldn't confirm Bivy Cloud's key:", cause);
+  }
+}
+
 interface Notice {
   tone: "ok" | "info" | "warn";
   title: string;
@@ -1889,7 +1907,9 @@ function AutomationEditor({
   if (!d.nodeId) missing.push("a machine");
   // Bivy Cloud is paired on save (it wakes first); any other machine must be already.
   else if (!controller.local.keys()[d.nodeId] && !selectedManaged) missing.push("a paired machine (encryption key missing)");
-  const canSave = missing.length === 0;
+  // The control plane only accepts changes to a file-managed automation from `bivy automation apply`.
+  const fileManaged = existing?.configKey;
+  const canSave = missing.length === 0 && !fileManaged;
   const unsafeCombo = d.approvalMode === "autonomous" && d.sandbox === "danger-full-access";
 
   /** Builds the same draft shape save() would submit (best-effort — this
@@ -1932,15 +1952,23 @@ function AutomationEditor({
     if (!canSave) return;
     setBusy(true);
     setError("");
+    // Bivy Cloud only has to wake before saving when this device has no key
+    // for it, or the stored instructions were flagged as sealed under a key it
+    // no longer has. Otherwise the held key is checked after saving.
     // The runner card shows why pairing failed; don't repeat it here.
-    if (selectedManaged && !(await pairCloudComputer(true))) {
+    const pairFirst = selectedManaged && (!controller.local.keys()[d.nodeId] || Boolean(d.instructionsUnreadable));
+    if (pairFirst && !(await pairCloudComputer(true))) {
       setBusy(false);
       return;
     }
     try {
       const roomKey = d.nodeId ? controller.local.keys()[d.nodeId] : undefined;
       if (!d.nodeId || !roomKey) throw new Error("Connect to the assigned machine before saving encrypted instructions.");
-      const encrypted = await seal(await importRoomKey(unb64url(roomKey)), encodeAutomationTemplate(d.instructions.trim(), d.credentialLabels, webhookFilter.filter));
+      const template = encodeAutomationTemplate(d.instructions.trim(), d.credentialLabels, webhookFilter.filter);
+      const encrypted = await seal(await importRoomKey(unb64url(roomKey)), template);
+      const confirmCloudKey = (id: string) => {
+        if (selectedManaged && managedTarget && !pairFirst) void resealIfCloudKeyChanged(managedTarget.config.id, d.nodeId, id, template, roomKey);
+      };
       const nodeName = selectedManaged ? undefined : selectedNode?.name;
       if (selectedManaged && managedTarget) {
         await controller.setQueueRouting({ primary: { kind: "config", configId: managedTarget.config.id } });
@@ -2013,6 +2041,7 @@ function AutomationEditor({
         ? { webhookSecret: customWebhookSecret } : {};
       if (d.id) {
         const result = await updateAutomation(controller.local, d.id, { ...input, ...secretInput });
+        confirmCloudKey(d.id);
         // Turning signing on for a previously unsigned webhook mints a secret
         // that is disclosed only in this response — show it like a create.
         if (d.trigger === "webhook" && result.webhookSecret) {
@@ -2022,6 +2051,7 @@ function AutomationEditor({
         }
       } else {
         const result = await createAutomation(controller.local, { ...input, ...secretInput });
+        confirmCloudKey(result.id);
         if (d.trigger === "webhook" && result.webhookSecret) {
           setCreated({ url: result.webhookUrl ?? "", secret: result.webhookSecret, name: d.name.trim() });
         } else if (d.trigger === "webhook") {
@@ -2513,7 +2543,9 @@ function AutomationEditor({
             {error && <div className="autom-save-error" role="alert">{error}</div>}
             <div className="wizard-actions">
               <button type="button" className="btn" onClick={closeWithBack} disabled={busy}>Cancel</button>
-              {!canSave && missing.length > 0 && (
+              {fileManaged ? (
+                <span className="settings-hint autom-save-hint">Managed by .bivy/automations.yaml ({fileManaged}). Edit the file and run <code>bivy automation apply</code>.</span>
+              ) : !canSave && missing.length > 0 && (
                 <span className="settings-hint autom-save-hint">Needs {missing.join(", ")} to save.</span>
               )}
               <button
