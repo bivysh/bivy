@@ -358,6 +358,9 @@ test("the preview works framed inside Bivy and hands drafts to it", async ({ pag
     await page.route("https://*.preview.example.net/__bivy/redeem", async (route) => {
       const request = route.request(); const url = new URL(request.url());
       const response = await route.fetch({ url: `http://127.0.0.1:${port}${url.pathname}`, headers: { ...await request.allHeaders(), host: url.host } });
+      // route.fetch keeps response cookies in the context's jar and sends them
+      // on later proxied requests; drop that copy too, or the refusal is undone.
+      await page.context().clearCookies({ domain: "127.0.0.1" });
       await route.fulfill({ status: response.status(), headers: Object.fromEntries(Object.entries(response.headers()).filter(([key]) => key !== "set-cookie")) });
     });
     await page.context().clearCookies();
