@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Pi 1.4.0.** The Pi agent moves from 1.0.4 to 1.4.0, with its sibling packages pinned to the same version. Pi's own fixes include sessions that broke after a reply was cut off at the output limit, and its `grep` tool no longer following `RIPGREP_CONFIG_PATH`. See Pi's changelog for changed default models.
+
+### Fixed
+
+- **API keys stored as references work with Pi.** A key added as `op://`, `env://` or `cmd://` (`bivy credentials add`) was invisible to Pi, which only read keys stored in the vault itself. Pi now reads a reference when it needs the key.
+- **`bivy exec --session … --model …` switches the model.** `--model` was ignored when continuing a session; it now applies before the turn, and exec says so if the model isn't available.
+- **A cancelled `bivy exec` turn says it was cancelled.** It printed the prompt as the answer and exited 0; it now exits non-zero with "The turn was cancelled."
+
 ## [0.21.7] - 2026-10-26
 
 ### Fixed

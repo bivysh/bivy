@@ -30,6 +30,13 @@ try {
   assert.equal(await store.read("anthropic"), undefined, "a dangling account mapping must not use default");
   assert.ok(!(await store.list()).some((record) => record.providerId === "anthropic"));
   await assert.rejects(store.modify("anthropic", async (current) => current), /No account selected/);
+
+  // A reference is an API key read at use time; Pi only sees it with a resolver.
+  await vault.setReference("groq", "env://GROQ_TEST_KEY", "env");
+  assert.equal(await store.read("groq"), undefined, "without a resolver a reference is not a credential");
+  const resolving = selectedCredentialStore(vault, credsDir, undefined, { resolve: async (ref) => (ref === "env://GROQ_TEST_KEY" ? "gsk-test" : undefined) });
+  assert.deepEqual(await resolving.read("groq"), { type: "api_key", key: "gsk-test" });
+  assert.ok((await resolving.list()).some((record) => record.providerId === "groq" && record.type === "api_key"));
 } finally {
   fs.rmSync(dir, { recursive: true, force: true });
 }

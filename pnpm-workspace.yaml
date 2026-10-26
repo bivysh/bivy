@@ -43,16 +43,16 @@ overrides:
   # pinning vulnerable copies below its own node_modules.
   "@earendil-works/pi-coding-agent>brace-expansion": 5.0.12
   "@earendil-works/pi-coding-agent>undici": 8.12.3
-  # pi-coding-agent asks for its sibling packages with ^ ranges, but they are
-  # released together and a newer sibling can drop exports it imports
-  # (pi-codemode 1.4.0 removed MCP_TYPESCRIPT_PREAMBLE). Hold them at the
-  # version pi-coding-agent itself is pinned to.
-  "@earendil-works/chord": 1.0.4
-  "@earendil-works/pi-agent-core": 1.0.4
-  "@earendil-works/pi-codemode": 1.0.4
-  "@earendil-works/pi-mcp": 1.0.4
-  "@earendil-works/pi-telemetry": 1.0.4
-  "@earendil-works/pi-tui": 1.0.4
+  # Pi's packages are released together, and pi-coding-agent 1.0.x asked for
+  # its siblings with ^ ranges: a newer sibling once dropped an export it
+  # imports (pi-codemode 1.4.0, MCP_TYPESCRIPT_PREAMBLE). Keep every sibling at
+  # the pi-coding-agent version, and move them together.
+  "@earendil-works/chord": 1.4.0
+  "@earendil-works/pi-agent-core": 1.4.0
+  "@earendil-works/pi-codemode": 1.4.0
+  "@earendil-works/pi-mcp": 1.4.0
+  "@earendil-works/pi-telemetry": 1.4.0
+  "@earendil-works/pi-tui": 1.4.0
 
 # pnpm does not run a dependency's install scripts unless it is listed here.
 # Each `true` is arbitrary code we let run at install time, so every entry is a
