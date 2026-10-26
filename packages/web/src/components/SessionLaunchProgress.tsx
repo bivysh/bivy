@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { ModelInfo, SessionLaunchCheckpointId, SessionLaunchProgress } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
 import { LaunchModelChoice } from "./LaunchModelChoice.js";
+import { useAppState } from "../store/useStore.js";
 
 const CHECKPOINTS: ReadonlyArray<{ id: SessionLaunchCheckpointId; label: string; skippedLabel?: string }> = [
   { id: "account", label: "Checking account and provider access" },
@@ -36,6 +37,9 @@ export function SessionLaunchProgressView({
   onRetryLaunch?: () => Promise<void>;
 }) {
   const choice = progress.modelChoice;
+  // When the chat already shows the failure as an error card (with its fixes),
+  // the failed step points there instead of repeating the message.
+  const errorShownBelow = useAppState().activeSession.transcript.some((entry) => entry.role === "error");
   const needsCredentials = progress.checkpoints.account?.errorCode === "managed_credentials_required";
   const terminalAt = progress.firstResponseAt ?? progress.failedAt;
   const [now, setNow] = useState(() => terminalAt ?? Date.now());
@@ -76,7 +80,7 @@ export function SessionLaunchProgressView({
               </span>
               <span>
                 <span className="session-launch-checkpoint-label">{text}</span>
-                {state === "failed" && checkpoint?.error && <span className="session-launch-checkpoint-error">{checkpoint.error}</span>}
+                {state === "failed" && checkpoint?.error && <span className="session-launch-checkpoint-error">{errorShownBelow ? "See the error below." : checkpoint.error}</span>}
               </span>
               <span className="sr-only"> — {state}</span>
             </li>
