@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { activationFromState, authProviderForRuntime, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionAppsResult, type SessionSummary } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
@@ -82,6 +82,8 @@ import { readSessionView, writeSessionView, type SessionView } from "./sessionVi
 import { CloseIcon, PanelRightIcon, SearchIcon } from "./components/UiIcons.js";
 import { SidePane } from "./components/SidePane.js";
 import { useSidePane, type SidePaneTabId } from "./useSidePane.js";
+import { ResizeHandle } from "./components/ResizeHandle.js";
+import { SIDEBAR_SIZE, SIDE_PANE_SIZE, usePanelWidth } from "./usePanelWidth.js";
 import { controller } from "./store/useStore.js";
 import { onAppsSheetRequest, type AppsSheetRequest } from "./appsSheetRequest.js";
 import { attentionRank, isUnseen, runStatusLabel, statusClass, type SessionStatusInput } from "./sessionStatus.js";
@@ -153,6 +155,8 @@ export function App() {
   // On a wide screen these surfaces dock beside the chat instead (see
   // useSidePane); every way of opening one goes through `sidePane.show`.
   const sidePane = useSidePane();
+  const [sidebarWidth, setSidebarWidth] = usePanelWidth(SIDEBAR_SIZE);
+  const [paneWidth, setPaneWidth] = usePanelWidth(SIDE_PANE_SIZE);
   const showInSidePane = sidePane.show;
   // An apps request (a transcript card, a notification, the first task's app)
   // lands in the pane's Apps tab when the pane is how apps are shown.
@@ -860,7 +864,13 @@ export function App() {
   const openFiles = () => { if (!sidePane.show("files")) setFilesSheetOpen(true); };
 
   return (
-    <div className={`app${paneTab ? " has-pane" : ""}`}>
+    <div
+      className={`app${paneTab ? " has-pane" : ""}`}
+      style={{
+        ...(sidebarWidth !== null && { "--sidebar-col": `${sidebarWidth}px` }),
+        ...(paneWidth !== null && { "--pane-col": `${paneWidth}px` }),
+      } as CSSProperties}
+    >
       <div
         ref={drawerRef}
         className={`sidebar${drawerOpen ? " open" : ""}${sessionSearchOpen ? " is-searching" : ""}`}
@@ -869,6 +879,7 @@ export function App() {
         aria-label="Sessions and workspace"
         tabIndex={drawerOpen ? -1 : undefined}
       >
+        <ResizeHandle label="Resize sidebar" edge="end" size={SIDEBAR_SIZE} width={sidebarWidth} onResize={setSidebarWidth} />
         <div className="sidebar-head">
           <span className="brand"><BivyMark className="brand-mark" />Bivy</span>
           <div className="sidebar-head-actions">
@@ -1355,6 +1366,7 @@ export function App() {
 
       {paneTab && activeSession && (
         <SidePane
+          handle={<ResizeHandle label="Resize side pane" edge="start" size={SIDE_PANE_SIZE} width={paneWidth} onResize={setPaneWidth} />}
           tabs={[
             { id: "changes", label: "Changes", count: changedFiles },
             { id: "files", label: "Files" },

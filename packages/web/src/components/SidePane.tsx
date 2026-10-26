@@ -11,11 +11,13 @@ export type SidePaneTab<T extends string> = { id: T; label: string; count?: numb
  * whatever the parent renders for the active tab (the same component that is
  * a sheet on a phone, see Panel).
  */
-export function SidePane<T extends string>({ tabs, active, onSelect, onClose, children }: {
+export function SidePane<T extends string>({ tabs, active, onSelect, onClose, handle, children }: {
   tabs: ReadonlyArray<SidePaneTab<T>>;
   active: T;
   onSelect: (id: T) => void;
   onClose: () => void;
+  /** Optional resize edge (ResizeHandle) on the pane's leading side. */
+  handle?: ReactNode;
   children: ReactNode;
 }) {
   const refs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -32,6 +34,7 @@ export function SidePane<T extends string>({ tabs, active, onSelect, onClose, ch
   };
   return (
     <aside className="side-pane" aria-label="Session details">
+      {handle}
       <div className="side-pane-head">
         <div className="segmented side-pane-tabs" role="tablist" aria-label="Session details">
           {tabs.map((tab, index) => (

@@ -245,13 +245,30 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    viewport. Falls back to 100dvh where the visualViewport API is unavailable. */
 .app {
   position: fixed; top: var(--app-top, 0px); left: 0; width: 100%;
-  display: grid; grid-template-columns: var(--sidebar-col) 1fr; height: var(--app-h, 100dvh); overflow: hidden;
+  display: grid; grid-template-columns: min(var(--sidebar-col), 36vw) minmax(0, 1fr); height: var(--app-h, 100dvh); overflow: hidden;
 }
 .sidebar {
   display: flex; flex-direction: column; min-height: 0; height: var(--app-h, 100dvh);
   position: sticky; top: 0;
   border-right: 1px solid var(--line); background: var(--surface);
 }
+/* Drag edge on a desktop panel (ResizeHandle): an invisible strip over the
+   panel's border that shows an accent line on hover, focus and drag. */
+.resize-handle {
+  position: absolute; inset-block: 0; z-index: var(--z-sticky); width: 9px;
+  cursor: col-resize; touch-action: none; outline: none;
+}
+.resize-handle.end { right: -5px; }
+.resize-handle.start { left: -5px; }
+.resize-handle::after {
+  content: ""; position: absolute; inset-block: 0; left: 4px; width: 1px;
+  background: transparent; transition: background var(--dur) var(--ease-standard);
+}
+.resize-handle:hover::after, .resize-handle:focus-visible::after, .is-resizing .resize-handle::after { background: var(--accent); width: 2px; left: 3.5px; }
+/* While dragging, keep the resize cursor everywhere and stop text selection
+   and embedded frames (previews, terminals) from swallowing the pointer. */
+.is-resizing, .is-resizing * { cursor: col-resize !important; user-select: none; }
+.is-resizing iframe { pointer-events: none; }
 .sidebar-head {
   display: flex; align-items: center; justify-content: space-between;
   min-height: var(--toolbar-h); box-sizing: border-box; padding: 0 var(--space-2) 0 var(--space-3);
@@ -340,9 +357,11 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    beside the chat instead of in a sheet over it. Same bodies as the sheets
    (components/Panel.tsx), docked; below the breakpoint in App.tsx the pane
    is never rendered and the sheets are used. */
-.app.has-pane { grid-template-columns: var(--sidebar-col) minmax(0, 1fr) clamp(380px, 32vw, 600px); }
+/* Widths the user dragged to (ResizeHandle) are capped by the window, so a
+   remembered wide panel can't crowd out the chat on a smaller one. */
+.app.has-pane { grid-template-columns: min(var(--sidebar-col), 36vw) minmax(0, 1fr) min(var(--pane-col, clamp(380px, 32vw, 600px)), 45vw); }
 .side-pane {
-  display: flex; flex-direction: column; min-width: 0; min-height: 0; height: var(--app-h, 100dvh);
+  position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; height: var(--app-h, 100dvh);
   border-left: 1px solid var(--line); background: var(--surface);
 }
 .side-pane-head {
@@ -512,14 +531,6 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
   position: relative; display: flex; align-items: center; gap: var(--space-2); width: 100%; text-align: left;
   padding: 6px var(--space-2); border: 0; border-radius: var(--radius-md); background: transparent; color: var(--ink);
 }
-/* Desktop rows are one line; the machine (only with more than one) sits before
-   the age. Phones keep the meta line, which already names it. */
-.session-machine {
-  flex: 0 1 auto; min-width: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  color: var(--muted); font-size: var(--text-xs); line-height: var(--lh-xs);
-}
-@media (min-width: 721px) and (pointer: fine) { .session-item .session-meta { display: none; } }
-@media not ((min-width: 721px) and (pointer: fine)) { .session-machine { display: none; } }
 .session-item:hover { background: var(--surface-2); }
 .session-item.active, .session-item[aria-current="page"] { background: var(--surface-2); }
 /* Two single-line rows: title (+ status dot, PR mark, age) over a quiet meta
@@ -3235,6 +3246,7 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
     visibility: hidden;
   }
   .sidebar.open { transform: translateX(0); visibility: visible; box-shadow: var(--shadow-xl); }
+  .sidebar .resize-handle { display: none; }
   /* Agent rows have two optional actions. Put them on their own line instead
      of reducing the actual agent choice to a clipped sliver. */
   .picker-item-row.with-actions { display: grid; grid-template-columns: minmax(0, 1fr); padding-bottom: var(--space-1); }
