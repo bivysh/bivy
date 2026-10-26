@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Agents tested against their latest releases.** Bivy now ships and release-tests Pi 1.4.0 (with its sibling packages moved together), the Claude Agent SDK 0.3.310 (Claude Code 2.1.310), Codex 0.164.0, OpenCode 1.19.4 and Grok 1.0.70.
 - **The sidebar is readable on desktop.** Session rows had squeezed the title, a PR badge, the machine name and the age onto one line, so most titles were cut to a few letters. Desktop rows now match the phone layout: the full-width title on top, with agent, machine and repo on a quieter line below.
 - **Resize the sidebar and the side pane.** On desktop, drag the inner edge of either panel to resize it. Arrow keys work when the edge is focused, and double-clicking the edge restores the default width. Each panel remembers its width across reloads.
 

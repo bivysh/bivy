@@ -6,10 +6,10 @@
 
 | Agent | Runtime id | Validated range | Platforms | Required mode | Release-tested capabilities |
 | --- | --- | --- | --- | --- | --- |
-| Claude Code | `claude-code-sdk` | `>=0.3.286 <=0.3.286` (pin `0.3.286`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
-| Codex (governed) | `codex-approvals` | `>=0.159.2 <=0.159.2` (pin `0.159.2`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
-| Pi | `pi` | `>=1.0.4 <=1.0.4` (pin `1.0.4`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
-| OpenCode ACP | `opencode` | `>=1.18.33 <=1.18.33` (pin `1.18.33`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
-| Grok | `grok` | `>=1.0.44 <=1.0.44` (pin `1.0.44`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| Claude Code | `claude-code-sdk` | `>=0.3.310 <=0.3.310` (pin `0.3.310`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| Codex (governed) | `codex-approvals` | `>=0.164.0 <=0.164.0` (pin `0.164.0`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| Pi | `pi` | `>=1.4.0 <=1.4.0` (pin `1.4.0`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| OpenCode ACP | `opencode` | `>=1.19.4 <=1.19.4` (pin `1.19.4`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| Grok | `grok` | `>=1.0.70 <=1.0.70` (pin `1.0.70`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
 
 Deterministic normal-CI fixtures exercise: probe-install, auth-handoff, first-turn, structured-streaming, approval, denial, cancellation, resume, attachments, token-refresh, malformed-output, version-drift. Live credentials are tested only by explicit workflow dispatch. Nightly latest-upstream checks report drift for review and never update this file or the production pins.
