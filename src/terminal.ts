@@ -244,6 +244,9 @@ export { resolveExecutable } from "./executable.js";
 export class TerminalManager {
   private terminals = new Map<string, TerminalEntry>();
 
+  /** `onOpen` hears every terminal that opens (the node counts it as use). */
+  constructor(private readonly hooks: { onOpen?: () => void } = {}) {}
+
   /** The number of live terminals (for tests / capacity reporting). */
   get size(): number {
     return this.terminals.size;
@@ -378,6 +381,7 @@ export class TerminalManager {
       }
     });
 
+    this.hooks.onOpen?.();
     return id;
   }
 

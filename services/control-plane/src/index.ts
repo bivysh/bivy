@@ -22,7 +22,7 @@ import { publicManagedLaunchError } from "./managed-launch-error.js";
 import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation, mintInstallationToken } from "./hosted-github-auth.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { DeploymentCompute, deploymentCompute, managedComputeEnabled, setDeploymentCompute } from "./deployment-compute.js";
-import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, cloudRouteSourceLabel, isCloudComputerNode, isEphemeralMilestone, nodeMayTakeWork, routeWorkToCloudComputer } from "./cloud-computer.js";
+import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, cloudRouteSourceLabel, isCloudComputerNode, isCloudComputerPresence, isEphemeralMilestone, nodeMayTakeWork, routeWorkToCloudComputer } from "./cloud-computer.js";
 import { bootRunner, isRunnerNode, placeWorkOnRunner, runnerLabel, runnerNodeId } from "./runners.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
@@ -1463,6 +1463,19 @@ app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res)
   await respondCloudComputer(res, account.id, { purpose: "interactive", requestId: String(req.body?.requestId ?? randomUUID()), runtimeId: runtimeId || undefined });
 }));
 
+// Someone is in the app and may be about to work: wake their sleeping cloud
+// computer now, so it is up by the time they send. The app only reports
+// presence; whether that is worth starting the machine is the deployment's
+// call (computeWake's reason). Rate-limited: tab focus can fire often.
+app.post("/account/cloud-computer/presence", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  res.setHeader("cache-control", "no-store");
+  const reason = String(req.body?.reason ?? "");
+  if (!isCloudComputerPresence(reason)) return res.status(400).json({ error: "unknown presence reason" });
+  if (await store.rateLimitExceeded("cloud-computer-presence", account.id, 12, 60_000)) return res.json({ ok: true, waking: false });
+  res.json({ ok: true, waking: await wakeCloudComputerIfAsleep(account.id, reason) });
+}));
+
 // Bring a managed session back. The account's cloud computer keeps its
 // sessions on its own disk, so this is a wake. A lost disk is not rebuilt from
 // snapshots: they are sealed under the old disk's room key, which no one else
@@ -1644,7 +1657,14 @@ app.post("/node/ephemeral-milestone", requireNode, asyncHandler(async (req, res)
   // Only the account's cloud computer is tracked: its milestones live on the
   // node, for the current boot.
   if (!isCloudComputerNode(node.accountId, node.id)) return res.json({ ok: true, tracked: false });
-  await store.setNodeMilestone(node.id, milestone, new Date().toISOString());
+  const at = new Date().toISOString();
+  await store.setNodeMilestone(node.id, milestone, at);
+  // The machine's first real use this awake period (an agent turn or a
+  // terminal), not just being woken; the deployment may meter from here.
+  if (milestone === "firstUseAt") {
+    void deploymentExtension.computeUsed(node.accountId, node.id, at)
+      .catch((error) => console.warn(`[cloud-computer] used event failed for ${node.accountId}: ${error instanceof Error ? error.message : error}`));
+  }
   res.json({ ok: true, tracked: true });
 }));
 
@@ -4867,15 +4887,17 @@ app.post("/client/relay-ticket", asyncHandler(async (req, res) => {
   }
 }));
 
-async function wakeCloudComputerIfAsleep(accountId: string): Promise<void> {
+async function wakeCloudComputerIfAsleep(accountId: string, reason = "connect"): Promise<boolean> {
   try {
     const nodeId = cloudComputerNodeId(accountId);
     const node = (await store.listNodes(accountId)).find((candidate) => candidate.id === nodeId);
-    if (!node || node.online || !(await accountMachineMode(accountId))) return;
+    if (!node || node.online || !(await accountMachineMode(accountId))) return false;
     await store.resetNodeMilestones(nodeId);
-    await deploymentExtension.computeWake(accountId, nodeId);
+    await deploymentExtension.computeWake(accountId, nodeId, reason);
+    return true;
   } catch (error) {
     console.warn(`[cloud-computer] wake failed for ${accountId}:`, error instanceof Error ? error.message : error);
+    return false;
   }
 }
 
@@ -4969,7 +4991,7 @@ app.post("/internal/preview-wake", requireRelay, asyncHandler(async (req, res) =
   const route = String(req.body?.route ?? "");
   const node = /^[a-f0-9]{24}$/.test(route) ? await store.nodeByPreviewRoute(route) : undefined;
   const waking = Boolean(node && !node.online && isCloudComputerNode(node.accountId, node.id) && await accountMachineMode(node.accountId));
-  if (waking) void wakeCloudComputerIfAsleep(node!.accountId);
+  if (waking) void wakeCloudComputerIfAsleep(node!.accountId, "preview");
   res.json({ waking });
 }));
 

@@ -265,6 +265,16 @@ export function App() {
     }, 30000);
     return () => { clearInterval(id); stopObserving(); };
   }, [refreshGithubQueue, state.connection.signedIn]);
+  // Being in the app is the cue to wake a sleeping cloud computer, so it is up
+  // before the first message rather than after it (controller.signalPresence
+  // decides whether this person works on one). The node list is what says a
+  // computer exists and sleeps, so the open signal waits for it.
+  const nodesKnown = state.connection.nodes.length > 0;
+  useEffect(() => {
+    if (controller.direct || !state.connection.signedIn || !nodesKnown) return;
+    controller.signalPresence("app-open");
+    return onAppVisible(() => controller.signalPresence("app-visible"));
+  }, [state.connection.signedIn, nodesKnown]);
   useEffect(() => {
     if (controller.direct || !state.connection.signedIn) return;
     controller.getNotificationPreferences().then(setNotificationPreferencesSnapshot).catch(() => {});

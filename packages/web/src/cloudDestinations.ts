@@ -3,8 +3,9 @@
 import type { EphemeralNodeConfig, HostedMachineSummary } from "@bivy/core";
 
 /** One picker row for a deployment-provided cloud destination. `nodeId` set →
- * picking it reuses that running Machine; unset → a Machine launches when the
- * first message is sent. */
+ * picking it connects to the account's cloud computer, awake or asleep
+ * (connecting wakes it); unset → no computer exists yet and one is created when
+ * the first message is sent. */
 export interface CloudDestination {
   key: string;
   label: string;
@@ -21,6 +22,21 @@ interface NodeLike { id: string; online?: boolean }
  * quiet and wakes when used. */
 export function isCloudComputerNodeId(nodeId: string | undefined): boolean {
   return Boolean(nodeId?.startsWith("eph-managed-auto-"));
+}
+
+/**
+ * The sleeping cloud computer to wake because this person is in the app, or
+ * undefined. Only someone who works on it counts: it's their current machine,
+ * they picked Bivy Cloud, or they have no machine of their own (a new device
+ * that hasn't been asked yet). Someone who chose their own computer is left
+ * alone, as is a computer that is already up.
+ */
+export function cloudComputerToWake(nodes: NodeLike[], currentNodeId: string, place: "cloud" | "own" | null): string | undefined {
+  const computer = nodes.find((node) => isCloudComputerNodeId(node.id));
+  if (!computer || computer.online) return undefined;
+  if (currentNodeId === computer.id || place === "cloud") return computer.id;
+  const ownMachine = nodes.some((node) => !node.id.startsWith("eph-"));
+  return place === null && !ownMachine ? computer.id : undefined;
 }
 
 /** Whether a machine can be used now. A cloud computer that isn't connected is
@@ -52,9 +68,10 @@ export function cloudDestinations(
   const live = machines
     .filter((machine) => isCloudComputerNodeId(machine.nodeId) && online(machine.nodeId))
     .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  const sleeping = nodes.find((node) => isCloudComputerNodeId(node.id) && !node.online);
   return configs.filter((config) => config.computeSource === "managed").map((config) => {
     const reuse = live[0];
-    const asleep = !reuse && nodes.some((node) => isCloudComputerNodeId(node.id) && !node.online);
-    return { key: config.id, label: (config.name || "Bivy Cloud").replace(/^Hosted\s+/i, ""), online: Boolean(reuse), asleep, nodeId: reuse?.nodeId, config };
+    const asleep = !reuse && Boolean(sleeping);
+    return { key: config.id, label: (config.name || "Bivy Cloud").replace(/^Hosted\s+/i, ""), online: Boolean(reuse), asleep, nodeId: reuse?.nodeId ?? sleeping?.id, config };
   });
 }

@@ -178,10 +178,20 @@ export class DeploymentExtension {
     return { allowed: true, nodeId: result.nodeId, state: typeof result.state === "string" ? result.state : "launching" };
   }
 
-  /** Best-effort: start the account's sleeping cloud computer. */
-  async computeWake(accountId: string, nodeId: string): Promise<void> {
+  /** Best-effort: start the account's sleeping cloud computer. `reason` says
+   *  what asked: a connection, or the person being present in the app before
+   *  any connection (see CLOUD_COMPUTER_PRESENCE). The deployment decides
+   *  whether a presence wake is worth starting the machine for. */
+  async computeWake(accountId: string, nodeId: string, reason = "connect"): Promise<void> {
     if (!this.url) return;
-    await this.request("/v1/compute/wake", { subject: { accountId }, nodeId });
+    await this.request("/v1/compute/wake", { subject: { accountId }, nodeId, reason });
+  }
+
+  /** Best-effort: the cloud computer did real work in its current awake
+   *  period (its first agent event), as opposed to only being woken. */
+  async computeUsed(accountId: string, nodeId: string, at: string): Promise<void> {
+    if (!this.url) return;
+    await this.request("/v1/compute/used", { subject: { accountId }, nodeId, at });
   }
 
   /** The account's cloud machines, for the hosted-machines panel. */

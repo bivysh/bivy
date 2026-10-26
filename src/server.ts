@@ -921,7 +921,8 @@ setInterval(() => {
 // facilities; advertising Runs here caused routine work to create noisy,
 // top-level Sessions in the UI.
 const integrations = new IntegrationManager(appDir, undefined, attachToChatForSession);
-const terminals = new TerminalManager();
+// A terminal opened is someone using this machine, like an agent turn.
+const terminals = new TerminalManager({ onOpen: () => void reportEphemeralMilestone("firstUseAt") });
 // Per-session agents: a node holds one AgentRuntime instance *per agent id*,
 // built lazily and cached, instead of a single global runtime. `defaultRuntimeId`
 // is the agent used for sessions that don't name one (env-seeded). A runtime can't
@@ -4425,7 +4426,7 @@ const NODE_HEARTBEAT_MS = 30_000;
 let nodeHeartbeatTimer: ReturnType<typeof setInterval> | undefined;
 const reportedEphemeralMilestones = new Set<string>();
 
-async function reportEphemeralMilestone(milestone: "credentialsReadyAt" | "repositoryReadyAt" | "snapshotReadyAt" | "firstAgentEventAt" | "firstTokenAt"): Promise<void> {
+async function reportEphemeralMilestone(milestone: "credentialsReadyAt" | "repositoryReadyAt" | "snapshotReadyAt" | "firstAgentEventAt" | "firstTokenAt" | "firstUseAt"): Promise<void> {
   if (!sessionAdvertiseTarget || reportedEphemeralMilestones.has(milestone)) return;
   try {
     const res = await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/ephemeral-milestone`, {
@@ -8220,7 +8221,10 @@ function attachSessionListeners(record: SessionRecord) {
     });
   }
   record.unsubscribe = record.session.subscribe((event) => {
-    if (event.type === "agent_start" || event.type === "turn_start") void reportEphemeralMilestone("firstAgentEventAt");
+    if (event.type === "agent_start" || event.type === "turn_start") {
+      void reportEphemeralMilestone("firstAgentEventAt");
+      void reportEphemeralMilestone("firstUseAt");
+    }
     // Keep streamed assistant text ordered ahead of everything else: any event
     // that is not itself a superseding update must flush the session's pending
     // coalesced update first, so a tool_call / message_end never overtakes the

@@ -321,7 +321,10 @@ POST /v1/compute/profile
 POST /v1/compute/acquire   { "subject": {…}, "purpose": "interactive" | "auth-runner" | "automation",
                              "requestId": "…", "runtimeId"?: "…", "sessionId"?: "…" }
 → { "nodeId": "…", "state": "awake" | "waking" | "launching" }   or a policy denial
-POST /v1/compute/wake      { "subject": {…}, "nodeId": "…" }   → { "state": "…" }
+POST /v1/compute/wake      { "subject": {…}, "nodeId": "…",
+                             "reason": "connect" | "preview" | "app-open" | "app-visible" | "composer" }
+→ { "state": "…" }
+POST /v1/compute/used      { "subject": {…}, "nodeId": "…", "at": "<iso>" }   → {}
 POST /v1/compute/machines  { "subject": {…} }                  → { "machines": [ … ] }
 POST /v1/compute/release   { "subject": {…}, "nodeId": "…" }   → { "released": true }
 ```
@@ -335,7 +338,16 @@ POST /v1/compute/release   { "subject": {…}, "nodeId": "…" }   → { "releas
   cloud. A refusal is returned to the client as the deployment's decision, so
   enforce plans and limits there.
 - **Wake.** Called when a client connects to, or a preview link is opened for,
-  the sleeping node.
+  the sleeping node (`"connect"`, `"preview"`), and when someone who works on the cloud
+  computer is present in the app before connecting: it opened, came back into
+  view, or the composer got focus. Presence only says the person may be about
+  to work; whether that is worth starting the machine (plan, hours left) is
+  the deployment's call.
+- **Used.** Sent once per boot, at the node's first real use (an agent turn or
+  an opened terminal): the machine did work in this awake period rather than
+  only being woken. A
+  deployment can meter from here, so an early wake nobody used costs the
+  account nothing.
 - **Machines / release.** Back the account's machine panel and its delete
   action.
 
