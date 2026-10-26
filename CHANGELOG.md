@@ -12,20 +12,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pick Claude Code's and Codex's reasoning effort.** The effort picker the other agents have now lists the selected Claude or Codex model's own levels. A Claude pick applies right away; a Codex pick from the next turn.
 - **A message sent while Codex works joins the running turn**, like Claude Code and Pi, instead of waiting for it to finish.
 
-### Changed
-
-- **Development toolchain updated.** Playwright 1.64, Vite 8.3.5, vite-plugin-pwa 2.0, ESLint 10.13 and Vitest 5.0.5. The app and its offline service worker build the same as before.
-
 ### Fixed
 
-- **Automations sign-in screen reads cleanly.** Its two explanation paragraphs ran together with no space between them. They now have one.
 - **Codex's questions reach you.** When Codex asked you something mid-turn, Bivy answered it with nothing. The question now shows on the question card and your answer goes back to Codex. A question it marks secret stays off the card.
 - **Codex's requests for more access get an approval card.** Bivy answered a Codex request for network or filesystem access beyond its sandbox, and an MCP tool approval, with an empty reply. Sandbox requests now ask you in every approval mode except "never", and MCP tool approvals follow the node's approval policy. An MCP server's own form is declined instead of answered empty.
 - **Answers to an agent's question reach protocol agents.** For agents Bivy drives over its agent protocol, an answered question card was sent back as a plain "allow" without the answer.
 
+## [0.21.9] - 2026-10-26
+
+### Fixed
+
+- **Automations sign-in screen reads cleanly.** Its two explanation paragraphs ran together with no space between them. They now have one.
+
 ### Security
 
 - **Stricter Origin check for tailnet names.** The node accepts a browser Origin on a `*.ts.net` name only when it is the node's own tailnet name, the one it serves the app on. Before, any `*.ts.net` Origin counted as local.
+
+### Changed
+
+- **Development toolchain updated.** Playwright 1.64, Vite 8.3.5, vite-plugin-pwa 2.0, ESLint 10.13 and Vitest 5.0.5. The app and its offline service worker build the same as before.
 
 ## [0.21.8] - 2026-10-26
 
