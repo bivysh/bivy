@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Patched dependency advisories.** The control plane moves to body-parser 2.4.0 (a compressed request body with trailing bytes could tie up the server) and ip-address 10.7.5. The node and CLI move to fast-uri 3.1.9, hono 4.13.14 and ip-address 10.7.5.
+
 ### Changed
 
 - **Agents tested against their latest releases.** Bivy now ships and release-tests Pi 1.4.0 (with its sibling packages moved together), the Claude Agent SDK 0.3.310 (Claude Code 2.1.310), Codex 0.164.0, OpenCode 1.19.4 and Grok 1.0.70.
