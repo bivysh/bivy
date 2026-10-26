@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { applyPlanUpdate, handoffSeedOf, looksLikeAuthFailure, planUpdateOf, stripAttachmentPlaceholders, toHtml, type PlanEntry, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
+import { applyPlanUpdate, handoffSeedOf, looksLikeAuthFailure, looksLikeModelFailure, planUpdateOf, stripAttachmentPlaceholders, toHtml, type PlanEntry, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
 import { AppMessage } from "./AppMessage.js";
 import { ReviewCard } from "./ReviewCard.js";
@@ -37,6 +37,7 @@ function actionLabel(action: string): string {
   if (action === "cancel-resume") return "Cancel auto-retry";
   if (action === "fix-auth" || action.startsWith("fix-auth:")) return "Fix sign-in";
   if (action === "retry-auth") return "Refresh and retry";
+  if (action === "choose-model") return "Choose another model";
   if (action.startsWith("connect-provider:")) return "Connect a provider";
   if (action.startsWith("retry-at-reset:")) return `Retry automatically at ${formatResetTime(action.slice("retry-at-reset:".length))}`;
   return `Run ${action}`;
@@ -381,7 +382,11 @@ const EntryView = memo(function EntryView({
     // its own. Refresh-and-retry sits beside it: the agent normally refreshes an
     // expired sign-in by itself, and a new turn re-reads the credential, so a
     // retry often recovers without signing in again.
-    const actions = entry.actions?.length ? entry.actions : (authAction && looksLikeAuthFailure(entry.text) ? [authAction, "retry-auth"] : undefined);
+    const actions = entry.actions?.length
+      ? entry.actions
+      : authAction && looksLikeAuthFailure(entry.text)
+        ? [authAction, "retry-auth"]
+        : looksLikeModelFailure(entry.text) ? ["choose-model"] : undefined;
     return (
       <div className="card transcript-error" data-tone="danger" role="alert">
         <strong>{summary}</strong>

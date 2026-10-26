@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A model error offers "Choose another model".** Errors such as "Model unavailable for this account" had no next step; the error card now opens the model picker (or the agent picker, for an agent that picks its own model).
 - **A failed cloud startup shows its error once.** The startup card repeated the error that the chat's error card already showed, with its fixes. The failed step now says "See the error below."
 - **Pi offers only the models your ChatGPT plan includes.** Pi's built-in list has ChatGPT models a plan can't use, and it could start on one, so every turn failed with "not supported when using Codex with a ChatGPT account". Bivy now reads the plan's model list from ChatGPT (the list Codex shows), filters Pi's models to it, and moves a session off a model the plan refuses.
 - **An expired sign-in can be started again.** After a Claude or ChatGPT sign-in expired, its sheet kept showing the dead code with no way to retry short of reloading the app. It now offers "Start sign-in again".

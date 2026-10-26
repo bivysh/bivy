@@ -61,7 +61,7 @@ import {
 
 // Re-export the helpers that moved out of this file so the package's public
 // surface (index.ts `export * from "./store.js"`) is unchanged.
-export { humanizeError, looksLikeAgentError, looksLikeAuthFailure, authProviderForRuntime } from "./store-errors.js";
+export { humanizeError, looksLikeAgentError, looksLikeAuthFailure, looksLikeModelFailure, authProviderForRuntime } from "./store-errors.js";
 export {
   EMPTY_SESSION_DRAFT,
   reduceSessionDraft,

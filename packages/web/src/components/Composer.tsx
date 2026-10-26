@@ -391,6 +391,12 @@ export function Composer({
     });
   }, []);
 
+  // An error card's "Choose another model" opens the same picker as the pill.
+  // An agent that picks its own model can't switch here, so it offers agents.
+  const modelSelectableRef = useRef(modelSelectable);
+  modelSelectableRef.current = modelSelectable;
+  useEffect(() => controller.onOpenModelPicker(() => setPicker(modelSelectableRef.current ? "model" : "agent")), []);
+
   // Escape closes the image viewer — coordinated through the shared modal stack
   // so only the topmost open layer responds (matches the pickers/sheets).
   useModalEscape(() => setViewing(null), Boolean(viewing));
