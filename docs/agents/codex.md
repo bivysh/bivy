@@ -36,6 +36,21 @@ model (currently GPT-5.6 Sol). The session-less placeholder shown before that
 handshake is the current Codex line — GPT-5.6 Sol/Terra/Luna, GPT-5.5, GPT-5.4
 (and mini), and GPT-5.3 Codex Spark — under the `openai-codex` provider.
 
+The effort picker lists the selected model's reasoning efforts from the same
+catalog and starts at that model's default. A pick applies from the next turn.
+
+## What Codex asks mid-turn
+
+- **Questions** (`request_user_input`) show as Bivy's question card, and the
+  answers go back to Codex. A question Codex marks secret is left off the card,
+  so its answer never lands in the transcript.
+- **Permission requests** (more network or filesystem access than the sandbox
+  allows) are an approval card in every approval mode except "never".
+- **MCP tool approvals** follow the same policy as any other tool call. An MCP
+  server's own form or link prompt is declined, since Bivy can't show one yet.
+- **A message sent while Codex is working** joins the running turn
+  (`turn/steer`) instead of waiting for it to finish.
+
 ## Resume
 
 Yes. The app-server reconnects a prior thread by its rollout id

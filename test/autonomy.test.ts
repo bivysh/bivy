@@ -92,6 +92,12 @@ check("risky mode keeps prompting on risky bash", () => {
   assert.equal(guardToolCall("/ws", "bash", { command: "ls" }, "risky", noRisky).decision, "allow");
 });
 
+check("widening an agent's sandbox asks in every asking mode", () => {
+  for (const mode of ["autonomous", "risky", "always"] as const) {
+    assert.equal(guardToolCall("/ws", "request_permissions", { permissions: { network: { enabled: true } } }, mode, noRisky).decision, "ask", mode);
+  }
+});
+
 if (failures > 0) {
   console.error(`\n${failures} test(s) failed`);
   process.exit(1);

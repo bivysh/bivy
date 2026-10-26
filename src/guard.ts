@@ -141,6 +141,13 @@ export function isShellTool(toolName: string): boolean {
   return tool === "bash" || tool === "shell" || tool === "execute" || tool === "run_command";
 }
 
+// An agent asking for more than its sandbox allows (Codex's
+// item/permissions/requestApproval: network access, writes outside the
+// workspace). Widening the sandbox is the user's call in every asking mode.
+function isSandboxEscalationTool(toolName: string): boolean {
+  return toolName.toLowerCase() === "request_permissions";
+}
+
 // Tools that write to the filesystem and so must respect the workspace
 // boundary. MultiEdit/NotebookEdit also take a `file_path` (see toolPath).
 function isWriteTool(toolName: string): boolean {
@@ -189,8 +196,9 @@ export function guardToolCall(
 
   if (mode === "never") return { decision: "allow" };
 
-  // Integration tools flagged risky (send email, upload, ...) always confirm.
-  if (isRiskyIntegration(toolName)) return { decision: "ask" };
+  // Integration tools flagged risky (send email, upload, ...) always confirm,
+  // as does a request to widen the agent's sandbox.
+  if (isRiskyIntegration(toolName) || isSandboxEscalationTool(toolName)) return { decision: "ask" };
 
   if (mode === "autonomous") {
     if (isShell && looksBackstop(bashCommand(input))) return { decision: "ask" };

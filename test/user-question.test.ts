@@ -48,7 +48,8 @@ await scenario("isAskUserQuestionTool matches case-insensitively across runtimes
 await scenario("validQuestions rejects malformed shapes so a broken card never renders", () => {
   assert.deepEqual(validQuestions([QUESTION]), [QUESTION]);
   assert.equal(validQuestions([]), null, "empty array");
-  assert.equal(validQuestions([{ question: "q", header: "h", options: [{ label: "one" }] }]), null, "needs >= 2 options");
+  assert.equal(validQuestions([{ question: "q", header: "h", options: [{ label: "one" }] }]), null, "one option is not a choice");
+  assert.ok(validQuestions([{ question: "q", header: "h", options: [] }]), "no options is a free-text question");
   assert.equal(validQuestions([{ question: "q", header: "h" }]), null, "missing options");
   assert.equal(validQuestions("nope"), null, "non-array");
 });

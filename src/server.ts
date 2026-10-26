@@ -6358,7 +6358,7 @@ const guardianInterceptorImpl: ToolInterceptor = async ({ sessionId, toolName, i
     const questions = validQuestions((input as { questions?: unknown } | undefined)?.questions);
     if (!questions) return;
     const answer = await questionManager.request({ sessionId, questions, signal });
-    return { handled: true, result: formatQuestionResult(questions, answer) };
+    return { handled: true, result: formatQuestionResult(questions, answer), ...(answer.behavior === "completed" ? { answers: answer.answers } : {}) };
   }
 
   const record = openSessions.get(sessionId);

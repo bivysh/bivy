@@ -137,6 +137,37 @@ async function waitFor(cond: () => boolean, ms = 1000): Promise<void> {
   console.log("warmModels catalog OK");
 }
 
+// ── Reasoning effort: the model's own levels, applied to the running query ──
+{
+  const sdkModels = [
+    { value: "default", displayName: "Default (recommended)", supportsEffort: true, supportedEffortLevels: ["low", "medium", "high", "max"] },
+    { value: "claude-haiku-4-5", displayName: "Haiku 4.5", supportsEffort: false },
+  ];
+  const { sdk, queries } = makeSdk(sdkModels);
+  const applied: unknown[] = [];
+  (FakeQuery.prototype as any).applyFlagSettings = async (settings: unknown) => { applied.push(settings); };
+  const runtime = new ClaudeCodeRuntime({ sdkLoader: async () => sdk, credentials: new TokenStore() });
+  const { session } = await runtime.createSession({ workspace: process.cwd() });
+  await session.warmModels?.();
+  await waitFor(() => queries.length === 1);
+  await session.getModels();
+
+  assert.deepEqual(session.getAvailableThinkingLevels?.(), ["low", "medium", "high", "max"], "the account default's effort levels");
+  session.setThinkingLevel?.("high");
+  assert.deepEqual(applied, [{ effortLevel: "high" }], "a pick reaches the running query as a session flag");
+  assert.equal(session.getThinkingLevel?.(), "high");
+  session.setThinkingLevel?.("turbo");
+  assert.equal(applied.length, 1, "a level the model lacks is ignored");
+
+  await session.setModel("anthropic", "claude-haiku-4-5");
+  assert.equal(session.supportsThinking?.(), false, "a model without effort hides the picker");
+  assert.equal(session.getThinkingLevel?.(), undefined, "and drops the pick it can't run");
+
+  delete (FakeQuery.prototype as any).applyFlagSettings;
+  session.dispose();
+  console.log("effort picker OK");
+}
+
 console.log("claude-code model catalog: all tests passed");
 
 // --- merged from claude-commands.test.ts ---

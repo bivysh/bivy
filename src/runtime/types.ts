@@ -166,6 +166,10 @@ export interface ToolCallDecision {
   reason?: string;
   handled?: boolean;
   result?: string;
+  /** With `handled`: the user's answers to an AskUserQuestion (question text →
+   *  answer), for agents whose protocol takes structured answers rather than a
+   *  result text (Codex's request_user_input). */
+  answers?: Record<string, string>;
 }
 
 export type ToolInterceptor = (

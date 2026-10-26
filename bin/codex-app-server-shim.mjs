@@ -24,6 +24,11 @@
 //   • item/agentMessage/delta {delta}         → assistant text
 //   • item/commandExecution/requestApproval   → shell approval  ({decision:accept|decline})
 //   • item/fileChange/requestApproval         → patch approval
+//   • item/permissions/requestApproval        → sandbox-widening approval
+//   • item/tool/requestUserInput              → AskUserQuestion card
+//   • mcpServer/elicitation/request           → MCP tool approval (codex_approval_kind)
+//   • turn/steer {expectedTurnId}             → mid-turn message
+//   • thread/settings/update {model, effort}  → model / reasoning-effort picker
 //   • turn/completed                          → turn done
 //
 // This is a first-class v1: governed sessions with shell/patch approvals and a
@@ -47,7 +52,9 @@ function bivy(obj) {
 const as = spawn(CODEX_BIN, ["app-server"], { stdio: ["pipe", "pipe", "pipe"] });
 let asNextId = 1;
 const asPending = new Map(); // jsonrpc id -> {resolve, reject}
-// itemId -> app-server request id, so a later tool.decision can answer the right approval.
+// itemId -> { id, reply }: the app-server request a later tool.decision answers,
+// and how that decision becomes the request's result (each request kind has its
+// own response shape).
 const approvalRequests = new Map();
 
 function asRequest(method, params) {
@@ -65,6 +72,12 @@ let initialized = false;
 let sawError = null;
 let models = [];
 let selectedModel = null;
+// model id -> { levels, default } from model/list's supportedReasoningEfforts.
+const modelEfforts = new Map();
+// The user's effort pick; null runs each model at its own default.
+let selectedEffort = null;
+// The running turn, which a steering message must name (turn/steer).
+let activeTurnId = null;
 const itemInputs = new Map();
 const itemOutputs = new Map();
 const agentMessageItems = new Set();
@@ -345,11 +358,28 @@ createInterface({ input: as.stdout }).on("line", (line) => {
   if (m.method) return onNotification(m);
 });
 
+const acceptOrDecline = (msg) => ({ decision: msg.decision === "deny" ? "decline" : "accept" });
+
+// What Codex asked for, minus empty parts: granting exactly that is the "allow".
+function requestedPermissions(permissions) {
+  return Object.fromEntries(Object.entries(permissions ?? {}).filter(([, value]) => value != null));
+}
+
+// Codex's request_user_input questions as Bivy question-card items. A secret
+// question is left out: its answer would land in the transcript.
+function cardQuestions(questions) {
+  return (questions ?? []).filter((q) => !q.isSecret).map((q) => ({
+    question: text(q.question),
+    header: text(q.header || "Question").slice(0, 40),
+    options: (q.options ?? []).map((o) => ({ label: text(o.label), ...(o.description ? { description: text(o.description) } : {}) })),
+  }));
+}
+
 function onServerRequest(m) {
   const { method, id, params } = m;
   if (method === "item/commandExecution/requestApproval" || method === "execCommandApproval") {
     const itemId = paramsItemId(params, id);
-    approvalRequests.set(itemId, id);
+    approvalRequests.set(itemId, { id, reply: acceptOrDecline });
     const input = {
       command: commandText(params.command),
       cwd: params.cwd,
@@ -362,7 +392,7 @@ function onServerRequest(m) {
   }
   if (method === "item/fileChange/requestApproval" || method === "applyPatchApproval") {
     const itemId = paramsItemId(params, id);
-    approvalRequests.set(itemId, id);
+    approvalRequests.set(itemId, { id, reply: acceptOrDecline });
     const input = {
       reason: params.reason,
       changes: params.changes ?? params.fileChanges,
@@ -370,6 +400,54 @@ function onServerRequest(m) {
     };
     itemInputs.set(itemId, input);
     bivy({ type: "tool.call", toolCallId: itemId, name: "apply_patch", input });
+    return;
+  }
+  // The model asks the user something (request_user_input). Raise it as an
+  // AskUserQuestion, which Bivy answers on its question card for every agent,
+  // and hand the answers back keyed by Codex's question ids.
+  if (method === "item/tool/requestUserInput") {
+    const itemId = paramsItemId(params, id);
+    const questions = params.questions ?? [];
+    const card = cardQuestions(questions);
+    if (!card.length) { asReply(id, { answers: {} }); return; }
+    approvalRequests.set(itemId, {
+      id,
+      reply: (msg) => {
+        bivy({ type: "tool.result", toolCallId: itemId, name: "AskUserQuestion", result: text(msg.reason || "No answer"), isError: !msg.handled });
+        const answers = msg.answers ?? {};
+        return { answers: Object.fromEntries(questions.filter((q) => typeof answers[q.question] === "string").map((q) => [q.id, { answers: [answers[q.question]] }])) };
+      },
+    });
+    bivy({ type: "tool.call", toolCallId: itemId, name: "AskUserQuestion", input: { questions: card } });
+    return;
+  }
+  // The agent wants more than its sandbox allows (network, paths outside the
+  // workspace). Governed like a tool call: granted as asked on allow, nothing
+  // on deny. Answering `{}` here used to drop the request on the floor.
+  if (method === "item/permissions/requestApproval") {
+    const itemId = paramsItemId(params, id);
+    const permissions = requestedPermissions(params.permissions);
+    approvalRequests.set(itemId, { id, reply: (msg) => ({ permissions: msg.decision === "deny" ? {} : permissions, scope: "turn" }) });
+    const input = { reason: params.reason, permissions, cwd: params.cwd };
+    itemInputs.set(itemId, input);
+    bivy({ type: "tool.call", toolCallId: itemId, name: "request_permissions", input });
+    return;
+  }
+  if (method === "mcpServer/elicitation/request") {
+    // Codex asks to approve an MCP tool call (or a connector action) as an
+    // elicitation tagged with codex_approval_kind. Govern it like any tool
+    // call; the answer carries no form content, as in Codex's own TUI.
+    const meta = params._meta && typeof params._meta === "object" ? params._meta : {};
+    if (meta.codex_approval_kind || meta.codex_request_type === "approval_request") {
+      const itemId = `elicitation-${id}`;
+      approvalRequests.set(itemId, { id, reply: (msg) => ({ action: msg.decision === "deny" ? "decline" : "accept", content: null, _meta: null }) });
+      const input = { server: params.serverName, message: params.message, ...(meta.tool_params ? { arguments: meta.tool_params } : {}) };
+      bivy({ type: "tool.call", toolCallId: itemId, name: text(meta.tool_name || params.serverName || "mcp"), input });
+      return;
+    }
+    // A server's own form or page. Bivy has no card for an arbitrary schema
+    // yet, so decline it explicitly instead of answering an empty "accept".
+    asReply(id, { action: "decline", content: null, _meta: null });
     return;
   }
   // Any other server→client request we don't model yet: accept so the turn isn't
@@ -459,10 +537,13 @@ function onNotification(m) {
     // a child's turn/completed ended the parent turn early and the parent's
     // remaining tools and answer landed after it was closed.
     case "turn/started":
-      if (fromCurrentThread) bivy({ type: "session.status", status: "working" });
+      if (!fromCurrentThread) return;
+      if (params?.turn?.id) activeTurnId = params.turn.id;
+      bivy({ type: "session.status", status: "working" });
       return;
     case "turn/completed": {
       if (!fromCurrentThread) return;
+      activeTurnId = null;
       // The completion event is authoritative about a terminal failure: a turn
       // that hit a usage limit (or any provider error) arrives here as
       // `status: "failed"` carrying `turn.error`. Capture it directly instead of
@@ -484,6 +565,7 @@ function onNotification(m) {
     }
     case "turn/failed": {
       if (!fromCurrentThread) return;
+      activeTurnId = null;
       // A failed turn is TERMINAL in the app-server — no `turn/completed` follows
       // it — so end the turn here rather than merely stashing the error for a
       // completion event that never arrives. Stashing (the old behavior) left the
@@ -593,17 +675,24 @@ async function onBivyCommand(msg) {
         // That rejected the prompt ("chat.send timed out"), stranded the session,
         // and forced a fresh thread on the next message.
         bivy({ replyTo: id, ok: true });
-        asRequest("turn/start", {
+        const input = [
+          { type: "text", text: String(msg.text ?? "") },
+          ...(msg.images ?? []).map((image) => ({
+            type: "image", url: `data:${image.mimeType || "image/png"};base64,${image.data}`,
+          })),
+        ];
+        const startTurn = () => asRequest("turn/start", {
           threadId,
-          input: [
-            { type: "text", text: String(msg.text ?? "") },
-            ...(msg.images ?? []).map((image) => ({
-              type: "image", url: `data:${image.mimeType || "image/png"};base64,${image.data}`,
-            })),
-          ],
+          input,
           ...(selectedModel ? { model: selectedModel } : {}),
-        })
-          .catch((error) => bivy({ type: "session.error", error: error instanceof Error ? error.message : String(error) }));
+          ...(selectedEffort ? { effort: selectedEffort } : {}),
+        });
+        // A message sent mid-turn joins the running turn. If that turn ended in
+        // the meantime, it starts the next one instead of being lost.
+        const turn = msg.streamingBehavior === "steer" && activeTurnId
+          ? asRequest("turn/steer", { threadId, input, expectedTurnId: activeTurnId }).catch(startTurn)
+          : startTurn();
+        turn.catch((error) => bivy({ type: "session.error", error: error instanceof Error ? error.message : String(error) }));
         return;
       }
       case "model.set": {
@@ -612,17 +701,31 @@ async function onBivyCommand(msg) {
           bivy({ replyTo: id, ok: false, error: "unknown Codex model: " + (model || "(empty)") });
           return;
         }
-        if (threadId) await asRequest("thread/settings/update", { threadId, model });
+        // An effort the new model doesn't offer falls back to its default.
+        const keepEffort = selectedEffort && modelEfforts.get(model)?.levels.includes(selectedEffort);
+        if (threadId) await asRequest("thread/settings/update", { threadId, model, ...(keepEffort ? {} : { effort: null }) });
         selectedModel = model;
+        if (!keepEffort) selectedEffort = null;
         bivy({ replyTo: id, ok: true, model });
+        publishEfforts();
+        return;
+      }
+      case "thinking.set": {
+        const level = String(msg.level || "").trim();
+        if (!modelEfforts.get(selectedModel)?.levels.includes(level)) {
+          bivy({ replyTo: id, ok: false, error: "unknown reasoning effort: " + (level || "(empty)") });
+          return;
+        }
+        if (threadId) await asRequest("thread/settings/update", { threadId, effort: level });
+        selectedEffort = level;
+        bivy({ replyTo: id, ok: true });
         return;
       }
       case "tool.decision": {
-        const reqId = approvalRequests.get(msg.toolCallId);
-        if (reqId !== undefined) {
+        const pending = approvalRequests.get(msg.toolCallId);
+        if (pending) {
           approvalRequests.delete(msg.toolCallId);
-          const decision = msg.decision === "deny" ? "decline" : "accept";
-          asReply(reqId, { decision });
+          asReply(pending.id, pending.reply(msg));
         }
         return;
       }
@@ -653,16 +756,32 @@ async function announceHello() {
       if (Array.isArray(result?.data)) catalog.push(...result.data);
       cursor = typeof result?.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
     } while (cursor);
+    for (const model of catalog) {
+      if (!model || typeof model.id !== "string" || model.hidden) continue;
+      const efforts = (model.supportedReasoningEfforts ?? []).map((option) => option?.reasoningEffort).filter((effort) => typeof effort === "string" && effort);
+      modelEfforts.set(model.id, { levels: efforts, default: typeof model.defaultReasoningEffort === "string" ? model.defaultReasoningEffort : undefined });
+    }
     models = catalog.filter((model) => model && typeof model.id === "string" && !model.hidden).map((model) => ({
       provider: "openai", id: model.id,
       name: typeof model.displayName === "string" && model.displayName ? model.displayName : model.id,
-      reasoning: Array.isArray(model.supportedReasoningEfforts) && model.supportedReasoningEfforts.length > 0,
+      reasoning: (modelEfforts.get(model.id)?.levels.length ?? 0) > 0,
     }));
     selectedModel = catalog.find((model) => model?.isDefault && !model.hidden)?.id ?? models[0]?.id ?? null;
   } catch (error) {
     process.stderr.write("[codex-app-server] model discovery failed: " + String(error) + "\n");
   }
-  bivy({ type: "hello", runtime: { models, ...(selectedModel ? { currentModel: selectedModel } : {}), capabilities: { toolInterception: true, modelSelection: models.length > 0, resume: true } } });
+  // `steer`: a message sent mid-turn joins the running turn (turn/steer).
+  bivy({ type: "hello", runtime: { models, ...(selectedModel ? { currentModel: selectedModel } : {}), capabilities: { toolInterception: true, modelSelection: models.length > 0, resume: true, streamingBehaviors: ["steer"] } } });
+  publishEfforts();
+}
+
+// The selected model's reasoning efforts, for the same effort picker the other
+// agents get (ProtocolRuntime's `runtime.models` thinking levels).
+function publishEfforts() {
+  const efforts = modelEfforts.get(selectedModel);
+  if (!efforts?.levels.length) return;
+  const current = selectedEffort && efforts.levels.includes(selectedEffort) ? selectedEffort : efforts.default;
+  bivy({ type: "runtime.models", models, ...(selectedModel ? { currentModel: selectedModel } : {}), thinking: { levels: efforts.levels, ...(current ? { current } : {}) } });
 }
 
 void announceHello();
