@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.12] - 2026-10-26
+
 ### Fixed
 
 - **Pi offers only the models your ChatGPT plan includes.** Pi's built-in list has ChatGPT models a plan can't use, and it could start on one, so every turn failed with "not supported when using Codex with a ChatGPT account". Bivy now reads the plan's model list from ChatGPT (the list Codex shows), filters Pi's models to it, and moves a session off a model the plan refuses.
