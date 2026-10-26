@@ -33,6 +33,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import fs from "node:fs";
 import path from "node:path";
+import { exitWithParent } from "./shim-lifecycle.mjs";
 
 // --- arg parsing: --agent <cmd> [-- <args…>] --------------------------------
 const argv = process.argv.slice(2);
@@ -89,6 +90,8 @@ function killPending(reason) {
   for (const [id, p] of [...pending]) { pending.delete(id); p.reject(agentDead); }
 }
 agent.on("error", (e) => killPending(`acp agent spawn failed: ${e.message}`));
+// The node is gone (crash, OOM kill, restart): take the agent down with us.
+exitWithParent(agent);
 agent.on("exit", (code, signal) => {
   if (code || signal) killPending(`acp agent exited (${code ?? signal})`);
 });

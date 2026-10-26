@@ -6342,7 +6342,7 @@ function runNativeCommand(command: MeshCommand) {
     onOutput: (stream, text) => broadcast({ type: "command.output", runId, command: command.name, stream, text: stripAnsi(text) }),
     onError: (error) => {
       commandProcesses.delete(runId);
-      broadcast({ type: "command.error", runId, command: command.name, error: String(error?.stack ?? error) });
+      broadcast({ type: "command.error", runId, command: command.name, error: error instanceof Error ? error.message : String(error) });
     },
     onExit: (code, signal) => {
       commandProcesses.delete(runId);
@@ -12111,7 +12111,10 @@ app.post("/api/session/prompt", async (req, res, next) => {
       await turnWatchdog.promptWithWatchdog(record, agentPrompt, promptOptionsFor(record, req.body?.streamingBehavior, images));
     }).catch((error) => {
       clearSessionWorking(record);
-      broadcast({ type: "session.error", sessionId: record.id, error: String(error?.stack ?? error) });
+      // The stack stays in the node log; clients get the same safe message
+      // (or sign-in card) as every other failed turn, never internal paths.
+      console.error(`[session ${record.id}] prompt failed:`, error);
+      broadcast({ type: "session.error", sessionId: record.id, error: sessionAgentError(record, error) });
     });
     res.json({ ok: true, sessionId: record.id, sessionFile: record.sessionFile });
   } catch (error) {
