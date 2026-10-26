@@ -328,7 +328,7 @@ export class AppGateway {
     const origin = this.shellOrigin(id);
     const nonce = randomBytes(16).toString("hex");
     res.setHeader("Cross-Origin-Opener-Policy", "same-origin");
-    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'self' 'nonce-${nonce}'; connect-src 'self' ${this.origin(id)}; img-src blob:; frame-src ${this.origin(id)}; frame-ancestors ${this.clientOrigins().join(" ") || "'none'"}; base-uri 'none'; form-action 'none'`);
+    res.setHeader("Content-Security-Policy", `default-src 'none'; script-src 'nonce-${nonce}'; style-src 'self' 'nonce-${nonce}'; font-src 'self'; connect-src 'self' ${this.origin(id)}; img-src blob:; frame-src ${this.origin(id)}; frame-ancestors ${this.clientOrigins().join(" ") || "'none'"}; base-uri 'none'; form-action 'none'`);
     if (req.method === "GET" && this.styles.has(req.url ?? "")) {
       res.setHeader("Content-Type", "text/css; charset=utf-8");
       res.end(this.styles.get(req.url!)); return;
@@ -399,7 +399,13 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     // comes back to the same page. Framed loads keep the plain message.
     const signIn = !session && req.method === "GET" && req.headers["sec-fetch-dest"] === "document" && req.url?.startsWith("/") ? this.signIn?.(entry, req.url) : undefined;
     if (signIn) { res.writeHead(303, { location: signIn }); res.end(); return; }
-    if (!session) { res.writeHead(401); res.end("Preview access expired. Open a new preview link from Bivy."); return; }
+    if (!session) {
+      // The shell polls from its own origin; let it read the 401 so it can stop
+      // and say the preview expired, instead of seeing a bare network error.
+      const shell = this.shellOrigin(id);
+      res.writeHead(401, req.headers.origin === shell ? { "access-control-allow-origin": shell, "access-control-allow-credentials": "true", vary: "Origin" } : {});
+      res.end("Preview access expired. Open a new preview link from Bivy."); return;
+    }
     // The shell (its own origin) chooses this browser's scenario; nothing else may.
     if (req.url === SCENARIO_PATH && req.method === "POST") { await this.enterScenario(req, res, entry, session); return; }
     // Block cross-site mutations even if a client sends the preview cookie.

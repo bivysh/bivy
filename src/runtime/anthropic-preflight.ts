@@ -41,12 +41,12 @@ export function claudeCredentialFiles(deps: AnthropicPreflightDeps = {}): string
 /** How to fix a missing/invalid Anthropic credential — shared by both messages. */
 const ANTHROPIC_AUTH_FIX = [
   "• Add an Anthropic API key or sign in with Claude under Models & providers, or",
-  "• Run `claude` on this node and use `/login` to sign in with your Claude subscription.",
+  "• Run `claude` on this machine and use `/login` to sign in with your Claude subscription.",
 ].join("\n");
 
 /** Shown when the node has no Anthropic credential at all (preflight block). */
 export const ANTHROPIC_NO_CREDENTIAL_MESSAGE = [
-  "Claude Code has no Anthropic credential on this node, so it can't start a turn — it would fail with `401 Unauthorized`.",
+  "Claude Code has no Claude sign-in or Anthropic API key on this machine yet, so it can't start.",
   "",
   "Sign in one of these ways, then start the session again:",
   ANTHROPIC_AUTH_FIX,

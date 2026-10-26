@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { AppState } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { isPackagedClient, openPackagedExternal } from "../packaged-client.js";
-import { signInSync } from "../onboarding.js";
+import { AI_ACCOUNTS, signInSync } from "../onboarding.js";
 
 /**
  * The device-code / callback-url step of an in-flight OAuth login
@@ -123,7 +123,8 @@ export function ProviderConnectForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const provider = state.catalogs.providers.find((p) => p.id === providerId);
-  const name = provider?.name || providerId;
+  // A plan people pay for reads as "Claude"/"ChatGPT", as in "Connect your AI".
+  const name = AI_ACCOUNTS.find((account) => account.provider === providerId)?.name || provider?.name || providerId;
   const keyProvider = apiKeyProvider || providerId;
 
   if (provider?.configured) {

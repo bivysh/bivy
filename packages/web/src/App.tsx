@@ -1105,8 +1105,11 @@ export function App() {
 
         {!needsNode && !state.draft.ephemeralConfig && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
           <Suspense fallback={null}>
-            {!aiDone ? (
-              <ConnectAI state={state} place={runPlace} startError={cloudStart?.error} onRetry={startCloud} onDone={() => setAiDone(true)} />
+            {/* A missing AI sign-in is always asked for the same way, also after
+                "Set up later" and on a newly added machine (own machines keep
+                their sign-ins to themselves). */}
+            {!aiDone || activation.blockingCheckId === "credential_valid" ? (
+              <ConnectAI state={state} place={runPlace} startError={cloudStart?.error} onRetry={startCloud} onDone={() => setAiDone(true)} deferrable={!aiDone} />
             ) : activation.activated ? (
               <GetStarted
                 machineName={state.connection.nodes.find((n) => n.id === state.connection.currentNodeId)?.name || undefined}

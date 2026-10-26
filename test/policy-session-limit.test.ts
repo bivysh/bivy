@@ -41,6 +41,15 @@ check("a non-limit failure is not a limit", () => {
   assert.equal(detectSessionLimit("tests failed: 3 assertions", { now: NOW }), undefined);
 });
 
+check("a Claude plan refused outside Claude Code points to Claude Code, not a reset", () => {
+  const limit = detectSessionLimit("Third-party apps now draw from your extra usage, not your plan limits. Add more at claude.ai/settings/usage and keep going.", { now: NOW })!;
+  assert.equal(limit.planNotCovered, true);
+  const notice = sessionLimitNotice("Pi", limit);
+  assert.deepEqual(notice.actions, ["fork"]);
+  assert.match(notice.message, /Claude Code/);
+  assert.doesNotMatch(notice.message, /usage limit/);
+});
+
 check("resume plan lands just after the reset, and shortly from now if it already passed", () => {
   const future = limitResumePlan({ condition: "credits_exhausted", resetsAt: "2026-09-26T12:00:00Z" }, NOW)!;
   assert.equal(future.resumeAt, "2026-09-26T12:01:00.000Z");

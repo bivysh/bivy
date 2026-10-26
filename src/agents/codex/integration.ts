@@ -8,6 +8,8 @@ import { defineAgentIntegration, type AgentIntegrationOrigin } from "../definiti
 import type { AgentInfo, AgentInstallCommand, AgentSessionOptions } from "../types.js";
 import { codexSandboxPolicy, type SandboxTier } from "../../harness/sandbox.js";
 import { codexCredentialPreflight } from "../../runtime/codex-preflight.js";
+import { ensureCodexAuth } from "../../runtime/codex-auth.js";
+import { createCredentialStore } from "../../runtime/credentials.js";
 import {
   deleteCodexSession,
   discoverNativeCodexSessions,
@@ -64,7 +66,7 @@ async function suggestCodexSessionName(firstPrompt: string, context: { cwd: stri
   });
 }
 
-export function codexAppServerRuntime(tier?: SandboxTier): AgentRuntime {
+export function codexAppServerRuntime(tier?: SandboxTier, credsDir?: string): AgentRuntime {
   const bridge = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "bin", "codex-app-server-shim.mjs");
   const policy = tier ? codexSandboxPolicy(tier) : undefined;
   return new ProtocolRuntime({
@@ -73,6 +75,17 @@ export function codexAppServerRuntime(tier?: SandboxTier): AgentRuntime {
     command: process.execPath,
     args: [bridge],
     ...(policy ? { env: { BIVY_CODEX_SANDBOX: policy.sandbox, BIVY_CODEX_APPROVAL_POLICY: policy.approvalPolicy } } : {}),
+    // Bivy's vault reaches Codex both ways it signs in: API keys as
+    // OPENAI_API_KEY, and a ChatGPT plan as the auth.json `codex login` would
+    // write (a cloud computer has no `codex login` of its own). Runs before
+    // every turn, so a sign-in finished mid-session works on the next prompt.
+    ...(credsDir ? {
+      credentials: createCredentialStore(credsDir),
+      prepare: async (): Promise<Record<string, string>> => {
+        const home = await ensureCodexAuth(credsDir);
+        return home ? { CODEX_HOME: home } : {};
+      },
+    } : {}),
     preflight: (env: Record<string, string | undefined>) => codexCredentialPreflight(env),
     catalog: [{
       id: "openai-codex",
@@ -173,7 +186,7 @@ export function codexIntegration(origin: AgentIntegrationOrigin) {
     },
     create: (options) => {
       if (!codexCommandAvailable()) throw new Error(`Codex command not found on PATH: ${codexCommand()}`);
-      return codexAppServerRuntime(options.sandbox);
+      return codexAppServerRuntime(options.sandbox, options.credsDir);
     },
     install: (prefix) => ({
       command: "npm",

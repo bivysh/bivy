@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A ChatGPT plan works with Codex on a cloud computer.** The chat's Codex never received the sign-in Bivy stored, so it said it had no OpenAI credential while the sign-in sheet said ChatGPT was connected. Codex now gets Codex's own login file from the ChatGPT sign-in before each turn, and OpenAI API keys too.
+- **A Claude plan used outside Claude Code says so.** Anthropic answers other apps (such as Pi) signed in with a Claude plan with "Third-party apps now draw from your extra usage". Bivy showed that as "reached its usage limit". It now explains that the plan covers Claude Code only and offers to fork to Claude Code.
+- **Previews stop failing quietly in the console.** The preview's own requests read an expired-access answer instead of tripping CORS, its server-errors poll backs off when access is missing, and its fonts load.
+
+### Changed
+
+- **The model picker puts the plans you pay for first.** With nothing connected it listed 41 providers alphabetically under an empty heading. Claude and ChatGPT now come first under "Use a plan you already pay for", named as in "Connect your AI"; the connect screen and its button use those names too.
+- **"Connect your AI" is the one place to sign in.** After "Set up later", a missing sign-in showed a separate checklist ("Credential valid", "Authenticate"); it now shows the same card again, without "Set up later" the second time.
+- **Plainer messages when an agent has no sign-in.** "Claude Code has no Claude sign-in or Anthropic API key on this machine yet" replaces "no Anthropic credential on this node … `401 Unauthorized`", and likewise for Codex and Grok. Claude Code is called "Claude Code" everywhere, not "Claude Code SDK".
+
 ### Added
 
 - **Test sign-in for automated end-to-end tests.** A deployment that sets `TEST_SIGN_IN_SECRET` and `TEST_SIGN_IN_DOMAIN` accepts `POST /auth/test-login` for addresses on that one reserved domain, so an agent or CI can sign up, onboard and clean up a fresh account without an emailed link. It is off by default and can never sign in a real person's address.

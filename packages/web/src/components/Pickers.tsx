@@ -16,6 +16,7 @@ import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { openSettings } from "../settingsRoute.js";
 import { agentPickerLabel, filterAndSortAgentRuntimes, isTopAgent } from "../agentPickerCatalog.js";
 import { nodePresence, PRESENCE } from "../cloudDestinations.js";
+import { AI_ACCOUNTS } from "../onboarding.js";
 
 const agentLabel = agentPickerLabel;
 
@@ -836,7 +837,12 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
   // unconnected model, since Pi's catalog runs to ~1000 models) rendered below
   // as a separate, non-selectable "Other models" section.
   const connectedModels = models.filter((m) => (m as any).configured !== false);
-  const otherProviders = models.filter((m) => (m as any).configured === false);
+  const unconnected = models.filter((m) => (m as any).configured === false);
+  // The plans people already pay for (Claude, ChatGPT) come first, named the
+  // way "Connect your AI" names them; every other provider follows.
+  const planOf = (m: ModelInfo) => AI_ACCOUNTS.find((account) => account.provider === String((m as any).provider || ""));
+  const planProviders = AI_ACCOUNTS.flatMap((account) => unconnected.filter((m) => planOf(m) === account));
+  const otherProviders = unconnected.filter((m) => !planOf(m));
 
   const isCurrent = (m: ModelInfo) =>
     state.catalogs.currentModel != null && m.id === state.catalogs.currentModel.id && (m as any).provider === (state.catalogs.currentModel as any).provider;
@@ -848,7 +854,7 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
   if (connecting) {
     return (
       <Sheet
-        title={providerName(connecting)}
+        title={AI_ACCOUNTS.find((account) => account.provider === connecting)?.name ?? providerName(connecting)}
         onClose={onClose}
         size="large"
         headExtra={
@@ -920,18 +926,22 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
             }}
           />;
         })}
-        {otherProviders.length > 0 && (
-          <>
-            <div className="picker-section-label">Other models</div>
-            {otherProviders.map((m) => {
+        {[
+          { label: "Use a plan you already pay for", rows: planProviders },
+          { label: planProviders.length || connectedModels.length ? "Other providers" : "Providers", rows: otherProviders },
+        ].filter((section) => section.rows.length > 0).map((section) => (
+          <div key={section.label}>
+            <div className="picker-section-label">{section.label}</div>
+            {section.rows.map((m) => {
               const provider = String((m as any).provider || "");
-              const name = providerName(provider);
+              const plan = planOf(m);
+              const name = plan?.name ?? providerName(provider);
               const count = Number((m as any).modelCount) || 0;
               return (
                 <PickerItem
                   key={`${provider}:${m.id}`}
                   title={name}
-                  meta={`${count} model${count === 1 ? "" : "s"} · Not connected`}
+                  meta={plan ? `${plan.plan} · Not connected` : `${count} model${count === 1 ? "" : "s"} · Not connected`}
                   right={
                     <button
                       type="button"
@@ -948,8 +958,8 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
                 />
               );
             })}
-          </>
-        )}
+          </div>
+        ))}
       </div>
     </Sheet>
   );

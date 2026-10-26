@@ -13,9 +13,11 @@ import { AI_ACCOUNTS, agentForProviders, rememberConnectAiDone, signInSync, type
 import { ProviderConnectForm } from "./ProviderConnect.js";
 import { Spinner } from "./Spinner.js";
 
-export function ConnectAI({ state, place, startError, onRetry, onDone }: {
+export function ConnectAI({ state, place, startError, onRetry, onDone, deferrable = true }: {
   state: AppState;
   place: RunPlace | null;
+  /** Offer "Set up later" (only the first time it's asked). */
+  deferrable?: boolean;
   /** Set when starting the cloud machine failed. */
   startError?: string;
   onRetry: () => void;
@@ -103,7 +105,7 @@ export function ConnectAI({ state, place, startError, onRetry, onDone }: {
 
       <div className="get-started-actions">
         <button type="button" className="btn sm primary" disabled={!ready} onClick={finish}>Continue</button>
-        {!ready && online && <button type="button" className="btn sm ghost" onClick={finish}>Set up later</button>}
+        {!ready && online && deferrable && <button type="button" className="btn sm ghost" onClick={finish}>Set up later</button>}
       </div>
     </section>
   );
