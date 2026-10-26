@@ -870,7 +870,7 @@ export function AutomationsView({
             <div className="autom-hero-copy">
               <h2 className="autom-hero-title">Schedule work while you&apos;re away</h2>
               <p className="autom-hero-body">
-                Sign in through Bivy Cloud or a self-hosted control plane to store triggers and Runs
+                Sign in through Bivy Cloud or a self-hosted control plane to store triggers and runs
                 while this device and your machine are offline.
               </p>
               <p className="autom-hero-body">
