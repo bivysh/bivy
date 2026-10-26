@@ -36,12 +36,12 @@ export function grokAuthFile(deps: GrokPreflightDeps = {}): string {
 
 /** The user-facing message shown when Grok has no xAI credential. */
 export const GROK_NO_CREDENTIAL_MESSAGE = [
-  "Grok has no xAI credential on this node, so it can't start a turn.",
+  "Grok has no xAI sign-in or API key on this machine yet, so it can't start.",
   "",
   "Fix it any of these ways:",
   "• Connect SuperGrok / X Premium under Keys & OAuth — Bivy mints Grok's auth file from it automatically, or",
   "• Add an xAI API key under Keys & OAuth — Bivy passes it as XAI_API_KEY (and GROK_API_KEY), or",
-  "• Run `grok login` on this node to sign in directly (official Grok CLI).",
+  "• Run `grok login` on this machine to sign in directly (official Grok CLI).",
   "",
   "Install the official Grok CLI if you haven't: `curl -fsSL https://x.ai/cli/install.sh | bash`",
   "(The older @vibe-kit/grok-cli package only accepts API keys and cannot use a subscription login.)",

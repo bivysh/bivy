@@ -21,7 +21,13 @@ export interface SessionLimit {
   condition: RuntimeCondition;
   /** ISO instant the window resets, when the provider told us. */
   resetsAt?: string;
+  /** The provider refused a subscription sign-in for this agent (Anthropic bills
+   *  apps other than Claude Code from extra usage), so waiting won't help. */
+  planNotCovered?: boolean;
 }
+
+/** Anthropic's answer when a Claude plan sign-in is used outside Claude Code. */
+const PLAN_NOT_COVERED = /third[\s-]party apps? (?:now )?draw from your extra usage/i;
 
 /** The conditions a user can route around (fork) or wait out (retry at reset),
  *  with how the notice describes each. Adding a limit-like condition is a row. */
@@ -44,6 +50,8 @@ export function detectSessionLimit(
   const now = opts.now ?? Date.now();
   const classified = classifyFailure(error, { now, resetsAtHint: opts.resetsAtHint });
   if (!LIMIT_COPY[classified.condition]) return undefined;
+  const raw = error instanceof Error ? error.message : String(error ?? "");
+  if (PLAN_NOT_COVERED.test(raw)) return { condition: classified.condition, planNotCovered: true };
   const resetsAt = classified.resetsAt
     ?? (classified.retryAfterMs !== undefined ? new Date(now + classified.retryAfterMs).toISOString() : undefined);
   return { condition: classified.condition, ...(resetsAt ? { resetsAt } : {}) };
@@ -54,6 +62,12 @@ export function detectSessionLimit(
  *  automatic retry (the timestamp is only for the button's label — the daemon
  *  schedules from its own remembered limit). */
 export function sessionLimitNotice(agentName: string, limit: SessionLimit): { message: string; actions: string[] } {
+  if (limit.planNotCovered) {
+    return {
+      message: `${agentName} can't use your Claude plan: Anthropic only covers Claude Code with it and bills other apps from extra usage. Fork to Claude Code to keep going, or connect an Anthropic API key.`,
+      actions: ["fork"],
+    };
+  }
   const what = `${agentName} ${LIMIT_COPY[limit.condition] ?? "hit a limit"}.`;
   return limit.resetsAt
     ? {

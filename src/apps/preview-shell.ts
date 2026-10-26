@@ -619,12 +619,14 @@ let entries=[];
 function resetConsole(){entries=[];serverSince='page';renderConsole();}
 // The server's errors join the page's: what the app's server logged since this
 // page loaded (Bivy follows the output of servers it runs). The owner's only.
-let serverSince='page',serverPolling=false;
+// A failed poll (access not redeemed yet, or expired) backs off like watch().
+let serverSince='page',serverPolling=false,serverRetry=0;
 async function pollServer(){
   serverPolling=true;
   if(metadata&&!metadata.reviewer&&metadata.inspect!==false){
     try{
       const r=await fetch(metadata.origin+'/__bivy/server-errors?since='+serverSince,{credentials:'include',cache:'no-store'});
+      serverRetry=r.ok?0:Math.min(30000,(serverRetry||1500)*2);
       if(r.ok){
         const d=await r.json();
         for(const line of (Array.isArray(d.lines)?d.lines:[]).slice(-20))entries.push({level:'error',source:'server',text:String(line.text).slice(0,500)});
@@ -632,9 +634,9 @@ async function pollServer(){
         if(d.lines?.length)renderConsole();
         if(Number.isFinite(d.now))serverSince=String(d.now);
       }
-    }catch{}
+    }catch{serverRetry=Math.min(30000,(serverRetry||1500)*2);}
   }
-  setTimeout(()=>void pollServer(),document.hidden?10000:3000);
+  setTimeout(()=>void pollServer(),serverRetry||(document.hidden?10000:3000));
 }
 function renderConsole(){
   const errors=entries.filter(e=>e.level==='error').length,count=$('error-count');

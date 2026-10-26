@@ -1591,7 +1591,7 @@ class ClaudeSession implements RuntimeSession {
 
 export class ClaudeCodeRuntime implements AgentRuntime {
   readonly id = "claude-code-sdk";
-  readonly displayName = "Claude Code SDK";
+  readonly displayName = "Claude Code";
   readonly capabilities: RuntimeCapabilities = withExactCapabilitySurface({
     toolInterception: true,
     modelSelection: true,

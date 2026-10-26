@@ -153,8 +153,13 @@ for (const mode of ["direct", "automatic"]) test(`preview launch redeems its fra
     expect(credential?.secure).toBe(true);
     expect(credential?.domain).toBe(new URL(gateway.origin(id)).hostname);
     gateway.revoke(id);
+    // The shell keeps polling after access ends; it must read the 401, not trip CORS.
+    const corsErrors: string[] = [];
+    page.on("console", (message) => { if (/CORS/i.test(message.text())) corsErrors.push(message.text()); });
     await page.reload();
     await expect(content.getByText("Preview access expired. Open a new preview link from Bivy.")).toBeVisible();
+    await page.waitForTimeout(1500);
+    expect(corsErrors).toEqual([]);
     await expect(page.getByRole("button", { name: "Back to chat" })).toBeVisible();
     // Exercise fallback navigation for browser contexts that refuse close().
     await page.evaluate(() => { window.close = () => {}; });

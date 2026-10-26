@@ -38,12 +38,12 @@ export function codexAuthFile(deps: CodexPreflightDeps = {}): string {
 
 /** The user-facing message shown when Codex has no OpenAI credential. */
 export const CODEX_NO_CREDENTIAL_MESSAGE = [
-  "Codex has no OpenAI credential on this node, so it can't start a turn — it would fail with `401 Unauthorized: Missing bearer or basic authentication in header`.",
+  "Codex has no ChatGPT sign-in or OpenAI API key on this machine yet, so it can't start.",
   "",
   "Fix it any of these ways:",
   "• Connect ChatGPT Plus/Pro (Codex) under Keys & OAuth — Bivy mints Codex's auth file from it automatically, or",
   "• Add an OpenAI API key under Keys & OAuth — Bivy passes it to Codex as OPENAI_API_KEY, or",
-  "• Run `codex login` on this node to sign in directly.",
+  "• Run `codex login` on this machine to sign in directly.",
   "",
   "If you already connected the ChatGPT/Codex subscription in Bivy and still see this, the saved login could not be refreshed — reconnect it under Keys & OAuth.",
 ].join("\n");
