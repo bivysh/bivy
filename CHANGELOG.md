@@ -7,13 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.21.5] - 2026-10-26
-
 ### Fixed
 
 - **Each browser tab keeps its own machine.** The selected machine was read back from storage shared by all tabs, so switching machines in one tab moved every other open tab's connection to it while their screens still showed the old machine. Those tabs then missed updates, like a finished sign-in, and could ask the wrong machine for a session. A new tab or a reload still starts on the last machine chosen.
 - **Choosing Bivy Cloud survives a reload or a failed start.** After a reload the first-run screen asked again where agents should run. After a failed start, the header stayed "Offline" even once the cloud computer was online. Bivy now connects to the cloud computer as soon as it is online, and after a reload it starts it again.
 - **The machine switcher says when no machine is chosen.** It showed "Offline — Machine"; it now shows "Choose a machine".
+
+### Changed
+
+- **The sidebar is readable on desktop.** Session rows had squeezed the title, a PR badge, the machine name and the age onto one line, so most titles were cut to a few letters. Desktop rows now match the phone layout: the full-width title on top, with agent, machine and repo on a quieter line below.
+- **Resize the sidebar and the side pane.** On desktop, drag the inner edge of either panel to resize it. Arrow keys work when the edge is focused, and double-clicking the edge restores the default width. Each panel remembers its width across reloads.
+
+## [0.21.5] - 2026-10-26
 
 ### Fixed
 
@@ -35,8 +40,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Plainer agent descriptions in the picker.** Claude Code, Codex and Pi say which sign-ins they use instead of "operator-installed … governed tool calls".
 - **A shorter update notice.** "Reload to use it. Unsent text is kept; attached files need adding again." replaces a sentence about browser storage.
 - **The sign-in page uses the Bivy wordmark** and says agents can run on your own computer or, where offered, a cloud computer.
-- **The sidebar is readable on desktop.** Session rows had squeezed the title, a PR badge, the machine name and the age onto one line, so most titles were cut to a few letters. Desktop rows now match the phone layout: the full-width title on top, with agent, machine and repo on a quieter line below.
-- **Resize the sidebar and the side pane.** On desktop, drag the inner edge of either panel to resize it. Arrow keys work when the edge is focused, and double-clicking the edge restores the default width. Each panel remembers its width across reloads.
 
 ## [0.21.4] - 2026-10-26
 
