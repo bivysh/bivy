@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Development toolchain updated.** Playwright 1.64, Vite 8.3.5, vite-plugin-pwa 2.0, ESLint 10.13 and Vitest 5.0.5. The app and its offline service worker build the same as before.
 - **Agents tested against their latest releases.** Bivy now ships and release-tests Pi 1.4.0 (with its sibling packages moved together), the Claude Agent SDK 0.3.310 (Claude Code 2.1.310), Codex 0.164.0, OpenCode 1.19.4 and Grok 1.0.70.
 
 ## [0.21.7] - 2026-10-26
