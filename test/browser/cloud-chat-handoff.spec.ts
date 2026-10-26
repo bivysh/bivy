@@ -243,7 +243,9 @@ for (const { outcome, currentModelKnown } of scenarios) {
       await expect(page.getByText("Test", { exact: true })).toBeVisible();
       await expect(page.getByText(/Agent responded in/)).toHaveCount(0);
     } else {
-      await expect(page.getByText("Model unavailable for this account", { exact: true }).first()).toBeVisible();
+      // Said once, by the chat's error card; the failed step points to it.
+      await expect(page.getByText("Model unavailable for this account", { exact: true })).toHaveCount(1);
+      await expect(page.getByText("See the error below.", { exact: true })).toBeVisible();
       await expect(page.getByText(/Startup failed after/)).toBeVisible();
       await expect(page.getByRole("button", { name: /Retry.*Machine/ })).toHaveCount(0);
     }
