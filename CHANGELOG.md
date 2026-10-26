@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Codex's requests for more access get an approval card.** Bivy answered a Codex request for network or filesystem access beyond its sandbox, and an MCP tool approval, with an empty reply. Sandbox requests now ask you in every approval mode except "never", and MCP tool approvals follow the node's approval policy. An MCP server's own form is declined instead of answered empty.
 - **Answers to an agent's question reach protocol agents.** For agents Bivy drives over its agent protocol, an answered question card was sent back as a plain "allow" without the answer.
 - **`bivy run <agent>` uses the agent install Bivy manages.** With `BIVY_NPM_GLOBAL_PREFIX` set, the node put `<prefix>/bin` first but `bivy run` still looked in `~/.local/bin` first, so a terminal session could start a different version of the agent than chat did, or none at all.
+- **`bivy run claude` and `bivy run pi` use the same login as chat.** Chat signed these agents in with the login held by Bivy, while a terminal run used only the agent's own login. Bivy imports and refreshes that login, so the agent's own copy could stop working, and the terminal then said "Not logged in" or rejected every token while chat worked. Terminal runs now get the same credentials, and a login made in Pi's own TUI is still kept.
 
 ## [0.21.9] - 2026-10-26
 

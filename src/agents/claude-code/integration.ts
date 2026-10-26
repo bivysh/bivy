@@ -58,10 +58,12 @@ export function claudeCodeIntegration(origin: AgentIntegrationOrigin) {
         supportTier: "supported",
         testedVersion: CLAUDE_TESTED_VERSION,
         source: origin,
-        authOwner: "agent",
-        credentialRequirements: { owner: "agent", strategy: "agent-login", providers: ["anthropic"] },
+        // Chat and `bivy run claude` sign in with the node's Anthropic credential
+        // when Bivy holds one, else with the CLI's own login.
+        authOwner: "mixed",
+        credentialRequirements: { owner: "mixed", strategy: "agent-login", providers: ["anthropic"] },
         notes: installed
-          ? "Uses the Claude Code executable already on this node, including its native auth, configuration, and sessions. Set BIVY_CLAUDE_MODEL to pick a default model."
+          ? "Uses the Claude Code executable already on this node, with its configuration and sessions, and signs in with this node's Anthropic login when it has one. Set BIVY_CLAUDE_MODEL to pick a default model."
           : agentInstalled
             ? "The Claude Code agent is installed; Bivy installs its SDK bridge when you start the first Claude session (or run 'bivy agents:install --bridges')."
             : "Install and sign in to Claude Code on this node; Bivy will connect to that existing agent.",
