@@ -872,6 +872,13 @@ class ProtocolSession implements RuntimeSession {
       }
       return;
     }
+    // The agent's own slash commands arrived after the hello (an ACP
+    // available_commands_update): fold them in and let the node re-advertise.
+    if (type === "runtime.commands") {
+      this.capabilitiesRef.commands = parseAgentCommands(msg.commands);
+      this.emit({ type: "runtime.commands", commands: this.capabilitiesRef.commands ?? [] });
+      return;
+    }
     if (type === "usage") {
       // Best-effort token/cost snapshot the shim reports; surfaced via getUsage().
       this.lastUsage = parseProtocolUsage(msg.usage ?? msg);

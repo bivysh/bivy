@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Pick Claude Code's and Codex's reasoning effort.** The effort picker the other agents have now lists the selected Claude or Codex model's own levels. A Claude pick applies right away; a Codex pick from the next turn.
 - **A message sent while Codex works joins the running turn**, like Claude Code and Pi, instead of waiting for it to finish.
+- **Slash commands from ACP agents.** OpenCode, Grok and other ACP agents announce their own commands (Grok's `/compact`, `/context`, `/goal` and more); the composer now offers them, and picking one runs it.
+- **Token usage for ACP agents.** A Grok session, and any ACP agent that reports usage, now shows its token use (and its cost, when the agent sends one), like Claude Code, Codex and Pi.
 
 ### Fixed
 

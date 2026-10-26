@@ -122,6 +122,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         notify("session/update", { sessionId, update: { sessionUpdate: "tool_call", toolCallId: "auto1", title: "automatic read", kind: "read", rawInput: { path: "README.md" } } });
         notify("session/update", { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: "auto1", status: "completed", content: { type: "text", text: "done" } } });
       }
+      // The agent's own slash commands and its running session cost.
+      if (process.env.ACP_SESSION_INFO === "1") {
+        notify("session/update", { sessionId, update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "compact", description: "Summarize the conversation" }, { name: "init", description: "" }] } });
+        notify("session/update", { sessionId, update: { sessionUpdate: "usage_update", used: 1200, size: 200000, cost: { amount: 0.25, currency: "USD" } } });
+      }
       if (process.env.ACP_PLAN === "1") {
         notify("session/update", { sessionId, update: { sessionUpdate: "plan", entries: [{ content: "Read the README", priority: "medium", status: "completed" }, { content: "Count its lines", priority: "medium", status: "in_progress" }] } });
       }
@@ -164,7 +169,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       done.then((outcome) => {
         const granted = outcome?.outcome?.outcome === "selected" && outcome.outcome.optionId === "ok";
         notify("session/update", { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: "tc1", status: granted ? "completed" : "failed", content: { type: "text", text: granted ? "file.txt" : "denied" } } });
-        reply(id, { stopReason: "end_turn" });
+        reply(id, { stopReason: "end_turn", ...(process.env.ACP_SESSION_INFO === "1" ? { usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120, cachedReadTokens: 40 } } : {}) });
         // Simulate the opencode ACP end_turn race (opencode#17505): the LAST
         // agent_message_chunk frames are emitted AFTER the session/prompt reply —
         // the reply resolves, and the tail lands a moment later. The shim must
