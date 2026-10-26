@@ -111,6 +111,28 @@ await check("acp: a plan update is a plan tool call, not reasoning", async () =>
   }
 });
 
+await check("acp: the agent's slash commands and session usage reach the node", async () => {
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_SESSION_INFO = "1";
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: __dirname, piDir: __dirname, sessionsDir: __dirname });
+    const { session } = await runtime.createSession({ workspace: __dirname, toolInterceptor: async () => undefined });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    await session.prompt("hello");
+    await waitFor(events, (event) => event.type === "agent_end");
+    assert.ok(events.some((event) => event.type === "runtime.commands"), "the node hears the commands arrived");
+    assert.deepEqual(session.getCommands?.(), [{ name: "/compact", description: "Summarize the conversation" }, { name: "/init" }], "offered as slash commands");
+    assert.deepEqual(await session.getUsage?.(), { tokens: { input: 100, output: 20, cacheRead: 40, cacheWrite: 0, total: 120 }, costUsd: 0.25 }, "turn tokens plus the agent's session cost");
+    session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_SESSION_INFO;
+  }
+});
+
 await check("acp: observed tool activity never opens a misleading approval", async () => {
   process.env.BIVY_ACP_COMMAND = process.execPath;
   process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);

@@ -109,6 +109,13 @@ bundle. When one of them ships a first-party ACP server, promoting it is a one-l
   providers that agent has actually been signed into — and a model the agent
   rejects fails visibly rather than appearing to apply. An agent that reports no
   model options advertises no picker.
+- **Slash commands:** Yes, when the agent sends `available_commands_update`. The
+  shim publishes them as a `runtime.commands` event and the composer offers
+  them. Picking one sends the slash line as a prompt, which is how ACP invokes
+  commands.
+- **Usage:** each turn's token counts (the `session/prompt` reply's `usage`, or
+  `_meta.usage` as Grok sends it) add up to the session's running total, and a
+  `usage_update` cost in USD is the session cost.
 
 ## Known gaps / notes
 

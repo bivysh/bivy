@@ -478,9 +478,49 @@ function onSessionUpdate(params) {
     case "plan":
       if (!child && Array.isArray(u.entries)) emitPlan(u.entries);
       break;
+    // The agent's own slash commands, offered in the composer. Picking one
+    // sends the slash line as a prompt, which is how ACP invokes them.
+    case "available_commands_update":
+      if (!child && Array.isArray(u.availableCommands)) {
+        const commands = u.availableCommands
+          .filter((c) => c && typeof c.name === "string" && c.name.trim())
+          .map((c) => ({ name: `/${c.name.trim().replace(/^\//, "")}`, ...(typeof c.description === "string" && c.description.trim() ? { description: c.description.trim() } : {}) }));
+        bivy({ type: "runtime.commands", commands });
+      }
+      break;
+    // The session's running cost, when the agent knows it.
+    case "usage_update":
+      if (!child && u.cost && typeof u.cost.amount === "number" && String(u.cost.currency || "").toUpperCase() === "USD") {
+        sessionCostUsd = u.cost.amount;
+        reportUsage();
+      }
+      break;
     default:
       break;
   }
+}
+
+// Session usage as one running snapshot: token counts summed over the turns'
+// session/prompt replies, plus the cost the agent reports. Bivy keeps usage as
+// a running total per session.
+const sessionTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+let sawTokens = false;
+let sessionCostUsd;
+function addTurnUsage(usage) {
+  if (!usage || typeof usage !== "object") return;
+  const n = (v) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  sessionTokens.input += n(usage.inputTokens);
+  sessionTokens.output += n(usage.outputTokens);
+  sessionTokens.cacheRead += n(usage.cachedReadTokens);
+  sessionTokens.cacheWrite += n(usage.cachedWriteTokens);
+  sessionTokens.total += n(usage.totalTokens) || n(usage.inputTokens) + n(usage.outputTokens);
+  sawTokens = true;
+  reportUsage();
+}
+function reportUsage() {
+  const { input, output, cacheRead, cacheWrite, total } = sessionTokens;
+  const tokens = { input, output, cache_read: cacheRead, cache_write: cacheWrite, total };
+  bivy({ type: "usage", usage: { ...(sawTokens ? { tokens } : {}), ...(sessionCostUsd !== undefined ? { costUsd: sessionCostUsd } : {}) } });
 }
 
 // --- ACP → bivy: agent→client requests (permission, fs) ---------------------
@@ -658,7 +698,9 @@ async function onBivyCommand(msg) {
           if (image && typeof image.data === "string" && typeof image.mimeType === "string") prompt.push({ type: "image", data: image.data, mimeType: image.mimeType });
         }
         agentRequest("session/prompt", { sessionId, prompt })
-          .then(() => {
+          .then((result) => {
+            // Grok reports a turn's usage under _meta rather than the draft `usage`.
+            addTurnUsage(result?.usage ?? result?._meta?.usage);
             // The prompt reply is NOT the end of the turn for opencode — the last
             // agent_message_chunk frames trail it (see the drain note above). Arm
             // the drain; session.done fires once the update stream goes quiet.
