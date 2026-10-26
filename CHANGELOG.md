@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.6] - 2026-10-26
+
 ### Fixed
 
 - **Each browser tab keeps its own machine.** The selected machine was read back from storage shared by all tabs, so switching machines in one tab moved every other open tab's connection to it while their screens still showed the old machine. Those tabs then missed updates, like a finished sign-in, and could ask the wrong machine for a session. A new tab or a reload still starts on the last machine chosen.
