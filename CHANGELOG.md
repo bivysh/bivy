@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.4] - 2026-10-26
+
 ### Security
 
 - **undici 8.12.3, zod 4.6.7, body-parser 2.4.0 and DOMPurify 3.4.17.** They fix GHSA-xjj6-f33q-929c (undici: denial of service through an unhandled error on excessive content-encodings), GHSA-mrhx-c7xc-m3w5 (zod: memory exhaustion validating oversized constrained collections), GHSA-27r3-jxmh-p828 (body-parser: denial of service through trailing bytes after a compressed body), and GHSA-cg2g-xh64-v4q7 and GHSA-mrv2-3pqr-j5jr (DOMPurify: a SAFE_FOR_TEMPLATES bypass in shadow-root content, and event handlers left armed after an IN_PLACE hook removes a parent).
