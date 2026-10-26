@@ -47,12 +47,12 @@ overrides:
   # released together and a newer sibling can drop exports it imports
   # (pi-codemode 1.4.0 removed MCP_TYPESCRIPT_PREAMBLE). Hold them at the
   # version pi-coding-agent itself is pinned to.
-  "@earendil-works/chord": 1.0.4
-  "@earendil-works/pi-agent-core": 1.0.4
-  "@earendil-works/pi-codemode": 1.0.4
-  "@earendil-works/pi-mcp": 1.0.4
-  "@earendil-works/pi-telemetry": 1.0.4
-  "@earendil-works/pi-tui": 1.0.4
+  "@earendil-works/chord": 1.4.0
+  "@earendil-works/pi-agent-core": 1.4.0
+  "@earendil-works/pi-codemode": 1.4.0
+  "@earendil-works/pi-mcp": 1.4.0
+  "@earendil-works/pi-telemetry": 1.4.0
+  "@earendil-works/pi-tui": 1.4.0
 
 # pnpm does not run a dependency's install scripts unless it is listed here.
 # Each `true` is arbitrary code we let run at install time, so every entry is a
@@ -70,22 +70,22 @@ allowBuilds:
   "@google/genai": false
 
 minimumReleaseAgeExclude:
-  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286'
-  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286'
-  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286'
-  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286'
-  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286'
-  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286'
-  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286'
-  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286'
-  - '@anthropic-ai/claude-agent-sdk@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286'
-  - '@earendil-works/pi-agent-core@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4'
-  - '@earendil-works/pi-ai@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4'
-  - '@earendil-works/pi-client@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4'
-  - '@earendil-works/pi-coding-agent@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4'
-  - '@earendil-works/pi-protocol@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4'
-  - '@earendil-works/pi-telemetry@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4'
-  - '@earendil-works/pi-tui@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4'
-  - '@earendil-works/chord@0.99.1 || 0.99.2 || 1.0.4'
-  - '@earendil-works/pi-codemode@0.99.1 || 0.99.2 || 1.0.4'
-  - '@earendil-works/pi-mcp@0.99.1 || 0.99.2 || 1.0.4'
+  - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286 || 0.3.310'
+  - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286 || 0.3.310'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286 || 0.3.310'
+  - '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286 || 0.3.310'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286 || 0.3.310'
+  - '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286 || 0.3.310'
+  - '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286 || 0.3.310'
+  - '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286 || 0.3.310'
+  - '@anthropic-ai/claude-agent-sdk@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286 || 0.3.310'
+  - '@earendil-works/pi-agent-core@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4 || 1.4.0'
+  - '@earendil-works/pi-ai@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4 || 1.4.0'
+  - '@earendil-works/pi-client@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4 || 1.4.0'
+  - '@earendil-works/pi-coding-agent@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4 || 1.4.0'
+  - '@earendil-works/pi-protocol@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4 || 1.4.0'
+  - '@earendil-works/pi-telemetry@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4 || 1.4.0'
+  - '@earendil-works/pi-tui@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4 || 1.4.0'
+  - '@earendil-works/chord@0.99.1 || 0.99.2 || 1.0.4 || 1.4.0'
+  - '@earendil-works/pi-codemode@0.99.1 || 0.99.2 || 1.0.4 || 1.4.0'
+  - '@earendil-works/pi-mcp@0.99.1 || 0.99.2 || 1.0.4 || 1.4.0'
