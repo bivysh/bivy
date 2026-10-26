@@ -7,6 +7,7 @@
 // The guardian/approval hook is wired here: a generic `toolInterceptor` passed in
 // OpenSessionOptions is adapted to Pi's `pi.on("tool_call")` extension event.
 
+import { accountModelLists, withinAccount } from "../../runtime/account-models.js";
 import fs from "node:fs";
 import path from "node:path";
 import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
@@ -336,7 +337,7 @@ class PiSession implements RuntimeSession {
     const runtime = this.session.modelRuntime;
     try {
       const models = await runtime.getAvailable();
-      return models.map((model) => toModelInfo(model, true));
+      return withinAccount(models.map((model) => toModelInfo(model, true)), await this.accountLists());
     } catch (error) {
       // The runtime's availability refresh is a Promise.all across every
       // provider's auth check, so one broken provider (an unreachable custom
@@ -349,9 +350,27 @@ class PiSession implements RuntimeSession {
           for (const model of await runtime.getAvailable(provider.id)) models.push(toModelInfo(model, true));
         } catch { /* this provider is broken — the rest still list */ }
       }
-      if (models.length) return models;
+      if (models.length) return withinAccount(models, await this.accountLists());
       throw error instanceof Error ? error : new Error(String(error));
     }
+  }
+
+  /** Models each signed-in account may use (a ChatGPT plan lists its own);
+   *  Pi's fixed catalog is filtered to them. Only for Bivy-held sign-ins. */
+  private async accountLists(): Promise<Map<string, Set<string>>> {
+    if (this.tui.credentialOwner !== "bivy") return new Map();
+    return accountModelLists(this.tui.credsDir).catch(() => new Map());
+  }
+
+  /** Move off a starting model the account can't use (Pi picks its own default
+   *  from its catalog, which can include models a plan refuses). */
+  async ensureAccountModel(): Promise<void> {
+    const current = this.session.model as { provider?: string; id?: string } | undefined;
+    if (!current?.provider || !current.id) return;
+    const allowed = (await this.accountLists()).get(current.provider);
+    if (!allowed || allowed.has(current.id)) return;
+    const replacement = (await this.getModels()).find((model) => model.provider === current.provider);
+    if (replacement) await this.setModel(current.provider, replacement.id).catch(() => {});
   }
 
   /**
@@ -368,7 +387,7 @@ class PiSession implements RuntimeSession {
     // Promise.all) must not blank the full catalog — the flags then reflect
     // the last successful refresh, which the picker can still act on.
     await runtime.getAvailable().catch(() => {});
-    return runtime.getModels().map((model) => toModelInfo(model, runtime.hasConfiguredAuth(model.provider)));
+    return withinAccount(runtime.getModels().map((model) => toModelInfo(model, runtime.hasConfiguredAuth(model.provider))), await this.accountLists());
   }
 
   /** Reload the projected models.json in-place so a live session immediately
@@ -558,7 +577,9 @@ export class PiRuntime implements AgentRuntime {
       credentialOwner: this.options.credentialOwner ?? "bivy",
       allowModelNetwork,
     };
-    return { session: new PiSession(runtime, tui, backgroundShells), warning: runtime.modelFallbackMessage };
+    const session = new PiSession(runtime, tui, backgroundShells);
+    await session.ensureAccountModel().catch(() => {});
+    return { session, warning: runtime.modelFallbackMessage };
   }
 
   createSession(options: OpenSessionOptions): Promise<OpenSessionResult> {
@@ -616,11 +637,12 @@ export class PiRuntime implements AgentRuntime {
           modelsPath: path.join(this.options.piDir, "models.json"),
         })
       : await createPiModelRuntime({ credsDir: this.options.credsDir, piDir: this.options.piDir });
+    const lists = this.options.credentialOwner === "agent" ? new Map<string, Set<string>>() : await accountModelLists(this.options.credsDir).catch(() => new Map<string, Set<string>>());
     return runtime.getProviders().map((provider) => ({
       id: provider.id,
       name: provider.name,
       oauth: isNativeOAuthProvider(provider.id),
-      models: runtime.getModels(provider.id).map((model) => toModelInfo(model, true)),
+      models: withinAccount(runtime.getModels(provider.id).map((model) => toModelInfo(model, true)), lists),
     }));
   }
 
