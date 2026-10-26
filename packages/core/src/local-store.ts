@@ -68,6 +68,10 @@ export function createLocalStore(storage: Storage, volatile?: Storage): LocalSto
       return storage;
     }
   })();
+  // The current node is per tab: storage only seeds a new tab or a reload.
+  // Reading it back from shared storage let one tab's machine switch silently
+  // re-route every other open tab while their screens still showed the old one.
+  let current: string | undefined;
   return {
     get s() {
       return storage.getItem("bivy_session") || "";
@@ -88,9 +92,11 @@ export function createLocalStore(storage: Storage, volatile?: Storage): LocalSto
       storage.setItem("bivy_relay", v);
     },
     get cur() {
-      return storage.getItem("bivy_current") || "";
+      current ??= storage.getItem("bivy_current") || "";
+      return current;
     },
     set cur(v: string) {
+      current = v;
       storage.setItem("bivy_current", v);
     },
     keys() {
@@ -186,6 +192,7 @@ export function createLocalStore(storage: Storage, volatile?: Storage): LocalSto
         "bivy_last_choice",
       ])
         storage.removeItem(k);
+      current = undefined;
     },
   };
 }
