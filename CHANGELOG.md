@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.5] - 2026-10-26
+
 ### Fixed
 
 - **Links in chat keep their query parameters.** Message text was escaped before its URLs became links, and the link was escaped again, so `?a=1&b=2` reached the browser as a parameter named `amp;b`. Sign-in links lost their `client_id` this way.
