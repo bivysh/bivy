@@ -83,7 +83,7 @@ export function approvalTitle(approval: any): string {
   const input = approvalToolInput(approval);
   const name = approvalToolName(approval);
   if (BIVY_REQUESTS[name]) return BIVY_REQUESTS[name].title;
-  const target = (input as any).path || (input as any).file || (input as any).filePath || (input as any).pathname;
+  const target = (input as any).path || (input as any).file || (input as any).filePath || (input as any).file_path || (input as any).pathname;
   if (name.includes("bash") || name.includes("shell")) return "Run this command?";
   if (name.includes("mail") || name.includes("email") || name.includes("send")) return "Agent wants to send a message";
   if (name.includes("edit")) return `Edit ${compactPath(target) || "a file"}?`;
@@ -96,7 +96,7 @@ export function approvalConsequence(approval: any, severity: ApprovalSeverity = 
   const name = approvalToolName(approval);
   if (BIVY_REQUESTS[name]) return BIVY_REQUESTS[name].consequence(input);
   const command = String(input.command || input.cmd || input.shell || "").trim();
-  const target = input.path || input.file || input.filePath || input.pathname || input.cwd || input.directory;
+  const target = input.path || input.file || input.filePath || input.file_path || input.pathname || input.cwd || input.directory;
   const recipients = input.to || input.recipients || input.recipient;
   const recipientCount = Array.isArray(recipients) ? recipients.length : recipients ? String(recipients).split(",").filter(Boolean).length : 0;
   const lower = `${name} ${command}`.toLowerCase();
@@ -132,11 +132,12 @@ export function approvalFields(approval: any): Array<[string, string]> {
     for (const [label, value] of BIVY_REQUESTS[name].fields(input)) add(label, value, Infinity);
     return fields;
   }
-  add("Tool", name);
-  add("File", input.path || input.file || input.filePath || input.pathname);
+  // The title already says what kind of action this is ("Run this command?",
+  // "Edit …/totals.ts?", "Allow mcp__x?"), so the tool name isn't repeated.
+  add("File", input.path || input.file || input.filePath || input.file_path || input.pathname);
   add("Command", name.includes("bash") || name.includes("shell") ? "" : input.command);
-  add("Find", input.oldText || input.search || input.find);
-  add("Replace", input.newText || input.replace);
+  add("Find", input.oldText || input.old_string || input.search || input.find);
+  add("Replace", input.newText || input.new_string || input.replace);
   add("Text", input.content || input.text);
   return fields;
 }

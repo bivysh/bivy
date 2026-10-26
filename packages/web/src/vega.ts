@@ -144,6 +144,10 @@ export async function renderChart(host: HTMLElement, spec: Record<string, unknow
         title: { color: ink },
         range: { category: [accent, token("--ok", "#2f9e44"), token("--warn", "#e8590c"), token("--danger", "#c92a2a"), muted] },
         mark: { color: accent },
+        // Two or three categories otherwise fill the message with slabs of
+        // solid colour; slimmer, softly rounded bars read as a chart.
+        scale: { bandPaddingInner: 0.35, bandPaddingOuter: 0.2 },
+        bar: { cornerRadiusEnd: 3 },
       },
     });
     return { ok: true };
