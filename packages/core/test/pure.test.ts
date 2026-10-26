@@ -141,6 +141,11 @@ describe("markdown", () => {
     expect(inline("https://x.test/a?a=1&b=2")).toContain(href);
     expect(inline("[go](https://x.test/a?a=1&b=2)")).toContain(href);
   });
+  it("shows a link to a file on the agent's machine as its label, not raw markdown", () => {
+    expect(inline("Added `subtract` to [math.ts](/tmp/demo/math.ts:3).")).toBe(
+      'Added <code>subtract</code> to <span class="md-path" title="/tmp/demo/math.ts:3">math.ts</span>.',
+    );
+  });
   it("renders a remote markdown image as an unresolved placeholder, not a fetchable src", () => {
     // #293: the deployed app's CSP (img-src 'self' data: blob:) blocks a literal
     // remote src outright, so the element must never carry one — the node

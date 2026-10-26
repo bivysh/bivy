@@ -12,12 +12,14 @@ import { StandbyNotice } from "./StandbyNotice.js";
 import { standbyCopyOf } from "../standby.js";
 import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { Spinner } from "./Spinner.js";
+import { CloseIcon, FileIcon, ImageIcon, ShieldIcon } from "./UiIcons.js";
 import { Dictation, dictationEngine, NO_DICTATION, type DictationEngine } from "./Dictation.js";
 import { controller } from "../store/useStore.js";
 import { clearComposerDraft, composerDraftKey, holdComposerAttachments, restoreComposerDraft, writeComposerDraft, type PendingAttachmentMetadata } from "../composerDraft.js";
 import { setComposerLifecycle } from "../pwaLifecycle.js";
 
-type Picker = "repo" | "agent" | "model" | "sandbox" | null;
+/** "model-to-send": Send was pressed before a model was chosen. */
+type Picker = "repo" | "agent" | "model" | "model-to-send" | "sandbox" | null;
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS = 12;
@@ -548,7 +550,7 @@ export function Composer({
     if ((!value && !attachments.length) || disabled || blockedByTurn) return;
     const modelId = state.catalogs.currentModel?.id || state.catalogs.currentModelId;
     if (isDraft && modelSelectable && (!modelId || modelId === "unknown")) {
-      setPicker("model");
+      setPicker("model-to-send");
       return;
     }
     // Dispatch a slash line (see resolveSlash): an advertised agent command is
@@ -605,7 +607,7 @@ export function Composer({
     ? draftTier.label
     : nodeDefaultTier
       ? nodeDefaultTier.label
-      : state.settings.nodeSettings?.defaultSandbox ?? "Default";
+      : state.settings.nodeSettings?.defaultSandbox ?? "Machine default";
   const selectedRuntime = state.catalogs.runtimes.find((runtime) => runtime.id === state.catalogs.selectedAgentId);
   const sandboxTitle = runtimeEnforcesProtection(selectedRuntime)
     ? (draftTier ? draftTier.hint : "Protection for this session (machine default)")
@@ -622,7 +624,7 @@ export function Composer({
             <span className="pill-label">{repoLabel}</span>
           </button>
           <button type="button" className="btn sm ghost sandbox-pill" onClick={() => setPicker("sandbox")} title={sandboxTitle} aria-label={`Protection: ${sandboxLabel}`}>
-            <span className="pill-glyph">◈</span>
+            <span className="pill-glyph"><ShieldIcon size={15} /></span>
             <span className="pill-label">{sandboxLabel}</span>
           </button>
         </div>
@@ -753,11 +755,11 @@ export function Composer({
                         <img className="attach-thumb" src={thumb} alt={a.name} />
                       </button>
                     ) : (
-                      <span className="attach-glyph">{a.kind === "image" ? "🖼" : "📄"}</span>
+                      <span className="attach-glyph">{a.kind === "image" ? <ImageIcon size={14} /> : <FileIcon size={14} />}</span>
                     )}
                     <span className="attach-name">{a.name}</span>
                     <button type="button" className="attach-remove" onClick={() => removeAttachment(i)} aria-label={`Remove ${a.name}`}>
-                      ✕
+                      <CloseIcon size={12} />
                     </button>
                   </span>
                 );
@@ -896,7 +898,13 @@ export function Composer({
       {picker === "repo" && <RepoPicker state={state} onClose={() => setPicker(null)} />}
       {picker === "sandbox" && <SandboxPicker state={state} onClose={() => setPicker(null)} />}
       {picker === "agent" && <AgentPicker state={state} onClose={() => setPicker(null)} />}
-      {picker === "model" && modelSelectable && <ModelPicker state={state} onClose={() => setPicker(null)} />}
+      {(picker === "model" || picker === "model-to-send") && modelSelectable && (
+        <ModelPicker
+          state={state}
+          hint={picker === "model-to-send" ? "Choose a model to send your message. Your draft is kept." : undefined}
+          onClose={() => setPicker(null)}
+        />
+      )}
       {/* Portal to <body>. Like the pickers' Sheet, the viewer is
           `position: fixed` but rendered from deep inside the `.chat` scroll
           container. On iOS a fixed element does NOT escape a scrolling ancestor

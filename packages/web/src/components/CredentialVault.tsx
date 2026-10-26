@@ -8,6 +8,7 @@ import { OauthStep } from "./ProviderConnect.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { Badge } from "./Badge.js";
 import { NativeCredentialImport } from "./NativeCredentialImport.js";
+import { AI_ACCOUNTS } from "../onboarding.js";
 
 type CatalogProvider = { id: string; name: string; oauth?: boolean; apiKey?: boolean; reference?: boolean; help?: string };
 type Availability = "account" | "node" | "device";
@@ -268,23 +269,35 @@ export function CredentialVault({ state, initialProvider = null }: { state: AppS
     const chosen = catalog.find((p) => p.id === provider) ?? (provider ? { id: provider, name: provider } : undefined);
     if (!chosen) {
       const matches = catalog.filter((p) => `${p.name} ${p.id}`.toLowerCase().includes(query.toLowerCase()));
+      // The plans people already pay for lead, named the way "Connect your AI"
+      // and the model picker name them; a search narrows them like any provider.
+      const plans = AI_ACCOUNTS.filter((account) => matches.some((p) => p.id === account.provider));
+      const hosted = matches.filter((p) => !plans.some((account) => account.provider === p.id));
+      const choose = (p: CatalogProvider) => { resetAdd(p.id); setProvider(p.id); if (p.oauth) setMethod("oauth"); };
       return <div className="settings-form credential-vault">
         <button className="btn link" onClick={() => setView("list")}>‹ Credentials</button>
         <h3>Add model access</h3>
-        <p className="muted">Connect a hosted provider or point Bivy at a model server you control.</p>
+        <input autoFocus className="picker-search" placeholder="Search providers…" aria-label="Search providers" value={query} onChange={(e) => setQuery(e.target.value)} />
+        {plans.length > 0 && <>
+          <div className="vault-picker-label">Use a plan you already pay for</div>
+          <div className="picker-list">
+            {plans.map((account) => <button key={account.provider} className="picker-item" onClick={() => choose(catalog.find((p) => p.id === account.provider)!)}>
+              <span><strong>{account.name}</strong><small>{account.plan}</small></span><span aria-hidden>›</span>
+            </button>)}
+          </div>
+        </>}
+        <div className="vault-picker-label">Hosted providers</div>
+        <div className="picker-list">
+          {hosted.map((p) => <button key={p.id} className="picker-item" onClick={() => choose(p)}>
+            <span><strong>{p.name}</strong></span><span aria-hidden>›</span>
+          </button>)}
+          {hosted.length === 0 && <div className="picker-empty">No hosted providers match. Add it as a custom endpoint below.</div>}
+        </div>
         <button className="custom-provider-card" onClick={() => { const id = query.trim().toLowerCase() || "local"; resetAdd(id); setProvider(id); setCustomMode(true); }}>
           <span className="custom-provider-card-icon" aria-hidden>＋</span>
           <span><strong>Local server or custom endpoint</strong><small>Ollama, LM Studio, vLLM, Azure, or another compatible API</small></span>
           <span aria-hidden>›</span>
         </button>
-        <div className="vault-picker-label">Hosted providers</div>
-        <input autoFocus className="picker-search" placeholder="Search providers…" value={query} onChange={(e) => setQuery(e.target.value)} />
-        <div className="picker-list">
-          {matches.map((p) => <button key={p.id} className="picker-item" onClick={() => { resetAdd(p.id); setProvider(p.id); if (p.apiKey === false && p.oauth) setMethod("oauth"); }}>
-            <span><strong>{p.name}</strong><small>{p.id}</small></span><span aria-hidden>›</span>
-          </button>)}
-          {matches.length === 0 && <div className="picker-empty">No hosted providers match. Add it as a custom endpoint above.</div>}
-        </div>
       </div>;
     }
     const customProvider = customMode || localModels.some((entry) => entry.id === chosen.id)
@@ -305,9 +318,11 @@ export function CredentialVault({ state, initialProvider = null }: { state: AppS
         </select>
       </>}
     </>;
+    // A plan reads as the product people pay for ("Claude"), not the vendor.
+    const chosenName = AI_ACCOUNTS.find((account) => account.provider === chosen.id)?.name ?? chosen.name;
     return <div className="settings-form credential-vault">
       <button className="btn link" onClick={() => setProvider("")}>‹ Providers</button>
-      <h3>{customProvider ? "Custom provider" : chosen.name}</h3>
+      <h3>{customProvider ? "Custom provider" : chosenName}</h3>
       {oauth?.provider === chosen.id ? <OauthStep /> : <>
         {customProvider && <>
           <p className="muted">Use a local model server or any OpenAI-, Anthropic-, or Azure-compatible endpoint.</p>
@@ -348,13 +363,13 @@ export function CredentialVault({ state, initialProvider = null }: { state: AppS
           {chosen.apiKey !== false && <button aria-pressed={method === "api_key"} className={`btn ${method === "api_key" ? "primary" : ""}`} onClick={() => setMethod("api_key")}>API key</button>}
           {chosen.reference !== false && <button aria-pressed={method === "reference"} className={`btn ${method === "reference" ? "primary" : ""}`} onClick={() => { setMethod("reference"); if (availability === "device") setAvailability("node"); }}>Password manager</button>}
         </div>}
-        {!customProvider && (discloseOptions ? identityOptions : method !== "oauth" ? <details className="vault-advanced"><summary>Advanced options</summary>{identityOptions}</details> : null)}
         {method !== "oauth" && !customProvider && <>
           <label className="field-label" htmlFor="credential-secret">{method === "reference" ? "Reference" : "API key"}</label>
           <input id="credential-secret" className="picker-search" type={method === "reference" ? "text" : "password"} placeholder={method === "reference" ? "op://Vault/Item/field, env://NAME, or cmd://…" : "Paste API key"} value={secret} onChange={(e) => setSecret(e.target.value)} />
           {chosen.help && method === "api_key" && <a className="btn link" href={chosen.help} target="_blank" rel="noreferrer">Where to create a key ↗</a>}
         </>}
-        <button className="btn primary block" disabled={busy || (!customProvider && method !== "oauth" && !secret.trim()) || (customProvider && !customBaseUrl.trim())} onClick={save}>{busy ? "Saving…" : method === "oauth" ? `Sign in with ${chosen.name}` : customProvider ? "Save custom provider" : "Save credential"}</button>
+        {!customProvider && (discloseOptions ? identityOptions : method !== "oauth" ? <details className="vault-advanced"><summary>Advanced options</summary>{identityOptions}</details> : null)}
+        <button className="btn primary block" disabled={busy || (!customProvider && method !== "oauth" && !secret.trim()) || (customProvider && !customBaseUrl.trim())} onClick={save}>{busy ? "Saving…" : method === "oauth" ? `Sign in with ${chosenName}` : customProvider ? "Save custom provider" : "Save credential"}</button>
       </>}
       {error && <div className="banner inline" data-tone="danger" role="alert">{error}</div>}
     </div>;
@@ -421,18 +436,27 @@ export function CredentialVault({ state, initialProvider = null }: { state: AppS
   }
 
   const filtered = items.filter((item) => `${item.providerName} ${item.provider} ${item.label}`.toLowerCase().includes(query.toLowerCase()));
+  const openAdd = (id = "", oauthFirst = false) => { setSelectedKey(null); resetAdd(id); setQuery(""); if (oauthFirst) setMethod("oauth"); setView("add"); };
   return <div className="settings-form credential-vault">
-    <div className="vault-title-row"><div><h3>Your model access</h3><p className="muted settings-intro">Hosted providers, subscription sign-ins, API keys, and your own model endpoints.</p></div><button className="btn primary" onClick={() => { setSelectedKey(null); resetAdd(); setQuery(""); setView("add"); }}>+ Add</button></div>
+    <div className="vault-title-row"><div><h3>Your model access</h3><p className="muted">Subscription sign-ins, API keys, and your own model endpoints.</p></div>{items.length > 0 && <button className="btn primary" onClick={() => openAdd()}>+ Add</button>}</div>
+    {items.length === 0 ? <div className="vault-empty">
+      <h4>Connect your AI</h4>
+      <p className="muted">Sign in with a plan you already pay for, or add any provider's API key.</p>
+      <div className="row-actions">
+        {AI_ACCOUNTS.map((account) => <button key={account.provider} className="btn primary" onClick={() => openAdd(account.provider, true)}>Sign in with {account.name}</button>)}
+        <button className="btn" onClick={() => openAdd()}>Other provider</button>
+      </div>
+    </div> : <>
+      <input className="picker-search" placeholder="Search credentials…" aria-label="Search credentials" value={query} onChange={(e) => setQuery(e.target.value)} />
+      <div className="picker-list vault-items">{filtered.map((item) => <button className="picker-item" key={keyOf(item.provider, item.label)} onClick={() => { setSelectedKey(keyOf(item.provider, item.label)); setMessage(null); setError(null); setView("detail"); }}>
+        <span><strong>{titleFor(item)}</strong><small>{localModels.some((model) => model.id === item.provider) ? "Local or custom endpoint" : methodLabel(item.kind)} · {availabilityLabel(item.availability)}</small></span><span className="vault-row-status">{item.record?.lastVerifiedOk && <Badge tone="ok">Verified</Badge>}<span aria-hidden>›</span></span>
+      </button>)}</div>
+    </>}
+    <div className="vault-picker-label">Advanced</div>
     <button ref={importButton} className="btn" onClick={() => setView("import")}>Import from machine</button>
     <div className="settings-toggle-row">
       <div className="settings-toggle-text"><div className="settings-toggle-title">OAuth browser recovery</div><p className="muted small">Keep account OAuth refresh tokens end-to-end encrypted on your signed-in devices so a new machine can recover without another machine online.</p></div>
       <button type="button" role="switch" aria-checked={oauthRecovery} aria-label="Allow OAuth browser recovery" className={`settings-toggle${oauthRecovery ? " on" : ""}`} onClick={() => { const enabled = !oauthRecovery; setOauthRecovery(enabled); void controller.setOAuthBrowserRecovery(enabled).catch(() => setOauthRecovery(!enabled)); }}><span className="settings-toggle-knob" aria-hidden /></button>
     </div>
-    {items.length === 0 ? <div className="vault-empty"><h4>No providers yet</h4><p className="muted">Add a sign-in, API key, local model, or custom endpoint.</p><button className="btn primary" onClick={() => { setSelectedKey(null); resetAdd(); setView("add"); }}>Add provider</button></div> : <>
-      <input className="picker-search" placeholder="Search credentials…" value={query} onChange={(e) => setQuery(e.target.value)} />
-      <div className="picker-list vault-items">{filtered.map((item) => <button className="picker-item" key={keyOf(item.provider, item.label)} onClick={() => { setSelectedKey(keyOf(item.provider, item.label)); setMessage(null); setError(null); setView("detail"); }}>
-        <span><strong>{titleFor(item)}</strong><small>{localModels.some((model) => model.id === item.provider) ? "Local or custom endpoint" : methodLabel(item.kind)} · {availabilityLabel(item.availability)}</small></span><span className="vault-row-status">{item.record?.lastVerifiedOk && <Badge tone="ok">Verified</Badge>}<span aria-hidden>›</span></span>
-      </button>)}</div>
-    </>}
   </div>;
 }

@@ -26,7 +26,7 @@ export function TurnWork({ tools, note, notes, running, onExpand, children }: {
   const bodyId = useId();
   const hasError = tools.some((tool) => toolHasError(tool.detail));
   const label = running ? "Working" : tools.length ? "Worked" : "Thought";
-  const done = [tools.length ? toolGroupSummary(tools) : "", notes ? `${notes} update${notes === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
+  const done = [tools.length ? toolGroupSummary(tools) : "", notes ? `${notes} message${notes === 1 ? "" : "s"}` : ""].filter(Boolean).join(" · ");
   const summary = running ? note || (tools.length ? toolGroupSummary(tools) : "Thinking…") : done || "Thought it through";
   return (
     <div className={`turn-work${open ? " is-open" : ""}`}>

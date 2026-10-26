@@ -177,7 +177,7 @@ const TITLES: Record<View, string> = {
   appearance: "Appearance",
   notifications: "Notifications",
   import: "Import session",
-  providers: "Models & keys",
+  providers: "Providers & credentials",
   "agent-keys": "Keys for agents",
   models: "Models & keys",
   instructions: "Agent instructions",

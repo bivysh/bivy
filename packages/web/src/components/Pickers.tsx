@@ -766,7 +766,12 @@ function modelMeta(m: ModelInfo, account?: string): string {
   return [(m as any).provider, account, ctx ? `${Math.round(ctx / 1000)}k ctx` : null].filter(Boolean).join(" · ");
 }
 
-export function ModelPicker({ state, onClose }: { state: AppState; onClose: () => void }) {
+export function ModelPicker({ state, hint, onClose }: {
+  state: AppState;
+  /** Why the picker opened, when the user didn't ask for it (Send without a model). */
+  hint?: string;
+  onClose: () => void;
+}) {
   const [q, setQ] = useState("");
   const [accountModel, setAccountModel] = useState<ModelInfo | null>(null);
   const accountOpener = useRef<HTMLButtonElement>(null);
@@ -900,7 +905,8 @@ export function ModelPicker({ state, onClose }: { state: AppState; onClose: () =
       autoFocusSearch={false}
       size="large"
     >
-      <input className="picker-search" placeholder="Search models…" value={q} onChange={(e) => setQ(e.target.value)} />
+      {hint && <p className="picker-hint" role="status">{hint}</p>}
+      <input className="picker-search" placeholder="Search models…" aria-label="Search models" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="picker-list">
         {connectedModels.length === 0 && otherProviders.length === 0 && <div className="picker-empty">No models available.</div>}
         {connectedModels.map((m) => {
