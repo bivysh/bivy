@@ -22,16 +22,18 @@ explicit command/path on managed nodes.
 
 ## Authentication and configuration
 
-**Auth owner: Claude Code.** Sign in and configure the native agent normally:
+**Auth owner: mixed.** When Bivy holds an Anthropic credential (signed in from
+the app, or imported from Claude Code), chat sessions and `bivy run claude` both
+use it, so one login works on every path. Without one, Claude Code uses its own
+login:
 
 ```bash
 claude
 /login
 ```
 
-The integration deliberately does not inject Bivy's Anthropic credential over
-Claude Code's own login. It reuses the CLI's existing configuration, projects,
-plugins, hooks, MCP configuration, sessions, and subscription/API credentials.
+Either way the integration reuses the CLI's existing configuration, projects,
+plugins, hooks, MCP configuration and sessions.
 
 ## Models
 

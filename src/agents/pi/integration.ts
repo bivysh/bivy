@@ -124,8 +124,10 @@ export function piIntegration(origin: AgentIntegrationOrigin) {
         supportTier: "supported",
         testedVersion: PI_TESTED_VERSION,
         source: origin,
-        authOwner: "agent",
-        credentialRequirements: { owner: "agent", strategy: "one-of", providers: [] },
+        // Chat reads the vault; `bivy run pi` gets it projected into Pi's own
+        // auth.json, and logins made in Pi's TUI fold back into the vault.
+        authOwner: "mixed",
+        credentialRequirements: { owner: "mixed", strategy: "one-of", providers: [] },
         notes: !nodeSupportsPi()
           ? unsupportedNodeMessage()
           : installed

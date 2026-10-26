@@ -352,6 +352,10 @@ process.chdir(appDir);
 const userLocalPrefix = process.env.BIVY_NPM_GLOBAL_PREFIX || path.join(process.env.HOME ?? os.homedir(), ".local");
 process.env.PATH = [path.join(repoRoot, "bin"), path.join(userLocalPrefix, "bin"), process.env.PATH || "", path.dirname(process.execPath)].filter(Boolean).join(path.delimiter);
 const piDir = path.join(appDir, "pi");
+// The agent dir the native `pi` command reads (normally ~/.pi/agent): its
+// auth.json is where a `bivy run pi` session gets the vault's logins, as the
+// chat-to-terminal hand-off already does.
+const piNativeDir = piAgentDir();
 // The node's shared, agent-neutral credential vault (auth.enc/auth.key). NOT
 // inside any one agent's dir — every runtime (Pi, Codex, Claude, …) reads the
 // same vault. Pi's own dir (piDir) keeps only Pi-specific files: models.json,
@@ -4364,7 +4368,7 @@ async function reprojectPiAuthForLiveRuns() {
     .some((t) => runTerms.hasRunTerminal(t.id));
   if (!hasLivePi) return;
   try {
-    const vault = createCredentialVault(credsDir, piDir);
+    const vault = createCredentialVault(credsDir, piNativeDir);
     await vault.ingestPlaintext();
     vault.materializePlaintext();
   } catch (error) {
@@ -4389,10 +4393,11 @@ function startModelAuthWatcher() {
   });
   // Pi's own TUI writes credentials to the plaintext auth.json; fold those back
   // into the vault (then push) so a login done in the native TUI propagates.
-  const legacyPath = path.join(piDir, "auth.json");
-  fs.watchFile(legacyPath, { interval: 2000 }, () => {
-    void createCredentialVault(credsDir, piDir).ingestPlaintext().then(debouncedPush).catch(() => {});
-  });
+  for (const dir of new Set([piDir, piNativeDir])) {
+    fs.watchFile(path.join(dir, "auth.json"), { interval: 2000 }, () => {
+      void createCredentialVault(credsDir, dir).ingestPlaintext().then(debouncedPush).catch(() => {});
+    });
+  }
   if (modelAuthPollTimer) clearInterval(modelAuthPollTimer);
   modelAuthPollTimer = setInterval(() => void syncModelAuthFromControlPlane(), 30_000);
   modelAuthPollTimer.unref?.();
@@ -9486,7 +9491,7 @@ const runTerms = createRunTerminals({
   getActiveSession: () => active,
   defaultWorkspace,
   credsDir,
-  piDir,
+  piDir: piNativeDir,
   maxRunTerminals,
 });
 

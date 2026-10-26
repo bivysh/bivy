@@ -56,8 +56,12 @@ export async function provisionAgentEnv(credsDir: string, providers?: string[]):
  * login/refresh back in.
  */
 export async function provisionPiAuthJson(credsDir: string, piDir: string): Promise<void> {
+  // Fold in what the file already holds first (a login made only in Pi), so the
+  // projection never drops it. The merge keeps the fresher of two tokens.
+  const vault = createCredentialVault(credsDir, piDir);
+  await vault.ingestPlaintext();
   await refreshExpiringOAuth(credsDir);
-  createCredentialVault(credsDir, piDir).materializePlaintext();
+  vault.materializePlaintext();
 }
 
 /**

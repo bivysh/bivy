@@ -63,6 +63,19 @@ await check("provisionPiAuthJson materializes Pi's plaintext auth.json in Pi's o
   assert.deepEqual(onDisk.openai, { type: "api_key", key: "sk-1" }, "vault contents projected to Pi's format");
 });
 
+await check("provisionPiAuthJson keeps a login that exists only in Pi's own auth.json", async () => {
+  const credsDir = tmpDir();
+  const piDir = path.join(credsDir, "pi");
+  await createCredentialVault(credsDir).modify("openai", async () => ({ type: "api_key", key: "sk-1" }));
+  fs.mkdirSync(piDir, { recursive: true });
+  fs.writeFileSync(path.join(piDir, "auth.json"), JSON.stringify({ groq: { type: "api_key", key: "gsk-pi-only" } }));
+  await provisionPiAuthJson(credsDir, piDir);
+
+  const onDisk = JSON.parse(fs.readFileSync(path.join(piDir, "auth.json"), "utf8"));
+  assert.deepEqual(onDisk.groq, { type: "api_key", key: "gsk-pi-only" }, "the Pi-only login survives the projection");
+  assert.deepEqual(onDisk.openai, { type: "api_key", key: "sk-1" }, "next to the vault's own");
+});
+
 await check("provisionAgentRun('pi') returns env AND materializes Pi's native store in Pi's dir", async () => {
   const credsDir = tmpDir();
   const piDir = path.join(credsDir, "pi");

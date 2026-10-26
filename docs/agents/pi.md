@@ -20,20 +20,22 @@ not discoverable through its service `PATH`.
 
 ## Authentication and configuration
 
-**Auth owner: Pi.** The packaged integration reads Pi's existing agent directory
-(`PI_CODING_AGENT_DIR`, default `~/.pi/agent`) and therefore uses the same
-`auth.json`, `models.json`, settings, extensions, skills, prompts, and provider
-configuration as an ordinary Pi terminal session.
+**Auth owner: mixed.** The integration reads Pi's existing agent directory
+(`PI_CODING_AGENT_DIR`, default `~/.pi/agent`) for `models.json`, settings,
+extensions, skills, prompts and provider configuration, and signs in with the
+logins in Bivy's vault:
 
-Sign in using the upstream agent:
+- Chat sessions read the vault directly.
+- `bivy run pi`, and opening a chat session in Pi's terminal, write the vault's
+  logins into that directory's `auth.json` first.
+- A login you make in Pi's TUI (`/login`) is folded back into the vault.
+
+Sign in from the app, or with the upstream agent:
 
 ```bash
 pi
 /login
 ```
-
-Bivy's separate provider vault remains available to integrations that explicitly
-choose it, but the default Pi integration does not replace the user's Pi login.
 
 ## Capabilities
 
