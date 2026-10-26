@@ -364,6 +364,20 @@ function isApiErrorMessage(message: any): boolean {
   return Boolean(message?.error) || message?.isApiErrorMessage === true;
 }
 
+/** The failure an API-error assistant message stands for, as the daemon's
+ *  recovery path wants it: the provider's own sentence, plus the authoritative
+ *  reset instant when the message carried one. A plan/usage limit rides a
+ *  `quotaLimits` block whose `resetsAt` is a Unix epoch in SECONDS; the text
+ *  alone only ever states a time of day ("resets 6:30pm (UTC)"), which can't
+ *  say which day a weekly window clears on. */
+function apiErrorDetail(message: any, error: string): { error: string; resetsAt?: string } {
+  const quota = message?.quotaLimits ?? message?.message?.quotaLimits;
+  const seconds = Number(quota?.resetsAt);
+  return Number.isFinite(seconds) && seconds > 0
+    ? { error, resetsAt: new Date(seconds * 1000).toISOString() }
+    : { error };
+}
+
 /** True when a role:"user" turn is a model-only meta injection (see
  *  DROP_META_TEXT) rather than a real human prompt. Callers must exclude
  *  tool_result-bearing turns first — those carry real tool output, never meta. */
@@ -784,6 +798,13 @@ class ClaudeSession implements RuntimeSession {
   /** One reactive credential reload per turn — a second 401 after a refresh means
    *  the fresh token was also rejected, so surface it instead of looping. */
   private reloadedThisTurn = false;
+  /** An API failure the SDK reported as a synthetic assistant message instead of
+   *  throwing (a 429 plan/usage limit, a provider outage). The turn then ends
+   *  *cleanly*, so without this the daemon sees a finished turn and never offers
+   *  the ways past a limit (fork / retry at reset) or applies the run policy.
+   *  Carried to this turn's agent_end; cleared when a real reply follows, which
+   *  means the SDK retried and recovered on its own. */
+  private apiErrorThisTurn?: { error: string; resetsAt?: string };
   /** Guards restartWithFreshCredential against re-entrancy. */
   private reloading = false;
   /** Set when *we* call abort() for a genuine user Stop, so the resulting
@@ -1222,9 +1243,16 @@ class ClaudeSession implements RuntimeSession {
         // after the turn had already answered it.
         const assistantText = extractText(message.message);
         if (isApiErrorMessage(message) && assistantText && await this.recoverFromAuthError(assistantText)) break;
+        // Any other API error reported this way (a usage limit, a 5xx) still ends
+        // the turn with a clean `result`, so remember it as this turn's failure —
+        // agent_end carries it out and the daemon's recovery path takes over.
+        if (isApiErrorMessage(message) && assistantText) this.apiErrorThisTurn = apiErrorDetail(message, assistantText);
         // The SDK labels messages it makes up itself (errors, interrupts) with
         // the model "<synthetic>"; that is not a model the session runs on.
         const model = message.message?.model;
+        // A real reply after an API error means the SDK retried and got through;
+        // the turn is no longer a failure.
+        if (!isApiErrorMessage(message) && model && model !== "<synthetic>") this.apiErrorThisTurn = undefined;
         if (model && model !== "<synthetic>") this.currentModel = toModelInfo({ id: model });
         // The SDK stamps every message it generates inside a `Task` sub-agent
         // with the spawning Task's tool_use id. Carry it onto this turn's tool
@@ -1350,10 +1378,15 @@ class ClaudeSession implements RuntimeSession {
         if (message.subtype && message.subtype !== "success") {
           this.emit({ type: "tool_result", error: message.subtype, message: message.result });
         }
+        // An API error the SDK reported as a message (see apiErrorThisTurn) ends
+        // the turn here, looking successful. Carry it on agent_end so the daemon
+        // classifies the failure once, in the one place that handles every agent.
+        const apiError = this.apiErrorThisTurn;
+        this.apiErrorThisTurn = undefined;
         this.emit({ type: "turn_end" });
         // Cost/token/plan-quota totals are read via getUsage() (backed by the
         // SDK's usage_EXPERIMENTAL... control request), not forwarded here.
-        this.emit({ type: "agent_end", subtype: message.subtype });
+        this.emit({ type: "agent_end", subtype: message.subtype, ...(apiError ?? {}) });
         break;
       }
 
@@ -1432,6 +1465,7 @@ class ClaudeSession implements RuntimeSession {
     if (this.query && !this.streaming) await this.restartWithFreshCredential();
     this.messages.push({ role: "user", content: hasImages ? content : prompt, timestamp: Date.now() });
     this.reloadedThisTurn = false;
+    this.apiErrorThisTurn = undefined;
     this.inFlightPrompt = content;
     this.streaming = true;
     this.emit({ type: "agent_start" });

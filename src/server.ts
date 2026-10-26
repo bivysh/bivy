@@ -8379,6 +8379,11 @@ function attachSessionListeners(record: SessionRecord) {
         ? humanizeAgentError((event as Record<string, unknown>).error as string)
         : undefined;
       const turnError = messageError ?? (agentEndError?.trim() ? agentEndError : undefined);
+      // The runtime may know exactly when the window clears (Claude Code puts the
+      // quota's reset on the limit message); prefer it over the plan snapshot,
+      // whose windows are a turn stale and whose text says only a time of day.
+      const eventResetsAt = (event as Record<string, unknown>).resetsAt;
+      const resetsAtHint = typeof eventResetsAt === "string" ? eventResetsAt : limitResetHint(record, Date.now());
       // Before surfacing a turn error, see if the session's run policy can recover
       // it in place by swapping to a fallback model and retrying the same prompt.
       // planReroute is synchronous, so we can atomically suppress the error toast
@@ -8392,9 +8397,7 @@ function attachSessionListeners(record: SessionRecord) {
       // synchronous too, so this stays atomic with suppressing the error toast).
       const resumePlan =
         !reroutePlan && turnError && record.lastPrompt !== undefined
-          ? record.reroute?.planResume(turnError, record.session.getCurrentModel()?.name, {
-              resetsAtHint: limitResetHint(record, Date.now()),
-            }) ?? null
+          ? record.reroute?.planResume(turnError, record.session.getCurrentModel()?.name, { resetsAtHint }) ?? null
           : null;
       // Did this turn end by scheduling another auto-resume? If not, the session
       // made forward progress (a user turn, a resume that cleared the limit, a
@@ -8426,7 +8429,7 @@ function attachSessionListeners(record: SessionRecord) {
         if (messageError) broadcast({ type: "session.error", sessionId: record.id, error: sessionAgentError(record, messageError) });
         // A usage/rate limit nothing recovered automatically: offer the ways past
         // it — fork to another agent now, or retry when the window resets.
-        record.limitHit = detectSessionLimit(turnError, { resetsAtHint: limitResetHint(record, Date.now()) });
+        record.limitHit = detectSessionLimit(turnError, { resetsAtHint });
         if (record.limitHit) {
           const notice = sessionLimitNotice(getRuntime(record.runtimeId).displayName, record.limitHit);
           broadcast({ type: "session.notice", sessionId: record.id, level: "warn", ...notice });

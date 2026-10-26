@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Hitting Claude's usage limit offers the way past it again.** Claude Code now reports a rejected limit as an ordinary message ("You've hit your session limit · resets 6:30pm (UTC)") and ends the turn as if it succeeded, so the chat went quiet with no "Fork to another agent" or "Retry automatically at …" to tap, and run policies never saw a limit. Bivy reads that message as the turn's failure, and takes the exact reset instant from the limit itself instead of guessing the day from the stated time.
+
 ## [0.21.12] - 2026-10-26
 
 ### Fixed
