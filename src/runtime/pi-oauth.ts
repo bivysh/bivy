@@ -16,6 +16,7 @@ import { BivyCredentialStore, createCredentialVault } from "./credential-store.j
 import { isNativeOAuthProvider } from "./oauth/model-oauth-providers.js";
 import { selectedCredentialStore } from "../credentials/selected-store.js";
 import { enableBridgeResolution } from "../agent-bridges.mjs";
+import { resolveSecret } from "../secrets.js";
 
 /** Provider catalog entry: model metadata Pi owns, joined with Bivy auth state. */
 export interface PiProviderInfo {
@@ -47,7 +48,9 @@ export async function createPiModelRuntime(
   const store = opts.store ?? createCredentialVault(opts.credsDir);
   enableBridgeResolution();
   const { ModelRuntime } = await import("@earendil-works/pi-coding-agent");
-  const selected = selectedCredentialStore(store, opts.credsDir, { workspace: opts.workspace, credentialLabels: opts.credentialLabels });
+  // References resolve against the local secret vault next to the credentials dir.
+  const secrets = { resolve: (ref: string) => resolveSecret(ref, path.dirname(opts.credsDir)) };
+  const selected = selectedCredentialStore(store, opts.credsDir, { workspace: opts.workspace, credentialLabels: opts.credentialLabels }, secrets);
   for (const provider of Object.keys(opts.credentialLabels ?? {})) await selected.read(provider);
   return ModelRuntime.create({
     credentials: piCredentialStore(selected),

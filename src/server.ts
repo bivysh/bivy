@@ -11035,8 +11035,12 @@ app.post("/api/sessions/open", async (req, res, next) => {
       ? await resolveOrResumeSession(requestedId, req.body?.path)
       : await createSession(defaultWorkspace, String(req.body?.path ?? ""), { runtimeId: agentFrom(req.body ?? {}) });
     if (!session) return res.status(404).json({ error: "Session not found" });
+    // `bivy exec --session … -m …` switches the model before the next turn.
+    await applyRequestedModel(session, modelFrom(req.body ?? {}));
+    const model = session.session.getCurrentModel();
     res.json({
       id: session.id,
+      model: model ? { provider: model.provider, id: model.id } : null,
       workspace: session.workspace,
       sessionFile: session.sessionFile,
       runtimeId: session.runtimeId,
