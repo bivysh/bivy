@@ -98,6 +98,13 @@ export type AgentProfile = {
    * (resume stays off, and the catalog reports it off) — the honest state for an
    * agent with no native "continue session <id>" form (e.g. Aider, Crush).
    */
+  /**
+   * "Continue in terminal": the args that reopen a session in the agent's own
+   * terminal UI, after `command`, with `{id}` → the session's own ref. Drives
+   * the interactiveTui capability on the pipe and ACP paths alike. Absent = no
+   * terminal hand-off.
+   */
+  tui?: { resume: string[] };
   resume?: {
     template: string[];
     /** Optional fresh-launch recipe containing `{id}` for agents that accept a
@@ -259,6 +266,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // OpenCode falls back to the pipe path rather than opening a dead session.
     // Force the pipe path back with BIVY_OPENCODE_ACP=0.
     acp: { args: ["acp"], helpToken: "acp", preferred: true },
+    tui: { resume: ["--session", "{id}"] },
     install: { kind: "npm", pkg: "opencode-ai" },
   },
   aider: {
@@ -380,6 +388,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // streaming + resume. Opt in with BIVY_GEMINI_ACP=1 (or global BIVY_PREFER_ACP=1);
     // off by default until validated for your Gemini version.
     acp: { args: ["--experimental-acp"] },
+    tui: { resume: ["--resume", "{id}"] },
     promptMode: "argv",
     install: { kind: "npm", pkg: "@google/gemini-cli" },
   },
@@ -425,6 +434,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // global BIVY_PREFER_ACP=1); off by default until validated for your version.
     // Zed's ACP registry lists qwen-code with `args: ["--acp"]`.
     acp: { args: ["--experimental-acp"] },
+    tui: { resume: ["--resume", "{id}"] },
     promptMode: "argv",
     install: { kind: "npm", pkg: "@qwen-code/qwen-code" },
   },
@@ -615,6 +625,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // older CLI falls back to the pipe path rather than opening a dead session.
     // Force the pipe path back with BIVY_GROK_ACP=0.
     acp: { args: ["agent", "stdio"], helpToken: "without the interactive ui", preferred: true },
+    tui: { resume: ["--resume", "{id}"] },
     install: {
       kind: "curl",
       display: "curl -fsSL https://x.ai/cli/install.sh | bash",

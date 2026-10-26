@@ -28,9 +28,11 @@ export function exitWithParent(child, options = {}) {
     child.once("exit", () => exit(0));
     try { child.stdin?.end(); } catch {}
     try { child.kill("SIGTERM"); } catch {}
+    // A SIGKILLed child still reports its exit; the fallback only covers a
+    // child the kernel can't reap.
     setTimeout(() => {
       try { child.kill("SIGKILL"); } catch {}
-      exit(0);
+      setTimeout(() => exit(0), 1000);
     }, graceMs);
   };
   input.on("end", stop);
