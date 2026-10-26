@@ -43,11 +43,13 @@ type Behavior =
   | "fail-no-text-with-code"
   // The runtime seals a failed turn (usage limit) as an assistant message with
   // stopReason "error", then a plain agent_end — as ProtocolRuntime does.
-  | "turn-error-message";
+  | "turn-error-message"
+  // The turn's own user message streams first; then the user cancels it.
+  | "user-echo-then-aborted";
 
 /** Records the parsed body of the last POST /api/session, so tests can assert
  *  which fields (name/model/workspace) exec sends to the daemon. */
-type CreateProbe = { body?: Record<string, unknown> };
+type CreateProbe = { body?: Record<string, unknown>; openBody?: Record<string, unknown> };
 
 /** Spin up a fake daemon: /api/session + /api/session/prompt over HTTP, turn events over a /ws socket. */
 async function withFakeDaemon(behavior: Behavior, fn: (url: string, probe: CreateProbe) => Promise<void>) {
@@ -67,6 +69,7 @@ async function withFakeDaemon(behavior: Behavior, fn: (url: string, probe: Creat
         return;
       }
       if (req.method === "POST" && req.url === "/api/sessions/open") {
+        try { probe.openBody = body ? JSON.parse(body) : {}; } catch { probe.openBody = {}; }
         res.end(JSON.stringify({ id: sessionId }));
         return;
       }
@@ -90,6 +93,10 @@ async function withFakeDaemon(behavior: Behavior, fn: (url: string, probe: Creat
           } else if (behavior === "fail-no-text-with-code") {
             send({ type: "tool_execution_update", toolName: "agent_output", toolCallId: "agent-output", input: { stream: "stderr", output: "Error: Not signed in. Run: grok login" } });
             send({ type: "agent_end", code: 1 });
+          } else if (behavior === "user-echo-then-aborted") {
+            send({ type: "message_end", message: { role: "user", content: "hello" } });
+            send({ type: "message_end", message: { role: "assistant", content: "", stopReason: "aborted" } });
+            send({ type: "agent_end" });
           } else if (behavior === "turn-error-message") {
             send({ type: "message_end", message: { role: "assistant", content: "", stopReason: "error", errorMessage: "You've hit your usage limit." } });
             send({ type: "agent_end" });
@@ -182,6 +189,15 @@ await check("exits non-zero with the runtime's error when it seals the turn as f
   });
 });
 
+await check("a cancelled turn exits non-zero and never prints the prompt as the answer", async () => {
+  await withFakeDaemon("user-echo-then-aborted", async (url) => {
+    const { code, stdout, stderr } = await runExec(url);
+    assert.notEqual(code, 0);
+    assert.equal(stdout.trim(), "", `the user's own message is not an answer, got ${JSON.stringify(stdout)}`);
+    assert.ok(stderr.includes("cancelled"), `stderr should say the turn was cancelled, got ${JSON.stringify(stderr)}`);
+  });
+});
+
 await check("sends --name/--model/--workspace to the daemon instead of leaking them into the prompt", async () => {
   await withFakeDaemon("complete-normally", async (url, probe) => {
     const { code } = await runExec(url, ["--agent", "codex", "--name", "nightly audit", "--model", "gpt-5.6-sol", "--workspace", "/tmp/ws"]);
@@ -191,6 +207,13 @@ await check("sends --name/--model/--workspace to the daemon instead of leaking t
     assert.equal(probe.body!.name, "nightly audit", "explicit --name must be sent as the `name` field");
     assert.equal(probe.body!.workspace, "/tmp/ws");
     assert.deepEqual(probe.body!.model, { provider: "", id: "gpt-5.6-sol" }, "--model must be sent as a model ref, verbatim id");
+  });
+});
+
+await check("--model with --session switches the existing session's model", async () => {
+  await withFakeDaemon("complete-normally", async (url, probe) => {
+    assert.equal((await runExec(url, ["--session", "sess-fake-1", "--model", "gpt-5.6-sol"])).code, 0);
+    assert.deepEqual(probe.openBody?.model, { provider: "", id: "gpt-5.6-sol" });
   });
 });
 

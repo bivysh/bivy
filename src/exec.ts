@@ -119,7 +119,9 @@ function textContent(value: unknown): string {
 }
 
 function assistantText(event: Record<string, unknown>): string {
-  const message = event.message as { content?: unknown } | undefined;
+  const message = event.message as { role?: unknown; content?: unknown } | undefined;
+  // The turn's own user message streams through the same events.
+  if (message?.role && message.role !== "assistant") return "";
   return textContent(message?.content ?? event.content ?? event.text);
 }
 
@@ -145,12 +147,18 @@ async function main() {
   // Establish the session — resume by ref or create fresh with the chosen agent.
   let sessionId: string;
   try {
+    let bound: { provider?: string; id?: string } | null | undefined;
     if (args.session) {
-      const opened = await api<{ id: string }>(args.url, args.token, "/api/sessions/open", {
+      const opened = await api<{ id: string; model?: { provider?: string; id?: string } | null }>(args.url, args.token, "/api/sessions/open", {
         method: "POST",
-        body: JSON.stringify({ path: args.session, ...(args.agent ? { agent: args.agent } : {}) }),
+        body: JSON.stringify({
+          path: args.session,
+          ...(args.agent ? { agent: args.agent } : {}),
+          ...(args.model ? { model: { provider: "", id: args.model } } : {}),
+        }),
       });
       sessionId = opened.id;
+      bound = opened.model;
     } else {
       const created = await api<{ id: string; model?: { provider?: string; id?: string } | null }>(args.url, args.token, "/api/session", {
         method: "POST",
@@ -167,17 +175,17 @@ async function main() {
         }),
       });
       sessionId = created.id;
-      // The node binds the model best-effort and keeps the agent's default when
-      // it can't; say so instead of silently answering on another model.
-      const model = created.model;
-      if (args.model && model?.id) {
-        const qualified = !model.provider || model.id.startsWith(`${model.provider}/`) ? model.id : `${model.provider}/${model.id}`;
-        // Compare model names: the same model can sit under another provider
-        // spelling in this agent (openai-codex/gpt-5.6-sol is OpenCode's openai/gpt-5.6-sol).
-        const name = (id: string) => id.slice(id.lastIndexOf("/") + 1);
-        if (![model.id, qualified].some((id) => id === args.model || name(id) === name(args.model!))) {
-          err(`Model "${args.model}" is not available for this agent; using ${qualified}.\n`);
-        }
+      bound = created.model;
+    }
+    // The node binds the model best-effort and keeps the current one when it
+    // can't; say so instead of silently answering on another model.
+    if (args.model && bound?.id) {
+      const qualified = !bound.provider || bound.id.startsWith(`${bound.provider}/`) ? bound.id : `${bound.provider}/${bound.id}`;
+      // Compare model names: the same model can sit under another provider
+      // spelling in this agent (openai-codex/gpt-5.6-sol is OpenCode's openai/gpt-5.6-sol).
+      const name = (id: string) => id.slice(id.lastIndexOf("/") + 1);
+      if (![bound.id, qualified].some((id) => id === args.model || name(id) === name(args.model!))) {
+        err(`Model "${args.model}" is not available for this agent; using ${qualified}.\n`);
       }
     }
   } catch (error) {
@@ -197,6 +205,7 @@ async function main() {
   // A runtime that fails a turn (usage limit, provider error) seals it with an
   // assistant message marked stopReason "error" before a normal agent_end.
   let turnError = "";
+  let aborted = false;
 
   const finish = (code: number, errorText?: string) => {
     if (settled) return;
@@ -248,6 +257,7 @@ async function main() {
         if (text) answer = text; // events carry the full message text so far
         const message = ev.message as { stopReason?: unknown; errorMessage?: unknown } | undefined;
         if (message?.stopReason === "error" && typeof message.errorMessage === "string") turnError = message.errorMessage.trim();
+        if (message?.stopReason === "aborted") aborted = true;
       } else if (ev.type === "tool_execution_update" && ev.toolName === "agent_output") {
         const input = (ev.input || {}) as Record<string, unknown>;
         if (input.stream === "stderr" && typeof input.output === "string" && input.output.trim()) {
@@ -265,7 +275,9 @@ async function main() {
         const failed = !!errText || (code !== undefined && code !== 0);
         // A turn the runtime itself marked failed is a failure even when some
         // prose streamed before the error.
-        if (turnError || (!answer.trim() && failed)) {
+        if (aborted) {
+          finish(1, "The turn was cancelled.");
+        } else if (turnError || (!answer.trim() && failed)) {
           finish(1, errText || lastStderr || `The agent produced no output (exit code ${code ?? "unknown"}).`);
         } else {
           finish(0);

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **API keys stored as references work with Pi.** A key added as `op://`, `env://` or `cmd://` (`bivy credentials add`) was invisible to Pi, which only read keys stored in the vault itself. Pi now reads a reference when it needs the key.
+- **`bivy exec --session … --model …` switches the model.** `--model` was ignored when continuing a session; it now applies before the turn, and exec says so if the model isn't available.
+- **A cancelled `bivy exec` turn says it was cancelled.** It printed the prompt as the answer and exited 0; it now exits non-zero with "The turn was cancelled."
+
 ### Security
 
 - **Patched dependency advisories.** The control plane moves to body-parser 2.4.0 (a compressed request body with trailing bytes could tie up the server) and ip-address 10.7.5. The node and CLI move to fast-uri 3.1.9, hono 4.13.14 and ip-address 10.7.5.
