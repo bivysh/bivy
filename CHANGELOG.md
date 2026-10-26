@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Codex's questions reach you.** When Codex asked you something mid-turn, Bivy answered it with nothing. The question now shows on the question card and your answer goes back to Codex. A question it marks secret stays off the card.
 - **Codex's requests for more access get an approval card.** Bivy answered a Codex request for network or filesystem access beyond its sandbox, and an MCP tool approval, with an empty reply. Sandbox requests now ask you in every approval mode except "never", and MCP tool approvals follow the node's approval policy. An MCP server's own form is declined instead of answered empty.
 - **Answers to an agent's question reach protocol agents.** For agents Bivy drives over its agent protocol, an answered question card was sent back as a plain "allow" without the answer.
+- **`bivy run <agent>` uses the agent install Bivy manages.** With `BIVY_NPM_GLOBAL_PREFIX` set, the node put `<prefix>/bin` first but `bivy run` still looked in `~/.local/bin` first, so a terminal session could start a different version of the agent than chat did, or none at all.
 
 ## [0.21.9] - 2026-10-26
 

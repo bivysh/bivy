@@ -235,7 +235,9 @@ const SERVICE_UNIT = "bivy.service";
 function commandPath(extraPath = "") {
   const parts = [
     path.join(repoRoot, "bin"),
-    path.join(os.homedir(), ".local", "bin"),
+    // The same agent prefix the node puts first (BIVY_NPM_GLOBAL_PREFIX), so
+    // `bivy run <agent>` starts the binary chat sessions use.
+    path.join(process.env.BIVY_NPM_GLOBAL_PREFIX || path.join(os.homedir(), ".local"), "bin"),
     extraPath,
     process.env.PATH || "",
     // npm global executables normally live beside the Node binary (including
