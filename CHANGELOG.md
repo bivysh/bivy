@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.10] - 2026-10-26
+
 ### Added
 
 - **Pick Claude Code's and Codex's reasoning effort.** The effort picker the other agents have now lists the selected Claude or Codex model's own levels. A Claude pick applies right away; a Codex pick from the next turn.
