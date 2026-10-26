@@ -1659,9 +1659,9 @@ app.post("/node/ephemeral-milestone", requireNode, asyncHandler(async (req, res)
   if (!isCloudComputerNode(node.accountId, node.id)) return res.json({ ok: true, tracked: false });
   const at = new Date().toISOString();
   await store.setNodeMilestone(node.id, milestone, at);
-  // The first agent event is the machine doing real work this awake period,
-  // not just being woken; the deployment may meter from here.
-  if (milestone === "firstAgentEventAt") {
+  // The machine's first real use this awake period (an agent turn or a
+  // terminal), not just being woken; the deployment may meter from here.
+  if (milestone === "firstUseAt") {
     void deploymentExtension.computeUsed(node.accountId, node.id, at)
       .catch((error) => console.warn(`[cloud-computer] used event failed for ${node.accountId}: ${error instanceof Error ? error.message : error}`));
   }
@@ -4991,7 +4991,7 @@ app.post("/internal/preview-wake", requireRelay, asyncHandler(async (req, res) =
   const route = String(req.body?.route ?? "");
   const node = /^[a-f0-9]{24}$/.test(route) ? await store.nodeByPreviewRoute(route) : undefined;
   const waking = Boolean(node && !node.online && isCloudComputerNode(node.accountId, node.id) && await accountMachineMode(node.accountId));
-  if (waking) void wakeCloudComputerIfAsleep(node!.accountId);
+  if (waking) void wakeCloudComputerIfAsleep(node!.accountId, "preview");
   res.json({ waking });
 }));
 

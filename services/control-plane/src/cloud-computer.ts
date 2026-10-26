@@ -37,6 +37,8 @@ export const EPHEMERAL_MILESTONES = [
   "snapshotReadyAt",
   "firstAgentEventAt",
   "firstTokenAt",
+  /** The machine's first real use this boot: an agent turn or a terminal. */
+  "firstUseAt",
 ] as const;
 export type EphemeralMilestone = (typeof EPHEMERAL_MILESTONES)[number];
 
