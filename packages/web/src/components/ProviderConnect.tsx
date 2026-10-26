@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (c) 2026 Petter André Sjulstad
-import { useState } from "react";
+import { useId, useState } from "react";
 import type { AppState } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { isPackagedClient, openPackagedExternal } from "../packaged-client.js";
@@ -122,6 +122,7 @@ export function ProviderConnectForm({
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const keyId = useId();
   const provider = state.catalogs.providers.find((p) => p.id === providerId);
   // A plan people pay for reads as "Claude"/"ChatGPT", as in "Connect your AI".
   const name = AI_ACCOUNTS.find((account) => account.provider === providerId)?.name || provider?.name || providerId;
@@ -142,51 +143,52 @@ export function ProviderConnectForm({
     return <OauthStep />;
   }
 
+  const saveKey = async () => {
+    if (!key.trim() || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      // Await the node's authoritative ack. A timer/re-list can make a
+      // failed save look successful and is especially harmful in the
+      // first-run auth path.
+      const keep = sync();
+      await controller.setCredential(keyProvider, "default", { key: key.trim(), ...(keep ? { sync: keep } : {}) });
+      // Keep the account's device vault converged too, so the same item
+      // can seed a first machine even when no peer node is online later.
+      // A key kept on this machine stays out of it.
+      if (!keep) await controller.setEphemeralModelKey(keyProvider, key.trim(), "account", "default").catch(() => {});
+      setKey("");
+      controller.listProviders();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
-    <div className="settings-form">
+    <form className="settings-form" onSubmit={(e) => { e.preventDefault(); void saveKey(); }}>
       {error && <div className="banner inline" data-tone="danger" role="alert">{error}</div>}
       {provider?.oauth && !keyOnly && (
-        <button className="btn primary block" onClick={() => controller.startOauth(providerId, undefined, sync())}>
+        <button type="button" className="btn primary block" onClick={() => controller.startOauth(providerId, undefined, sync())}>
           Sign in with {name}
         </button>
       )}
-      <label className="field-label">API key</label>
+      <label className="field-label" htmlFor={keyId}>{name} API key</label>
       <input
+        id={keyId}
         className="picker-search"
         type="password"
+        autoComplete="off"
         value={key}
         placeholder="Paste API key"
         onChange={(e) => setKey(e.target.value)}
       />
       <div className="row-actions">
-        <button
-          className="btn primary"
-          disabled={!key.trim() || busy}
-          onClick={async () => {
-            setBusy(true);
-            setError(null);
-            try {
-              // Await the node's authoritative ack. A timer/re-list can make a
-              // failed save look successful and is especially harmful in the
-              // first-run auth path.
-              const keep = sync();
-              await controller.setCredential(keyProvider, "default", { key: key.trim(), ...(keep ? { sync: keep } : {}) });
-              // Keep the account's device vault converged too, so the same item
-              // can seed a first machine even when no peer node is online later.
-              // A key kept on this machine stays out of it.
-              if (!keep) await controller.setEphemeralModelKey(keyProvider, key.trim(), "account", "default").catch(() => {});
-              setKey("");
-              controller.listProviders();
-            } catch (e) {
-              setError(e instanceof Error ? e.message : String(e));
-            } finally {
-              setBusy(false);
-            }
-          }}
-        >
-          Save key
+        <button type="submit" className="btn primary" disabled={!key.trim() || busy}>
+          {busy ? "Saving…" : "Save key"}
         </button>
       </div>
-    </div>
+    </form>
   );
 }

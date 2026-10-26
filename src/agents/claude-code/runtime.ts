@@ -1222,8 +1222,10 @@ class ClaudeSession implements RuntimeSession {
         // after the turn had already answered it.
         const assistantText = extractText(message.message);
         if (isApiErrorMessage(message) && assistantText && await this.recoverFromAuthError(assistantText)) break;
+        // The SDK labels messages it makes up itself (errors, interrupts) with
+        // the model "<synthetic>"; that is not a model the session runs on.
         const model = message.message?.model;
-        if (model) this.currentModel = toModelInfo({ id: model });
+        if (model && model !== "<synthetic>") this.currentModel = toModelInfo({ id: model });
         // The SDK stamps every message it generates inside a `Task` sub-agent
         // with the spawning Task's tool_use id. Carry it onto this turn's tool
         // calls so the UI nests the sub-agent's work under its delegation card

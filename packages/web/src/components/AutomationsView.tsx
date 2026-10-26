@@ -68,7 +68,7 @@ import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { AutomationsSection } from "../router.js";
 import type { GithubQueueItem } from "@bivy/core";
 import { ConfirmDialog } from "./AppDialog.js";
-import { CloseIcon, PlusIcon } from "./UiIcons.js";
+import { ChevronDownIcon, ChevronLeftIcon, CloseIcon, DisplayIcon, PlusIcon } from "./UiIcons.js";
 import { AutomationSourcesPanel } from "./AutomationSourcesPanel.js";
 import { RunHistory } from "./RunHistory.js";
 import { compactCronSummary, formatAutomationMoment, formatNextAutomationRun } from "../automationPresentation.js";
@@ -899,7 +899,7 @@ export function AutomationsView({
   return createPortal(
     <div className={`automations-view${historyAutomationId ? " is-history" : ""}`} role="dialog" aria-modal="true" aria-label={historyItem?.name || "Automations"}>
       {historyItem ? <header className="automation-detail-head">
-        <button type="button" className="btn ghost icon" onClick={() => setHistoryAutomationId(null)} aria-label="Back to automations">‹</button>
+        <button type="button" className="btn ghost icon" onClick={() => setHistoryAutomationId(null)} aria-label="Back to automations"><ChevronLeftIcon /></button>
         <h1>{historyItem.name}</h1>
         <button type="button" className="btn sm ghost" onClick={() => void toggle(historyItem)} aria-label={historyItem.enabled ? "Pause automation" : "Resume automation"}>
           <Badge tone={historyItem.enabled ? "ok" : undefined}>{historyItem.enabled ? "Active" : "Paused"}</Badge>
@@ -1498,22 +1498,22 @@ function SourceAutomationEditor({
       <div ref={sourceEditorRef} className="wizard autom-editor" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
         <div className="wizard-head">
           <strong>{title}</strong>
-          <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Cancel">✕</button>
+          <details className="autom-editor-actions">
+            <summary className="btn sm" aria-label="Automation actions">Actions</summary>
+            <div className="menu row-menu-pop" role="menu">
+              {onRunNow && <button type="button" className="menu-item" role="menuitem" disabled={runBusy} onClick={() => void onRunNow(item)}>{runBusy ? "Queueing…" : "Run now"}</button>}
+              {onToggle && <button type="button" className="menu-item" role="menuitem" onClick={() => void onToggle(item)}>{enabled ? "Pause" : "Resume"}</button>}
+              {onHistory && <button type="button" className="menu-item automation-history-btn" role="menuitem" onClick={() => onHistory(item.id)}>History</button>}
+              {onSourceSetup && <button type="button" className="menu-item" role="menuitem" onClick={() => onSourceSetup(item)}>Source setup</button>}
+              {onMove && (trigger === "github" || trigger === "linear") && <>
+                <button type="button" className="menu-item" role="menuitem" onClick={() => void onMove(item, -1)}>Move earlier</button>
+                <button type="button" className="menu-item" role="menuitem" onClick={() => void onMove(item, 1)}>Move later</button>
+              </>}
+              {onDelete && !item.configKey && <button type="button" className="menu-item danger" role="menuitem" onClick={() => void onDelete(item)}>Delete</button>}
+            </div>
+          </details>
+          <button type="button" className="btn ghost icon" onClick={onClose} aria-label="Cancel"><CloseIcon /></button>
         </div>
-        <details className="autom-editor-actions">
-          <summary className="btn sm" aria-label="Automation actions">Actions</summary>
-          <div className="menu row-menu-pop" role="menu">
-            {onRunNow && <button type="button" className="menu-item" role="menuitem" disabled={runBusy} onClick={() => void onRunNow(item)}>{runBusy ? "Queueing…" : "Run now"}</button>}
-            {onToggle && <button type="button" className="menu-item" role="menuitem" onClick={() => void onToggle(item)}>{enabled ? "Pause" : "Resume"}</button>}
-            {onHistory && <button type="button" className="menu-item automation-history-btn" role="menuitem" onClick={() => onHistory(item.id)}>History</button>}
-            {onSourceSetup && <button type="button" className="menu-item" role="menuitem" onClick={() => onSourceSetup(item)}>Source setup</button>}
-            {onMove && (trigger === "github" || trigger === "linear") && <>
-              <button type="button" className="menu-item" role="menuitem" onClick={() => void onMove(item, -1)}>Move earlier</button>
-              <button type="button" className="menu-item" role="menuitem" onClick={() => void onMove(item, 1)}>Move later</button>
-            </>}
-            {onDelete && !item.configKey && <button type="button" className="menu-item danger" role="menuitem" onClick={() => void onDelete(item)}>Delete</button>}
-          </div>
-        </details>
         <div className="wizard-body">
           {needsConnect && (
             <div className="banner inline" data-tone="accent" role="status">
@@ -2089,29 +2089,31 @@ function AutomationEditor({
         aria-label={d.id ? "Edit automation" : "New automation"}
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Back sits where every other Automations screen puts it (left of the
+            title); the actions menu shares the header row instead of floating
+            over the form below it. */}
         <div className="wizard-head">
+          <button type="button" className="btn ghost icon" onClick={closeWithBack} aria-label={d.id ? "Back to automation" : "Back to new automation"}><ChevronLeftIcon /></button>
           <strong>{created ? "Webhook ready" : d.id ? "Edit automation" : "New automation"}</strong>
-          <button type="button" className="btn ghost icon" onClick={closeWithBack} aria-label={d.id ? "Back to automation" : "Back to new automation"}>‹</button>
+          {existing && !created && (
+            <details className="autom-editor-actions">
+              <summary className="btn sm" aria-label="Automation actions">Actions</summary>
+              <div className="menu row-menu-pop" role="menu">
+                {onRunNow && <button type="button" className="menu-item" role="menuitem" disabled={runBusy} onClick={() => void onRunNow(existing)}>{runBusy ? "Queueing…" : existing.trigger === "webhook" ? "Test run" : "Run now"}</button>}
+                {onToggle && <button type="button" className="menu-item" role="menuitem" onClick={() => void onToggle(existing)}>{existing.enabled ? "Pause" : "Resume"}</button>}
+                {onHistory && <button type="button" className="menu-item automation-history-btn" role="menuitem" onClick={() => onHistory(existing.id)}>History</button>}
+                {existing.webhookUrl && <button type="button" className="menu-item" role="menuitem" onClick={() => { void copyText(existing.webhookUrl!); }}>Copy URL</button>}
+                {existing.trigger === "webhook" && onRotate && <button type="button" className="menu-item" role="menuitem" onClick={() => void onRotate(existing)}>Rotate secret</button>}
+                {onSourceSetup && (existing.trigger === "github" || existing.trigger === "linear") && <button type="button" className="menu-item" role="menuitem" onClick={() => onSourceSetup(existing)}>Source setup</button>}
+                {onMove && (existing.trigger === "github" || existing.trigger === "linear") && <>
+                  <button type="button" className="menu-item" role="menuitem" onClick={() => void onMove(existing, -1)}>Move earlier</button>
+                  <button type="button" className="menu-item" role="menuitem" onClick={() => void onMove(existing, 1)}>Move later</button>
+                </>}
+                {onDelete && !existing.configKey && <button type="button" className="menu-item danger" role="menuitem" onClick={() => void onDelete(existing)}>Delete</button>}
+              </div>
+            </details>
+          )}
         </div>
-
-        {existing && !created && (
-          <details className="autom-editor-actions">
-            <summary className="btn sm" aria-label="Automation actions">Actions</summary>
-            <div className="menu row-menu-pop" role="menu">
-              {onRunNow && <button type="button" className="menu-item" role="menuitem" disabled={runBusy} onClick={() => void onRunNow(existing)}>{runBusy ? "Queueing…" : existing.trigger === "webhook" ? "Test run" : "Run now"}</button>}
-              {onToggle && <button type="button" className="menu-item" role="menuitem" onClick={() => void onToggle(existing)}>{existing.enabled ? "Pause" : "Resume"}</button>}
-              {onHistory && <button type="button" className="menu-item automation-history-btn" role="menuitem" onClick={() => onHistory(existing.id)}>History</button>}
-              {existing.webhookUrl && <button type="button" className="menu-item" role="menuitem" onClick={() => { void copyText(existing.webhookUrl!); }}>Copy URL</button>}
-              {existing.trigger === "webhook" && onRotate && <button type="button" className="menu-item" role="menuitem" onClick={() => void onRotate(existing)}>Rotate secret</button>}
-              {onSourceSetup && (existing.trigger === "github" || existing.trigger === "linear") && <button type="button" className="menu-item" role="menuitem" onClick={() => onSourceSetup(existing)}>Source setup</button>}
-              {onMove && (existing.trigger === "github" || existing.trigger === "linear") && <>
-                <button type="button" className="menu-item" role="menuitem" onClick={() => void onMove(existing, -1)}>Move earlier</button>
-                <button type="button" className="menu-item" role="menuitem" onClick={() => void onMove(existing, 1)}>Move later</button>
-              </>}
-              {onDelete && !existing.configKey && <button type="button" className="menu-item danger" role="menuitem" onClick={() => void onDelete(existing)}>Delete</button>}
-            </div>
-          </details>
-        )}
 
         {created ? (
           <>
@@ -2426,7 +2428,7 @@ function AutomationEditor({
                 <div className="autom-field-label">Run on</div>
                 <div className={`card autom-runner-card${selectedNodeHasKey ? " ready" : " warn"}`} data-tone={selectedNodeHasKey ? "ok" : "warn"}>
                   <label className="autom-runner-select-row">
-                    <span className="autom-runner-icon" aria-hidden="true">⌁</span>
+                    <span className="autom-runner-icon" aria-hidden="true"><DisplayIcon size={18} /></span>
                     <span className="autom-runner-select-copy">
                       <strong>{selectedManaged ? "Bivy Cloud" : selectedNode ? String(selectedNode.name || selectedNode.id) : "Choose a paired machine"}</strong>
                       <span>
@@ -2438,7 +2440,7 @@ function AutomationEditor({
                       </span>
                     </span>
                     <select className="autom-inline-select" value={d.nodeId} onChange={(e) => void chooseRunner(e.target.value)} aria-label="Run on machine">
-                      <option value="">Select…</option>
+                      <option value="">Choose a machine…</option>
                       {managedTarget && <option value={managedTarget.nodeId}>Bivy Cloud · managed</option>}
                       {state.connection.nodes.map((n) => {
                         const hasKey = Boolean(controller.local.keys()[n.id]);
@@ -2446,6 +2448,7 @@ function AutomationEditor({
                       })}
                       {d.nodeId && !selectedManaged && !state.connection.nodes.some((n) => n.id === d.nodeId) && <option value={d.nodeId}>{d.nodeId} · unavailable</option>}
                     </select>
+                    <span className="autom-runner-change" aria-hidden="true">Change<ChevronDownIcon size={14} /></span>
                   </label>
                   {selectedManaged && !selectedNodeHasKey && (
                     cloudPairing.state === "failed" ? (

@@ -9,12 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **File links in agent replies read as file names.** `[math.ts](/repo/math.ts:3)` showed as raw markdown because only web links were recognised. It now shows `math.ts`, with the full path on hover.
+- **A Claude Code error no longer renames the model "<synthetic>".** The model pill keeps the model the session runs on.
 - **A ChatGPT plan works with Codex on a cloud computer.** The chat's Codex never received the sign-in Bivy stored, so it said it had no OpenAI credential while the sign-in sheet said ChatGPT was connected. Codex now gets Codex's own login file from the ChatGPT sign-in before each turn, and OpenAI API keys too.
 - **A Claude plan used outside Claude Code says so.** Anthropic answers other apps (such as Pi) signed in with a Claude plan with "Third-party apps now draw from your extra usage". Bivy showed that as "reached its usage limit". It now explains that the plan covers Claude Code only and offers to fork to Claude Code.
 - **Previews stop failing quietly in the console.** The preview's own requests read an expired-access answer instead of tripping CORS, its server-errors poll backs off when access is missing, and its fonts load.
 
 ### Changed
 
+- **Cleaner transcript, composer and settings.** An expanded "Worked" line no longer repeats "Worked" for each step inside it; table headers align with their cells; attachments and the protection pill use the app's line icons instead of emoji; the protection pill says "Machine default" instead of "Default"; and Send without a model explains why the model picker opened.
+- **Settings → Providers & credentials leads with your plans.** With nothing connected it offers "Sign in with Claude" and "Sign in with ChatGPT" directly. Adding a provider lists those plans first and opens on subscription sign-in; import and OAuth recovery move under "Advanced". The page title matches its menu item. The API key field in "Connect your AI" saves with Enter.
+- **Tidier automation editor.** Back sits left of the title and the Actions menu shares the header row instead of floating over the form. The "Run on" card is the machine picker, so the machine name shows once. Templates show what each one does.
 - **The model picker puts the plans you pay for first.** With nothing connected it listed 41 providers alphabetically under an empty heading. Claude and ChatGPT now come first under "Use a plan you already pay for", named as in "Connect your AI"; the connect screen and its button use those names too.
 - **"Connect your AI" is the one place to sign in.** After "Set up later", a missing sign-in showed a separate checklist ("Credential valid", "Authenticate"); it now shows the same card again, without "Set up later" the second time.
 - **Plainer messages when an agent has no sign-in.** "Claude Code has no Claude sign-in or Anthropic API key on this machine yet" replaces "no Anthropic credential on this node … `401 Unauthorized`", and likewise for Codex and Grok. Claude Code is called "Claude Code" everywhere, not "Claude Code SDK".

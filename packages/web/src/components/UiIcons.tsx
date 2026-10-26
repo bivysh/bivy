@@ -113,6 +113,21 @@ export function PanelRightIcon({ size = 20, ...props }: IconProps) {
   return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M15 4v16" /></svg>;
 }
 
+/** A page with a folded corner — a file. */
+export function FileIcon({ size = 20, ...props }: IconProps) {
+  return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /></svg>;
+}
+
+/** A framed landscape — an image. */
+export function ImageIcon({ size = 20, ...props }: IconProps) {
+  return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><rect x="3" y="4" width="18" height="16" rx="2" /><circle cx="9" cy="10" r="1.6" /><path d="m21 16-5-5-9 9" /></svg>;
+}
+
+/** A shield — how much the agent may do (protection). */
+export function ShieldIcon({ size = 20, ...props }: IconProps) {
+  return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><path d="M12 3 5 6v5c0 4.4 3 8.3 7 10 4-1.7 7-5.6 7-10V6z" /></svg>;
+}
+
 /** Circular arrow — refresh. */
 export function RefreshIcon({ size = 20, ...props }: IconProps) {
   return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><path d="M20 12a8 8 0 1 1-2.34-5.66L20 8.5" /><path d="M20 4v4.5h-4.5" /></svg>;
