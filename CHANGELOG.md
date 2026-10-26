@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Each browser tab keeps its own machine.** The selected machine was read back from storage shared by all tabs, so switching machines in one tab moved every other open tab's connection to it while their screens still showed the old machine. Those tabs then missed updates, like a finished sign-in, and could ask the wrong machine for a session. A new tab or a reload still starts on the last machine chosen.
+- **Choosing Bivy Cloud survives a reload or a failed start.** After a reload the first-run screen asked again where agents should run. After a failed start, the header stayed "Offline" even once the cloud computer was online. Bivy now connects to the cloud computer as soon as it is online, and after a reload it starts it again.
+- **The machine switcher says when no machine is chosen.** It showed "Offline — Machine"; it now shows "Choose a machine".
+
+### Fixed
+
 - **Links in chat keep their query parameters.** Message text was escaped before its URLs became links, and the link was escaped again, so `?a=1&b=2` reached the browser as a parameter named `amp;b`. Sign-in links lost their `client_id` this way.
 - **Links in questions are tappable, and long ones wrap.** A question from `bivy ask` showed its text as plain text, so a URL could neither be tapped nor fully seen on a phone.
 - **Links in an app preview open in a normal tab.** A preview's new tab inherited the preview's sandbox, which can break sign-in pages. It now opens as an ordinary page.

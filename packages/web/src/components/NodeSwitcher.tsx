@@ -60,7 +60,9 @@ export function NodeSwitcher() {
   // A runner picked for the (not-yet-created) draft session shows as the current
   // selection — offline/pending until the first message launches it.
   const draftRunner = cloudMachinesEnabled && !activeSessionId ? draft.ephemeralConfig : null;
-  const concreteName = current?.name?.replace(/^Hosted\s+/i, "") || sessionNodeId || "Machine";
+  // Nothing selected yet is a choice to make, not an offline machine.
+  const noMachine = !draftRunner && !pendingNodeName && !sessionNodeId;
+  const concreteName = current?.name?.replace(/^Hosted\s+/i, "") || sessionNodeId || "Choose a machine";
   // Whether a cloud node is up is the status dot's job; the name stays the name.
   const label = draftRunner ? draftRunner.name : pendingNodeName || concreteName;
   const presence = draftRunner ? "offline" : nodePresence(current ?? (sessionNodeId ? { id: sessionNodeId } : undefined));
@@ -106,7 +108,7 @@ export function NodeSwitcher() {
             readers and easy to miss for colorblind users. */}
         {reconnecting
           ? <><Spinner size="xs" /><span className="sr-only">Reconnecting — </span></>
-          : <StatusDot status={presence === "online" ? "online" : "idle"} label={`${PRESENCE[presence].label} — `} />}
+          : <StatusDot status={presence === "online" ? "online" : "idle"} label={noMachine ? "No machine selected — " : `${PRESENCE[presence].label} — `} />}
         <span className="node-switcher-name">{label}</span>
         {!locked && <span className="node-switcher-caret">▾</span>}
       </button>

@@ -798,6 +798,21 @@ export function App() {
       (error: unknown) => setCloudStart({ error: error instanceof Error ? error.message : String(error) }),
     );
   }, []);
+  // Having chosen the cloud, a reload or a failed start must not strand the
+  // user on the choice screen or an "Offline" header: connect to the cloud
+  // computer once it is online, or start it again (once) after a reload.
+  const cloudNodeOnline = state.connection.nodes.find((node) => node.id.startsWith("eph-") && node.online)?.id;
+  const cloudResumed = useRef(false);
+  useEffect(() => {
+    if (!needsNode || runPlace !== "cloud" || cloudAvailable !== true) return;
+    if (cloudNodeOnline) {
+      controller.switchNode(cloudNodeOnline);
+      setCloudStart(null);
+    } else if (!cloudStart && !cloudResumed.current) {
+      cloudResumed.current = true;
+      startCloud();
+    }
+  }, [needsNode, runPlace, cloudAvailable, cloudNodeOnline, cloudStart, startCloud]);
   const choosingPlace = needsNode && cloudAvailable === true && runPlace !== "own" && !state.connection.nodes.some((node) => !node.id.startsWith("eph-"));
   const needsNodeTitle = choosingPlace || cloudStart ? "Get started" : "Connect a Machine";
   const choosePlace = useCallback((place: RunPlace) => {

@@ -48,6 +48,19 @@ async function nodeWrapEncKey(nodePriv: CryptoKey, devicePubB64: string, purpose
   return crypto.subtle.importKey("raw", bits as BufferSource, "AES-GCM", false, ["encrypt"]);
 }
 
+describe("local store", () => {
+  it("keeps each tab's current node while seeding new tabs from the last choice", () => {
+    const shared = mem();
+    const first = createLocalStore(shared, mem());
+    const second = createLocalStore(shared, mem());
+    first.cur = "laptop";
+    expect(second.cur).toBe("laptop");
+    second.cur = "cloud";
+    expect(first.cur).toBe("laptop");
+    expect(createLocalStore(shared, mem()).cur).toBe("cloud");
+  });
+});
+
 describe("pairing handshake", () => {
   it("persists and reuses the device keypair", async () => {
     const storage = mem();
