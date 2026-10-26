@@ -24,7 +24,9 @@ export function ConnectAI({ state, place, startError, onRetry, onDone }: {
   const [open, setOpen] = useState<string | null>(null);
   const nodeId = state.connection.currentNodeId;
   const online = Boolean(nodeId) && state.connection.status === "online";
-  const cloud = place === "cloud" || Boolean(nodeId?.startsWith("eph-"));
+  // The selected machine decides, once there is one: picking your own computer
+  // after choosing Bivy Cloud keeps sign-ins on that computer.
+  const cloud = nodeId ? nodeId.startsWith("eph-") : place === "cloud";
   const machine = state.connection.nodes.find((node) => node.id === nodeId)?.name || "your computer";
   const providers = state.catalogs.providers;
   const isConnected = (provider: string) => providers.some((p) => (p.id === provider || p.id === modelAuthApiKeyProvider(provider)) && p.configured);
