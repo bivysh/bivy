@@ -23,6 +23,10 @@ function run() {
   assert.equal(requestOriginAllowed(req({ host: "mymac.local:4317", origin: "http://mymac.local:4317" })), true, ".local mDNS");
   assert.equal(requestOriginAllowed(req({ host: "node.tailnet.ts.net", origin: "http://node.tailnet.ts.net" })), true, "tailscale ts.net");
   assert.equal(requestOriginAllowed(req({ host: "100.100.1.1:4317" })), true, "CGNAT/tailscale IP");
+  // A tailnet name is local only as the request's own origin: anyone can
+  // publish a page on some other *.ts.net name.
+  assert.equal(requestOriginAllowed(req({ host: "localhost:4317", origin: "https://other.tail9999.ts.net" })), false, "foreign ts.net origin to loopback");
+  assert.equal(requestOriginAllowed(req({ host: "node.tailnet.ts.net", origin: "https://other.tail9999.ts.net" })), false, "foreign ts.net origin to tailnet name");
 
   // The attack: a public web page opening a cross-origin socket to the loopback
   // daemon — rejected on the Origin.

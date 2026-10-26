@@ -284,6 +284,12 @@ function hostnameOf(value: string): string | null {
   return colon > 0 && /^\d+$/.test(trimmed.slice(colon + 1)) ? trimmed.slice(0, colon) : trimmed;
 }
 
+// Local-looking names that other people can also serve public pages on (a
+// tailnet name can be published with Tailscale Funnel). As an Origin they are
+// trusted only when they are the request's own Host: same-origin, as the PWA a
+// machine serves on its own tailnet name is. Adding a suffix is adding a row.
+const SHARED_LOCAL_SUFFIXES = [".ts.net"];
+
 function allowedExtraHosts(): Set<string> {
   return new Set(
     (process.env.BIVY_ALLOWED_HOSTS ?? "")
@@ -305,10 +311,8 @@ export function requestOriginAllowed(req: IncomingMessage): boolean {
     !!hostname && (hostnameIsLocal(hostname) || extra.has(hostname.toLowerCase()));
 
   const hostHeader = req.headers["host"];
-  if (typeof hostHeader === "string") {
-    const host = hostnameOf(hostHeader);
-    if (host && !ok(host)) return false;
-  }
+  const host = typeof hostHeader === "string" ? hostnameOf(hostHeader) : null;
+  if (host && !ok(host)) return false;
 
   const origin = req.headers["origin"];
   if (origin !== undefined) {
@@ -320,6 +324,9 @@ export function requestOriginAllowed(req: IncomingMessage): boolean {
       const parsed = new URL(origin);
       if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
       if (!ok(parsed.hostname)) return false;
+      const name = parsed.hostname.toLowerCase();
+      const shared = SHARED_LOCAL_SUFFIXES.some((suffix) => name.endsWith(suffix)) && !extra.has(name);
+      if (shared && name !== host?.toLowerCase()) return false;
     } catch {
       return false;
     }
