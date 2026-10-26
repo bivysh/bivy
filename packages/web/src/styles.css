@@ -983,9 +983,12 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .approval-title { font-size: var(--text-md); line-height: var(--lh-md); font-weight: var(--weight-semibold); margin-bottom: var(--space-1); }
 .approval-consequence { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
 .approval-reason { font-size: 13px; font-style: italic; color: var(--muted); margin-bottom: 8px; }
+/* Wraps rather than scrolls: the whole command is what's being approved, and a
+   phone-width card must never hide the end of `git push --force origin main`. */
 .approval-command {
   margin: 0 0 8px; background: var(--surface-2); border-radius: var(--radius-sm);
-  padding: 8px 10px; overflow-x: auto; font-size: var(--text-sm); font-family: var(--font-mono);
+  padding: 8px 10px; font-size: var(--text-sm); font-family: var(--font-mono);
+  white-space: pre-wrap; overflow-wrap: anywhere;
 }
 .approval-fields { display: grid; gap: 6px; margin-bottom: 8px; }
 .approval-field-label { font-size: var(--text-xs); line-height: var(--lh-xs); color: var(--muted); }
@@ -1040,6 +1043,8 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    top of this file) — this textarea gets autoFocus'd when "Other" is picked,
    and anything below 16px makes iOS Safari auto-zoom the viewport on focus. */
 .question-other-input { box-sizing: border-box; resize: vertical; min-height: 40px; }
+.question-reply-toggle { align-self: flex-start; padding-inline: 0; color: var(--muted); font-size: var(--text-sm); font-weight: var(--weight-medium); }
+.question-reply-toggle:hover { color: var(--ink); }
 .question-other-input:disabled { opacity: 0.6; }
 /* Fine print: where a secret goes, or what Open terminal does. */
 .question-note { margin: 0; font-size: var(--text-xs); line-height: var(--lh-xs); color: var(--muted); }
@@ -3399,6 +3404,8 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
 .delegation-answer p { margin: var(--space-1) 0 0; font-size: var(--text-sm); white-space: pre-wrap; overflow-wrap: anywhere; max-block-size: 18em; overflow-y: auto; }
 .delegation-refs { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); font-size: var(--text-sm); }
 .delegation-refs code { overflow-wrap: anywhere; }
+.delegation-refs a { color: var(--accent); font-weight: var(--weight-semibold); text-decoration: underline; text-underline-offset: 2px; }
+.delegation-refs a:hover { color: var(--accent-hover); }
 .delegation-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 .delegation-group { display: flex; flex-direction: column; gap: var(--space-1); margin-block: var(--space-2); }
 .delegation-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-2); }

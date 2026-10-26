@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Approval cards show the whole command on a phone.** A long command scrolled sideways, so `git push --force origin main` could read as `git push --force`. It now wraps.
+- **Approving a Claude Code edit shows the change.** The card listed only the file; it now shows what is replaced and with what, without repeating the tool name.
 - **File links in agent replies read as file names.** `[math.ts](/repo/math.ts:3)` showed as raw markdown because only web links were recognised. It now shows `math.ts`, with the full path on hover.
 - **A Claude Code error no longer renames the model "<synthetic>".** The model pill keeps the model the session runs on.
 - **A ChatGPT plan works with Codex on a cloud computer.** The chat's Codex never received the sign-in Bivy stored, so it said it had no OpenAI credential while the sign-in sheet said ChatGPT was connected. Codex now gets Codex's own login file from the ChatGPT sign-in before each turn, and OpenAI API keys too.
@@ -27,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Questions that ask you to do something answer with "Done".** A sign-in link, a code or a command to run used to need a typed answer; "Done" sends it, and "Reply with a message instead" opens a box. "Allow edit this session" now reads "Allow file edits this session", and a sub-agent's pull-request link uses the app's link style. Bar charts use slimmer, rounded bars.
 - **Cleaner transcript, composer and settings.** An expanded "Worked" line no longer repeats "Worked" for each step inside it; table headers align with their cells; attachments and the protection pill use the app's line icons instead of emoji; the protection pill says "Machine default" instead of "Default"; and Send without a model explains why the model picker opened.
 - **Settings → Providers & credentials leads with your plans.** With nothing connected it offers "Sign in with Claude" and "Sign in with ChatGPT" directly. Adding a provider lists those plans first and opens on subscription sign-in; import and OAuth recovery move under "Advanced". The page title matches its menu item. The API key field in "Connect your AI" saves with Enter.
 - **Tidier automation editor.** Back sits left of the title and the Actions menu shares the header row instead of floating over the form. The "Run on" card is the machine picker, so the machine name shows once. Templates show what each one does.

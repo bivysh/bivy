@@ -18,6 +18,12 @@ const RISK: Record<ReturnType<typeof formatApproval>["severity"], { label: strin
   low: { label: "Low risk" },
 };
 
+/** What "Allow … this session" remembers, in words. A shell key is the
+ *  program and subcommand (`npm test`) and reads best quoted; a tool key is the
+ *  tool's name, which reads better as the kind of action it allows. */
+const REMEMBER_LABEL: Record<string, string> = { edit: "file edits", write: "new files", multiedit: "file edits" };
+const rememberLabel = (key: string) => REMEMBER_LABEL[key] ?? `“${key}”`;
+
 export type ApprovalResolver = (id: string, approved: boolean, remember?: boolean) => void;
 
 function ApprovalCard({
@@ -108,9 +114,9 @@ function ApprovalCard({
             <button
               className="btn ghost"
               onClick={() => resolve(true, true)}
-              title={`Approve, and allow “${rememberKey}” without asking until this session closes`}
+              title={`Approve, and allow ${rememberLabel(rememberKey!)} without asking until this session closes`}
             >
-              Allow “{rememberKey}” this session
+              Allow {rememberLabel(rememberKey!)} this session
             </button>
           )}
           <button className="btn primary" onClick={() => resolve(true)}>

@@ -36,6 +36,12 @@ describe("formatApproval", () => {
     expect(f.command).toBe("ls -la");
   });
 
+  it("shows what a Claude Code edit changes, and where", () => {
+    const f = formatApproval({ toolName: "Edit", toolInput: { file_path: "src/totals.ts", old_string: "round(x)", new_string: "round(x * 100) / 100" } });
+    expect(f.title).toBe("Edit src/totals.ts?");
+    expect(f.fields).toEqual([["File", "src/totals.ts"], ["Find", "round(x)"], ["Replace", "round(x * 100) / 100"]]);
+  });
+
   it("shows every automation change an agent proposes, in full, and treats removals as permanent", () => {
     const changes = Array.from({ length: 12 }, (_, i) => `Add automation-${i}: 0 2 * * * (UTC), node default, workspace-write, approvals risky`);
     const f = formatApproval({ toolName: "apply_automations", input: { file: ".bivy/automations.yaml", changes } });

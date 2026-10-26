@@ -58,6 +58,13 @@ function QuestionStep({ url, code, command, onRunInTerminal }: { url?: string; c
   );
 }
 
+/** A question that asks the user to do something (open a page, enter a code,
+ *  run a command) rather than to choose or type. Its answer is "Done", and a
+ *  reply box only opens if the user wants to say more. */
+const isStep = (q: UserQuestionRequest["questions"][number]) =>
+  !q.secret && q.options.length === 0 && Boolean(q.url || q.code || q.command);
+const STEP_DONE = "Done";
+
 function QuestionCard({
   request,
   onAnswer,
@@ -100,7 +107,7 @@ function QuestionCard({
   // A question with no options (`bivy ask` without --option) is free text: its
   // answer box is open from the start.
   const [otherActive, setOtherActive] = useState<Record<number, boolean>>(() =>
-    Object.fromEntries(request.questions.map((q, qi) => [qi, q.options.length === 0])));
+    Object.fromEntries(request.questions.map((q, qi) => [qi, q.options.length === 0 && !isStep(q)])));
   const [otherText, setOtherText] = useState<Record<number, string>>({});
 
   const toggle = (qi: number, label: string, multiSelect: boolean | undefined) => {
@@ -125,6 +132,7 @@ function QuestionCard({
 
   const isAnswered = (qi: number) => {
     if ((selected[qi] || []).length > 0) return true;
+    if (isStep(request.questions[qi]!) && !otherActive[qi]) return true;
     return !!otherActive[qi] && (otherText[qi] || "").trim().length > 0;
   };
   const answered = request.questions.every((_, qi) => isAnswered(qi));
@@ -139,7 +147,7 @@ function QuestionCard({
       if (otherActive[qi]) {
         const custom = (otherText[qi] || "").trim();
         if (custom) parts.push(custom);
-      }
+      } else if (isStep(q)) parts.push(STEP_DONE);
       answers[q.question] = parts.join(", ");
     });
     return answers;
@@ -238,6 +246,11 @@ function QuestionCard({
                 </button>
               </div>
             )}
+            {isStep(q) && !otherActive[qi] && !pending && (
+              <button type="button" className="btn link question-reply-toggle" onClick={() => setOtherActive((prev) => ({ ...prev, [qi]: true }))}>
+                Reply with a message instead
+              </button>
+            )}
             {!q.secret && otherActive[qi] && (
               <textarea
                 className="field question-other-input"
@@ -246,7 +259,7 @@ function QuestionCard({
                 placeholder="Type your answer…"
                 aria-label={q.question}
                 rows={2}
-                autoFocus={q.options.length > 0}
+                autoFocus={q.options.length > 0 || isStep(q)}
                 disabled={pending}
               />
             )}
@@ -271,7 +284,11 @@ function QuestionCard({
             Skip
           </button>
           {(!oneTap || otherActive[0]) && <button className="btn primary" onClick={submit} disabled={!answered}>
-            {request.questions.every((q) => q.secret) ? "Save secret" : `Send answer${request.questions.length > 1 ? "s" : ""}`}
+            {request.questions.every((q) => q.secret)
+              ? "Save secret"
+              : request.questions.every((q, qi) => isStep(q) && !otherActive[qi])
+                ? STEP_DONE
+                : `Send answer${request.questions.length > 1 ? "s" : ""}`}
           </button>}
         </div>
       )}
