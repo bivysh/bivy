@@ -648,7 +648,7 @@ function cliAgentInfo(id: string, spec: AgentProfile): RuntimeInfo {
       sessionDiscovery: Boolean(spec.behaviors?.sessionStore || spec.behaviors?.nativeSessions),
       // Native-session behavior identities describe discovery/adoption and TUI
       // hand-off without teaching the wrapper which concrete agent owns them.
-      interactiveTui: Boolean(spec.behaviors?.nativeSessions) && commandAvailable(spec.command),
+      interactiveTui: Boolean(spec.tui) && commandAvailable(spec.command),
       nativeSessionDiscovery: Boolean(spec.behaviors?.nativeSessions) && commandAvailable(spec.command),
       nativeSessionAdoption: Boolean(spec.behaviors?.nativeSessions) && resume,
     }),
@@ -717,6 +717,14 @@ export function catalogRuntimes(credsDir: string, piDir: string, sessionsDir: st
 // BIVY_ACP_COMMAND / BIVY_ACP_ARGS (mirrors generic-cli / bivy-agent-protocol);
 // hidden from the picker until validated against a given agent, then promotable
 // with one catalog edit. Returns null when BIVY_ACP_COMMAND isn't set.
+/** "Continue in terminal" from the profile's `tui` row: the agent's own TUI,
+ *  reopened on the session's ref. */
+function tuiFromProfile(spec: Pick<AgentProfile, "command" | "tui">): ProtocolRuntimeOptions["interactiveTui"] {
+  const resume = spec.tui?.resume;
+  if (!resume) return undefined;
+  return ({ sessionRef, env }) => (sessionRef ? { command: spec.command, args: resume.map((arg) => arg.replaceAll("{id}", sessionRef)), env } : null);
+}
+
 /** Absolute path to the ACP bridge shim. */
 function acpShimPath(): string {
   return path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "bin", "acp-shim.mjs");
@@ -727,7 +735,7 @@ function acpShimPath(): string {
  * through bin/acp-shim.mjs. Shared by the generic `acp` runtime and the per-agent
  * ACP promotion path so both wrap agents identically.
  */
-function acpRuntimeOptions(opts: { id: string; displayName: string; command: string; agentArgs: string[]; credsDir?: string; behaviors?: AgentProfileBehaviors; historyLoader?: HistoryLoader; mcpConfig?: McpConfig; sandbox?: AgentSessionOptions["sandbox"]; instructionsEnv?: Record<string, string> }): ProtocolRuntimeOptions {
+function acpRuntimeOptions(opts: { id: string; displayName: string; command: string; agentArgs: string[]; credsDir?: string; behaviors?: AgentProfileBehaviors; historyLoader?: HistoryLoader; mcpConfig?: McpConfig; sandbox?: AgentSessionOptions["sandbox"]; instructionsEnv?: Record<string, string>; interactiveTui?: ProtocolRuntimeOptions["interactiveTui"] }): ProtocolRuntimeOptions {
   const slashBehavior = opts.behaviors?.slashCommands;
   const slashCommands = slashBehavior ? SLASH_COMMAND_BEHAVIORS[slashBehavior]() : undefined;
   // Forward Bivy's configured MCP servers to the ACP agent: the shim reads
@@ -751,6 +759,7 @@ function acpRuntimeOptions(opts: { id: string; displayName: string; command: str
     // ACP handshake doesn't carry them); a bare ACP agent has none.
     ...(slashCommands ? { slashCommands } : {}),
     ...(opts.instructionsEnv ? { instructionsEnv: opts.instructionsEnv } : {}),
+    ...(opts.interactiveTui ? { interactiveTui: opts.interactiveTui } : {}),
     ...(opts.credsDir ? { credentials: createCredentialStore(opts.credsDir) } : {}),
     // Declared credential behaviors apply to the governed path exactly as they do
     // to the pipe path: the preflight surfaces a clear no-credential error before
@@ -1287,6 +1296,7 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
           sandbox: options.sandbox,
           mcpConfig: options.mcpConfig,
           instructionsEnv: spec.instructions?.env,
+          interactiveTui: tuiFromProfile(spec),
         }));
       }
       const structured = executionMode === "structured-pipe";
@@ -1384,8 +1394,6 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
                 firstMessage: s.firstMessage,
               }));
             },
-            interactiveTui: ({ sessionRef, env }: { sessionRef?: string; cwd: string; env: Record<string, string> }) =>
-              sessionRef ? { command: spec.command, args: ["--resume", sessionRef], env } : null,
           }
         : {};
       const runtime = new ProcessRuntime({
@@ -1405,6 +1413,7 @@ function makeCliRuntime(id: string, options: RuntimeFactoryOptions, spec: AgentP
         ...(spec.instructions ? { instructionsEnv: spec.instructions.env } : {}),
         ...resumeOpts,
         ...nativeSessionOpts,
+        interactiveTui: tuiFromProfile(spec),
       });
       if (nativeSessionBehavior) {
         // Issue #156 discovery surface — ProcessRuntime has no options hook for

@@ -1243,6 +1243,7 @@ export class ProtocolRuntime implements AgentRuntime {
     // byte-exact same-runtime forks (fidelity "full"). Both hooks are required —
     // a capability without a working import would silently degrade to replayed.
     if (options.exportForFork && options.importForFork) this.capabilities.forkTransport = true;
+    if (options.interactiveTui) this.capabilities.interactiveTui = true;
     if (options.capabilities) Object.assign(this.capabilities, withExactCapabilitySurface({ ...this.capabilities, ...options.capabilities }));
   }
 

@@ -156,6 +156,9 @@ a time:
   session. It outlives the device that opened it, any device can join it, and
   `bivy resume <session>` on a laptop joins the same terminal instead of
   starting a second one.
+  Claude Code, Codex, Pi, OpenCode, Grok, Gemini and Qwen offer it; for a
+  CLI agent it is one `tui.resume` row in its profile
+  (`src/agents/profiles.ts`), the same on the pipe and ACP paths.
 - **While the terminal drives,** the chat is locked on every device and the
   node refuses chat sends. That includes a run pinned with `bivy resume` whose
   chat is opened later.

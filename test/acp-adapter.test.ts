@@ -565,6 +565,10 @@ await check("gemini: BIVY_GEMINI_ACP=1 promotes it to the governed ACP path end-
     const text = events.filter((e) => e.type === "message_update").map((e) => (e as any).message?.content).filter((c: unknown) => typeof c === "string").join("");
     assert.match(text, /Hello from ACP/, "streamed via the ACP path");
     assert.equal(decisions.length, 1, "the tool permission was governed");
+    // "Continue in terminal" reopens the governed session in gemini's own TUI.
+    assert.equal(runtime.capabilities.interactiveTui, true);
+    const tui = await session.interactiveTuiCommand?.();
+    assert.deepEqual([tui?.command, tui?.args], ["gemini", ["--resume", "acp-session-1"]]);
     session.dispose();
   } finally {
     delete process.env.BIVY_GEMINI_ACP;
@@ -689,7 +693,10 @@ await check("acp: shim takes its agent down when the node goes away", async () =
   const code = await Promise.race([exited, new Promise<string>((resolve) => setTimeout(() => resolve("still running"), 8000))]);
   if (code === "still running") { shim.kill("SIGKILL"); try { process.kill(agentPid, "SIGKILL"); } catch {} }
   assert.equal(code, 0, "shim exits once its node is gone");
-  assert.throws(() => process.kill(agentPid, 0), /ESRCH/, "the agent is gone too");
+  // The killed agent is reparented and reaped by init, which takes a moment.
+  const alive = () => { try { process.kill(agentPid, 0); return true; } catch { return false; } };
+  for (let i = 0; i < 100 && alive(); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(alive(), false, "the agent is gone too");
 });
 
 if (failures > 0) {
