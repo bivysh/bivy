@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Stricter Origin check for tailnet names.** The node accepts a browser Origin on a `*.ts.net` name only when it is the node's own tailnet name, the one it serves the app on. Before, any `*.ts.net` Origin counted as local.
 - **Patched dependency advisories.** The control plane moves to body-parser 2.4.0 (a compressed request body with trailing bytes could tie up the server) and ip-address 10.7.5. The node and CLI move to fast-uri 3.1.9, hono 4.13.14 and ip-address 10.7.5.
 
 ### Changed
