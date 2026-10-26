@@ -7,6 +7,7 @@ import { OwnerSignIn } from "./OwnerSignIn.js";
 import { BivyMark } from "./BivyMark.js";
 import { clientConfiguration, configuredAuthentication } from "../client-config.js";
 import { accountOrigin, isPackagedClient, openPackagedExternal } from "../packaged-client.js";
+import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 
 interface SignInMethods {
   enabled: boolean;
@@ -306,7 +307,7 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
         )}
         <BivyMark className="setup-logo" />
         <h1>Bivy</h1>
-        <p>{clientConfiguration.signInDescription ?? (methods?.enabled ? "Your self-hosted Bivy workspace." : "Run Claude Code, Codex, or another coding agent on a Machine you control — then continue it from your browser or phone.")}</p>
+        <p>{clientConfiguration.signInDescription ?? (methods?.enabled ? "Your self-hosted Bivy workspace." : `Run Claude Code, Codex, or another coding agent on your own computer${EPHEMERAL_MACHINES_ENABLED ? " or a cloud computer" : ""}, and continue it from your browser or phone.`)}</p>
         {!methods && !methodsError && <p className="muted" role="status">Loading sign-in options…</p>}
         {methodsError && <div className="setup-error" role="alert">
           <p>{methodsError}</p>

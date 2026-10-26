@@ -134,6 +134,13 @@ describe("markdown", () => {
       '<strong><a href="https://example.com/bar" target="_blank" rel="noopener">https://example.com/bar</a></strong>'
     );
   });
+  it("keeps a URL's query parameters intact in bare and labelled links", () => {
+    // The text is escaped before the link rules run, so the href used to be
+    // escaped twice: `&b=2` reached the browser as a parameter named `amp;b`.
+    const href = 'href="https://x.test/a?a=1&amp;b=2"';
+    expect(inline("https://x.test/a?a=1&b=2")).toContain(href);
+    expect(inline("[go](https://x.test/a?a=1&b=2)")).toContain(href);
+  });
   it("renders a remote markdown image as an unresolved placeholder, not a fetchable src", () => {
     // #293: the deployed app's CSP (img-src 'self' data: blob:) blocks a literal
     // remote src outright, so the element must never carry one — the node

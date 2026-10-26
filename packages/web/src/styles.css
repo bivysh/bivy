@@ -986,7 +986,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
    badge (the header is a .card-eyebrow). Options are one radio/checkbox list rather than a stack of buttons. */
 .question-card { display: flex; flex-direction: column; gap: var(--space-4); }
 .question-item { display: flex; flex-direction: column; gap: var(--space-2); }
-.question-text { font-size: var(--text-md); line-height: var(--lh-md); font-weight: var(--weight-semibold); }
+.question-text { font-size: var(--text-md); line-height: var(--lh-md); font-weight: var(--weight-semibold); white-space: pre-line; overflow-wrap: anywhere; }
 .card-eyebrow + .question-text { margin-top: calc(-1 * var(--space-1)); }
 .question-options {
   display: flex; flex-direction: column; margin-top: var(--space-1);
@@ -3197,7 +3197,7 @@ select.picker-search { appearance: auto; }
 /* Back out of a summoned sign-in (solo pairing) — pinned to the card's leading edge. */
 .setup-back { display: block; text-align: left; margin-bottom: 4px; }
 .setup-logo { display: block; width: var(--space-8); height: var(--space-8); margin-inline: auto; color: var(--ink); }
-.setup-card h1 { margin: 6px 0 12px; }
+.setup-card h1 { margin: 6px 0 12px; font-family: var(--font-serif); font-weight: var(--weight-medium); letter-spacing: -0.01em; }
 .setup-card p { color: var(--ink); margin: 8px 0; }
 .setup-card .muted { color: var(--muted); font-size: 13px; }
 .setup-foot { margin-top: 18px; }

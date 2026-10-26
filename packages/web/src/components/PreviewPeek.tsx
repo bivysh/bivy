@@ -146,7 +146,7 @@ export function PreviewPeek({ url, name, sessionId, appId, viewId, onClose, onOp
               onCancel={done} onError={(message) => toShell({ type: "transcript", error: message })} />
           </div>}
           <iframe ref={frame} className="preview-peek" src={url} title={name} referrerPolicy="no-referrer"
-            sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox"
             // Delegated to Bivy's preview shell, which passes it only to desktop-app viewers.
             allow="clipboard-read; clipboard-write" onLoad={capabilities} />
           {marking && <div className="preview-marking" role={marking.state === "working" ? "status" : "alert"}>

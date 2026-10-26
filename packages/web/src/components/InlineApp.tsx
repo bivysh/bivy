@@ -114,7 +114,7 @@ export function InlineApp({ appId, caption, sessionId }: { appId: string; captio
           src={frame.url}
           title={frame.name}
           referrerPolicy="no-referrer"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups allow-popups-to-escape-sandbox"
         />
         <figcaption className="card-sub">
           {caption ?? frame.name}

@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
 import { writeClipboard } from "../clipboard.js";
-import type { UserQuestionRequest } from "@bivy/core";
+import { inline, type UserQuestionRequest } from "@bivy/core";
 
 // A blocking, multiple-choice clarifying question the agent raised mid-turn
 // (e.g. Claude's AskUserQuestion tool) — distinct from ApprovalCard, which is
@@ -187,7 +187,7 @@ function QuestionCard({
         return (
           <div className="question-item" key={qi}>
             {q.header && <div className="card-eyebrow">{q.header}</div>}
-            <div className="question-text" id={`${request.id}-q${qi}`}>{q.question}</div>
+            <div className="question-text" id={`${request.id}-q${qi}`} dangerouslySetInnerHTML={{ __html: inline(q.question) }} />
             {!q.secret && (q.url || q.code || q.command) && <QuestionStep url={q.url} code={q.code} command={q.command} onRunInTerminal={onRunInTerminal} />}
             {q.secret ? (
               <div className="question-field">
