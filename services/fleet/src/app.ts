@@ -147,8 +147,10 @@ export function createApp(deps: AppDeps) {
     const accountId = accountOf(req);
     const event = req.body?.event;
     if (deps.computers && event?.type === "account.signed-in" && isNewAccount(event.accountCreatedAt, event.at)) {
+      // The id goes in as an argument, not into the format string: console
+      // reads `%s` in the first argument and would shift the rest.
       void deps.computers.acquireAtSignup(accountId)
-        .catch((error) => console.warn(`[fleet] sign-up start failed for ${accountId}:`, error instanceof Error ? error.message : error));
+        .catch((error) => console.warn("[fleet] sign-up start failed for", accountId, error instanceof Error ? error.message : error));
     }
     res.json({ ok: true });
   }));
