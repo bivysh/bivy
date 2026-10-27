@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Connect your AI works on a node you open directly.** On a node served to the browser directly (`bivy tailscale`, or a local `?local=1` page), the first-run card said "Waiting for your computer…" forever with Sign in and API key disabled, because it waited for a selected machine id that direct mode never has. It now treats the open connection as the machine.
 - Settings → Providers no longer shows the OAuth browser recovery switch when no account is signed in (a node opened directly); there it could not be turned on and snapped back.
 - `BIVY_SETUP_SKIP_SERVICE=1` setup waits for the already-started node to answer, instead of giving up after one 1.2-second probe and reporting that the service could not be installed.
 - **"Continue in terminal" works for OpenCode and Grok chats.** Grok's chats run over its ACP server, which had no terminal hand-off, so the option did nothing; OpenCode had none at all. Both now reopen the chat in the agent's own TUI (`grok --resume <id>`, `opencode --session <id>`). The resume arguments are one row of profile data per agent, shared by both paths.

@@ -17,7 +17,7 @@ import { modelAccountChoice } from "../packages/web/src/modelAccounts.js";
 import { githubInstallationSettings, githubMentionHandles, githubSourceStatus } from "../packages/web/src/components/githubSource.js";
 import { standbyCopyOf } from "../packages/web/src/standby.js";
 import { cloudComputerToWake, cloudDestinations, nodePresence } from "../packages/web/src/cloudDestinations.js";
-import { agentForProviders, signInSync } from "../packages/web/src/onboarding.js";
+import { agentForProviders, signInMachineOnline, signInSync } from "../packages/web/src/onboarding.js";
 
 test("account routing follows project, active, default and ambiguity rules", () => {
   const records = [{ label: "default" }, { label: "work" }];
@@ -170,6 +170,9 @@ test("first run: own-computer sign-ins stay on that machine, and the agent follo
   assert.equal(signInSync("eph-managed-auto-1", "own"), undefined, "a cloud machine keeps the account vault, so a new disk can recover it");
   assert.equal(signInSync("laptop", null), "node", "no cloud chosen (or offered) means own computer");
   assert.equal(signInSync("laptop", "cloud"), undefined);
+  assert.equal(signInMachineOnline({ status: "online", currentNodeId: null }, true), true, "a node reached directly has no machine id but is connected");
+  assert.equal(signInMachineOnline({ status: "online", currentNodeId: null }, false), false, "signed in with no machine selected yet");
+  assert.equal(signInMachineOnline({ status: "connecting", currentNodeId: null }, true), false);
 
   const claude = { id: "claude-code", credentialRequirements: { owner: "agent" as const, strategy: "one-of" as const, providers: ["anthropic"] } };
   const codex = { id: "codex", credentialRequirements: { owner: "agent" as const, strategy: "one-of" as const, providers: ["openai-codex", "openai"] } };
