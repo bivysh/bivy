@@ -572,7 +572,8 @@ dumb, end-to-end-encrypted pipe — it holds no database.
 | `RELAY_MAX_CLIENT_MESSAGES_PER_MINUTE` | integer | `600` | Rate cap on phone/browser sockets |
 | `RELAY_MAX_NODE_MESSAGES_PER_MINUTE` | integer | `6000` | Rate cap on node sockets |
 | `RELAY_MAX_MESSAGES_PER_MINUTE` | integer | unset | **Deprecated.** Used only as a fallback for the client limit; explicitly ignored for node sockets, with a warning |
-| `RELAY_MAX_CONNECTIONS_PER_IP` | integer | `50` | |
+| `RELAY_MAX_CONNECTIONS_PER_IP` | integer | `50` | Concurrent WebSockets per client address. Behind a reverse proxy, set `RELAY_TRUST_PROXY` so this counts clients, not the proxy |
+| `RELAY_TRUST_PROXY` | comma-separated IPs/CIDRs or `loopback`, `linklocal`, `uniquelocal` | unset (trust no proxies); Compose and Kamal: `uniquelocal` | Proxies whose `X-Forwarded-For` names the client for the per-address cap. The nearest untrusted hop counts. Never list Internet-wide ranges |
 | `RELAY_IDLE_TIMEOUT_MS` | integer ms | `120000` | Heartbeat/idle timeout |
 | `RELAY_MAX_BUFFERED_BYTES` | integer bytes | `16777216` (16 MiB) | Per-socket outbound backpressure mark; a socket above it is evicted |
 | `RELAY_MAX_TOTAL_BUFFERED_BYTES` | integer bytes | `268435456` (256 MiB) | Relay-wide outbound budget. Above it, every socket holding more than one max-size frame is evicted, so many stalled consumers at once cannot exhaust memory |

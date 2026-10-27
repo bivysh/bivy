@@ -156,6 +156,8 @@ services:
       # in the app when a flapping node makes the relay replay peer.online bursts.
       RELAY_MAX_CLIENT_MESSAGES_PER_MINUTE: "${RELAY_MAX_CLIENT_MESSAGES_PER_MINUTE:-600}"
       RELAY_MAX_CONNECTIONS_PER_IP: "${RELAY_MAX_CONNECTIONS_PER_IP:-50}"
+      # Caddy is the relay's only peer; count connections per forwarded client.
+      RELAY_TRUST_PROXY: "${RELAY_TRUST_PROXY-uniquelocal}"
       RELAY_IDLE_TIMEOUT_MS: "${RELAY_IDLE_TIMEOUT_MS:-120000}"
     # The relay holds one WebSocket per node plus one per connected phone, so it
     # is the most FD-hungry service. At ~2 FDs/user the default 1024 limit walls
