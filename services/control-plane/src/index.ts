@@ -12,7 +12,7 @@ import { createApns } from "./apns.js";
 import { associatedApps } from "./associated-apps.js";
 import { resolveWebhookAuth, verifyWebhookAuth, DEFAULT_WEBHOOK_HEADER, type WebhookAuth } from "./webhook-auth.js";
 import { matchGithubItemTrigger } from "./github-item-trigger.js";
-import { validateCapabilityTags } from "@bivy/core";
+import { CLOUD_RUNNER_CONFIG_ID, validateCapabilityTags } from "@bivy/core";
 import { notificationLink } from "./notification-link.js";
 import { type Account, type NodeRecord, type NotificationKind, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity, mintHostedInstallationToken, listHostedRepositories } from "./central-github-app.js";
@@ -23,7 +23,7 @@ import { listAppInstallations, listInstallationRepositories, listInstallationBra
 import { countActiveAccountSessions } from "./session-count.js";
 import { DeploymentCompute, deploymentCompute, managedComputeEnabled, setDeploymentCompute } from "./deployment-compute.js";
 import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, cloudRouteSourceLabel, isCloudComputerNode, isCloudComputerPresence, isEphemeralMilestone, nodeMayTakeWork, routeWorkToCloudComputer } from "./cloud-computer.js";
-import { bootRunner, isRunnerNode, placeWorkOnRunner, runnerLabel, runnerNodeId } from "./runners.js";
+import { bootRunner, isRunnerNode, placeWorkOnRunner, runnerLabel, runnerNodeId, sessionRunnerId } from "./runners.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
 import { configureProxyTrust } from "./proxy-trust.js";
@@ -33,7 +33,7 @@ import { safeReturnPath } from "./redirect.js";
 import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult, recordRunFailureStage, classifyRunFailureStage, recordProductEvent, PRODUCT_EVENT_VALUES, PRODUCT_CLIENT_VALUES, type ProductEvent, type ProductClient } from "./metrics.js";
 import { initSentry } from "./instrument.js";
 import { sanitizeEvidencePatch } from "./run-evidence.js";
-import { DeploymentExtension, type DeploymentOperation, type DeploymentPolicyContext } from "./deployment-extension.js";
+import { DeploymentExtension, type CloudComputerAcquire, type DeploymentOperation, type DeploymentPolicyContext } from "./deployment-extension.js";
 import {
   verifyGithubSignature,
   verifyLinearSignature,
@@ -1321,8 +1321,32 @@ async function respondCloudComputer(
   accountId: string,
   input: { purpose: string; requestId: string; runtimeId?: string; sessionId?: string },
 ): Promise<void> {
+  await respondManagedMachine(res, input.purpose, "Bivy Cloud", () => deploymentExtension.computeAcquire(accountId, input));
+}
+
+/** Start a new runner for one session and answer with its node, like the
+ * cloud computer's. The device pairs with it on connect. */
+async function respondSessionRunner(res: Response, accountId: string, requestId: string): Promise<void> {
+  await respondManagedMachine(res, "interactive", "Cloud Runner", () => deploymentExtension.runnerLaunch(accountId, { runnerId: sessionRunnerId(requestId), requestId, sleeps: true }));
+}
+
+/** Wake a session's sleeping runner and answer with its node. */
+async function respondRunnerWake(res: Response, accountId: string, nodeId: string): Promise<void> {
+  await respondManagedMachine(res, "interactive", "Cloud Runner", async () => {
+    const woken = await deploymentExtension.runnerWake(accountId, nodeId, "resume");
+    if (woken.allowed && woken.state !== "awake") await store.resetNodeMilestones(nodeId);
+    return woken;
+  });
+}
+
+async function respondManagedMachine(
+  res: Response,
+  purpose: string,
+  name: string,
+  acquire: () => Promise<CloudComputerAcquire>,
+): Promise<void> {
   try {
-    const acquired = await deploymentExtension.computeAcquire(accountId, input);
+    const acquired = await acquire();
     if (!acquired.allowed) {
       const { decision } = acquired;
       res.status(403).json({ error: decision.reason || "Cloud machine launch denied", code: decision.code || "managed_launch_denied", ...decision });
@@ -1335,8 +1359,8 @@ async function respondCloudComputer(
       ok: true,
       duplicate: false,
       machine: {
-        id: acquired.nodeId, nodeId: acquired.nodeId, provider: "fly", name: "Bivy Cloud", region: "",
-        status: acquired.state, ip: null, createdAt: new Date().toISOString(), computeSource: "managed", purpose: input.purpose,
+        id: acquired.nodeId, nodeId: acquired.nodeId, provider: "fly", name, region: "",
+        status: acquired.state, ip: null, createdAt: new Date().toISOString(), computeSource: "managed", purpose,
       },
     });
   } catch (error) {
@@ -1457,10 +1481,15 @@ app.post("/account/managed-machines", requireUser, asyncHandler(async (req, res)
   }
   const configId = String(req.body?.configId ?? "").trim();
   const runtimeId = String(req.body?.runtimeId ?? "").trim().slice(0, 120);
+  const requestId = String(req.body?.requestId ?? randomUUID()).slice(0, 160);
+  if (configId === CLOUD_RUNNER_CONFIG_ID) {
+    if (!(await runnersMode(account.id))) return res.status(404).json({ error: "Cloud runners are not available." });
+    return respondSessionRunner(res, account.id, requestId);
+  }
   const storedConfig = (await store.getEphemeralConfigs(account.id)).find((candidate) => candidate.id === configId);
   if (!storedConfig || storedConfig.computeSource !== "managed") return res.status(404).json({ error: "Managed session profile not found." });
   if (!(await accountMachineMode(account.id))) return res.status(503).json({ error: "Managed session provider is not configured." });
-  await respondCloudComputer(res, account.id, { purpose: "interactive", requestId: String(req.body?.requestId ?? randomUUID()), runtimeId: runtimeId || undefined });
+  await respondCloudComputer(res, account.id, { purpose: "interactive", requestId, runtimeId: runtimeId || undefined });
 }));
 
 // Someone is in the app and may be about to work: wake their sleeping cloud
@@ -1490,6 +1519,11 @@ app.post("/account/managed-machines/restore", requireUser, asyncHandler(async (r
   const nodeId = String(req.body?.nodeId ?? "").trim();
   const configId = String(req.body?.configId ?? "").trim();
   if (!sessionId || !nodeId || !configId) return res.status(400).json({ error: "sessionId, nodeId and configId are required." });
+  // A session's runner sleeps on its own disk too: bringing it back is a wake.
+  if (isRunnerNode(nodeId) && (await store.listNodes(account.id)).some((node) => node.id === nodeId)) {
+    if (!(await runnersMode(account.id))) return res.status(503).json({ error: "Cloud runners are not available." });
+    return respondRunnerWake(res, account.id, nodeId);
+  }
   if (!isCloudComputerNode(account.id, nodeId)) return res.status(404).json({ error: "Managed session restore record not found." });
   if (!(await accountMachineMode(account.id))) return res.status(503).json({ error: "Managed session provider is not configured." });
   await respondCloudComputer(res, account.id, { purpose: "interactive", requestId: String(req.body?.requestId ?? `restore:${sessionId}:${randomUUID()}`), sessionId });
@@ -1654,14 +1688,15 @@ app.post("/node/ephemeral-milestone", requireNode, asyncHandler(async (req, res)
   const node = (req as Request & { node: NodeRecord }).node;
   const milestone = String(req.body?.milestone ?? "");
   if (!isEphemeralMilestone(milestone)) return res.status(400).json({ error: "unknown milestone" });
-  // Only the account's cloud computer is tracked: its milestones live on the
-  // node, for the current boot.
-  if (!isCloudComputerNode(node.accountId, node.id)) return res.json({ ok: true, tracked: false });
+  // Only deployment machines are tracked: the account's cloud computer, for
+  // its current boot, and runners, which a session may be waiting on.
+  const computer = isCloudComputerNode(node.accountId, node.id);
+  if (!computer && !isRunnerNode(node.id)) return res.json({ ok: true, tracked: false });
   const at = new Date().toISOString();
   await store.setNodeMilestone(node.id, milestone, at);
   // The machine's first real use this awake period (an agent turn or a
   // terminal), not just being woken; the deployment may meter from here.
-  if (milestone === "firstUseAt") {
+  if (computer && milestone === "firstUseAt") {
     void deploymentExtension.computeUsed(node.accountId, node.id, at)
       .catch((error) => console.warn(`[cloud-computer] used event failed for ${node.accountId}: ${error instanceof Error ? error.message : error}`));
   }
@@ -3667,7 +3702,10 @@ app.get("/account/ephemeral-configs", asyncHandler(async (req, res) => {
   if (managedComputeEnabled() && deploymentCompute().configured) {
     await ensureManagedDefaultForAccount(client.accountId).catch(() => undefined);
   }
-  res.json((await store.getEphemeralConfigs(client.accountId)).filter((config) => config.computeSource === "managed"));
+  const runners = await runnersMode(client.accountId);
+  res.json((await store.getEphemeralConfigs(client.accountId))
+    .filter((config) => config.computeSource === "managed")
+    .map((config) => runners ? { ...config, runners: true } : config));
 }));
 
 app.get("/account/queue-routing", asyncHandler(async (req, res) => {
@@ -3934,6 +3972,7 @@ app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
     purpose: "interactive",
     kind: m.kind === "runner" ? "runner" : "computer",
     lifecycleState: typeof m.state === "string" ? m.state : undefined,
+    deleteAt: typeof m.deleteAt === "string" && Number.isFinite(Date.parse(m.deleteAt)) ? m.deleteAt : undefined,
   })));
 }));
 
@@ -4888,6 +4927,7 @@ app.post("/client/relay-ticket", asyncHandler(async (req, res) => {
     relayTicketMetrics.clientMinted += 1;
     // Connecting to a sleeping cloud computer is the signal to wake it.
     if (isCloudComputerNode(resolved.accountId, targetNodeId)) void wakeCloudComputerIfAsleep(resolved.accountId);
+    else if (isRunnerNode(targetNodeId)) void wakeRunnerIfAsleep(resolved.accountId, targetNodeId!);
     res.json({ ok: true, ticket, relayUrl: relayUrlForNode(targetNodeId) });
   } catch (error) {
     relayTicketMetrics.clientFailed += 1;
@@ -4895,6 +4935,19 @@ app.post("/client/relay-ticket", asyncHandler(async (req, res) => {
     throw error;
   }
 }));
+
+/** A session's runner sleeps like the cloud computer; connecting wakes it. A
+ * runner that does work and ends never sleeps, so the deployment ignores it. */
+async function wakeRunnerIfAsleep(accountId: string, nodeId: string): Promise<void> {
+  try {
+    const node = (await store.listNodes(accountId)).find((candidate) => candidate.id === nodeId);
+    if (!node || node.online || !(await runnersMode(accountId))) return;
+    const woken = await deploymentExtension.runnerWake(accountId, nodeId);
+    if (woken.allowed && woken.state !== "awake") await store.resetNodeMilestones(nodeId);
+  } catch (error) {
+    console.warn(`[runners] wake of ${nodeId} failed:`, error instanceof Error ? error.message : error);
+  }
+}
 
 async function wakeCloudComputerIfAsleep(accountId: string, reason = "connect"): Promise<boolean> {
   try {

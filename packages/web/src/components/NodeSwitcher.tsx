@@ -11,7 +11,7 @@ import { useModalEscape } from "../modalStack.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import type { EphemeralNodeConfig, HostedMachineSummary } from "@bivy/core";
 import { rememberRunPlace } from "../onboarding.js";
-import { cloudDestinations, nodePresence, PRESENCE, type CloudDestination } from "../cloudDestinations.js";
+import { cloudDestinations, isRunnerNodeId, nodePresence, PRESENCE, type CloudDestination } from "../cloudDestinations.js";
 import type { TailnetMachine } from "../access.js";
 
 /**
@@ -62,7 +62,7 @@ export function NodeSwitcher() {
   const draftRunner = cloudMachinesEnabled && !activeSessionId ? draft.ephemeralConfig : null;
   // Nothing selected yet is a choice to make, not an offline machine.
   const noMachine = !draftRunner && !pendingNodeName && !sessionNodeId;
-  const concreteName = current?.name?.replace(/^Hosted\s+/i, "") || sessionNodeId || "Choose a machine";
+  const concreteName = isRunnerNodeId(sessionNodeId) ? "Cloud Runner" : current?.name?.replace(/^Hosted\s+/i, "") || sessionNodeId || "Choose a machine";
   // Whether a cloud node is up is the status dot's job; the name stays the name.
   const label = draftRunner ? draftRunner.name : pendingNodeName || concreteName;
   const presence = draftRunner ? "offline" : nodePresence(current ?? (sessionNodeId ? { id: sessionNodeId } : undefined));
@@ -81,9 +81,10 @@ export function NodeSwitcher() {
     // Someone who runs on Bivy Cloud keeps their sign-ins with the account.
     rememberRunPlace("cloud");
     // An existing computer wakes when this device connects to it; a new one
-    // starts now, so it boots while the first message is typed.
+    // starts now, so it boots while the first message is typed. A runner is
+    // started by the first message, so picking it costs nothing.
     if (row.nodeId) controller.switchNode(row.nodeId);
-    else controller.pickDraftEphemeralRunner(row.config, { warm: true });
+    else controller.pickDraftEphemeralRunner(row.config, { warm: !row.runner });
   };
   // A draft may choose its node. Once the session exists, its owning node is
   // immutable: this control becomes a label rather than a global node switcher.
@@ -152,7 +153,7 @@ export function NodeSwitcher() {
                   >
                     <StatusDot status={row.online ? "online" : "idle"} label={row.online ? "Online — " : row.asleep ? "Asleep — " : "Not running — "} />
                     <span className="node-menu-name">{row.label}</span>
-                    {!row.online && <span className="node-menu-meta">{row.asleep ? `asleep · ${PRESENCE.asleep.hint}` : "starts when you send"}</span>}
+                    {!row.online && <span className="node-menu-meta">{row.runner ? "new machine for this session" : row.asleep ? `asleep · ${PRESENCE.asleep.hint}` : "starts when you send"}</span>}
                     {picked && <span className="node-menu-check">✓</span>}
                   </button>
                 );

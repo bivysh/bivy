@@ -72,6 +72,16 @@ exiting it flushes a sealed snapshot of every open session, then exits; the
 deployment keeps the stopped machine and its volume. The init `timeout` bounds
 each awake period.
 
+## Session runners
+
+When the deployment offers runners, the machine picker also lists "Cloud
+Runner": a new machine for one session instead of the shared cloud computer.
+It boots like a runner for queued work, but sleeps when quiet instead of
+ending, with its sessions on its own disk. Connecting to it or sending to its
+session wakes it. The deployment deletes one that has slept too long; the app
+shows that date above the composer, and deleting the runner's only session
+deletes the runner.
+
 ## Snapshots and a lost disk
 
 - **Snapshot.** `src/session/snapshot.ts` seals `{records, checkpointCommit,

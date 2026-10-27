@@ -16,7 +16,7 @@ import { attentionRank, isUnseen, statusClass, statusLabel } from "../packages/w
 import { modelAccountChoice } from "../packages/web/src/modelAccounts.js";
 import { githubInstallationSettings, githubMentionHandles, githubSourceStatus } from "../packages/web/src/components/githubSource.js";
 import { standbyCopyOf } from "../packages/web/src/standby.js";
-import { cloudComputerToWake, cloudDestinations, nodePresence } from "../packages/web/src/cloudDestinations.js";
+import { cloudComputerToWake, cloudDestinations, nodePresence, runnerDeletionNotice } from "../packages/web/src/cloudDestinations.js";
 import { agentForProviders, signInMachineOnline, signInSync } from "../packages/web/src/onboarding.js";
 
 test("account routing follows project, active, default and ambiguity rules", () => {
@@ -158,11 +158,22 @@ test("a managed cloud profile is one destination that reuses the account's cloud
   assert.deepEqual(sleeping.map((row) => [row.nodeId, row.asleep]), [[nodeId, true]], "a sleeping cloud computer is connected to (which wakes it), not launched again");
   const none = cloudDestinations([config], [], []);
   assert.deepEqual(none.map((row) => [row.nodeId, row.asleep]), [[undefined, false]], "no cloud computer yet: one starts on send");
+  const withRunners = cloudDestinations([{ ...config, runners: true }], machines, [{ id: nodeId, online: true }]);
+  assert.deepEqual(
+    withRunners.map((row) => [row.label, row.config.id, row.nodeId, Boolean(row.runner)]),
+    [["Bivy Cloud", config.id, nodeId, false], ["Cloud Runner", "managed-runner", undefined, true]],
+    "a deployment with runners also offers a new machine per session, never an existing one",
+  );
   assert.deepEqual(
     [{ id: nodeId, online: false }, { id: "laptop", online: false }, { id: "laptop", online: true }].map(nodePresence),
     ["asleep", "offline", "online"],
     "only the cloud computer sleeps; any other machine that isn't connected is offline",
   );
+  assert.equal(nodePresence({ id: "eph-runner-0123456789abcdef", online: false }), "asleep", "a session's runner sleeps too, and sending wakes it");
+  const now = Date.parse("2026-10-27T12:00:00Z");
+  assert.equal(runnerDeletionNotice(undefined, now), undefined, "no date, no notice");
+  assert.equal(runnerDeletionNotice("2026-11-03T12:00:00Z", now)?.soon, false);
+  assert.equal(runnerDeletionNotice("2026-10-29T11:00:00Z", now)?.soon, true, "a warning in the last two days");
 });
 
 test("first run: own-computer sign-ins stay on that machine, and the agent follows the connected account", () => {

@@ -27,6 +27,17 @@ export function isRunnerNode(nodeId: string | null | undefined): boolean {
   return Boolean(nodeId) && RUNNER_NODE.test(nodeId!);
 }
 
+/** A runner someone started for a new session, rather than for queued work.
+ * It sleeps when idle and wakes for the session's follow-ups, like the cloud
+ * computer; the deployment deletes it once it has slept long enough. */
+export function sessionRunnerId(requestId: string): string {
+  return `session:${requestId}`;
+}
+
+export function isSessionRunnerId(runnerId: string): boolean {
+  return runnerId.startsWith(sessionRunnerId(""));
+}
+
 /** The label work is placed on for a runner; also its node name. */
 export function runnerLabel(nodeId: string): string {
   return ephemeralNodeLabel(nodeId);
@@ -58,8 +69,9 @@ export async function bootRunner(
     ttlMinutes: input.awakeCapMinutes,
     provider: "fly",
     runner: true,
-    // Ends shortly after its work finishes; the deployment then deletes it.
-    teardownOnAgentFinish: true,
+    // Work ends shortly after it finishes and the deployment deletes it. A
+    // session's runner sleeps once idle, keeping its disk for follow-ups.
+    ...(isSessionRunnerId(input.runnerId) ? { sleepOnIdle: true } : { teardownOnAgentFinish: true }),
     hostedTasks: true,
     nodeLabel: label,
     ...await githubBootIdentity(store, input.accountId),

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-import { isCloudComputerNodeId } from "../../cloudDestinations.js";
+import { isSleepingMachineNodeId } from "../../cloudDestinations.js";
 import type {
   AccountNode,
   EphemeralMachine,
@@ -25,9 +25,10 @@ export class EphemeralCoordinator {
 
   async reprovision(nodeId: string, sessionId: string): Promise<void> {
     try {
-      // The account's cloud computer keeps its sessions on its own disk: bringing
-      // it back is a wake, and the control plane knows which machine that is.
-      if (!isCloudComputerNodeId(nodeId)) throw new Error("This session's machine can't be rebuilt.");
+      // The account's cloud computer, and a session's runner, keep their
+      // sessions on their own disk: bringing one back is a wake, and the
+      // control plane knows which machine that is.
+      if (!isSleepingMachineNodeId(nodeId)) throw new Error("This session's machine can't be rebuilt.");
       await this.deps.restoreManagedMachine({ configId: "managed-default", nodeId, sessionId, requestId: `wake:${sessionId}:${Date.now()}` });
       await this.deps.connectToNode(nodeId, 120_000);
     } catch (cause) {
@@ -35,12 +36,12 @@ export class EphemeralCoordinator {
     }
   }
 
-  /** A sleeping cloud computer wakes when a message is sent to it; any other
+  /** A sleeping cloud machine wakes when a message is sent to it; any other
    * node (even during a transient disconnect) must reconnect on its own. */
   isCurrentNodeResumable(): boolean {
     if (this.deps.direct()) return false;
     const nodeId = this.deps.currentNodeId();
-    if (!isCloudComputerNodeId(nodeId)) return false;
+    if (!isSleepingMachineNodeId(nodeId)) return false;
     return !this.deps.nodes().find((candidate) => candidate.id === nodeId)?.online;
   }
 }
