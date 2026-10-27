@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Provider-independent workload positioning for ephemeral compute. Providers
 // publish facts; this leaf turns them into a small user-facing intent vocabulary.

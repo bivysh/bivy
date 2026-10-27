@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { expect, test, themes, type WebApp } from "./fixtures.js";
 
 // A marked-up preview or a shared screenshot reaches the composer as

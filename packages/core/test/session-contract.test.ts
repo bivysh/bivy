@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { describe, expect, it } from "vitest";
 import { resolveSessionContract, type SessionContractInput } from "../src/session-contract.js";
 import { normalizeSessionContract } from "../src/store-normalize.js";

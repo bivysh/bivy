@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Device-local persistence effects. Data normalization depends inward on the
 // pure provider catalog; no provider adapter or transport implementation is used.

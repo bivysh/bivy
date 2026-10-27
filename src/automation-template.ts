@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Wire format mirrored in src/automation-template.ts (node has no core dependency).
 const PREFIX = "bivy-automation-v1\n";
 export interface AutomationFilter {

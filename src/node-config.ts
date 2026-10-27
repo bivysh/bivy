@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 /** Typed, user-authored node configuration (`<data-dir>/config.yaml`). */
 import fs from "node:fs";

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 
 import { useCallback, useState } from "react";
 import { simulateAutomation, type AutomationPreflightSeverity, type AutomationSimulationDraft, type AutomationSimulationEvent, type AutomationSimulationResult } from "@bivy/core";

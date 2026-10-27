@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // The Models-screen preset editor writes credentials.config.json
 // — set the active preset and map a provider→label within a preset — while

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Run with docker compose exec, never from the HTTP server. Docker administrative
 // access already grants access to the database and all account sessions.

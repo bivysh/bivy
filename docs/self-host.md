@@ -23,7 +23,7 @@ The two self-host surfaces differ only in how much you have to operate:
 
 **Operating the control-plane + relay stack yourself means:**
 
-- It is **open-source under AGPL-3.0-only**, not a managed product. You may use, modify, and run it under the terms of the [license](../LICENSE); modified network deployments must offer their users corresponding source as required by AGPL section 13.
+- It is **open-source under the MIT License**, not a managed product. You may use, modify, and run it under the terms of the [license](../LICENSE), with no obligation to publish your changes. The Bivy name and logo are trademarks, so a redistributed fork ships under its own name ([TRADEMARKS.md](../TRADEMARKS.md)).
 - **No uptime, response-time, or data-durability guarantees.** Breaking changes between versions and manual upgrade/migration steps are likely.
 - **You own operations:** TLS, backups, restore drills, secret rotation, monitoring, abuse prevention, and security hardening are your responsibility. This doc gets you started; it does not make them turnkey.
 
@@ -100,7 +100,7 @@ BIVY_IMAGE_TAG=X.Y.Z bash deploy/self-host.sh app.example.com relay.example.com
 The published tags are multi-platform OCI indexes for `linux/amd64` and
 `linux/arm64`; Docker selects the host architecture automatically.
 
-If you modify the AGPL service source, opt into local builds with the separate
+If you modify the service source, opt into local builds with the separate
 overlay:
 
 ```bash

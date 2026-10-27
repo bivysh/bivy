@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { parseAutomationFilter, type AutomationFilter } from "@bivy/core";
 
 /** Editable form of an AutomationFilter; the command is one argv string. */

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Pure decisions for focused-session lifecycle and chrome. Cache/subscription
 // identity and command interpretation remain in SessionStore.
 

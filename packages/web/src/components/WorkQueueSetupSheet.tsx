@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 //
 // Sole connection hub for GitHub App / Linear / Slack. Multi-app lifecycle
 // (add, reconnect key, disconnect), default machine, and who-can-trigger all

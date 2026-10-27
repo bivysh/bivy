@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // `bivy tui`: keys become the right effects on the right session, transcripts
 // read the shapes agents store, and every frame fits the terminal exactly.

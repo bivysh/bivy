@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Reactive "the user asked to sign in" flag. A solo (account-free QR) pairing
 // skips the sign-in gate entirely — by design, it needs no account — so the

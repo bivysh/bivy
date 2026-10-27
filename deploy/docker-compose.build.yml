@@ -1,4 +1,4 @@
-# Optional overlay for operators developing or modifying the AGPL services.
+# Optional overlay for operators developing or modifying the service source.
 # The default stack pulls public, multi-platform images pinned by BIVY_IMAGE_TAG.
 # This overlay restores local source builds instead:
 #

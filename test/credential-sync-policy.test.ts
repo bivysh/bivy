@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Per-credential opt-out sync (exportSyncable filters `sync:"node"`) and
 // record-addressed writes (modifyRecord targets a specific provider:label, so a

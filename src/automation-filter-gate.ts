@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { AutomationFilterError, runAutomationFilter, webhookFilterInput } from "./automation-filter.js";
 import type { AutomationFilter } from "./automation-template.js";
 import type { EvidencePatch } from "./control-plane-tasks.js";

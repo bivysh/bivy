@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 /** Deterministic certification trace runner shared by CI and integration authors. */
 export interface CertificationFixture {
   agentId: string;

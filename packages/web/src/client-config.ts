@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 /** Public deployment configuration. Defaults describe the ordinary OSS client;
  * no origin or platform implicitly selects authentication/commercial policy. */
 export interface ClientConfiguration {

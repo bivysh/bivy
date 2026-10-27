@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Generated from certification/agents.json by scripts/certification.mjs. Do not edit.
 export const CERTIFICATION_MATRIX = {
   schemaVersion: 1,

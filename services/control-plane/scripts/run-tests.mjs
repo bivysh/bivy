@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Discover and run the control-plane's standalone test files concurrently.
 // Each file already runs in its own process, so parallelizing files preserves

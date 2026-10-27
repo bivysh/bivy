@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // The container runs the esbuild bundle under plain `node` (deploy/Dockerfile.relay).
 // Build it, boot it, and check it serves and exits promptly on SIGTERM — as PID 1

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import type { AutomationDefinition, InboundHook } from "./store.js";
 import { matchSourceAutomation } from "./automation-match.js";
 import {

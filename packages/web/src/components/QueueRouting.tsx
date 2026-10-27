@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Account-level queue routing: where queued automation work runs. The shared
 // queue (any online machine), one of your machines, or — when the deployment
 // provides one — its cloud ("Bivy Cloud"), which starts a Machine on demand. A

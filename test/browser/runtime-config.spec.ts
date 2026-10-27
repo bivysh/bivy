@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { expect, test, type WebApp } from "./fixtures.js";
 import { webRuntimeConfigScript } from "../../services/control-plane/src/web-runtime-config.js";
 

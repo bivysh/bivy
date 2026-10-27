@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // The app matches an Omarchy machine's theme: the node resolves the staged
 // colors.toml the way Omarchy does and notices a theme switch.

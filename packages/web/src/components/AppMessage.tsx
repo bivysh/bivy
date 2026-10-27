@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import type { AppReference } from "@bivy/core";
 import { requestAppsSheet } from "../appsSheetRequest.js";

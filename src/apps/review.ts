@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import { inflateSync } from "node:zlib";
 import type { AppReview, ReviewCardMode } from "./types.js";

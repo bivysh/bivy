@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import type { Command, LocalStore, ServerEvent, Transport, TransportHandlers } from "@bivy/core";
 
 type Pending = { resolve: (event: ServerEvent) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // The access ladder: which setups are on, what the machine can do, and what the
 // next step would add. `bivy access`, `bivy status` and the app all show this.

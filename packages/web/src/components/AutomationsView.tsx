@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 //
 // The first-class Automations destination — a full-screen surface reached from
 // the sidebar foot (peer to Settings). Outcome-first: suggested jobs, your

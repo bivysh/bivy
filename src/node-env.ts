@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Imported first by server.ts, so the node's environment is clean before any
 // module reads it or launches an agent (see runtime/inherited-session-env.ts).

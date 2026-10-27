@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 //
 // An app framed inside a message, and the property that makes it acceptable:
 // a bearer launch URL is minted only when the frame is actually going to be

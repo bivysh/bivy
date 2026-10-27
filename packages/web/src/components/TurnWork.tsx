@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { useId, useState, type ReactNode } from "react";
 import { toolGroupSummary, toolHasError, type ToolActivity } from "@bivy/core";
 import { ChevronRightIcon } from "./UiIcons.js";

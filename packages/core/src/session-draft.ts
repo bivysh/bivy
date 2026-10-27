@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // New-session target selection as immutable data. Repository, branch, sandbox,
 // reduced-protection acknowledgement, and ephemeral target share one lifetime:

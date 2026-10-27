@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { CronExpressionParser } from "cron-parser";
 import type { AutomationDefinition, AutomationRun } from "./store.js";
 

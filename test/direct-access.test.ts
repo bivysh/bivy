@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Direct access over Tailscale (`bivy tailscale`): the proxied listener never
 // gets loopback trust, pairing codes are single-use and expire, and the CLI

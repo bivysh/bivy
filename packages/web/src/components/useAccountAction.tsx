@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Runs a deployment extension's account action the same way everywhere it is
 // offered: ask its confirm question first (if any), then either open the page

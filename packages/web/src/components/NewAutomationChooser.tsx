@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { useRef } from "react";
 import { useModalBack, useModalEscape } from "../modalStack.js";
 import { useModalFocus } from "../useModalFocus.js";

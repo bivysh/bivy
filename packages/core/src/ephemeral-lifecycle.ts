@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Pure ephemeral-compute values and projections. This module deliberately has
 // no browser, transport, storage, provider, or clock dependencies: callers

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Fly Machines boot payload for a pre-enrolled Bivy node.
 import { b64 } from "../base64.js";

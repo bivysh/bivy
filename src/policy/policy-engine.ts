@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import { bashCommand, catastrophicFloor, guardToolCall, isShellTool, looksBackstop, type ApprovalMode, type GuardDecision } from "../guard.js";
 import { riskCategoryForTool, type RiskCategory } from "./risk.js";

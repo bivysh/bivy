@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // User-initiated discovery for inference servers on this Machine. The default
 // candidate list is deliberately finite and loopback-only: this is not a LAN

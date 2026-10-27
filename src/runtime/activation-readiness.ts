@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import type { ModelAccessProbe } from "./anthropic-preflight.js";
 import type { NativeAuthAgent } from "./native-auth-import.js";
 

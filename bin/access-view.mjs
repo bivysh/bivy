@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Terminal views of the node's access report (src/access.ts): the full
 // `bivy access` screen and the one-line summary `bivy status` shows.

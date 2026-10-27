@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { useId } from "react";
 import type { WebhookFilterDraft } from "./webhookFilterDraft.js";
 

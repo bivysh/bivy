@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Feature-owned automation Run history: one list, grouped the way the session
 // list is — what needs you first, then what's in flight, then by day.
 import { Fragment, useMemo, type ReactNode } from "react";

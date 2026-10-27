@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 //
 // Components an agent placed inside its message, rendered by the real ChatView
 // with the real stylesheet. What this is here to prove cannot be seen from the

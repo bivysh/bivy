@@ -1,0 +1,57 @@
+# Developer Certificate of Origin check (see DCO.md).
+#
+# Every commit in the pull request must carry a Signed-off-by trailer. The job
+# reads commit messages through the API and never checks out or runs
+# pull-request code, which is what makes pull_request_target safe.
+name: DCO
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+  statuses: write
+
+concurrency:
+  group: dco-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Check sign-off
+        run: |
+          set -euo pipefail
+          pr_json=$(gh api "repos/$REPO/pulls/$PR")
+          author=$(jq -r '.user.login' <<<"$pr_json")
+          sha=$(jq -r '.head.sha' <<<"$pr_json")
+
+          # A merge commit GitHub made for the branch carries no sign-off and
+          # is not the contributor's work, so it is not checked.
+          missing=$(gh api "repos/$REPO/pulls/$PR/commits" --paginate \
+            --jq '.[] | select((.parents | length) < 2)
+                      | select((.commit.message | test("(^|\n)Signed-off-by: .+ <.+@.+>")) | not)
+                      | .sha[0:8]' | tr '\n' ' ')
+
+          if [ -z "$missing" ]; then
+            gh api "repos/$REPO/statuses/$sha" -f state=success -f context=DCO \
+              -f description="All commits signed off" >/dev/null
+            exit 0
+          fi
+
+          gh api "repos/$REPO/statuses/$sha" -f state=failure -f context=DCO \
+            -f description="Commits without a sign-off: $missing" >/dev/null
+          marker="<!-- bivy:dco-request -->"
+          if ! gh api "repos/$REPO/issues/$PR/comments" --paginate --jq '.[].body' | grep -qF "$marker"; then
+            body=$(printf '%s\n\nThanks for the contribution, @%s! Bivy takes changes under the [Developer Certificate of Origin](https://github.com/%s/blob/main/DCO.md): each commit needs a `Signed-off-by` line, which `git commit -s` adds for you.\n\nTo sign off what you have already pushed:\n\n```sh\ngit rebase --signoff main\ngit push --force-with-lease\n```\n\nNothing to register, and no copyright assignment — you keep the copyright in your work.' "$marker" "$author" "$REPO")
+            gh api "repos/$REPO/issues/$PR/comments" -f body="$body" >/dev/null
+          fi
+          exit 1

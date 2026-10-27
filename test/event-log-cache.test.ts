@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // The event log's in-memory cache is bounded, and whole-store sweeps (`scan`) read
 // without populating it — so daemon memory tracks sessions in use, not all history.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 /** Treat native delivery as untrusted input, never as a navigation command. */
 export function nativeSessionLink(input: string, origin: string): { path: string; node: string | null } | null {
   try {

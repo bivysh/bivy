@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // A ChatGPT plan lists the models it includes; Pi's fixed catalog is filtered to
 // that list, and a failed lookup leaves the catalog alone.
 import assert from "node:assert/strict";

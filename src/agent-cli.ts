@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 /** First-class bring-your-own-agent CLI: writes `agents:` in the node config.yaml. */
 import fs from "node:fs";

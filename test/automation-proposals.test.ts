@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // An agent's `bivy automation apply` is a proposal: nothing reaches the
 // account until the user approves the changes shown to them.

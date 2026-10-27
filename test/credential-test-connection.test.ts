@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Unit coverage for `testCredential` (src/credentials/api.ts) — the "Test
 // connection" probe behind Settings' redacted readiness rows. Exercises the

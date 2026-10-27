@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import fs from "node:fs";
 import path from "node:path";
 import type { PromptImage } from "./record.js";

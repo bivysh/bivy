@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 /**
  * Where a push notification opens: the SPA session route (`/sessions/:id`),
  * carrying the owning node so a tap can switch to it first. Optional targets

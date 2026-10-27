@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import assert from "node:assert/strict";
 import { createServer, connect } from "node:http2";
 import { generateKeyPairSync, verify } from "node:crypto";

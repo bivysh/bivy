@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { Composer } from "../../packages/web/src/components/Composer.js";

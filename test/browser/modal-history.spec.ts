@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { expect, test, themes, type Page, type WebApp } from "./fixtures.js";
 import path from "node:path";
 

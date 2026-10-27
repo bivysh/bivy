@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // `bivy tui` frame: state in, exactly `height` lines of exactly `width` cells
 // out. It uses the terminal's own 16 colors, so it follows the terminal theme.

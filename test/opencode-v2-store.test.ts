@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // OpenCode 2 keeps sessions in session_v2/session_message and is written through
 // its own CLI. A stub `opencode` on PATH records each call and the document it

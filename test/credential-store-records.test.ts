@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // The record-addressed store CRUD + labeled daemon API — multiple
 // credentials per provider (work / personal / per-project). The single-credential

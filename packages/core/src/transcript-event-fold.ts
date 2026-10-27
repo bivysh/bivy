@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Pure live transcript/tool reducer. It owns no store, transport, cache, clock,
 // or persistence identity; the SessionStore interprets the returned commands.
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Post-login redirect helpers. Kept side-effect free (no server boot) so the
 // open-redirect protection can be unit tested in isolation.

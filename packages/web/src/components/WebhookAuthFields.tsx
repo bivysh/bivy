@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 export function WebhookAuthFields({ mode, header, secret, existing, onMode, onHeader, onSecret }: {
   mode: "hmac" | "header";
   header: string;

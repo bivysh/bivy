@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import type { BivyCredentialStore, StoredCredentialInfo } from "./store.js";
 import type { CredentialContext, StoredCredential } from "./types.js";
 import { defaultPresetsPath, loadPresets } from "./presets.js";

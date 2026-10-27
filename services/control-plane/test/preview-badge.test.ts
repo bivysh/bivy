@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // "Made with Bivy" on shared previews: a machine may hide it only when its
 // account's plan is one the deployment lists (BIVY_PREVIEW_BADGE_HIDE_PLANS).

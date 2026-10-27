@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // OpenCode on-disk session store — the write/read side of materialising a
 // **cross-runtime** fork as a real session in OpenCode's own store (fidelity

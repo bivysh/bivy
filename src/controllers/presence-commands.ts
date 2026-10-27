@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import type { CommandEntries } from "../protocol/command-registry.js";
 import { deviceFrom, type PresenceBook, type SessionPresence } from "../session/presence.js";

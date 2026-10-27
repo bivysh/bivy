@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { expect, test } from "./fixtures.js";
 import type { FrameLocator, Locator, Page } from "@playwright/test";
 import fs from "node:fs/promises";

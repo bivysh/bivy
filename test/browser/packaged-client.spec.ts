@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { expect, test } from "@playwright/test";
 import { themes } from "./fixtures.js";
 import { createRequire } from "node:module";

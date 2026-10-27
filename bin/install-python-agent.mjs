@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Shared by terminal setup/update and the daemon's agent installer.
 import { spawnSync } from "node:child_process";

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // A message the agent sent with `bivy notify`: the text the push notification
 // pointed at (the push itself names only the session).

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import type { Command, EphemeralNodeConfig, PromptAttachment, ServerEvent } from "@bivy/core";
 
 const FORK_IMPORT_TIMEOUT_MS = 11 * 60 * 1000;

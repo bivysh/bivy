@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import os from "node:os";
 import type { AppManifest, AppPinState, ReviewCardMode, SessionApp, ShareDuration } from "../apps/types.js";

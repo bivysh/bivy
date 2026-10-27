@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { describe, expect, it } from "vitest";
 import { projectReceiptV1, receiptV1FromRun, receiptV1Json, type ReceiptV1ProjectionInput } from "../src/receipt-v1.js";
 import type { Run } from "../src/run.js";

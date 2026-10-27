@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 
 export type SessionDateGroup = "Today" | "Yesterday" | "Previous 7 days" | "Older";
 
