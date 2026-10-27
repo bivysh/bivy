@@ -4941,8 +4941,9 @@ async function cmdSetup(args = []) {
   if (process.env.BIVY_SETUP_SKIP_SERVICE === "1") {
     // Isolation seam for disposable/container smoke tests: the caller starts a
     // node with this BIVY_DATA_DIR/port and setup exercises the real wizard
-    // without installing or replacing the host user's system service.
-    started = await isReachable(config);
+    // without installing or replacing the host user's system service. The
+    // caller's node may still be starting, so wait for it like a service start.
+    started = await waitForNode(config);
     console.log(c.dim(`\nBackground-service install skipped; using the isolated node already running at ${url(config)}.`));
   } else if (config.service) {
     console.log(c.dim("\nBackground service already configured; restarting it."));
