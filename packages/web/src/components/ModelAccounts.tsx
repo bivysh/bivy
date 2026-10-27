@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { useEffect, useRef, useState } from "react";
 import type { AppState, ModelInfo } from "@bivy/core";
 import { controller } from "../store/controller.js";

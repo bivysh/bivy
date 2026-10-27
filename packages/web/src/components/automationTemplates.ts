@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 //
 // First-party automation templates. A template is *not* a new runtime or a new
 // stored object — it is a preset that pre-fills the ordinary "create automation"

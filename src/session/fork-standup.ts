@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Fork stand-up, extracted from server.ts. Stands a forked session up on THIS

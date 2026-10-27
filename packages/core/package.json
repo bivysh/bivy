@@ -3,7 +3,7 @@
   "version": "0.21.15",
   "description": "Framework-agnostic Bivy client core: protocol, transport, crypto, state. Shared by the web PWA and (later) the Expo app.",
   "type": "module",
-  "license": "AGPL-3.0-only",
+  "license": "MIT",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {

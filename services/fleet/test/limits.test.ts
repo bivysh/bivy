@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // The caps a deployment applies on its own, and what happens when an operator

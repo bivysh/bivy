@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { expect, test } from "./fixtures.js";
 
 // The app preview's "Add to chat" (opened in a tab) lands on

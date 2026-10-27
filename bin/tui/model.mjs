@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // `bivy tui` state and keys, with no I/O: a key press returns the next state and
 // at most one effect for the caller to carry out (answer an approval, send a

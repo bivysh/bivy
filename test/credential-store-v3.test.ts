@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Guards the phase-2 store wiring: an existing v2 on-disk vault must migrate to v3
 // transparently, the public surface must keep returning today's provider-keyed

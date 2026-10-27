@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Bundle the control plane's entry points into dist/ so production runs plain
 // `node` instead of transpiling TypeScript on every boot with tsx.

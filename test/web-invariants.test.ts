@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // PWA safety invariants that live in pure state and coordinator logic. The ones
 // that need the rendered UI (full-access and billable confirmations, Stop,

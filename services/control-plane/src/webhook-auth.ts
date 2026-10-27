@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { verifyAutomationSignature } from "./webhooks.js";
 

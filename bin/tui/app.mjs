@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // `bivy tui`: the terminal around model.mjs and render.mjs. It polls each
 // machine's node API, keeps the selected session's transcript current, turns

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import type { McpConfig } from "../harness/mcp-config.js";
 import type { SandboxTier } from "../harness/sandbox.js";

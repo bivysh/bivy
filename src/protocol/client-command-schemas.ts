@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import { Type, type TSchema } from "typebox";
 import { SHARE_DURATIONS } from "../apps/types.js";

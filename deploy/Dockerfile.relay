@@ -12,7 +12,7 @@ RUN npm ci
 COPY --chown=node:node services/relay/ ./
 # Bundle to plain JS at build time; the container runs `node`, not tsx.
 RUN npm run build
-# Keep the license and attribution beside the distributed AGPL service source.
+# Keep the license and attribution beside the distributed service source.
 COPY --chown=node:node LICENSE NOTICE ./
 # Pin V8's old-space ceiling below the container's docker-compose mem_limit
 # (512m — see deploy/docker-compose.yml) instead of relying on Node's cgroup

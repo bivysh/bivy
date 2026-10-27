@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import type { SessionStore } from "@bivy/core";
 
 /** Bound the startup acknowledgement, not the installation (which may wait for

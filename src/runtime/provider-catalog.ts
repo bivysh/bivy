@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Bivy's provider catalog joined with live Pi status and Bivy credentials.
 // Static product metadata comes from @bivy/core; Pi is an optional freshness

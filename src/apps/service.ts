@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import { SHARE_DURATIONS, type AppManifest, type AppOffer, type AppPin, type AppPinState, type AppReview, type OpenAppViewResult, type ReviewCardMode, type ReviewerNote, type SessionApp, type SessionAppOffersResult, type SessionAppsResult, type ShareAppViewResult, type ShareOptions, type EvidenceRow, type BackendKind } from "./types.js";
 import { randomBytes } from "node:crypto";

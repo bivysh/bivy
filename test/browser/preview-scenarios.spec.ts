@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { expect, test } from "./fixtures.js";
 import fs from "node:fs/promises";
 import os from "node:os";

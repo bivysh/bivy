@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Standalone node mirror of packages/core/src/event-transfer.ts. The release
 // omits packages/; behavior is covered by the cross-stack transfer tests.

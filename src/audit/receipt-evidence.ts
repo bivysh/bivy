@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import type { AuditEvent } from "./index.js";
 
 /** Collapse the node's payload-free audit events into the bounded governance

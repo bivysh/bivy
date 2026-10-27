@@ -187,7 +187,7 @@ jobs:
             --metadata-file metadata.json \
             --label "org.opencontainers.image.source=https://github.com/bivysh/bivy" \
             --label "org.opencontainers.image.revision=$CORE_SHA" \
-            --label "org.opencontainers.image.licenses=AGPL-3.0-only" \
+            --label "org.opencontainers.image.licenses=MIT" \
             --provenance=true \
             --sbom=true \
             --cache-from "type=registry,ref=$IMAGE:buildcache-$ARCH" \

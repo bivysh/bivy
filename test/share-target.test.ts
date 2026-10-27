@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Share-target landing (`/share?title=…&text=…&url=…`): the Android share
 // sheet (Web Share Target) and the iOS "Send to Bivy" Shortcut both open this

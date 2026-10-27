@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { BIVY_PROVIDER_CATALOG, bivyProvider } from "./provider-catalog.js";
 import type { ModelInfo } from "./store.js";
 

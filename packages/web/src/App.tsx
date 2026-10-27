@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
 import { activationFromState, authProviderForRuntime, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionAppsResult, type SessionSummary } from "@bivy/core";

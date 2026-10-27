@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { expect, test, type Locator, type Page, type TestInfo } from "./fixtures.js";
 import { readFile } from "node:fs/promises";
 

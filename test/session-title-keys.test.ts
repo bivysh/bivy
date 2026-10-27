@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { LocalStore, Transport } from "@bivy/core";

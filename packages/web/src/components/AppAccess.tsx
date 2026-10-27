@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useState } from "react";
 import { DEFAULT_SHARE_DURATION, SHARE_DURATIONS, type AppViewSharing, type SessionAppsResult, type ShareAppViewResult, type ShareDuration } from "@bivy/core";

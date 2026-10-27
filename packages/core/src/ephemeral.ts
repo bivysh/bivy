@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Compatibility facade for ephemeral-node facts, local persistence, and the
 // boot payload. Machines are launched by the deployment, never from here.

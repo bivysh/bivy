@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { accountOrigin } from "../packaged-client.js";
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useId, useRef, useState } from "react";

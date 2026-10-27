@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import type { SVGProps } from "react";
 
 type IconProps = Omit<SVGProps<SVGSVGElement>, "children" | "viewBox"> & { size?: number };

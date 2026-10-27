@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Actions with real consequences (unsandboxed access, billable machines, a
 // stopped agent) need an informed, explicit step in the real components. Each
 // test renders the component with a stubbed controller and records its calls.

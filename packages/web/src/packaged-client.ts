@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Generic native platform adapter. Deployment/product policy lives in the
 // explicit client configuration, not in platform or URL detection.
 import { clientConfiguration } from "./client-config.js";

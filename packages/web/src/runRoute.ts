@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Reactive URL-backed state for the routable Run detail destination
 // (`/runs/:runId`). Like Settings and Automations, a Run detail overlays
 // whichever session route sits behind it rather than replacing it — the

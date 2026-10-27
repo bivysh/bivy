@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Best-effort "is there a live process for this discovered session" check (see
 // issue #156's "detect live external processes and offer follow/read-only or

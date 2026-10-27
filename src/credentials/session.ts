@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import type { AgentCredentialStore } from "./types.js";
 
 export class CredentialSelectionError extends Error {}

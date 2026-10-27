@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 /** Return only allowlisted diagnostics, never provider bodies/bootstrap secrets. */
 export function publicManagedLaunchError(error: unknown): { code: string; error: string } {
   const message = error instanceof Error ? error.message : "";

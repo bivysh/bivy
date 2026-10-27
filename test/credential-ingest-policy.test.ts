@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // The ingest policy is the user's choice. Default `merge` keeps the
 // historical behavior (a native login folds into the provider's synced default);

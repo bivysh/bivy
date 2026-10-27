@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 /**
  * A complete Bivy agent adapter in the JSONL turn format (parser `bivy-protocol`).
  *

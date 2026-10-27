@@ -3,7 +3,7 @@
   "version": "0.21.15",
   "description": "Types, validation, JSON Schema, and diagnostics for declarative Bivy plugins.",
   "type": "module",
-  "license": "AGPL-3.0-only",
+  "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/bivysh/bivy.git",

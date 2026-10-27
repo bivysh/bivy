@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import { defineConfig, loadEnv, type UserConfig } from "vite";
 import { parseClientConfiguration } from "./src/client-config.js";

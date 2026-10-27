@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 
 /** Compact, human-readable date copy for automation lists. Exact timestamps
  * belong in the automation detail/editor, not in the overview. */

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // What the Settings account card shows under the email: the deployment's plan
 // line, one usage meter, and — only when the allowance is nearly or fully used
 // — its primary action (e.g. upgrade). Everything comes from the opaque

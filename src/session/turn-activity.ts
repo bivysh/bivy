@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 /** Transient turn activity, not viewer presence. A remote prompt is pending
  * before the runtime emits agent_start, and must settle on every terminal path. */
 export interface TurnActivity {

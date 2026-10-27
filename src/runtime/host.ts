@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import { canonicalAgentId, listRuntimes, makeRuntime, type AgentRuntime, type RuntimeFactoryOptions, type RuntimeInfo } from "./index.js";
 import { RemoteRuntime, connectSocketTransport } from "./remote.js";

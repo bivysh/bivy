@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // The `bivy` command table: one row per top-level command. bin/bivy.mjs
 // dispatches only commands found here, and `bivy help`, `bivy help --json`,

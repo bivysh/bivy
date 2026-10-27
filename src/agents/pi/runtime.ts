@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Pi integration bridge. The operator's installed Pi remains the user-facing
 // agent/TUI; this module adapts Pi's SDK protocol to Bivy's AgentRuntime contract.

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Audits the licenses of every installed third-party dependency.
@@ -123,7 +123,7 @@ if (fs.existsSync(virtualStore)) {
         } catch {
           continue; // not a package dir (or a dangling link) — skip
         }
-        // Bivy's own workspace packages are AGPL and are not third-party.
+        // Bivy's own workspace packages are not third-party.
         if (typeof meta.name === "string" && meta.name.startsWith("@bivy/")) continue;
         const key = `${meta.name ?? rel}@${meta.version ?? "?"}`;
         if (rootPackages.has(key)) continue;

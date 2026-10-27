@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import assert from "node:assert/strict";
 import type { TranscriptEntry } from "@bivy/core";
 import { entryTurnKind, rowsBefore, splitTurn, startBefore, turnSpans, turnStartOf, type TurnItemKind } from "../packages/web/src/turnWork.js";

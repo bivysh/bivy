@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // `bivy ask`: a question any agent raises through the shared QuestionManager,
 // answered from the same card, waited on in slices, and readable afterwards.

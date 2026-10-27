@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { initializePackagedClient } from "./packaged-client.js";
 import { applyTheme } from "./theme.js";
 import { consumeShareTarget } from "./shareTarget.js";

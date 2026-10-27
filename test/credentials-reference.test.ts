@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // A reference credential (op:// / env://) is a pointer resolved per-node
 // at read time via the secret vault — the secret never enters the credential

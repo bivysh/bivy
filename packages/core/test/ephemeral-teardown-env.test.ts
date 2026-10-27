@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // The runtime env `/etc/bivy/start.sh` gives a booted node: what it serves,
 // which credentials it may hold, and how it sleeps.

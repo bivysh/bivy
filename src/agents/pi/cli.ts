@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Compatibility launcher for npm scripts and older service configurations.
 // It delegates to the operator-installed Pi command without replacing Pi's
 // auth/config directory or selecting a bundled private executable.

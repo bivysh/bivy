@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { useLayoutEffect, type RefObject } from "react";
 
 function resize(input: HTMLTextAreaElement) {

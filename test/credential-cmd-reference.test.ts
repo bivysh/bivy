@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // A `cmd://` reference runs a command and uses its stdout as the secret — the
 // generic escape hatch for any password-manager CLI. It resolves per-node at read

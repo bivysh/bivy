@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 /** Public association metadata, supplied by the deployment, never inferred
  * from a hostname. Empty configuration keeps Universal Links disabled. */
 export function associatedApps(value = "") {

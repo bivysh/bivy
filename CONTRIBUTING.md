@@ -73,14 +73,16 @@ pnpm run check:links
 - Update docs when changing user-visible behavior.
 - Do not commit secrets, tokens, private deployment details, or customer/user data.
 
-## Contributor License Agreement
+## Sign off your commits
 
-Before your first pull request can be merged, please sign the
-[Contributor License Agreement](CLA.md). The CLA check on your pull request
-explains how: reply with the signing phrase once, and it covers all your future
-contributions. You keep the copyright in your work.
+Bivy takes contributions under the [Developer Certificate of
+Origin](DCO.md): each commit needs a `Signed-off-by` line, which `git commit -s`
+writes for you. There is no copyright assignment and nothing to register — you
+keep the copyright in your work, licensed to everyone under the MIT license like
+the rest of the code. The DCO check on your pull request confirms it.
 
 ## Trademarks
 
-The code is AGPL-3.0, but the Bivy name and logo are covered by the
-[trademark policy](TRADEMARKS.md).
+The code is MIT, but the Bivy name and logo are covered by the
+[trademark policy](TRADEMARKS.md) — a permissive code license is not a
+trademark license.

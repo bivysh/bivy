@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { AppState } from "@bivy/core";

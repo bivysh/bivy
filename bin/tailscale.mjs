@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Pure helpers for `bivy tailscale`: read `tailscale status --json` and
 // `tailscale serve status --json`, and build the `tailscale serve` arguments.

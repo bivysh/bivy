@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Pure projection for all active-session response/attention queues.
 
 import type { ServerEvent } from "./protocol.js";

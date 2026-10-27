@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AppView, DataQuery, DataRowChange, DataViewResult, LogLine, LogMark, LogsViewResult, RequestAnswer, RequestDetail, RequestItem, RequestsViewResult, SessionApp, ValueChange } from "@bivy/core";

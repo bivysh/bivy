@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 /** Public, allowlisted UI configuration. Never serialize process.env itself. */
 export function webRuntimeConfigScript(env: NodeJS.ProcessEnv = process.env): string {
   const config = {

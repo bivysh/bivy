@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { requestNodeUpdate } from "./node-update.js";
 // Copyright (c) 2026 Petter André Sjulstad
 // AppController — the single seam between the React view and @bivy/core.

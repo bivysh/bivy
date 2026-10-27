@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // E2E device credential vault with per-record, tombstone-based convergence.
 import { seal, open, importRoomKey } from "./crypto.js";

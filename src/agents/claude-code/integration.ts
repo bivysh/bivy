@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import { defineAgentIntegration, type AgentIntegrationOrigin } from "../definition.js";
 import type { AgentInfo, AgentInstallCommand, AgentSessionOptions } from "../types.js";

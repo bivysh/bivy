@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // The sidebar's Artifacts and Apps pages: everything the account's machines can
 // open right now, across all their sessions — agent-sent files that are still

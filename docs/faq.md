@@ -47,7 +47,7 @@ See the [README](../README.md#install).
 ## Can I get support for a self-hosted deployment?
 
 Community support only — no SLA and no support queue. Self-hosting the control
-plane + relay stack is **open-source under AGPL-3.0-only** with no uptime,
+plane + relay stack is **open-source under the MIT License** with no uptime,
 response-time, or data-durability guarantees, and breaking changes between
 versions are likely. If you run it, you own operating it — TLS, backups,
 restores, secret rotation, monitoring, and abuse prevention are on you. GitHub

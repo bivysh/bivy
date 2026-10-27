@@ -64,7 +64,7 @@ COPY --chown=node:node services/control-plane/ ./
 # Bundle to plain JS at build time (automation-core is already built above); the
 # container runs `node`, not tsx.
 RUN node scripts/build.mjs
-# Keep the license and attribution beside the distributed AGPL service source.
+# Keep the license and attribution beside the distributed service source.
 COPY --chown=node:node LICENSE NOTICE /repo/
 # Bundle the built React client so the control plane serves it at the root.
 COPY --chown=node:node --from=webbuild /repo/packages/web/dist ./public/react

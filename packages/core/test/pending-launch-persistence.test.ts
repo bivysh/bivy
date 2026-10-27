@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { expect, it } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
 import { createPendingEphemeralLaunchStore, indexedDbBackend, type PendingEphemeralLaunch } from "../src/ephemeral-storage.js";

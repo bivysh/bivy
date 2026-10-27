@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { expect, test } from "@playwright/test";
 import { build } from "esbuild";
 import { createServer, type Server } from "node:http";

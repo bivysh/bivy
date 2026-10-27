@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // `bivy credentials` — CLI parity with the PWA's Keys & OAuth screen: manage
 // multiple labeled credentials per provider, per-credential sync, selection

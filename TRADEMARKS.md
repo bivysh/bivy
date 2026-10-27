@@ -1,6 +1,6 @@
 # Trademark policy
 
-Bivy's code is free software under the AGPL-3.0. The name "Bivy", the Bivy
+Bivy's code is free software under the MIT License. The name "Bivy", the Bivy
 logo, and "Bivy Cloud" are trademarks of Petter André Sjulstad. The license
 covers the code, not the names or logos. This policy says how you may use them.
 
@@ -31,7 +31,7 @@ covers the code, not the names or logos. This policy says how you may use them.
 
 ## Forks
 
-You're welcome to fork Bivy under the AGPL. If you distribute or host a fork,
+You're welcome to fork Bivy under the MIT License. If you distribute or host a fork,
 give it its own name and logo. You can describe it as "a fork of Bivy".
 
 ## Contact
@@ -39,4 +39,4 @@ give it its own name and logo. You can describe it as "a fork of Bivy".
 Questions or permission requests: support@bivy.sh.
 
 This policy may change. It is not legal advice and does not limit any rights
-the AGPL gives you to the code.
+the MIT License gives you to the code.

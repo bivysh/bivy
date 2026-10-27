@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // The PWA install suggestion: contextual (only after a first successful
 // response), driven by the browser's one-shot beforeinstallprompt event, and

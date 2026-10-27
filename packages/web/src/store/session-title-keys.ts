@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import type { LocalStore, Transport } from "@bivy/core";
 
 /** Acquire missing title keys without changing the selected machine. Failed or

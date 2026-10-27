@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Unit spec for the v3 credential-vault document engine (src/credentials/document.ts):
 // v1/v2/v3 migration + non-destructive merge convergence. Pure — no vault, no I/O.

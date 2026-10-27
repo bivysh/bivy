@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import type { RequestHandler } from "express";
 
 /** Optional operator allowlist for packaged clients. CORS is not authentication:

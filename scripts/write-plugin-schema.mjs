@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 /** Materialize the SDK's canonical schema object as an editor-friendly JSON file. */
 import fs from "node:fs";

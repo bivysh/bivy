@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // "Show in chat" from the Artifacts and Apps pages: open a session and land on
 // the message that carries a given file or app. Transcript entry ids are minted

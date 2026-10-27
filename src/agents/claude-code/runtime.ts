@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Claude Code integration bridge. The SDK is transport glue around the
 // operator-installed `claude` executable; Bivy does not substitute its bundled

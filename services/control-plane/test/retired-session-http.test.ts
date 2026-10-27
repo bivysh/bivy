@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import assert from "node:assert/strict";
 import net from "node:net";
 import { fileURLToPath } from "node:url";

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { useState } from "react";
 import type { ModelInfo, SessionLaunchProgress } from "@bivy/core";
 import { Sheet, PickerItem } from "./Sheet.js";

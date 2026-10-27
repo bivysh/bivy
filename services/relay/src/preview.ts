@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import { createHash, randomBytes } from "node:crypto";

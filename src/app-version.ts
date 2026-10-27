@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 /** Resolve the running Bivy package version in source and compiled layouts. */
 import fs from "node:fs";

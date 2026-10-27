@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 /** Runtime values override build defaults; malformed explicit values fail closed. */
 export function runtimeBoolean(
   name: string,

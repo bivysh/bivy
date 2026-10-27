@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Reactive URL-backed state for the Automations destination (`/automations`).
 // Automations is a first-class surface reached from the sidebar foot, but like
 // Settings it overlays whichever session route sits behind it rather than

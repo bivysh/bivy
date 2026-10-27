@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { spawn } from "node:child_process";
 import { parseAutomationFilter, type AutomationFilter } from "./automation-template.js";
 

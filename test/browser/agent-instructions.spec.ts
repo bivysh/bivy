@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Settings → Agent instructions: editing, saving against the loaded version, a
 // save rejected because another device changed them, the size limit, and the
 // switch + viewer for Bivy's own note — in the real Settings modal with real styles.

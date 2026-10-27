@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { createHash, createPrivateKey, sign } from "node:crypto";
 import { connect } from "node:http2";
 

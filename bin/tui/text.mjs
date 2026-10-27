@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Terminal cell arithmetic for `bivy tui`: visible width of styled text,
 // truncating, padding and wrapping it without splitting an escape sequence.

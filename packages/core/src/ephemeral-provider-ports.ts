@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Boot contract for an ephemeral node and the machine-size facts shared by
 // lifecycle and compute projections.

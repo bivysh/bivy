@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Codex on-disk session ("rollout") reader — the read side of adopting a Codex
 // session that was started outside Bivy (e.g. a bare `codex` in a terminal).

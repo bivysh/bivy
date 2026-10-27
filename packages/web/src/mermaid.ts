@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Lazily render fenced ```mermaid blocks after markdown has entered the DOM.
 // Mermaid is intentionally kept out of the initial bundle: most conversations

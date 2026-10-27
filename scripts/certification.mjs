@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -61,7 +61,7 @@ function generatedSource() {
     const capabilities = agent.capabilities.filter((capability) => ["toolInterception", "modelSelection", "resume"].includes(capability));
     return `    { id: ${JSON.stringify(agent.id)}, status: ${JSON.stringify(agent.status)}, executionMode: ${JSON.stringify(agent.executionMode)}, pinnedVersion: ${JSON.stringify(agent.upstream.pinnedVersion)}, capabilities: ${JSON.stringify(capabilities)} },`;
   }).join("\n");
-  return `// SPDX-License-Identifier: AGPL-3.0-only\n// Generated from certification/agents.json by scripts/certification.mjs. Do not edit.\nexport const CERTIFICATION_MATRIX = {\n  schemaVersion: 1,\n  agents: [\n${rows}\n  ]\n} as const;\n`;
+  return `// SPDX-License-Identifier: MIT\n// Generated from certification/agents.json by scripts/certification.mjs. Do not edit.\nexport const CERTIFICATION_MATRIX = {\n  schemaVersion: 1,\n  agents: [\n${rows}\n  ]\n} as const;\n`;
 }
 
 function generatedDocs() {

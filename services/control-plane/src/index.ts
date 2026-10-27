@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { packagedClientCors } from "./packaged-client-cors.js";
 // Copyright (c) 2026 Petter André Sjulstad
 import path from "node:path";

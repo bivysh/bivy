@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import { CLOUD_RUNNER_CONFIG_ID, type EphemeralNodeConfig, type HostedMachineSummary } from "@bivy/core";
 

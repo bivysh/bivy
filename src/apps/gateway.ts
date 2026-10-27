@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import http, { type IncomingMessage, type ServerResponse, type OutgoingHttpHeaders } from "node:http";
 import net from "node:net";

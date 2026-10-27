@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Reactive URL-backed state for the sidebar's Artifacts and Apps pages
 // (`/artifacts`, `/apps`). Like Automations, they overlay whichever session sits

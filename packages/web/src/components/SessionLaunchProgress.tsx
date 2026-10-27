@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { useEffect, useState } from "react";
 import type { ModelInfo, SessionLaunchCheckpointId, SessionLaunchProgress } from "@bivy/core";
 import { Spinner } from "./Spinner.js";

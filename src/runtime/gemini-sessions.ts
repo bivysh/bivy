@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // Gemini CLI / Qwen Code on-disk session readers. Both agents persist JSON or
 // JSONL conversations, but currently use different directory layouts. Keep the

@@ -1,7 +1,7 @@
 # Bivy
 
 [![release](https://img.shields.io/github/v/release/bivysh/bivy?color=2b6cb0&label=release)](https://github.com/bivysh/bivy/releases/latest)
-[![license: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-2b6cb0)](LICENSE)
+[![license: MIT](https://img.shields.io/badge/license-MIT-2b6cb0)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A520-2b6cb0)](https://nodejs.org)
 
 **Your agent. Your sign-ins. On your machines or a cloud computer.**
@@ -526,14 +526,15 @@ not a public issue. See [SECURITY.md](SECURITY.md).
 
 ## License
 
-Everything in this repository—node, CLI, web/PWA, relay, and control plane—is
-free and open-source **AGPL-3.0-only Core**, with no Bivy usage limits. You may
-use, modify, and self-host it under that license. If users interact with your
-modified version over a network, section 13 requires you to offer its
-corresponding source. See [LICENSE](LICENSE).
+Everything in this repository—node, CLI, web/PWA, relay, control plane, and
+the fleet that runs cloud machines—is free and open-source under the **MIT
+License**, with no Bivy usage limits. Use it, change it, run it, ship it inside
+something else. There is no copyleft obligation and nothing to publish back.
+See [LICENSE](LICENSE).
 
-Bivy Cloud is the hosted operation of that stack. Its plans, billing and
-managed-compute operations live in a separate private service behind Core's
-deployment extension. Contributions are made under the
-[Contributor License Agreement](CLA.md). The Bivy name and logo are covered by
-the [trademark policy](TRADEMARKS.md).
+What MIT does not give away is the name: "Bivy", the logo and "Bivy Cloud" are
+trademarks, so a fork ships under its own name — see the [trademark
+policy](TRADEMARKS.md). Bivy Cloud is the hosted operation of this stack; its
+plans, prices and billing live in a separate private service, behind the neutral
+hooks in this repository. Contributions are made under the [Developer
+Certificate of Origin](DCO.md): sign off your commits, keep your copyright.

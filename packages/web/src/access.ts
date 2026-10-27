@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 // The connected machine's access report (the node's src/access.ts): which
 // setups reach it, what each gives, and the next step. The node owns the

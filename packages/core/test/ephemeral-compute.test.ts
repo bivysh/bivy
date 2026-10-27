@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: AGPL-3.0-only
+// SPDX-License-Identifier: MIT
 import { describe, expect, it } from "vitest";
 import { ephemeralComputeIntent, ephemeralComputeIntentLabel } from "../src/ephemeral-compute.js";
 
