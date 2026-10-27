@@ -22,7 +22,7 @@ import { ProtocolRuntime } from "../../runtime/protocol.js";
 import { codexSlashCommands } from "../../runtime/slash-commands.js";
 import type { AgentRuntime } from "../../runtime/types.js";
 
-export const CODEX_TESTED_VERSION = "0.164.0";
+export const CODEX_TESTED_VERSION = "0.165.0";
 
 function codexCommand(): string {
   return process.env.BIVY_CODEX_BIN?.trim() || "codex";
@@ -162,6 +162,10 @@ export function codexIntegration(origin: AgentIntegrationOrigin) {
           // byte-exact codex→codex fork and a full transcript replay INTO it.
           forkTransport: true,
           forkHistoryImport: true,
+          // The app-server shim's hello advertises steer (turn/steer). The
+          // composer reads this catalog, not the hello, to decide whether a
+          // message can go into a running turn.
+          streamingBehaviors: ["steer"],
           usageReporting: true,
           interactiveTui: installed,
           nativeSessionDiscovery: true,

@@ -687,7 +687,9 @@ export interface UserQuestionSecret {
 }
 
 /** The host's answer to a pending `user_question`, keyed by each item's `question` text. */
-export type UserQuestionAnswer = { behavior: "completed"; answers: Record<string, string> } | { behavior: "cancelled" };
+/** `replied`: the user wrote in the chat instead of answering the card; that
+ *  message reaches the agent as its next input. */
+export type UserQuestionAnswer = { behavior: "completed"; answers: Record<string, string> } | { behavior: "cancelled" } | { behavior: "replied" };
 
 /** How to launch a session in the runtime's interactive TUI (resuming it). */
 export interface TuiLaunchSpec {

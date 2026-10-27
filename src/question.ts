@@ -19,7 +19,7 @@ import type { UserQuestionAnswer, UserQuestionItem } from "./runtime/types.js";
  *  indefinitely. Mirrors the old runtime-side QUESTION_TIMEOUT_MS. */
 const QUESTION_TIMEOUT_MS = 10 * 60 * 1000;
 
-export type QuestionStatus = "pending" | "answered" | "cancelled" | "expired";
+export type QuestionStatus = "pending" | "answered" | "cancelled" | "expired" | "replied";
 
 export interface QuestionRequest {
   id: string;
@@ -36,6 +36,8 @@ type Pending = {
   onAbort?: () => void;
   signal?: AbortSignal;
 };
+
+const ANSWER_STATUS: Record<UserQuestionAnswer["behavior"], QuestionStatus> = { completed: "answered", cancelled: "cancelled", replied: "replied" };
 
 export class QuestionManager {
   private pending = new Map<string, Pending>();
@@ -108,7 +110,18 @@ export class QuestionManager {
   /** Deliver the user's answer (or a skip/cancel) to a pending question. A
    *  stale/unknown id is a silent no-op — same tolerance as ApprovalManager. */
   resolve(id: string, answer: UserQuestionAnswer): boolean {
-    return this.settle(id, answer, answer.behavior === "completed" ? "answered" : "cancelled");
+    return this.settle(id, answer, ANSWER_STATUS[answer.behavior]);
+  }
+
+  /** The user wrote in the chat while the session's questions were open: settle
+   *  them as replied, so the agent stops waiting on the card and reads that
+   *  message as the answer. Returns whether any were open. */
+  replyInChat(sessionId: string): boolean {
+    let any = false;
+    for (const id of [...this.pending.keys()]) {
+      if (this.pending.get(id)?.request.sessionId === sessionId) any = this.settle(id, { behavior: "replied" }, "replied") || any;
+    }
+    return any;
   }
 
   /** Cancel every question outstanding for a session — called when the session
@@ -161,6 +174,11 @@ export function isAskUserQuestionTool(toolName: string): boolean {
   return toolName.toLowerCase() === "askuserquestion";
 }
 
+const UNANSWERED_RESULT: Record<Exclude<UserQuestionAnswer["behavior"], "completed">, string> = {
+  cancelled: "The user dismissed the question(s) without answering. Proceed using your best judgment, or ask again if you truly cannot continue.",
+  replied: "The user replied in the chat instead of answering here. Their message follows as your next input; treat it as their answer.",
+};
+
 /**
  * Format the user's answer into the tool result text handed back to the agent.
  * The interceptor delivers this through each runtime's block/deny channel (the
@@ -168,9 +186,7 @@ export function isAskUserQuestionTool(toolName: string): boolean {
  * reads as a plain statement of what the user chose rather than an error.
  */
 export function formatQuestionResult(questions: UserQuestionItem[], answer: UserQuestionAnswer): string {
-  if (answer.behavior === "cancelled") {
-    return "The user dismissed the question(s) without answering. Proceed using your best judgment, or ask again if you truly cannot continue.";
-  }
+  if (answer.behavior !== "completed") return UNANSWERED_RESULT[answer.behavior];
   const lines = questions.map((q) => {
     const a = answer.answers[q.question];
     return `- ${q.header}: ${a && a.trim() ? a : "(no answer)"}`;

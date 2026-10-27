@@ -90,6 +90,23 @@ await scenario("skip resolves as cancelled", async () => {
   assert.deepEqual(await pending, { behavior: "cancelled" });
 });
 
+await scenario("a chat message settles the session's open questions as replied", async () => {
+  const qm = new QuestionManager();
+  const statuses: string[] = [];
+  qm.onResolved((r) => statuses.push(r.status));
+  const pending = qm.request({ sessionId: "s1", questions: [QUESTION] });
+  const other = qm.request({ sessionId: "s2", questions: [QUESTION] });
+  await waitFor(() => qm.list().length === 2);
+  assert.equal(qm.replyInChat("s1"), true);
+  assert.deepEqual(await pending, { behavior: "replied" });
+  assert.deepEqual(statuses, ["replied"]);
+  assert.match(formatQuestionResult([QUESTION], { behavior: "replied" }), /replied in the chat/);
+  assert.equal(qm.replyInChat("s1"), false, "nothing left open");
+  assert.ok(qm.hasPendingForSession("s2"), "other sessions are untouched");
+  qm.cancelForSession("s2");
+  await other;
+});
+
 await scenario("timeout auto-cancels a parked question", async () => {
   const qm = new QuestionManager();
   const pending = qm.request({ sessionId: "s1", questions: [QUESTION], timeoutMs: 20 });

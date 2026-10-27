@@ -3530,6 +3530,9 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       // that was scheduled after a prior limit so it can't re-fire on top of them.
       clearSessionResume(record.id);
       record.limitHit = undefined;
+      // Typed while a question card is open: the message answers it, so the
+      // agent stops waiting on the card (see QuestionManager.replyInChat).
+      questionManager.replyInChat(record.id);
       await turnWatchdog.promptWithWatchdog(record, agentPrompt, record.lastPromptOptions);
     }).catch((error) => {
       // Mirror the HTTP path (see the /prompt route): a rejected turn after
@@ -12139,7 +12142,9 @@ app.post("/api/session/prompt", async (req, res, next) => {
       broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: req.body?.clientMessageId });
       void sessionNamer.maybeNameSession(record, promptText);
       harnessBeginTurn(record);
-      await turnWatchdog.promptWithWatchdog(record, agentPrompt, promptOptionsFor(record, req.body?.streamingBehavior, images));
+      const options = promptOptionsFor(record, req.body?.streamingBehavior, images);
+      questionManager.replyInChat(record.id);
+      await turnWatchdog.promptWithWatchdog(record, agentPrompt, options);
     }).catch((error) => {
       clearSessionWorking(record);
       // The stack stays in the node log; clients get the same safe message
