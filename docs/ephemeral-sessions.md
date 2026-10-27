@@ -87,6 +87,11 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env \
   --profile fleet up -d
 ```
 
+Taking over machines another fleet created (a migration, or a restore from
+somewhere else) needs `FLEET_SWEEP_ORPHANS=0` until the records are in the
+fleet's own tables: it deletes apps in its fleet that no record owns, so an
+empty store otherwise reads as litter. Turn it back on once the counts match.
+
 `GET /readyz` on the fleet reports `offered` and, when it is withholding
 launches, exactly what is missing. Every setting is listed in
 [services/fleet/README.md](../services/fleet/README.md).
