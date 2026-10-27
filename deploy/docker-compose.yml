@@ -209,6 +209,7 @@ services:
       FLEET_PROVIDER_TOKEN_FLY: "${FLEET_PROVIDER_TOKEN_FLY:-}"
       FLEET_PROVIDER_ORG: "${FLEET_PROVIDER_ORG:-}"
       FLEET_IMAGE: "${FLEET_IMAGE:?set FLEET_IMAGE to a machine image with Bivy installed}"
+      FLEET_LABEL: "${FLEET_LABEL:-}"
       FLEET_REGION: "${FLEET_REGION:-iad}"
       FLEET_SIZE: "${FLEET_SIZE:-}"
       FLEET_NAME: "${FLEET_NAME:-}"

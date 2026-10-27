@@ -1379,7 +1379,7 @@ async function managedProfileConfig(accountId: string): Promise<EphemeralNodeCon
   const now = new Date().toISOString();
   return {
     id: "managed-default",
-    name: "Bivy Cloud",
+    name: typeof profile.label === "string" && profile.label.trim() ? profile.label.trim().slice(0, 40) : "Bivy Cloud",
     provider: profile.provider,
     region: profile.region,
     size: profile.size,

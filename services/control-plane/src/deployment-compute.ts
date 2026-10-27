@@ -22,6 +22,9 @@ export type ComputePurpose = "interactive" | "auth-runner";
 /** What the deployment offers an account. */
 export interface ComputeProfile {
   provider: string;
+  /** What the app calls this destination. Defaults to "Bivy Cloud", which is
+   * what deployments that predate this field are called. */
+  label?: string;
   region?: string;
   size?: string;
   image?: string;

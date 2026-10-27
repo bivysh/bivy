@@ -15,6 +15,8 @@ import type { RunnerSettings } from "./runners.js";
 /** Launch profile for one purpose, as Core asks for it. */
 export interface ComputeProfile {
   provider: string;
+  /** What the app calls this destination. */
+  label?: string;
   region?: string;
   size?: string;
   image?: string;
@@ -164,6 +166,7 @@ export class FleetConfig {
     if (purpose === "auth-runner") {
       return {
         provider: this.provider(),
+        label: compute.label,
         region: compute.region,
         size: compute.size,
         // Several CLIs are needed because the agent is chosen after boot.
@@ -173,6 +176,7 @@ export class FleetConfig {
     }
     return {
       provider: this.provider(),
+      label: compute.label,
       region: compute.region,
       size: compute.size,
       image: this.image(runtimeId),

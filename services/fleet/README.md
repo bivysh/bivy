@@ -65,6 +65,7 @@ still accepted.
 | `FLEET_PROVIDER_ORG` | discovered | The provider organization to create apps in |
 | `FLEET_IMAGE` | — | Machine image with Bivy installed |
 | `FLEET_IMAGE_CLAUDE` / `_CODEX` / `_PI` | `FLEET_IMAGE` | Smaller per-agent images, when prebuilt |
+| `FLEET_LABEL` | `Cloud computer` | What the app calls this destination |
 | `FLEET_REGION` | `iad` | Where machines run |
 | `FLEET_SIZE` | `shared-4x-8gb` | Default size (see `src/sizes.ts`) |
 | `FLEET_DISK_GB` | `20` | A new disk's size, included for every account |
