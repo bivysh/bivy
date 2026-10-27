@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.14] - 2026-10-27
+
 ### Fixed
 
 - **The repo picker lists your repos on a hosted machine.** A deployment-run machine holds no GitHub App key, so its picker said GitHub wasn't connected even after the hosted GitHub App was installed, and its button led to settings that already showed it connected. The machine now lists the repos the hosted App reaches, across every installation on the account, and offers the hosted App install when there is none. A long-lived machine also picks up an App installed after it first booted, for cloning and branches too.
