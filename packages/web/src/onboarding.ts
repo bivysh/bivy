@@ -28,6 +28,13 @@ export function rememberConnectAiDone(): void {
   localStorage.setItem(AI_DONE_KEY, "1");
 }
 
+/** Whether sign-ins can start: the machine the agents use is connected. A node
+ *  reached directly (served by the node itself, or `?local=1`) has no selected
+ *  machine id, so its open socket is the machine. */
+export function signInMachineOnline(connection: { status: string; currentNodeId?: string | null }, direct: boolean): boolean {
+  return connection.status === "online" && (direct || Boolean(connection.currentNodeId));
+}
+
 /** Where a sign-in made from this device is kept. On your own computer it stays
  *  on that machine and never joins the account vault. On Bivy Cloud, including
  *  any `eph-` machine, it joins the account vault so a new disk can receive it

@@ -9,7 +9,7 @@
 import { useState } from "react";
 import { modelAuthApiKeyProvider, type AppState } from "@bivy/core";
 import { controller } from "../store/useStore.js";
-import { AI_ACCOUNTS, agentForProviders, rememberConnectAiDone, signInSync, type RunPlace } from "../onboarding.js";
+import { AI_ACCOUNTS, agentForProviders, rememberConnectAiDone, signInMachineOnline, signInSync, type RunPlace } from "../onboarding.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
 import { Spinner } from "./Spinner.js";
 
@@ -25,7 +25,7 @@ export function ConnectAI({ state, place, startError, onRetry, onDone, deferrabl
 }) {
   const [open, setOpen] = useState<string | null>(null);
   const nodeId = state.connection.currentNodeId;
-  const online = Boolean(nodeId) && state.connection.status === "online";
+  const online = signInMachineOnline(state.connection, controller.direct);
   // The selected machine decides, once there is one: picking your own computer
   // after choosing Bivy Cloud keeps sign-ins on that computer.
   const cloud = nodeId ? nodeId.startsWith("eph-") : place === "cloud";
