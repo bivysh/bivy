@@ -39,6 +39,7 @@ env:
     NODE_ENV: production
     PORT: "4500"
     CONTROL_PLANE_URL: http://bivy-control-plane:4400
+    RELAY_TRUST_PROXY: uniquelocal
   secret:
     - RELAY_SECRET
 

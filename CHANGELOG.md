@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Claude Agent SDK 0.3.311, tested with Claude Code 2.1.311.
 
+### Security
+
+- **The relay's per-address connection cap counts clients, not the proxy.** Behind Caddy or kamal-proxy every relay socket came from the proxy, so the 50-connection cap was shared by every node and phone on the deployment. The relay now reads `X-Forwarded-For` from proxies listed in the new `RELAY_TRUST_PROXY` (Compose and Kamal set `uniquelocal`; unset trusts none), and compares its shared secret in constant time.
+
 ## [0.21.12] - 2026-10-26
 
 ### Fixed

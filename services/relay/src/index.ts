@@ -5,6 +5,7 @@ import https from "node:https";
 import { timingSafeEqual } from "node:crypto";
 import { WebSocketServer, WebSocket, type RawData } from "ws";
 import { BufferBudget, forwardOrEvict } from "./backpressure.js";
+import { clientAddress, parseTrustedProxies } from "./client-ip.js";
 import { PreviewRelay } from "./preview.js";
 import { renderRelayMetrics, PROMETHEUS_CONTENT_TYPE } from "./metrics.js";
 import { initSentry } from "./instrument.js";
@@ -151,9 +152,12 @@ const metrics = {
   clientWaitTimedOut: 0,
 };
 const ipConnections = new Map<string, number>();
+// Proxies whose X-Forwarded-For names the client (see client-ip.ts). Parsed at
+// startup so a typo stops the relay instead of silently sharing one cap.
+const trustedProxies = parseTrustedProxies(process.env.RELAY_TRUST_PROXY);
 
-function clientIp(req: { socket?: { remoteAddress?: string | null } }): string {
-  return (req.socket?.remoteAddress ?? "unknown").replace(/^::ffff:/, "");
+function clientIp(req: IncomingMessage): string {
+  return clientAddress(req.socket?.remoteAddress, req.headers["x-forwarded-for"], trustedProxies);
 }
 
 interface Room {
@@ -306,7 +310,7 @@ async function readJsonBody(req: IncomingMessage, maxBytes = 64 * 1024): Promise
 }
 
 function authOk(req: { headers: Record<string, string | string[] | undefined> }): boolean {
-  return String(req.headers.authorization ?? "") === `Bearer ${relaySecret}`;
+  return tokenMatch(String(req.headers.authorization ?? ""), `Bearer ${relaySecret}`);
 }
 
 // One domain per deployment/shard, advertised automatically to admitted nodes.
