@@ -133,6 +133,16 @@ async function deletesOnlyAfterNotice() {
   expect(core.retiredNodes.length === 1 && !(await store.get(ACCOUNT)), "Core is told, and the fleet forgets it");
 }
 
+async function adoptsMachinesWithTheSweepOff() {
+  // Taking over a fleet whose records live somewhere else: the apps are there,
+  // this store is empty, and nothing may be deleted until the records arrive.
+  const { provider, time, computers } = fleet({ settings: { sweepOrphans: false } });
+  await provider.ensureApp(cloudComputerApp("someone-else", "test"));
+  time.advance(31 * 60_000);
+  expect((await computers.reconcile()).swept.length === 0, "with the sweep off, an app no record owns is left alone however long it sits there");
+  expect(provider.apps.size === 1, "and still exists, so its disk does too");
+}
+
 async function releaseAndOrphanSweep() {
   const { provider, core, time, computers } = fleet();
   await computers.acquire({ accountId: ACCOUNT, purpose: "interactive", requestId: "r1" });
@@ -197,6 +207,7 @@ await run(
   stopsRunawayAndExhaustedMachines,
   deletesOnlyAfterNotice,
   releaseAndOrphanSweep,
+  adoptsMachinesWithTheSweepOff,
   diskGrowsOnlyWhenAllowed,
   sizePreferenceFallsBack,
   refusalIsPassedOn,

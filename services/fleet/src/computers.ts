@@ -54,6 +54,11 @@ export interface ComputeSettings {
    * one provider organization never touch each other's. Without it, no orphan
    * sweep runs. */
   fleet?: string;
+  /** Delete apps in this fleet that no record owns (default on). Turn it off
+   * to adopt a fleet whose records are not in this store yet — a migration
+   * from another fleet implementation, or a restore — so machines in flight
+   * are never mistaken for litter. Turn it back on once the records match. */
+  sweepOrphans?: boolean;
   /** Start computers early (at sign-up, on presence) and meter early starts
    * from first use (SPECULATIVE_STARTS). Off: every start is use. */
   earlyStarts?: boolean;
@@ -400,8 +405,10 @@ export class CloudComputers {
   /** Delete this fleet's apps that no record owns: left behind when a create
    * or a release failed partway. Each costs money until deleted. */
   private async sweepOrphans(): Promise<string[]> {
-    const { fleet } = this.deps.settings;
-    if (!fleet) return [];
+    const { fleet, sweepOrphans } = this.deps.settings;
+    // The fleet name alone used to decide this, so there was no way to adopt
+    // existing machines without also renaming (and so orphaning) them.
+    if (!fleet || sweepOrphans === false) return [];
     const apps = await this.deps.provider.listApps(fleetPrefix(fleet)).catch((error) => {
       console.warn("[fleet] orphan sweep skipped:", error instanceof Error ? error.message : error);
       return null;

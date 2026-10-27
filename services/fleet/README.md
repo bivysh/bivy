@@ -81,6 +81,7 @@ still accepted.
 | `FLEET_MONTHLY_HOURS` | `0` (unmetered) | Machine hours an account gets per month |
 | `FLEET_SIZE_CLASSES` | all | Size classes accounts may pick |
 | `FLEET_NAME` | — | Names this fleet's apps, so two fleets can share one provider org |
+| `FLEET_SWEEP_ORPHANS` | on | `0` stops deleting apps no record owns — set it while adopting machines whose records are not here yet |
 | `FLEET_EARLY_STARTS` | off | Start at sign-up and on presence; meter from first use |
 | `FLEET_GUEST_HARDENING_ATTESTED` | — | Required in production: you have checked the image's egress and process controls |
 | `FLEET_POLICY_URL` / `_TOKEN` | — | An operator policy service, applied on top of these caps |

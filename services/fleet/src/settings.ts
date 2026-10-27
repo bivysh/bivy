@@ -122,6 +122,9 @@ export class FleetConfig {
       cpuGuardPercent: this.zeroable("CPU_GUARD_PERCENT", "MANAGED_CPU_GUARD_PERCENT", 90, 100),
       cpuGuardMinutes: this.number("CPU_GUARD_MINUTES", "MANAGED_CPU_GUARD_MINUTES", 60),
       fleet: this.name(),
+      // On unless explicitly turned off: a fleet that leaves paid-for machines
+      // behind is the worse default. See ComputeSettings.sweepOrphans.
+      sweepOrphans: this.value("SWEEP_ORPHANS", undefined) !== "0",
       earlyStarts: this.flag("EARLY_STARTS", "MANAGED_EARLY_STARTS"),
     };
   }
