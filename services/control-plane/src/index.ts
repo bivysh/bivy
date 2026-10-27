@@ -15,7 +15,7 @@ import { matchGithubItemTrigger } from "./github-item-trigger.js";
 import { validateCapabilityTags } from "@bivy/core";
 import { notificationLink } from "./notification-link.js";
 import { type Account, type NodeRecord, type NotificationKind, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
-import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity, mintHostedInstallationToken } from "./central-github-app.js";
+import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity, mintHostedInstallationToken, listHostedRepositories } from "./central-github-app.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, initializeHostedKeyring } from "./hosted-crypto.js";
 import { webRuntimeConfigScript } from "./web-runtime-config.js";
 import { publicManagedLaunchError } from "./managed-launch-error.js";
@@ -3978,6 +3978,15 @@ app.post("/node/hosted-git-credential", requireNode, asyncHandler(async (req, re
   const minted = await mintHostedInstallationToken(store, node.accountId, { repo });
   if (!minted) return res.status(404).json({ error: "No hosted GitHub App configured" });
   res.json({ token: minted.token, expiresAt: minted.expiresAt });
+}));
+
+// The repo picker on a hosted machine: it holds no App key, so it asks for the
+// repos its minted tokens can reach. Same identity resolution as the mint.
+app.post("/node/hosted-repos", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const repositories = await listHostedRepositories(store, node.accountId);
+  if (!repositories) return res.status(404).json({ error: "No hosted GitHub App configured" });
+  res.json({ repositories });
 }));
 
 // Clear the whole queue: remove every *pending* item (the "Clear queue" action).
