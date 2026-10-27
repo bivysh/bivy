@@ -1,0 +1,22 @@
+FROM node:22-slim
+RUN mkdir -p /app && chown node:node /app
+USER node
+WORKDIR /app
+# Copy the lockfile too and use `npm ci` so builds are reproducible and pinned
+# to the resolved versions in package-lock.json. `npm install` re-resolves
+# caret ranges to the newest published version on every build, which breaks
+# deploys when a brand-new release hasn't fully propagated to the registry CDN.
+COPY --chown=node:node services/fleet/package.json services/fleet/package-lock.json ./
+RUN npm ci
+COPY --chown=node:node services/fleet/ ./
+# Bundle to plain JS at build time; the container runs `node`, not tsx.
+RUN npm run build
+# Keep the license and attribution beside the distributed service source.
+COPY --chown=node:node LICENSE NOTICE ./
+# Below the container's docker-compose mem_limit (256m), leaving headroom for
+# non-heap RSS. If that limit changes, change this too.
+ENV NODE_OPTIONS="--max-old-space-size=192"
+EXPOSE 4600
+# node directly (no npm/tsx wrapper chain): one process, and SIGTERM reaches the
+# service itself, which exits on it.
+CMD ["node", "--enable-source-maps", "dist/index.js"]

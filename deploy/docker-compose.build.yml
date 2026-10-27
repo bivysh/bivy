@@ -25,3 +25,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/Dockerfile.relay
+
+  fleet:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.fleet

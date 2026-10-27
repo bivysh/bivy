@@ -119,6 +119,14 @@ async function main() {
   const enrolled = await req(port, "GET", "/nodes", undefined, token);
   expect((enrolled.json ?? []).some((n: { id: string; online: boolean }) => n.id === nodeId && !n.online), "the enrolled node is listed, asleep");
 
+  // Deletion notice: the fleet knows when, Core knows how to reach the person.
+  // This deployment has no email sender, and must say so rather than let the
+  // fleet wait forever on a warning that will never arrive.
+  const notice = await req(port, "POST", "/internal/compute/notice", { accountId, kind: "computer", deleteAt: new Date(Date.now() + 86_400_000).toISOString() }, EXTENSION_TOKEN);
+  expect(notice.status === 200 && notice.json?.notified === false, "an unsendable deletion notice is reported as unsent, not as an error");
+  const undated = await req(port, "POST", "/internal/compute/notice", { accountId, kind: "computer" }, EXTENSION_TOKEN);
+  expect(undated.status === 400, "a notice without a deletion date is refused");
+
   // Launch returns the cloud computer and no key: devices pair with it.
   const configs = await req(port, "GET", "/account/ephemeral-configs", undefined, token);
   const cloud = configs.json?.find((c: { computeSource?: string }) => c.computeSource === "managed");

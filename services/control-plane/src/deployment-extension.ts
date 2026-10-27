@@ -87,17 +87,35 @@ export type AccountActionResult = { url: string } | { done: true; message?: stri
 const ACCOUNT_ACTION_MESSAGE_MAX = 300;
 
 export class DeploymentExtension {
+  /** Compute comes from its own service when one is configured: Bivy's own
+   * fleet (services/fleet) is the open implementation, and an operator may
+   * answer the policy questions from somewhere else entirely. With no compute
+   * URL, both lanes are the one extension, as before. */
+  private readonly computeUrl: string | undefined;
+  private readonly computeToken: string | undefined;
+
   constructor(
     private readonly url = process.env.DEPLOYMENT_EXTENSION_URL?.replace(/\/$/, ""),
     private readonly token = process.env.DEPLOYMENT_EXTENSION_TOKEN,
     private readonly fetchImpl: typeof fetch = fetch,
+    computeUrl = process.env.DEPLOYMENT_COMPUTE_URL?.replace(/\/$/, ""),
+    computeToken = process.env.DEPLOYMENT_COMPUTE_TOKEN,
   ) {
     if (Boolean(this.url) !== Boolean(this.token)) {
       throw new Error("DEPLOYMENT_EXTENSION_URL and DEPLOYMENT_EXTENSION_TOKEN must be configured together");
     }
+    if (Boolean(computeUrl) !== Boolean(computeToken)) {
+      throw new Error("DEPLOYMENT_COMPUTE_URL and DEPLOYMENT_COMPUTE_TOKEN must be configured together");
+    }
+    this.computeUrl = computeUrl ?? this.url;
+    this.computeToken = computeToken ?? this.token;
   }
 
   get configured(): boolean { return Boolean(this.url); }
+
+  /** Compute is served by a service of its own, so account events have to be
+   * told to both. */
+  private get separateCompute(): boolean { return Boolean(this.computeUrl) && this.computeUrl !== this.url; }
 
   async authorize(accountId: string, operation: DeploymentOperation, idempotencyKey?: string, context: DeploymentPolicyContext = {}): Promise<DeploymentDecision> {
     if (!this.url) return { allowed: true };
@@ -107,9 +125,17 @@ export class DeploymentExtension {
     return decision as DeploymentDecision;
   }
 
+  /** Both lanes hear about it: the extension may greet the account, and the
+   * compute service may have its machine ready by the time it is wanted. */
   async recordAccount(accountId: string, email: string, event: DeploymentAccountEvent): Promise<void> {
-    if (!this.url) return;
-    await this.request("/v1/events", { subject: { accountId, email }, event });
+    const body = { subject: { accountId, email }, event };
+    // One lane being down must not keep the other from hearing about it.
+    const told = await Promise.allSettled([
+      this.separateCompute ? this.computeRequest("/v1/events", body) : undefined,
+      this.url ? this.request("/v1/events", body) : undefined,
+    ]);
+    const failed = told.find((result): result is PromiseRejectedResult => result.status === "rejected");
+    if (failed) throw failed.reason;
   }
 
   async publishSessions(accountId: string, sessionIds: string[]): Promise<void> {
@@ -157,12 +183,12 @@ export class DeploymentExtension {
   }
 
   /** Deployment-supplied compute (the "managed" lane), or undefined when no
-   * extension is configured — then there is no managed lane at all. */
+   * compute service is configured — then there is no managed lane at all. */
   computeSource(): DeploymentComputeSource | undefined {
-    if (!this.url) return undefined;
+    if (!this.computeUrl) return undefined;
     return {
       profile: async (purpose: ComputePurpose, accountId?: string, runtimeId?: string) => {
-        const result = await this.request("/v1/compute/profile", { subject: accountId ? { accountId } : undefined, purpose, runtimeId }) as { profile?: ComputeProfile | null };
+        const result = await this.computeRequest("/v1/compute/profile", { subject: accountId ? { accountId } : undefined, purpose, runtimeId }) as { profile?: ComputeProfile | null };
         return result.profile && typeof result.profile === "object" ? result.profile : null;
       },
     };
@@ -171,8 +197,8 @@ export class DeploymentExtension {
   /** Ask the deployment for the account's cloud computer (create or wake it).
    * A refusal comes back as a policy decision. */
   async computeAcquire(accountId: string, input: { purpose: string; requestId: string; runtimeId?: string; sessionId?: string }): Promise<CloudComputerAcquire> {
-    if (!this.url) throw new Error("No deployment compute is configured");
-    const result = await this.request("/v1/compute/acquire", { subject: { accountId }, ...input }, ACQUIRE_TIMEOUT_MS) as Partial<DeploymentDecision> & { nodeId?: unknown; state?: unknown };
+    if (!this.computeUrl) throw new Error("No deployment compute is configured");
+    const result = await this.computeRequest("/v1/compute/acquire", { subject: { accountId }, ...input }, ACQUIRE_TIMEOUT_MS) as Partial<DeploymentDecision> & { nodeId?: unknown; state?: unknown };
     if (result.allowed === false) return { allowed: false, decision: result as DeploymentDecision };
     if (typeof result.nodeId !== "string" || !result.nodeId) throw new Error("Deployment extension returned an invalid compute acquisition");
     return { allowed: true, nodeId: result.nodeId, state: typeof result.state === "string" ? result.state : "launching" };
@@ -183,29 +209,29 @@ export class DeploymentExtension {
    *  any connection (see CLOUD_COMPUTER_PRESENCE). The deployment decides
    *  whether a presence wake is worth starting the machine for. */
   async computeWake(accountId: string, nodeId: string, reason = "connect"): Promise<void> {
-    if (!this.url) return;
-    await this.request("/v1/compute/wake", { subject: { accountId }, nodeId, reason });
+    if (!this.computeUrl) return;
+    await this.computeRequest("/v1/compute/wake", { subject: { accountId }, nodeId, reason });
   }
 
   /** Best-effort: the cloud computer did real work in its current awake
    *  period (its first agent event), as opposed to only being woken. */
   async computeUsed(accountId: string, nodeId: string, at: string): Promise<void> {
-    if (!this.url) return;
-    await this.request("/v1/compute/used", { subject: { accountId }, nodeId, at });
+    if (!this.computeUrl) return;
+    await this.computeRequest("/v1/compute/used", { subject: { accountId }, nodeId, at });
   }
 
   /** The account's cloud machines, for the hosted-machines panel. */
   async computeMachines(accountId: string): Promise<Array<Record<string, unknown>>> {
-    if (!this.url) return [];
-    const result = await this.request("/v1/compute/machines", { subject: { accountId } }) as { machines?: unknown };
+    if (!this.computeUrl) return [];
+    const result = await this.computeRequest("/v1/compute/machines", { subject: { accountId } }) as { machines?: unknown };
     return Array.isArray(result.machines) ? result.machines.filter((m): m is Record<string, unknown> => Boolean(m) && typeof m === "object") : [];
   }
 
   /** Ask the deployment for a runner for one piece of work. A refusal (no
    * free runner, nothing left to run on) comes back as a policy decision. */
   async runnerLaunch(accountId: string, input: { runnerId: string; requestId: string; sleeps?: boolean }): Promise<CloudComputerAcquire> {
-    if (!this.url) throw new Error("No deployment compute is configured");
-    const result = await this.request("/v1/compute/runners/launch", { subject: { accountId }, ...input }, ACQUIRE_TIMEOUT_MS) as Partial<DeploymentDecision> & { nodeId?: unknown; state?: unknown };
+    if (!this.computeUrl) throw new Error("No deployment compute is configured");
+    const result = await this.computeRequest("/v1/compute/runners/launch", { subject: { accountId }, ...input }, ACQUIRE_TIMEOUT_MS) as Partial<DeploymentDecision> & { nodeId?: unknown; state?: unknown };
     if (result.allowed === false) return { allowed: false, decision: result as DeploymentDecision };
     if (typeof result.nodeId !== "string" || !result.nodeId) throw new Error("Deployment extension returned an invalid runner launch");
     return { allowed: true, nodeId: result.nodeId, state: typeof result.state === "string" ? result.state : "launching" };
@@ -214,30 +240,38 @@ export class DeploymentExtension {
   /** Start a sleeping runner because its session is being used again. A
    * refusal (no free runner, nothing left to run on) comes back as a decision. */
   async runnerWake(accountId: string, nodeId: string, reason = "connect"): Promise<CloudComputerAcquire> {
-    if (!this.url) throw new Error("No deployment compute is configured");
-    const result = await this.request("/v1/compute/runners/wake", { subject: { accountId }, nodeId, reason }, ACQUIRE_TIMEOUT_MS) as Partial<DeploymentDecision> & { state?: unknown };
+    if (!this.computeUrl) throw new Error("No deployment compute is configured");
+    const result = await this.computeRequest("/v1/compute/runners/wake", { subject: { accountId }, nodeId, reason }, ACQUIRE_TIMEOUT_MS) as Partial<DeploymentDecision> & { state?: unknown };
     if (result.allowed === false) return { allowed: false, decision: result as DeploymentDecision };
     return { allowed: true, nodeId, state: typeof result.state === "string" ? result.state : "waking" };
   }
 
   /** A runner's work is done: delete its machine now rather than at the deployment's next sweep. */
   async runnerRelease(accountId: string, nodeId: string): Promise<boolean> {
-    if (!this.url) return false;
-    const result = await this.request("/v1/compute/runners/release", { subject: { accountId }, nodeId }) as { released?: unknown };
+    if (!this.computeUrl) return false;
+    const result = await this.computeRequest("/v1/compute/runners/release", { subject: { accountId }, nodeId }) as { released?: unknown };
     return result.released === true;
   }
 
   /** Destroy the account's cloud computer and its disk. */
   async computeRelease(accountId: string, nodeId: string): Promise<boolean> {
-    if (!this.url) return false;
-    const result = await this.request("/v1/compute/release", { subject: { accountId }, nodeId }) as { released?: unknown };
+    if (!this.computeUrl) return false;
+    const result = await this.computeRequest("/v1/compute/release", { subject: { accountId }, nodeId }) as { released?: unknown };
     return result.released === true;
   }
 
-  private async request(path: string, body: unknown, timeoutMs = 5_000): Promise<unknown> {
-    const response = await this.fetchImpl(`${this.url}${path}`, {
+  private request(path: string, body: unknown, timeoutMs = 5_000): Promise<unknown> {
+    return this.post(this.url!, this.token!, path, body, timeoutMs);
+  }
+
+  private computeRequest(path: string, body: unknown, timeoutMs = 5_000): Promise<unknown> {
+    return this.post(this.computeUrl!, this.computeToken!, path, body, timeoutMs);
+  }
+
+  private async post(base: string, token: string, path: string, body: unknown, timeoutMs: number): Promise<unknown> {
+    const response = await this.fetchImpl(`${base}${path}`, {
       method: "POST",
-      headers: { authorization: `Bearer ${this.token}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(timeoutMs),
     });

@@ -53,7 +53,7 @@ which subsystem or command you need.
 | [automation-evaluator.md](automation-evaluator.md) | Contributors touching automation matching/preflight — the shared first-match, overlap, and checklist logic behind config-as-code, the control plane, and the PWA. |
 | [automation-runs.md](automation-runs.md) | Developers who want the run lifecycle: how every trigger lands in one durable queue, run states, and the milestone timeline. |
 | [rulesets.md](rulesets.md) | Users authoring retry / reroute / park policy for failed runs and turns. |
-| [ephemeral-sessions.md](ephemeral-sessions.md) | Users and operators running short-lived, per-task Machines that are destroyed when the work is done. |
+| [ephemeral-sessions.md](ephemeral-sessions.md) | Users on a cloud machine, and operators running the fleet that hands them out (`services/fleet`) on a provider of their own. |
 | [session-replication.md](session-replication.md) | Users who want a warm standby of a session on a second node (`sessionSync`). |
 | [agents/](agents/README.md) | Per-agent setup: install command, how to authenticate it, model picker, resume support, and known gaps — one short page per agent in the picker. |
 | [troubleshooting.md](troubleshooting.md) | Anyone whose node won't start, won't connect, or won't behave. |

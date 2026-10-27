@@ -238,7 +238,8 @@ jobs:
               --jq '[.statuses[] | select(.context == "service-images/published" and .state == "success")] | length')"
             if [ "$published" -gt 0 ] \
               && docker buildx imagetools inspect "ghcr.io/bivysh/bivy-control-plane:$RELEASE_SHA" >/dev/null 2>&1 \
-              && docker buildx imagetools inspect "ghcr.io/bivysh/bivy-relay:$RELEASE_SHA" >/dev/null 2>&1; then
+              && docker buildx imagetools inspect "ghcr.io/bivysh/bivy-relay:$RELEASE_SHA" >/dev/null 2>&1 \
+              && docker buildx imagetools inspect "ghcr.io/bivysh/bivy-fleet:$RELEASE_SHA" >/dev/null 2>&1; then
               echo "The exact-SHA publication receipt and anonymous images are available."
               exit 0
             fi
@@ -256,7 +257,7 @@ jobs:
           set -euo pipefail
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
           (
-            for image in bivy-control-plane bivy-relay; do
+            for image in bivy-control-plane bivy-relay bivy-fleet; do
               docker buildx imagetools create \
                 --tag "ghcr.io/bivysh/$image:$VERSION" \
                 --tag "ghcr.io/bivysh/$image:v$VERSION" \

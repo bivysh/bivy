@@ -76,11 +76,12 @@ versions and `kamal rollback <version> -c deploy/kamal/deploy.yml` returns to on
 |---|---|---|
 | `deploy/kamal/deploy.yml` | `bivy` | `https://<domain>/`: control plane and web app. Postgres runs as its accessory (`bivy-postgres`, data in a volume on the server). |
 | `deploy/kamal/deploy.relay.yml` | `bivy-relay` | `wss://<domain>/relay`: kamal-proxy strips `/relay` and passes the WebSocket stream through unbuffered. |
+| `deploy/kamal/deploy.fleet.yml` | `bivy-fleet` | Nothing public. The optional fleet that runs cloud machines; only the control plane talks to it. |
 
-Both images are the published `ghcr.io/bivysh/bivy-control-plane` and
-`ghcr.io/bivysh/bivy-relay` at `BIVY_VERSION`. Kamal only adds its `service`
-label on top (`deploy/kamal/Dockerfile.*`), so what runs is exactly the release
-you named. Bivy isn't built from source here.
+The images are the published `ghcr.io/bivysh/bivy-control-plane`,
+`ghcr.io/bivysh/bivy-relay` and `ghcr.io/bivysh/bivy-fleet` at `BIVY_VERSION`.
+Kamal only adds its `service` label on top (`deploy/kamal/Dockerfile.*`), so
+what runs is exactly the release you named. Bivy isn't built from source here.
 
 Secrets are read from your environment through `deploy/kamal/secrets`, which holds
 no values. Point them at a password manager with Kamal's `kamal secrets`
@@ -96,6 +97,22 @@ Add these to `deploy/kamal/.env` and redeploy the control plane:
 | `RESEND_API_KEY`, `AUTH_EMAIL_FROM` | Email sign-in links |
 | `WEB_PUSH_VAPID_PUBLIC_KEY`, `WEB_PUSH_VAPID_PRIVATE_KEY` | Push notifications (`npx web-push generate-vapid-keys`) |
 | `HOSTED_CREDENTIAL_KEY` | Encrypted credentials for [offline automations](self-host.md#offline-automations-encrypted-credential-storage) (`openssl rand -base64 32`) |
+
+To hand out machines Bivy runs, rather than only machines people connect
+themselves, set `BIVY_COMPUTE_TOKEN`, `BIVY_FLEET_PROVIDER_TOKEN` and
+`BIVY_FLEET_IMAGE`, then:
+
+```sh
+kamal setup -c deploy/kamal/deploy.fleet.yml
+# and on the control plane, in deploy/kamal/.env:
+#   DEPLOYMENT_COMPUTE_URL=http://bivy-fleet:4600
+#   DEPLOYMENT_COMPUTE_TOKEN=$BIVY_COMPUTE_TOKEN
+#   EPHEMERAL_MACHINES_ENABLED=1
+```
+
+Read [cloud machines](ephemeral-sessions.md#run-the-fleet-yourself) first: it
+covers the provider token, building the machine image and the caps to set
+before anyone else uses your fleet.
 
 Live app previews through the relay need a wildcard preview domain
 (`RELAY_PREVIEW_ORIGIN`); see [apps](apps.md). For backups, restores and the security

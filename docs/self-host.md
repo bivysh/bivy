@@ -306,12 +306,23 @@ identity and the boot payload, and tells the deployment
 when the machine is needed. Core never launches machines itself. Model and
 repository credentials still belong to each user.
 
-The control plane holds no configuration for this lane. It asks the deployment
-extension (`DEPLOYMENT_EXTENSION_URL` + `DEPLOYMENT_EXTENSION_TOKEN`, the same
-service that answers policy checks). With no extension configured there is no
-managed lane. Enable it with `EPHEMERAL_MACHINES_ENABLED=1`.
+The control plane holds no configuration for this lane: no provider
+credential, no image, no sizes, no caps. It asks a **compute service** over
+the contract below. There are two ways to supply one:
 
-The extension answers these calls, all `POST` with the bearer token:
+- **Bivy's own fleet** (`services/fleet`) — part of this repository, so the
+  whole stack is yours. Set `DEPLOYMENT_COMPUTE_URL` +
+  `DEPLOYMENT_COMPUTE_TOKEN` and bring compose up with `--profile fleet`. See
+  [ephemeral-sessions.md → Run the fleet yourself](ephemeral-sessions.md#run-the-fleet-yourself).
+- **Your own service** — answer the same calls from wherever you like. With no
+  `DEPLOYMENT_COMPUTE_URL`, the deployment extension
+  (`DEPLOYMENT_EXTENSION_URL` + `DEPLOYMENT_EXTENSION_TOKEN`, the same service
+  that answers policy checks) is asked instead.
+
+With neither configured there is no managed lane at all. Enable the lane with
+`EPHEMERAL_MACHINES_ENABLED=1`.
+
+The compute service answers these calls, all `POST` with the bearer token:
 
 ```text
 POST /v1/compute/profile
@@ -351,7 +362,11 @@ POST /v1/compute/release   { "subject": {…}, "nodeId": "…" }   → { "releas
 - **Machines / release.** Back the account's machine panel and its delete
   action.
 
-The extension calls back with the same bearer token:
+When compute has its own service, account sign-in events (`POST /v1/events`)
+go to both it and the extension, so a new account's machine can be started at
+sign-up while the extension does whatever else it does with a sign-in.
+
+The compute service calls back with the same bearer token:
 
 - `POST /internal/compute/bootstrap` `{ accountId, awakeCapMinutes }`
   → `{ nodeId, files, init }`: the Fly Machine `files` and `init.exec` that boot
@@ -363,6 +378,12 @@ The extension calls back with the same bearer token:
   destroyed the machine and its volume; the node stays enrolled and its
   sessions stay rebuildable from their snapshots. For a runner, the node is
   removed.
+- `POST /internal/compute/notice` `{ accountId, kind, deleteAt }`
+  → `{ notified }`: tell the account that an idle machine (`"computer"`) or a
+  sleeping session runner (`"runner"`) and its disk will be deleted. Core owns
+  the person's address and devices, so Core sends it. `notified: false` means
+  this deployment has no way to reach them, and the caller should carry on
+  rather than keep a disk forever.
 
 A profile with `"runners": true` also offers runners: extra machines beside
 the cloud computer, each with its own node, disk and room key.

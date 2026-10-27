@@ -23,6 +23,7 @@ import { listAppInstallations, listInstallationRepositories, listInstallationBra
 import { countActiveAccountSessions } from "./session-count.js";
 import { DeploymentCompute, deploymentCompute, managedComputeEnabled, setDeploymentCompute } from "./deployment-compute.js";
 import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, cloudRouteSourceLabel, isCloudComputerNode, isCloudComputerPresence, isEphemeralMilestone, nodeMayTakeWork, routeWorkToCloudComputer } from "./cloud-computer.js";
+import { deletionNoticeEmail, deletionNoticePush } from "./deletion-notice.js";
 import { bootRunner, isRunnerNode, placeWorkOnRunner, runnerLabel, runnerNodeId, sessionRunnerId } from "./runners.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
@@ -137,7 +138,8 @@ process.on("unhandledRejection", (reason) => {
 
 const store = await createStore();
 const deploymentExtension = new DeploymentExtension();
-// The managed lane exists only when a deployment extension supplies compute.
+// The managed lane exists only when a compute service is configured: Bivy's
+// own fleet (services/fleet), or an operator's extension.
 setDeploymentCompute(new DeploymentCompute(deploymentExtension.computeSource()));
 
 async function deploymentDecision(
@@ -1377,7 +1379,7 @@ async function managedProfileConfig(accountId: string): Promise<EphemeralNodeCon
   const now = new Date().toISOString();
   return {
     id: "managed-default",
-    name: "Bivy Cloud",
+    name: typeof profile.label === "string" && profile.label.trim() ? profile.label.trim().slice(0, 40) : "Bivy Cloud",
     provider: profile.provider,
     region: profile.region,
     size: profile.size,
@@ -4964,11 +4966,13 @@ async function wakeCloudComputerIfAsleep(accountId: string, reason = "connect"):
 }
 
 // --- Internal: deployment compute ----------------------------------------
-// Called back by the deployment extension that runs cloud computers. It holds
-// the same shared token Core uses to call it.
+// Called back by whatever runs the cloud machines — Bivy's own fleet
+// (services/fleet) or an operator's extension. It holds the same shared token
+// Core uses to call it; a separate compute service has its own.
 function requireDeploymentExtension(req: Request, res: Response, next: NextFunction) {
-  const token = process.env.DEPLOYMENT_EXTENSION_TOKEN;
-  if (!token || bearer(req) !== token) return res.status(401).json({ error: "Unauthorized" });
+  const presented = bearer(req);
+  const accepted = [process.env.DEPLOYMENT_COMPUTE_TOKEN, process.env.DEPLOYMENT_EXTENSION_TOKEN].filter((token): token is string => Boolean(token));
+  if (!presented || !accepted.includes(presented)) return res.status(401).json({ error: "Unauthorized" });
   next();
 }
 
@@ -5017,6 +5021,39 @@ app.post("/internal/compute/retired", requireDeploymentExtension, asyncHandler(a
   if (!isCloudComputerNode(accountId, nodeId)) return res.status(404).json({ error: "Not a cloud computer" });
   await store.setNodeOnline(nodeId, false);
   res.json({ ok: true });
+}));
+
+// An idle cloud machine and its disk are about to be deleted. The fleet knows
+// when; Core knows how to reach the person, so Core sends it. `notified: false`
+// means this deployment has no way to tell them — the fleet carries on rather
+// than keeping a disk forever on an unsendable warning.
+app.post("/internal/compute/notice", requireDeploymentExtension, asyncHandler(async (req, res) => {
+  const accountId = typeof req.body?.accountId === "string" ? req.body.accountId : "";
+  const kind = req.body?.kind === "runner" ? "runner" : "computer";
+  const deleteAt = typeof req.body?.deleteAt === "string" ? req.body.deleteAt : "";
+  if (!Number.isFinite(Date.parse(deleteAt))) return res.status(400).json({ error: "deleteAt must be an ISO timestamp" });
+  const account = accountId ? await store.getAccount(accountId) : null;
+  if (!account) return res.status(404).json({ error: "Account not found" });
+  const notice = {
+    kind, deleteAt,
+    appUrl: provisionEnv().cpBaseUrl,
+    supportEmail: process.env.SUPPORT_EMAIL?.trim() || account.email,
+  } as const;
+  // A device notification is a bonus, never the notice itself: phones lose
+  // subscriptions silently, so only the email counts as having told them.
+  await sendPushToAccount(accountId, deletionNoticePush(notice)).catch(() => undefined);
+  const email = deletionNoticeEmail(notice);
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.AUTH_EMAIL_FROM;
+  if (!apiKey || !from) return res.json({ notified: false, reason: "no_email_sender" });
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
+    body: JSON.stringify({ from, to: account.email, subject: email.subject, text: email.text, html: email.html }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`Deletion notice to ${accountId} failed: ${response.status}`);
+  res.json({ notified: true });
 }));
 
 // --- Internal: relay introspection -------------------------------------
