@@ -50,7 +50,10 @@ for (const source of ["appRepos", "userRepos"] as const) {
   assert.ok(only.repos.length > 0);
   assert.equal(only.error, undefined);
 }
-const empty = await discoverGithubRepos({ ...sources, appRepos: async () => [], userRepos: async () => undefined });
+const hostedRepo = { slug: "bivysh/bivy-cloud", description: "", private: true };
+const hostedOnly = await discoverGithubRepos({ appRepos: async () => undefined, userRepos: async () => undefined, hostedRepos: async () => [hostedRepo], ghInstalled: sources.ghInstalled });
+assert.deepEqual(hostedOnly, { authed: true, repos: [hostedRepo] });
+const empty =await discoverGithubRepos({ ...sources, appRepos: async () => [], userRepos: async () => undefined });
 assert.deepEqual(empty, { authed: true, repos: [] });
 for (const installed of [true, false]) {
   const absent = await discoverGithubRepos({ appRepos: async () => undefined, userRepos: async () => undefined, ghInstalled: async () => installed });

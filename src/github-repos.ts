@@ -33,19 +33,30 @@ export async function listGithubUserRepos(token: string, fetchImpl: typeof fetch
   }
 }
 
-/** Query both sources independently; a failed credential must not hide usable repos. */
+type RepoSource = () => Promise<GithubRepository[] | undefined>;
+
+// Each credential source and the label its failure is reported under.
+const REPO_SOURCES = [
+  ["appRepos", "GitHub App"],
+  ["userRepos", "GitHub user"],
+  ["hostedRepos", "Hosted GitHub App"],
+] as const;
+
+/** Query every source independently; a failed credential must not hide usable repos. */
 export async function discoverGithubRepos(sources: {
-  appRepos(): Promise<GithubRepository[] | undefined>;
-  userRepos(): Promise<GithubRepository[] | undefined>;
+  appRepos: RepoSource;
+  userRepos: RepoSource;
+  /** A deployment-run machine's repos, reached through the account's hosted App. */
+  hostedRepos?: RepoSource;
   ghInstalled(): Promise<boolean>;
 }): Promise<RepoListing> {
-  const results = await Promise.allSettled([sources.appRepos(), sources.userRepos()]);
+  const results = await Promise.allSettled(REPO_SOURCES.map(([key]) => sources[key]?.() ?? Promise.resolve(undefined)));
   const repos = new Map<string, GithubRepository>();
   const errors: string[] = [];
   let authed = false;
   for (const [index, result] of results.entries()) {
     if (result.status === "rejected") {
-      errors.push(`${index === 0 ? "GitHub App" : "GitHub user"}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+      errors.push(`${REPO_SOURCES[index]![1]}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
       continue;
     }
     if (result.value === undefined) continue;

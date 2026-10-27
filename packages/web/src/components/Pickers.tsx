@@ -15,7 +15,7 @@ import { Spinner } from "./Spinner.js";
 import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { openSettings } from "../settingsRoute.js";
 import { agentPickerLabel, filterAndSortAgentRuntimes, isTopAgent } from "../agentPickerCatalog.js";
-import { nodePresence, PRESENCE } from "../cloudDestinations.js";
+import { isCloudComputerNodeId, nodePresence, PRESENCE } from "../cloudDestinations.js";
 import { AI_ACCOUNTS } from "../onboarding.js";
 
 const agentLabel = agentPickerLabel;
@@ -297,7 +297,9 @@ export function RepoPicker({ state, onClose }: { state: AppState; onClose: () =>
   // by the ›-arrow on a repo row (#466). Tapping a repo row itself picks it on
   // its default branch; the arrow is the "…but from a specific branch" path.
   const [branchFor, setBranchFor] = useState<string | null>(null);
-  const managedDraft = state.draft.ephemeralConfig?.computeSource === "managed";
+  // Bivy Cloud reaches GitHub through the hosted App, whether the session will
+  // start one or is already on the account's cloud computer.
+  const managedDraft = state.draft.ephemeralConfig?.computeSource === "managed" || isCloudComputerNodeId(state.connection.currentNodeId ?? undefined);
   useEffect(() => {
     controller.listRepos();
     // Warm the branch list for the already-picked repo so drilling into it via

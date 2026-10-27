@@ -19,7 +19,7 @@ import type {
   HostedAuditEvent,
   HostedProvisioning,
 } from "./store.js";
-import { mintInstallationToken } from "./hosted-github-auth.js";
+import { listInstallationRepositories, mintInstallationToken, type GithubRepository } from "./hosted-github-auth.js";
 
 export interface CentralGithubAppConfig {
   appId: string;
@@ -211,6 +211,35 @@ export async function mintHostedInstallationToken(
     detail: `mint-on-demand mode=${identity.mode}${opts?.repo ? ` repo=${opts.repo}` : ""}${scoped ? " scoped" : ""}`,
   }).catch(() => { /* audit is best-effort */ });
   return minted;
+}
+
+/**
+ * The repositories a deployment-run machine can work on through the account's
+ * resolved GitHub App identity — the repo picker's listing for a machine that
+ * holds no App key of its own. The central app lists every installation bound
+ * to the account (the mint picks one per repo owner); a BYO app lists its one
+ * installation. Null when the account has no app identity, mirroring the mint.
+ */
+export async function listHostedRepositories(
+  store: Omit<HostedMintStorePort, "appendHostedAudit">,
+  accountId: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<GithubRepository[] | null> {
+  const hosted = await store.getHostedProvisioning(accountId);
+  if (!hosted.enabled) return null;
+  const central = centralGithubAppConfig();
+  const centralInstallations = central ? await store.listCentralGithubInstallations(accountId) : [];
+  const identity = resolveGithubIdentity({ hosted, central, centralInstallations });
+  if (identity?.kind !== "app") return null;
+  const installationIds = identity.mode === "central-app"
+    ? centralInstallations.map((installation) => installation.installationId)
+    : [identity.installationId];
+  const repos = new Map<string, GithubRepository>();
+  for (const installationId of installationIds) {
+    const listed = await listInstallationRepositories({ appId: identity.appId, installationId, privateKeyPem: identity.privateKeyPem }, fetchImpl);
+    for (const repo of listed) if (!repos.has(repo.slug.toLowerCase())) repos.set(repo.slug.toLowerCase(), repo);
+  }
+  return [...repos.values()];
 }
 
 // ---------------------------------------------------------------------------

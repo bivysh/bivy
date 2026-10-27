@@ -222,7 +222,7 @@ import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type Fork
 import { SecretVault, resolveSecret } from "./secrets.js";
 import { deviceFlowClientId, requestDeviceCode, pollAccessTokenOnce, REPO_CONNECT_SCOPE, type DeviceCode } from "./github-device-auth.js";
 import { InstallationTokenCache, createAppJwt, resolveInstallationId, type GitHubAppConfig } from "./github-app-auth.js";
-import { listGithubAppRepos } from "./github-app-repos.js";
+import { listGithubAppRepos, type GithubRepository } from "./github-app-repos.js";
 import { discoverGithubRepos, listGithubUserRepos, type RepoListing } from "./github-repos.js";
 import {
   loadGitHubAppConfigs,
@@ -5454,17 +5454,25 @@ function invalidateGitHubApps(): void {
 // fallback rung after local apps and BIVY_GITHUB_TOKEN. Passing the repo lets
 // the control plane pick the matching central-app installation and scope the
 // token down to that repo, so the cache is keyed per repo.
+// BIVY_HOSTED_MINT is decided at boot, but a long-lived cloud computer outlives
+// that decision: the user may install the hosted App after it first booted. Any
+// deployment-run machine asks; the control plane answers 404 when there is no App.
+function hostedGithubTarget(): typeof sessionAdvertiseTarget {
+  return process.env.BIVY_HOSTED_MINT || process.env.BIVY_EPHEMERAL ? sessionAdvertiseTarget : undefined;
+}
+
 const hostedMintCache = new Map<string, { token: string; expiresAt: number }>();
 async function hostedMintToken(repo?: string): Promise<string | undefined> {
-  if (!process.env.BIVY_HOSTED_MINT || !sessionAdvertiseTarget) return undefined;
+  const target = hostedGithubTarget();
+  if (!target) return undefined;
   const cacheKey = repo ?? "";
   const now = Date.now();
   const cached = hostedMintCache.get(cacheKey);
   if (cached && cached.expiresAt - now > 5 * 60 * 1000) return cached.token;
   try {
-    const res = await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/hosted-git-credential`, {
+    const res = await fetch(`${target.controlPlaneUrl.replace(/\/$/, "")}/node/hosted-git-credential`, {
       method: "POST",
-      headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}`, "content-type": "application/json" },
+      headers: { authorization: `Bearer ${target.enrollmentToken}`, "content-type": "application/json" },
       body: JSON.stringify(repo ? { repo } : {}),
     });
     if (!res.ok) return undefined;
@@ -5476,6 +5484,28 @@ async function hostedMintToken(repo?: string): Promise<string | undefined> {
   } catch {
     return undefined;
   }
+}
+
+/** The repos the account's hosted App reaches, for a machine that holds no App
+ * key; undefined when this isn't a hosted machine or the account has no App. */
+async function hostedGithubRepos(): Promise<GithubRepository[] | undefined> {
+  const target = hostedGithubTarget();
+  if (!target) return undefined;
+  const res = await fetch(`${target.controlPlaneUrl.replace(/\/$/, "")}/node/hosted-repos`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${target.enrollmentToken}`, "content-type": "application/json" },
+    body: "{}",
+  });
+  if (res.status === 404) return undefined;
+  if (!res.ok) throw new Error(`Bivy responded ${res.status} while listing hosted repositories`);
+  const data = (await res.json().catch(() => ({}))) as { repositories?: Array<{ slug?: unknown; description?: unknown; private?: unknown; defaultBranch?: unknown }> };
+  if (!Array.isArray(data.repositories)) throw new Error("Bivy returned an invalid repository listing");
+  return data.repositories.filter((repo) => typeof repo.slug === "string" && repo.slug).map((repo) => ({
+    slug: repo.slug as string,
+    description: typeof repo.description === "string" ? repo.description : "",
+    private: Boolean(repo.private),
+    ...(typeof repo.defaultBranch === "string" ? { defaultBranch: repo.defaultBranch } : {}),
+  }));
 }
 
 async function resolveTokenForWorkItem(item: ControlPlaneWorkItem): Promise<string | undefined> {
@@ -11319,6 +11349,7 @@ async function listAccessibleRepos(): Promise<RepoListing> {
       const token = await resolveGitHubToken();
       return token ? listGithubUserRepos(token) : undefined;
     },
+    hostedRepos: hostedGithubRepos,
     ghInstalled: ghCliInstalled,
   });
   if (val.authed && !val.error) reposCache = { at: Date.now(), val };

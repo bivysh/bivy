@@ -16,7 +16,7 @@ import {
   pickCentralInstallation,
   resolveGithubIdentity,
 } from "../src/central-github-app.js";
-import { mintHostedInstallationToken } from "../src/central-github-app.js";
+import { listHostedRepositories, mintHostedInstallationToken } from "../src/central-github-app.js";
 import type { CentralGithubInstallation } from "../src/store.js";
 
 const { privateKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
@@ -238,6 +238,34 @@ await test("mint: disabled hosted provisioning and PAT identities mint nothing",
   // explicit token identity → injected at launch, never minted here.
   await store.setHostedProvisioning(a.id, { enabled: true, githubIdentity: "token" });
   assert.equal(await mintHostedInstallationToken(store, a.id, { fetchImpl: fakeGithub([]) }), null);
+});
+
+await test("hosted repos: a machine lists every central installation bound to its account", async () => {
+  const store = await makeStore();
+  const a = await store.findOrCreateAccount("a@example.com");
+  const b = await store.findOrCreateAccount("b@example.com");
+  await store.setHostedProvisioning(a.id, { enabled: true });
+  await store.putCentralGithubInstallation({ installationId: "42", accountId: a.id, githubAccount: "acme" });
+  await store.putCentralGithubInstallation({ installationId: "43", accountId: a.id, githubAccount: "me" });
+  await store.putCentralGithubInstallation({ installationId: "44", accountId: b.id, githubAccount: "other" });
+  const minted: string[] = [];
+  const github = (async (url: string | URL | Request, init?: RequestInit) => {
+    const href = String(url);
+    const installation = href.match(/installations\/(\d+)\/access_tokens/)?.[1];
+    if (installation) {
+      minted.push(installation);
+      return new Response(JSON.stringify({ token: `ghs_${installation}`, expires_at: "2027-01-01T00:00:00Z" }), { status: 201 });
+    }
+    const token = String((init?.headers as Record<string, string>).authorization).replace("Bearer ghs_", "");
+    const owner = token === "42" ? "acme" : "me";
+    return new Response(JSON.stringify({ repositories: [{ full_name: `${owner}/rocket`, private: true }, { full_name: "shared/repo" }] }), { status: 200 });
+  }) as typeof fetch;
+  const repos = await listHostedRepositories(store, a.id, github);
+  assert.deepEqual(minted.sort(), ["42", "43"]);
+  assert.deepEqual(repos?.map((repo) => repo.slug).sort(), ["acme/rocket", "me/rocket", "shared/repo"]);
+  // No app identity (hosted provisioning off) → no listing, no GitHub call.
+  assert.equal(await listHostedRepositories(store, b.id, github), null);
+  assert.deepEqual(minted.sort(), ["42", "43"]);
 });
 
 console.log(`central-github-app: ${passed} tests passed`);
