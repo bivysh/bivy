@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.15] - 2026-10-27
+
 ### Fixed
 
 - The optional cloud-machine fleet no longer requires its settings to be present for stacks that do not run it: `docker compose up` interpolates every service's variables whatever the active profile, so `FLEET_IMAGE` and `DEPLOYMENT_COMPUTE_TOKEN` broke a plain control-plane + relay stack. The fleet still refuses to start without them, and says which are missing.
