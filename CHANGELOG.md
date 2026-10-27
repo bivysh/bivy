@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.13] - 2026-10-27
+
 ### Fixed
 
 - **Connect your AI works on a node you open directly.** On a node served to the browser directly (`bivy tailscale`, or a local `?local=1` page), the first-run card said "Waiting for your computer…" forever with Sign in and API key disabled, because it waited for a selected machine id that direct mode never has. It now treats the open connection as the machine.
