@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Dependency updates: Express 5.3.0, express-rate-limit 8.7.1, ws 8.22.0, MCP SDK 1.32.2, TypeBox 1.4.3, React 19.3.1, cronstrue 3.38.0 and vega-lite 6.5.0. Mermaid stays on 11.
 - Claude Agent SDK 0.3.311, tested with Claude Code 2.1.311.
 
 ## [0.21.12] - 2026-10-26
