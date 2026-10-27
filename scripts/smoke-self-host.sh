@@ -20,6 +20,10 @@ trap cleanup EXIT
 SELF_HOST_SETUP_TOKEN="$(openssl rand -hex 32)" SELF_HOST_OWNER_EMAIL=owner@self-host.invalid DATABASE_URL= BIVY_SELF_HOST_CONFIG_ONLY=1 \
   bash "$TMP/deploy/self-host.sh" bivy.example.com
 compose up -d --wait --wait-timeout 180 postgres control-plane relay
+# The optional fleet profile must stay optional: compose interpolates every
+# service's variables whatever the profile, so a required-variable default in
+# the fleet block would break `compose up` for a stack that runs no fleet.
+compose --profile fleet config >/dev/null
 # Validate the actual generated one-domain route; do not request real ACME TLS.
 compose run --rm --no-deps caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 # Pass the private link via stdin, never command-line arguments or CI logs.

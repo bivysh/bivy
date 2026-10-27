@@ -200,15 +200,20 @@ services:
     environment:
       NODE_ENV: "${NODE_ENV:-production}"
       PORT: "4600"
+      # Required, but not with compose's `:?` syntax: compose interpolates
+      # every service's variables even when this profile is off, and a missing
+      # value would then break `compose up` for the whole stack. The fleet
+      # itself refuses to start without these and says which are missing.
+      #
       # The same secret the control plane has: the fleet asks Core for each
       # machine's boot payload with it, and Core asks the fleet for machines.
-      DEPLOYMENT_COMPUTE_TOKEN: "${DEPLOYMENT_COMPUTE_TOKEN:?set DEPLOYMENT_COMPUTE_TOKEN to run the fleet}"
+      DEPLOYMENT_COMPUTE_TOKEN: "${DEPLOYMENT_COMPUTE_TOKEN:-}"
       FLEET_CORE_URL: "${FLEET_CORE_URL:-http://control-plane:4400}"
       # The provider credential. The fleet is the only service that holds it.
       FLEET_PROVIDER: "${FLEET_PROVIDER:-fly}"
       FLEET_PROVIDER_TOKEN_FLY: "${FLEET_PROVIDER_TOKEN_FLY:-}"
       FLEET_PROVIDER_ORG: "${FLEET_PROVIDER_ORG:-}"
-      FLEET_IMAGE: "${FLEET_IMAGE:?set FLEET_IMAGE to a machine image with Bivy installed}"
+      FLEET_IMAGE: "${FLEET_IMAGE:-}"
       FLEET_LABEL: "${FLEET_LABEL:-}"
       FLEET_REGION: "${FLEET_REGION:-iad}"
       FLEET_SIZE: "${FLEET_SIZE:-}"
