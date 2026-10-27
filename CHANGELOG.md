@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `BIVY_SETUP_SKIP_SERVICE=1` setup waits for the already-started node to answer, instead of giving up after one 1.2-second probe and reporting that the service could not be installed.
 - **"Continue in terminal" works for OpenCode and Grok chats.** Grok's chats run over its ACP server, which had no terminal hand-off, so the option did nothing; OpenCode had none at all. Both now reopen the chat in the agent's own TUI (`grok --resume <id>`, `opencode --session <id>`). The resume arguments are one row of profile data per agent, shared by both paths.
 - **OpenCode 2 keeps forks, imports and terminal takeover.** OpenCode 2 moved its sessions to new tables, so forking an OpenCode session, forking another agent's chat into OpenCode, taking a `bivy run opencode` terminal over as chat, and deleting its session all quietly stopped working. Bivy now reads OpenCode 2's sessions and writes them through `opencode session import` and `delete`. OpenCode 1 works as before.
 - **Agents stop when their node does.** If the node crashed or was killed mid-session, the Codex app-server and every ACP agent (OpenCode, Grok, Gemini and others) kept running with no owner, each holding hundreds of MB. The shim now stops its agent and exits as soon as the node is gone.
