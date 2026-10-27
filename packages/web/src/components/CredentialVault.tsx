@@ -454,9 +454,11 @@ export function CredentialVault({ state, initialProvider = null }: { state: AppS
     </>}
     <div className="vault-picker-label">Advanced</div>
     <button ref={importButton} className="btn" onClick={() => setView("import")}>Import from machine</button>
-    <div className="settings-toggle-row">
+    {/* Recovery keeps tokens in the account vault, so it needs a signed-in
+        account; a node opened directly has none and refuses the switch. */}
+    {!controller.direct && state.connection.signedIn && <div className="settings-toggle-row">
       <div className="settings-toggle-text"><div className="settings-toggle-title">OAuth browser recovery</div><p className="muted small">Keep account OAuth refresh tokens end-to-end encrypted on your signed-in devices so a new machine can recover without another machine online.</p></div>
       <button type="button" role="switch" aria-checked={oauthRecovery} aria-label="Allow OAuth browser recovery" className={`settings-toggle${oauthRecovery ? " on" : ""}`} onClick={() => { const enabled = !oauthRecovery; setOauthRecovery(enabled); void controller.setOAuthBrowserRecovery(enabled).catch(() => setOauthRecovery(!enabled)); }}><span className="settings-toggle-knob" aria-hidden /></button>
-    </div>
+    </div>}
   </div>;
 }
