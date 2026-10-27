@@ -361,7 +361,31 @@ The extension calls back with the same bearer token:
   the stopped machine and a volume mounted at `/data`).
 - `POST /internal/compute/retired` `{ accountId, nodeId }`: the deployment
   destroyed the machine and its volume; the node stays enrolled and its
-  sessions stay rebuildable from their snapshots.
+  sessions stay rebuildable from their snapshots. For a runner, the node is
+  removed.
+
+A profile with `"runners": true` also offers runners: extra machines beside
+the cloud computer, each with its own node, disk and room key.
+
+```text
+POST /v1/compute/runners/launch  { "subject": {…}, "runnerId": "…", "requestId": "…", "sleeps"?: true }
+→ { "nodeId": "…", "state": "awake" | "launching" }   or a policy denial
+POST /v1/compute/runners/wake    { "subject": {…}, "nodeId": "…", "reason": "connect" | "resume" }
+→ { "state": "awake" | "waking" | "gone" | "unknown" }   or a policy denial
+POST /v1/compute/runners/release { "subject": {…}, "nodeId": "…" }   → { "released": true }
+```
+
+- **Work runners** (`runnerId` `work:<item>`) take one queued item, end when
+  it is done and report settled; release deletes the machine.
+- **Session runners** (`runnerId` `session:<request>`, `"sleeps": true`) are
+  picked as "Cloud Runner" for a new session. They sleep when idle like the
+  cloud computer; connecting to one, or sending to its session, calls wake.
+  The deployment decides how long one may sleep before it deletes it, and may
+  report that time as `deleteAt` on the runner's `/v1/compute/machines` entry,
+  which the app shows on the session. Deleting a runner's only session
+  releases the runner.
+- `POST /internal/compute/runner-bootstrap` `{ accountId, runnerId, awakeCapMinutes }`
+  → `{ nodeId, files, init }` enrolls a runner's node and boots it.
 
 Core ships the runner image's build context (`deploy/Dockerfile.ephemeral-runner`);
 the deployment builds and publishes the image it boots. Use an image with Bivy

@@ -10,6 +10,8 @@ import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.j
 import { HandoffBanner } from "./HandoffBanner.js";
 import { StandbyNotice } from "./StandbyNotice.js";
 import { standbyCopyOf } from "../standby.js";
+import { RunnerSleepNotice } from "./RunnerSleepNotice.js";
+import { isRunnerNodeId } from "../cloudDestinations.js";
 import { runtimeEnforcesProtection, SANDBOX_TIERS } from "./sandboxTiers.js";
 import { Spinner } from "./Spinner.js";
 import { CloseIcon, FileIcon, ImageIcon, ShieldIcon } from "./UiIcons.js";
@@ -236,10 +238,12 @@ export function Composer({
   const formRef = useRef<HTMLFormElement>(null);
   const isDraft = !state.activeSession.activeSessionId;
   // Only a standby copy of this session lives here (warm replication).
-  const standby = standbyCopyOf(
-    state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId)?.source,
-    state.connection.nodes,
-  );
+  const activeSessionEntry = state.sessionIndex.sessions.find((s) => s.sessionId === state.activeSession.activeSessionId);
+  const standby = standbyCopyOf(activeSessionEntry?.source, state.connection.nodes);
+  // A session on a sleeping Cloud Runner: say when the runner will be deleted.
+  const sleepingRunner = isRunnerNodeId(activeSessionEntry?.nodeId) && !state.connection.nodes.some((n) => n.id === activeSessionEntry?.nodeId && n.online)
+    ? activeSessionEntry!.nodeId
+    : undefined;
   const activeDraftKey = useRef(composerDraftKey(state.activeSession.activeSessionId));
   const activeDraftSession = useRef(state.activeSession.activeSessionId);
   const textRef = useRef(text);
@@ -653,6 +657,7 @@ export function Composer({
           />
         );
       })()}
+      {sleepingRunner && <RunnerSleepNotice nodeId={sleepingRunner} />}
       {state.activeSession.activeSessionId && (
         <HandoffBanner
           sessionId={state.activeSession.activeSessionId}

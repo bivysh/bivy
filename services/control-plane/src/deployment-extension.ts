@@ -203,12 +203,21 @@ export class DeploymentExtension {
 
   /** Ask the deployment for a runner for one piece of work. A refusal (no
    * free runner, nothing left to run on) comes back as a policy decision. */
-  async runnerLaunch(accountId: string, input: { runnerId: string; requestId: string }): Promise<CloudComputerAcquire> {
+  async runnerLaunch(accountId: string, input: { runnerId: string; requestId: string; sleeps?: boolean }): Promise<CloudComputerAcquire> {
     if (!this.url) throw new Error("No deployment compute is configured");
     const result = await this.request("/v1/compute/runners/launch", { subject: { accountId }, ...input }, ACQUIRE_TIMEOUT_MS) as Partial<DeploymentDecision> & { nodeId?: unknown; state?: unknown };
     if (result.allowed === false) return { allowed: false, decision: result as DeploymentDecision };
     if (typeof result.nodeId !== "string" || !result.nodeId) throw new Error("Deployment extension returned an invalid runner launch");
     return { allowed: true, nodeId: result.nodeId, state: typeof result.state === "string" ? result.state : "launching" };
+  }
+
+  /** Start a sleeping runner because its session is being used again. A
+   * refusal (no free runner, nothing left to run on) comes back as a decision. */
+  async runnerWake(accountId: string, nodeId: string, reason = "connect"): Promise<CloudComputerAcquire> {
+    if (!this.url) throw new Error("No deployment compute is configured");
+    const result = await this.request("/v1/compute/runners/wake", { subject: { accountId }, nodeId, reason }, ACQUIRE_TIMEOUT_MS) as Partial<DeploymentDecision> & { state?: unknown };
+    if (result.allowed === false) return { allowed: false, decision: result as DeploymentDecision };
+    return { allowed: true, nodeId, state: typeof result.state === "string" ? result.state : "waking" };
   }
 
   /** A runner's work is done: delete its machine now rather than at the deployment's next sweep. */

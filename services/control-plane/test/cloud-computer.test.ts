@@ -67,9 +67,14 @@ async function main() {
         "/v1/compute/profile": { profile: { provider: "fly", image: "runner:test", ttlMinutes: 60, accountMachine: true, runners: true } },
         "/v1/compute/acquire": deny ? { allowed: false, code: "trial_exhausted", reason: "Trial used up." } : { nodeId, state: "launching" },
         "/v1/compute/wake": { state: "waking" },
-        "/v1/compute/machines": { machines: [{ id: "fly-1", nodeId, provider: "fly", region: "iad", state: "asleep", createdAt: "2026-10-06T00:00:00Z" }] },
+        "/v1/compute/machines": { machines: [
+          { id: "fly-1", nodeId, provider: "fly", region: "iad", state: "asleep", createdAt: "2026-10-06T00:00:00Z" },
+          { id: "fly-r", nodeId: "eph-runner-0123456789abcdef", provider: "fly", kind: "runner", state: "asleep", deleteAt: "2026-11-03T12:00:00.000Z", createdAt: "2026-10-27T00:00:00Z" },
+          { id: "fly-x", nodeId: "eph-runner-fedcba9876543210", provider: "fly", kind: "runner", state: "asleep", deleteAt: "soon", createdAt: "2026-10-27T00:00:00Z" },
+        ] },
         "/v1/compute/release": { released: true },
         "/v1/compute/runners/release": { released: true },
+        "/v1/compute/runners/wake": { state: "waking" },
         "/v1/compute/runners/launch": { nodeId: body.runnerId ? `eph-runner-${createHash("sha256").update(`${body.subject?.accountId}:${body.runnerId}`).digest("hex").slice(0, 16)}` : "", state: "launching" },
         "/v1/policy/check": { allowed: true },
         "/v1/account": { presentation: {} },
@@ -136,6 +141,30 @@ async function main() {
   expect(denied.status === 403 && denied.json?.code === "trial_exhausted", "a refusal returns the deployment's decision");
   deny = false;
 
+  // Cloud Runner: a new runner for one session, offered when the deployment runs runners.
+  expect(cloud.runners === true, "the managed profile says the deployment can start a runner per session");
+  const sessionRunner = await req(port, "POST", "/account/managed-machines", { configId: "managed-runner", requestId: "draft-1" }, token);
+  const sessionRunnerNode = sessionRunner.json?.machine?.nodeId as string;
+  expect(sessionRunner.status === 201 && /^eph-runner-/.test(sessionRunnerNode) && sessionRunner.json?.machine?.name === "Cloud Runner", "picking Cloud Runner starts a runner, not the cloud computer");
+  expect(calls.some((c) => c.path === "/v1/compute/runners/launch" && c.body.runnerId === "session:draft-1" && c.body.sleeps === true), "the runner is for this session, and sleeps between uses");
+  const sessionBoot = await req(port, "POST", "/internal/compute/runner-bootstrap", { accountId, runnerId: "session:draft-1" }, EXTENSION_TOKEN);
+  const sessionStart = Buffer.from(sessionBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/start.sh").raw_value, "base64").toString("utf8");
+  expect(sessionBoot.json?.nodeId === sessionRunnerNode && !/BIVY_TEARDOWN_ON_FINISH/.test(sessionStart), "a session's runner waits for follow-ups instead of ending after the first turn");
+  expect(/BIVY_EPHEMERAL_SLEEP=1/.test(sessionStart) && /BIVY_DATA_DIR=\/data\/bivy/.test(sessionStart), "it sleeps when idle, with its sessions on its own disk");
+  const sessionRelay = JSON.parse(Buffer.from(sessionBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/relay.json").raw_value, "base64").toString("utf8"));
+  const runnerMilestone = await req(port, "POST", "/node/ephemeral-milestone", { milestone: "credentialsReadyAt" }, sessionRelay.enrollmentToken);
+  expect(runnerMilestone.json?.tracked === true, "a runner's milestones are tracked, so its launch sees credentials ready");
+  const resumed = await req(port, "POST", "/account/managed-machines/restore", { sessionId: "s-on-runner", nodeId: sessionRunnerNode, configId: "managed-runner" }, token);
+  expect(resumed.status === 201 && resumed.json?.machine?.nodeId === sessionRunnerNode, "sending to a sleeping session runner wakes it");
+  expect(calls.some((c) => c.path === "/v1/compute/runners/wake" && c.body.nodeId === sessionRunnerNode), "the deployment is asked to wake that runner");
+  const wakesBefore = calls.filter((c) => c.path === "/v1/compute/runners/wake").length;
+  await req(port, "POST", "/client/relay-ticket", { nodeId: sessionRunnerNode }, token);
+  await waitFor(() => calls.filter((c) => c.path === "/v1/compute/runners/wake").length > wakesBefore, "runner wake on connect");
+  console.log("✓ connecting to a sleeping session runner wakes it");
+  const otherLogin = await req(port, "POST", "/auth/dev-login", { email: "someone-else@example.com" });
+  const foreign = await req(port, "POST", "/account/managed-machines/restore", { sessionId: "s", nodeId: sessionRunnerNode, configId: "managed-runner" }, otherLogin.json.token);
+  expect(foreign.status === 404, "nobody can wake another account's runner");
+
   // Connecting to the sleeping node wakes it.
   const ticket = await req(port, "POST", "/client/relay-ticket", { nodeId }, token);
   expect(ticket.status === 200, "a client can still get a relay ticket for a sleeping node");
@@ -174,6 +203,8 @@ async function main() {
   // Inventory and release go through the extension.
   const machines = await req(port, "GET", "/account/hosted-machines", undefined, token);
   expect(machines.json?.[0]?.nodeId === nodeId && machines.json?.[0]?.lifecycleState === "asleep", "the hosted-machines panel shows the extension's machine");
+  expect(machines.json?.[1]?.kind === "runner" && machines.json?.[1]?.deleteAt === "2026-11-03T12:00:00.000Z", "a sleeping runner says when it will be deleted");
+  expect(machines.json?.[2]?.deleteAt === undefined, "only a real date is passed on");
   const released = await req(port, "DELETE", `/account/hosted-machines/${nodeId}`, undefined, token);
   expect(released.status === 200, "release destroys the cloud computer through the extension");
 

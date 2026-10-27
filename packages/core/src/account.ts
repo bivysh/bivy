@@ -743,9 +743,16 @@ export interface EphemeralNodeConfig {
   /** Operator-owned compute is launched by the control plane; absent means the
    * user's provider credential and preserves existing BYO profiles. */
   computeSource?: "user" | "managed";
+  /** The deployment can also start a fresh runner for a session (the "Cloud
+   * Runner" destination, `CLOUD_RUNNER_CONFIG_ID`). Reported, never stored. */
+  runners?: boolean;
   createdAt: string;
   updatedAt: string;
 }
+
+/** The managed destination that starts a new, disposable runner for each
+ * session instead of using the account's cloud computer. */
+export const CLOUD_RUNNER_CONFIG_ID = "managed-runner";
 
 export type EphemeralConfigInput = {
   name: string;
@@ -785,6 +792,7 @@ function coerceConfig(v: any): EphemeralNodeConfig {
     ttlMinutes: typeof v?.ttlMinutes === "number" ? v.ttlMinutes : undefined,
     teardownOnAgentFinish: Boolean(v?.teardownOnAgentFinish) || undefined,
     computeSource: v?.computeSource === "managed" ? "managed" : undefined,
+    runners: v?.runners === true || undefined,
     createdAt: String(v?.createdAt ?? ""),
     updatedAt: String(v?.updatedAt ?? ""),
   };
@@ -922,6 +930,8 @@ export interface HostedMachineSummary {
   milestones?: Record<string, string>;
   /** The deployment's lifecycle state for the machine (e.g. awake, asleep). */
   lifecycleState?: string;
+  /** When the deployment deletes this sleeping machine unless it is used. */
+  deleteAt?: string;
 }
 
 function coerceHostedStatus(d: any): HostedProvisioningStatus {

@@ -143,7 +143,7 @@ import { EphemeralCoordinator } from "./coordinators/ephemeral-coordinator.js";
 import { AutomationsAccountCoordinator } from "./coordinators/automations-account-coordinator.js";
 import type { ReviewCardMode, SessionPresence } from "@bivy/core";
 import { thisDevice } from "../device.js";
-import { cloudComputerToWake, isCloudComputerNodeId } from "../cloudDestinations.js";
+import { cloudComputerToWake, isCloudComputerNodeId, isRunnerNodeId } from "../cloudDestinations.js";
 import { readRunPlace } from "../onboarding.js";
 
 /**
@@ -3886,6 +3886,11 @@ export class AppController {
     }
     const correlation = this.ephemeralCorrelations.find((entry) => entry.sessionId === sessionId);
     const online = correlation && this.store.getState().connection.nodes.some((node) => node.id === correlation.nodeId && node.online);
+    const runnerNodeId = this.direct ? undefined : this.soleRunnerOf(sessionId);
+    if (runnerNodeId) {
+      await this.deleteRunnerSession(sessionId, runnerNodeId);
+      return;
+    }
     if (!this.direct && correlation && !online) {
       await this.deleteRetiredSession(sessionId);
       return;
@@ -3900,18 +3905,44 @@ export class AppController {
       const response = await fetch(`${base}/session-correlation/${encodeURIComponent(sessionId)}`, { method: "DELETE", headers: auth, signal: AbortSignal.timeout(15_000) });
       if (!response.ok) throw new Error("Couldn't delete the retired session. Refresh and try again.");
       this.ephemeralCorrelations = this.ephemeralCorrelations.filter((entry) => entry.sessionId !== sessionId);
-      if (this.promptTargetSessionId === sessionId) this.promptTargetSessionId = null;
-      if (this.store.getState().activeSession.activeSessionId === sessionId) {
-        this.store.resetActiveSession();
-        navigate({ kind: "new" });
-      }
-      this.store.removeSessionLocal(sessionId);
-      this.persistDeletedSessionTombstones();
-      await this.transcriptCache.delete(sessionId);
-      this.refreshSessions();
+      await this.forgetDeletedSession(sessionId);
     } catch (error) {
       this.store.setError(error instanceof Error ? error.message : "Couldn't delete the retired session.");
     }
+  }
+
+  /** The Cloud Runner a session lives on, when it is the runner's only
+   *  session: deleting the session is then deleting the runner. */
+  private soleRunnerOf(sessionId: string): string | undefined {
+    const sessions = this.store.getState().sessionIndex.sessions;
+    const nodeId = sessions.find((session) => session.sessionId === sessionId)?.nodeId;
+    if (!isRunnerNodeId(nodeId)) return undefined;
+    return sessions.some((session) => session.sessionId !== sessionId && session.nodeId === nodeId) ? undefined : nodeId;
+  }
+
+  /** Delete a session together with the Cloud Runner it lives on: the machine
+   *  and its disk hold the session, so they go, awake or asleep. */
+  private async deleteRunnerSession(sessionId: string, nodeId: string): Promise<void> {
+    try {
+      // A runner already deleted for sleeping too long has nothing to release.
+      if (this.store.getState().connection.nodes.some((node) => node.id === nodeId)) await apiDestroyHostedMachine(this.local, nodeId);
+      await this.forgetDeletedSession(sessionId);
+      void this.refreshNodes();
+    } catch (error) {
+      this.store.setError(error instanceof Error ? error.message : "Couldn't delete this session's Cloud Runner.");
+    }
+  }
+
+  private async forgetDeletedSession(sessionId: string): Promise<void> {
+    if (this.promptTargetSessionId === sessionId) this.promptTargetSessionId = null;
+    if (this.store.getState().activeSession.activeSessionId === sessionId) {
+      this.store.resetActiveSession();
+      navigate({ kind: "new" });
+    }
+    this.store.removeSessionLocal(sessionId);
+    this.persistDeletedSessionTombstones();
+    await this.transcriptCache.delete(sessionId);
+    this.refreshSessions();
   }
 
   pauseSession(sessionId?: string): void {
