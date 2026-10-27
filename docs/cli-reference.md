@@ -524,9 +524,10 @@ so it works for any agent with a shell.
 `bivy ask wait <id> [--timeout …]` waits for an earlier `--async` question, and
 `bivy ask status <id>` checks it without waiting. Answers are kept for a day.
 
-Prints the answer and exits 0. Exits 1 when the user dismisses the question and
-5 when it times out. `--json` prints
-`{"id","status":"pending"|"answered"|"dismissed"|"expired","answer"?}`.
+Prints the answer and exits 0. Exits 1 when the user dismisses the question or
+replies in the chat instead (that message reaches the agent next), and 5 when it
+times out. `--json` prints
+`{"id","status":"pending"|"answered"|"dismissed"|"replied"|"expired","answer"?}`.
 
 ```bash
 bivy ask "Which database should the new service use?" --option Postgres --option SQLite

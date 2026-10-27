@@ -23,12 +23,15 @@ test("an answer from the card reaches a waiting caller, and stays readable", asy
   assert.equal(asks.get("other-session", id), undefined, "another session can't read it");
 });
 
-test("a dismissed question and an expired one are told apart", async () => {
+test("dismissed, replied-in-chat and expired questions are told apart", async () => {
   const manager = new QuestionManager();
   const asks = new AgentQuestions(manager);
   const dismissed = asks.ask("s", items, 60_000);
   manager.resolve(dismissed.id, { behavior: "cancelled" });
   assert.equal((await asks.wait("s", dismissed.id, 1_000))?.status, "dismissed");
+  const replied = asks.ask("s", items, 60_000);
+  manager.replyInChat("s");
+  assert.equal((await asks.wait("s", replied.id, 1_000))?.status, "replied");
   const expired = asks.ask("s", items, 1_000);
   assert.equal((await asks.wait("s", expired.id, 3_000))?.status, "expired");
 });

@@ -17,7 +17,7 @@ import { AGENT_SECRET_NAME } from "../secrets.js";
  * reads back only `secret://NAME`, so it never enters the transcript or the
  * model's context.
  */
-export type AskStatus = "pending" | "answered" | "dismissed" | "expired";
+export type AskStatus = "pending" | "answered" | "dismissed" | "expired" | "replied";
 
 export interface AskResult {
   id: string;
@@ -97,7 +97,7 @@ export class AgentQuestions {
     void this.questions.request({ id, sessionId, questions: items, timeoutMs: Math.min(Math.max(timeoutMs, 1000), MAX_ASK_TIMEOUT_MS) }).then((answer) => {
       const status = this.settled.get(id);
       this.settled.delete(id);
-      result.status = answer.behavior === "completed" ? "answered" : status === "expired" ? "expired" : "dismissed";
+      result.status = answer.behavior === "completed" ? "answered" : answer.behavior === "replied" ? "replied" : status === "expired" ? "expired" : "dismissed";
       if (answer.behavior === "completed") result.answers = this.keepSecrets(items, answer.answers);
       result.settledAt = this.now();
       for (const wake of this.waiters.get(id) ?? []) wake();

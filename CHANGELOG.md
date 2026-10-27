@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `FLEET_SWEEP_ORPHANS=0` stops the fleet deleting provider apps that no record of its own owns. Adopting machines another fleet created — a migration, or a restore — starts with an empty store, which the sweep would otherwise read as litter and delete along with every disk. The fleet name used to decide this on its own, and it also names the apps, so there was no way to adopt machines without renaming (and so orphaning) them.
 
+### Fixed
+
+- **Answer an agent's question by just replying.** A message typed while a question card is open now answers it: the card closes and the agent reads your message as the answer, for every agent and for `bivy ask` (which reports `replied`). The agent used to stay blocked on the card until it timed out after 10 minutes.
+- Codex chats can be steered from the composer again. Its app-server shim has supported steering a running turn, but the agent catalog the web app reads didn't say so, so the composer offered only Stop while Codex worked.
+
+### Changed
+
+- Agent pins: Claude Agent SDK 0.3.312, Codex 0.165.0.
+
 ## [0.21.15] - 2026-10-27
 
 ### Fixed

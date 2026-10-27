@@ -2722,11 +2722,12 @@ Open terminal button: a terminal on this machine opens with the command typed,
 not run. Use it for anything needing their password (sudo), then check the
 result yourself.
 
-Prints the answer and exits 0. Exits 1 if the user dismissed the question and 5
+Prints the answer and exits 0. Exits 1 if the user dismissed the question or
+replied in the chat instead (their message follows as your next input), and 5
 if --timeout (default 10m, up to 24h) passes first; the card closes then.
 --async returns the question's id at once; 'bivy ask wait <id>' blocks for the
 answer later and 'bivy ask status <id>' checks without waiting.
---json prints {"id","status":"pending"|"answered"|"dismissed"|"expired","answer"}.`);
+--json prints {"id","status":"pending"|"answered"|"dismissed"|"replied"|"expired","answer"}.`);
     return;
   }
   const json = wantsJson(args);
@@ -2753,13 +2754,18 @@ answer later and 'bivy ask status <id>' checks without waiting.
     return data;
   };
   const answerText = (result) => Object.values(result.answers ?? {}).join("\n");
+  const ASK_UNANSWERED = {
+    expired: "The question timed out without an answer.",
+    dismissed: "The user dismissed the question without answering.",
+    replied: "The user replied in the chat instead. Their message follows as your next input; treat it as the answer.",
+  };
   const finish = (result) => {
     if (result.status === "answered" && !answerText(result)) return fail({ code: "failed", message: "The secret was not stored on this node.", next: "bivy secrets doctor", exit: EXIT.failed });
     const out = { id: result.id, status: result.status, ...(result.status === "answered" ? { answer: answerText(result) } : {}) };
     if (result.status === "answered") { console.log(json ? JSON.stringify(out) : out.answer); return; }
     if (result.status === "pending") { console.log(json ? JSON.stringify(out) : `Still waiting for an answer. Check again with: bivy ask wait ${result.id}`); process.exit(EXIT.timeout); }
     if (json) console.log(JSON.stringify(out));
-    else console.error(result.status === "expired" ? "The question timed out without an answer." : "The user dismissed the question without answering.");
+    else console.error(ASK_UNANSWERED[result.status] ?? ASK_UNANSWERED.dismissed);
     process.exit(result.status === "expired" ? EXIT.timeout : EXIT.failed);
   };
   const waitFor = async (id, seconds) => {

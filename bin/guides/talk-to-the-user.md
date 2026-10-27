@@ -26,7 +26,8 @@ Next steps and options go in your reply as plain text.
     bivy ask "What should the release be called?"
 
 Blocks until they answer and prints the answer (exit 0). Exit 1 means they
-dismissed it (use your judgment), exit 5 that `--timeout` (default 10m) passed.
+dismissed it (use your judgment) or wrote in the chat instead (that message
+comes next; it is the answer), exit 5 that `--timeout` (default 10m) passed.
 For long waits use `--async`, keep working, and later `bivy ask wait <id>`.
 Ask only when you can't reasonably decide yourself.
 
