@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The optional cloud-machine fleet no longer requires its settings to be present for stacks that do not run it: `docker compose up` interpolates every service's variables whatever the active profile, so `FLEET_IMAGE` and `DEPLOYMENT_COMPUTE_TOKEN` broke a plain control-plane + relay stack. The fleet still refuses to start without them, and says which are missing.
+
 ### Added
 
 - **Self-host the cloud machines too.** The fleet that runs Bivy's cloud computers — create, wake, meter, guard, grow the disk, delete after notice, plus the per-work runners beside them — is now part of this repository as `services/fleet`. Point it at a provider token and a machine image and your own deployment hands out sleeping machines per account, exactly as Bivy Cloud does. Bring it up with `docker compose --profile fleet up`, or `kamal setup -c deploy/kamal/deploy.fleet.yml`. The fleet applies its own caps (hours a month, machines at once, runners per account, size classes, disk ceiling) so running one for other people is safe with nothing else configured, and it meters awake time itself and reports it at `/v1/compute/usage`. Adding a machine provider is one adapter and one row. See [cloud machines](docs/ephemeral-sessions.md#run-the-fleet-yourself).
