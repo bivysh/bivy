@@ -1,0 +1,31 @@
+{
+  "name": "bivy-fleet",
+  "version": "0.21.15",
+  "private": true,
+  "type": "module",
+  "description": "Self-hostable Bivy fleet: runs one sleeping cloud machine per account, plus disposable per-work runners, on a machine provider you own.",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node22 --packages=external --sourcemap --log-level=warning --outfile=dist/index.js",
+    "prestart": "npm run build",
+    "start": "node --enable-source-maps dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "test:computers": "tsx test/computers.test.ts",
+    "test:runners": "tsx test/runners.test.ts",
+    "test:limits": "tsx test/limits.test.ts",
+    "test:app": "tsx test/app.test.ts",
+    "test:unit": "npm run test:computers && npm run test:runners && npm run test:limits && npm run test:app"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "pg": "^8.23.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.1.2",
+    "@types/pg": "^8.23.1",
+    "esbuild": "^0.28.2",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

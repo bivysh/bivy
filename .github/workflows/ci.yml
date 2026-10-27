@@ -71,6 +71,7 @@ jobs:
       installer: ${{ steps.tier.outputs.areas == 'true' && steps.filter.outputs.installer || 'false' }}
       relay: ${{ steps.tier.outputs.areas == 'true' && steps.filter.outputs.relay || 'false' }}
       control_plane: ${{ steps.tier.outputs.areas == 'true' && steps.filter.outputs.control_plane || 'false' }}
+      fleet: ${{ steps.tier.outputs.areas == 'true' && steps.filter.outputs.fleet || 'false' }}
       e2e: ${{ steps.tier.outputs.areas == 'true' && steps.filter.outputs.e2e || 'false' }}
       docs: ${{ steps.tier.outputs.tier != 'verified' && steps.filter.outputs.docs || 'false' }}
     steps:
@@ -143,6 +144,9 @@ jobs:
             control_plane:
               - *common
               - 'services/control-plane/**'
+            fleet:
+              - *common
+              - 'services/fleet/**'
             e2e:
               - *common
               - 'pnpm-lock.yaml'
@@ -531,6 +535,32 @@ jobs:
       - run: npm run test:unit
         working-directory: services/control-plane
 
+  # The fleet is standalone: it talks to the control plane over HTTP only, and
+  # its suites drive it against a fake provider, so it needs nothing else.
+  fleet:
+    needs: changes
+    if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.fleet == 'true'
+    name: Fleet
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # services/* are standalone npm projects with their own package-lock.json;
+      # only the repo root migrated to pnpm.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22.19.0'
+          cache: npm
+          cache-dependency-path: services/fleet/package-lock.json
+      - run: npm ci
+        working-directory: services/fleet
+      - run: npm audit --omit=dev --audit-level=high
+        working-directory: services/fleet
+      - run: npm run typecheck
+        working-directory: services/fleet
+      - run: npm run test:unit
+        working-directory: services/fleet
+
   relay:
     needs: changes
     if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.relay == 'true'
@@ -602,6 +632,7 @@ jobs:
       - browser
       - control-plane
       - relay
+      - fleet
       - remote-e2e
     runs-on: ubuntu-latest
     timeout-minutes: 20

@@ -4,7 +4,8 @@ Guidance for any agent working in this repo (this file is `AGENTS.md`; `CLAUDE.m
 is a symlink to it, so both names serve the same single source). Bivy runs coding agents on
 machines you own — an open-source, self-hostable agent workspace. The node daemon
 and CLI live in `src/`; shared logic in `packages/core`; the React PWA in
-`packages/web`; the design system in `packages/ui`.
+`packages/web`; the design system in `packages/ui`; the services in
+`services/` (control plane, relay, fleet).
 
 ## Code structure philosophy
 
@@ -25,15 +26,21 @@ one large, entangled unit.
 
 ## What belongs in this repo
 
-This repo is everything a person or team needs to run Bivy on infrastructure
-they control, plus every piece of code that handles user secrets or session
-data, so its security claims stay auditable. Rules that only matter when
-operating Bivy for many unrelated accounts (plans, limits, quotas, operator
-credentials, launch profiles, fleet scheduling, abuse policy) do not live here.
-Core reaches them through the deployment extension
-(`services/control-plane/src/deployment-extension.ts`): add a neutral hook and
-pass technical facts, never tier names, prices or caps. With no extension
-configured, Core stays fully usable.
+This repo is **the whole stack**: everything a person or team needs to run Bivy
+on infrastructure they control — the node, the PWA, the control plane
+(`services/control-plane`), the relay (`services/relay`) and the fleet that
+runs cloud machines (`services/fleet`) — plus every piece of code that handles
+user secrets or session data, so its security claims stay auditable. A
+deployment's own ceilings (hours, machines, sizes, disk) are mechanisms, so they
+live here too, as configuration.
+
+What does **not** live here is commerce: plans, tiers, prices, payment
+providers, invoicing and abuse policy. Core reaches those through the deployment
+extension (`services/control-plane/src/deployment-extension.ts`) and the fleet
+through its policy hook (`services/fleet/src/policy.ts`): add a neutral hook and
+pass technical facts, never tier names, prices or caps. Both sets of answers
+apply, and an operator service can only lower a deployment's own ceiling, never
+raise it. With nothing configured, the stack stays fully usable.
 
 ## Design system — follow it, don't fork it
 

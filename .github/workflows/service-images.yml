@@ -1,6 +1,6 @@
 name: Core service images
 
-# Build the distributable control-plane and relay artifacts in the repository
+# Build the distributable control-plane, relay and fleet artifacts in the repository
 # that owns their source. Cloud and self-hosted deployments consume these exact
 # images instead of rebuilding a Core commit in a deployment repository.
 on:
@@ -22,8 +22,10 @@ on:
     paths:
       - deploy/Dockerfile.control-plane
       - deploy/Dockerfile.relay
+      - deploy/Dockerfile.fleet
       - services/control-plane/**
       - services/relay/**
+      - services/fleet/**
       - packages/**
       - src/automation/**
       - package.json
@@ -73,6 +75,12 @@ jobs:
             arch: amd64
             runner: ubuntu-latest
           - service: relay
+            arch: arm64
+            runner: ubuntu-24.04-arm
+          - service: fleet
+            arch: amd64
+            runner: ubuntu-latest
+          - service: fleet
             arch: arm64
             runner: ubuntu-24.04-arm
     steps:
@@ -131,7 +139,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        service: [control-plane, relay]
+        service: [control-plane, relay, fleet]
         arch: [amd64, arm64]
         include:
           - arch: amd64
@@ -142,6 +150,8 @@ jobs:
             image: bivy-control-plane
           - service: relay
             image: bivy-relay
+          - service: fleet
+            image: bivy-fleet
     permissions:
       contents: read
       packages: write
@@ -207,6 +217,8 @@ jobs:
             image: bivy-control-plane
           - service: relay
             image: bivy-relay
+          - service: fleet
+            image: bivy-fleet
     permissions:
       contents: read
       packages: write
@@ -245,14 +257,15 @@ jobs:
       contents: read
       statuses: write
     steps:
-      # GHCR visibility is UI-only. Operators make both packages public once;
-      # every publication verifies that property before recording success.
+      # GHCR visibility is UI-only. Operators make each package public once —
+      # including bivy-fleet, the first time it is published — and every
+      # publication verifies that property before recording success.
       - name: Verify anonymous multi-platform pulls
         env:
           CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
         run: |
           set -euo pipefail
-          for image in bivy-control-plane bivy-relay; do
+          for image in bivy-control-plane bivy-relay bivy-fleet; do
             manifest="$(docker buildx imagetools inspect --raw "ghcr.io/bivysh/$image:$CORE_SHA")"
             for arch in amd64 arm64; do
               jq -e --arg arch "$arch" \
@@ -288,6 +301,6 @@ jobs:
           gh api --method POST "/repos/$GITHUB_REPOSITORY/statuses/$CORE_SHA" \
             -f state=success \
             -f context=service-images/published \
-            -f description="Public control-plane and relay images verified" \
+            -f description="Public control-plane, relay and fleet images verified" \
             -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             >/dev/null

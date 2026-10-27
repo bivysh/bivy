@@ -47,6 +47,10 @@ env:
     # The local owner account `kamal owner-login` signs you into.
     SELF_HOST_OWNER_EMAIL: owner@self-host.invalid
     WEB_PUSH_SUBJECT: mailto:admin@<%= ENV.fetch("BIVY_DOMAIN") %>
+    # Cloud machines, when this deployment runs the fleet (deploy.fleet.yml).
+    # Blank leaves them off, and sessions run only on machines people connect.
+    EPHEMERAL_MACHINES_ENABLED: <%= ENV.fetch("EPHEMERAL_MACHINES_ENABLED", "") %>
+    DEPLOYMENT_COMPUTE_URL: <%= ENV.fetch("DEPLOYMENT_COMPUTE_URL", "") %>
   secret:
     - DATABASE_URL
     - RELAY_SECRET
@@ -59,6 +63,8 @@ env:
     - WEB_PUSH_VAPID_PUBLIC_KEY
     - WEB_PUSH_VAPID_PRIVATE_KEY
     - HOSTED_CREDENTIAL_KEY
+    # The shared secret with the fleet, both directions. Empty without one.
+    - DEPLOYMENT_COMPUTE_TOKEN
 
 accessories:
   postgres:

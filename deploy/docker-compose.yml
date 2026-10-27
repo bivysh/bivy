@@ -89,6 +89,11 @@ services:
       HOSTED_CREDENTIAL_KEY: "${HOSTED_CREDENTIAL_KEY:-}"
       HOSTED_CREDENTIAL_KEYS: "${HOSTED_CREDENTIAL_KEYS:-}"
       HOSTED_CREDENTIAL_KEY_PRIMARY: "${HOSTED_CREDENTIAL_KEY_PRIMARY:-}"
+      # Where the cloud machines come from, when this deployment runs any: the
+      # fleet below, or an operator's own compute service. Both must be set
+      # together, or neither. See docs/ephemeral-sessions.md.
+      DEPLOYMENT_COMPUTE_URL: "${DEPLOYMENT_COMPUTE_URL:-}"
+      DEPLOYMENT_COMPUTE_TOKEN: "${DEPLOYMENT_COMPUTE_TOKEN:-}"
       # Used only by the server-shell operator-login command, never an HTTP gate.
       SELF_HOST_OWNER_EMAIL: "${SELF_HOST_OWNER_EMAIL:-}"
       # Optional portable browser setup; generate with openssl rand -hex 32.
@@ -174,6 +179,67 @@ services:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4500/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 5s
       timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # Cloud machines: one sleeping machine per account on a provider you pay for,
+  # plus optional per-work runners. Opt in with `--profile fleet` once
+  # DEPLOYMENT_COMPUTE_* and FLEET_* are set in .env; without it, Bivy runs
+  # sessions only on machines people connect themselves. See
+  # docs/ephemeral-sessions.md.
+  fleet:
+    image: "ghcr.io/bivysh/bivy-fleet:${BIVY_IMAGE_TAG:?set BIVY_IMAGE_TAG to a release version or full commit SHA}"
+    profiles: ["fleet"]
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging: *default-logging
+    mem_limit: 256m
+    cpus: 1.0
+    environment:
+      NODE_ENV: "${NODE_ENV:-production}"
+      PORT: "4600"
+      # The same secret the control plane has: the fleet asks Core for each
+      # machine's boot payload with it, and Core asks the fleet for machines.
+      DEPLOYMENT_COMPUTE_TOKEN: "${DEPLOYMENT_COMPUTE_TOKEN:?set DEPLOYMENT_COMPUTE_TOKEN to run the fleet}"
+      FLEET_CORE_URL: "${FLEET_CORE_URL:-http://control-plane:4400}"
+      # The provider credential. The fleet is the only service that holds it.
+      FLEET_PROVIDER: "${FLEET_PROVIDER:-fly}"
+      FLEET_PROVIDER_TOKEN_FLY: "${FLEET_PROVIDER_TOKEN_FLY:-}"
+      FLEET_PROVIDER_ORG: "${FLEET_PROVIDER_ORG:-}"
+      FLEET_IMAGE: "${FLEET_IMAGE:?set FLEET_IMAGE to a machine image with Bivy installed}"
+      FLEET_REGION: "${FLEET_REGION:-iad}"
+      FLEET_SIZE: "${FLEET_SIZE:-}"
+      FLEET_NAME: "${FLEET_NAME:-}"
+      FLEET_DISK_GB: "${FLEET_DISK_GB:-}"
+      FLEET_DISK_MAX_GB: "${FLEET_DISK_MAX_GB:-}"
+      FLEET_AWAKE_CAP_MINUTES: "${FLEET_AWAKE_CAP_MINUTES:-}"
+      FLEET_IDLE_DELETE_DAYS: "${FLEET_IDLE_DELETE_DAYS:-}"
+      FLEET_IDLE_WARN_DAYS: "${FLEET_IDLE_WARN_DAYS:-}"
+      FLEET_CPU_GUARD_PERCENT: "${FLEET_CPU_GUARD_PERCENT:-}"
+      FLEET_CPU_GUARD_MINUTES: "${FLEET_CPU_GUARD_MINUTES:-}"
+      FLEET_RUNNERS: "${FLEET_RUNNERS:-}"
+      FLEET_MAX_RUNNERS_PER_ACCOUNT: "${FLEET_MAX_RUNNERS_PER_ACCOUNT:-}"
+      FLEET_MONTHLY_HOURS: "${FLEET_MONTHLY_HOURS:-}"
+      FLEET_MAX_MACHINES: "${FLEET_MAX_MACHINES:-}"
+      FLEET_SIZE_CLASSES: "${FLEET_SIZE_CLASSES:-}"
+      FLEET_EARLY_STARTS: "${FLEET_EARLY_STARTS:-}"
+      FLEET_GUEST_HARDENING_ATTESTED: "${FLEET_GUEST_HARDENING_ATTESTED:-}"
+      # An operator policy service in front of the caps above, when there is one.
+      FLEET_POLICY_URL: "${FLEET_POLICY_URL:-}"
+      FLEET_POLICY_TOKEN: "${FLEET_POLICY_TOKEN:-}"
+      DATABASE_URL: "postgres://${POSTGRES_USER:-bivy}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-bivy_control_plane}"
+    expose:
+      - "4600"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4600/healthz').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      start_period: 20s
       retries: 20
     restart: unless-stopped
 

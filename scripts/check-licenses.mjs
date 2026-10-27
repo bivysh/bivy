@@ -9,15 +9,16 @@
 // That is strictly better than reading a lockfile: it audits the bytes that are
 // actually on disk. It does require `pnpm install` to have run first.
 //
-// services/relay and services/control-plane are separate npm projects with their
-// own package-lock.json, and npm's lockfile does carry `license`, so those keep
-// the cheaper lockfile-based path (no install needed).
+// The services under services/ are separate npm projects with their own
+// package-lock.json, and npm's lockfile does carry `license`, so those keep the
+// cheaper lockfile-based path (no install needed).
 import fs from "node:fs";
 import path from "node:path";
 
 const npmLockfiles = [
   "services/relay/package-lock.json",
   "services/control-plane/package-lock.json",
+  "services/fleet/package-lock.json",
 ].filter((file) => fs.existsSync(file));
 
 const allowed = new Set([

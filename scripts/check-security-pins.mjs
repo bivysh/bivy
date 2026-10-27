@@ -157,7 +157,7 @@ for (const [name, version] of expected) {
 
 // Service lockfiles: every pinned registry tarball must still be the version its
 // entry claims. A release version bump once relabeled third-party entries.
-for (const service of ["control-plane", "relay"]) {
+for (const service of ["control-plane", "relay", "fleet"]) {
   const lock = JSON.parse(fs.readFileSync(`services/${service}/package-lock.json`, "utf8"));
   for (const [name, entry] of Object.entries(lock.packages ?? {})) {
     if (!entry.version || !entry.resolved?.startsWith("https://registry.npmjs.org/")) continue;

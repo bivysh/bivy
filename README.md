@@ -365,7 +365,7 @@ and [Remote access](docs/remote-access.md).
 |---|---|
 | **Free Cloud — $0** | Every launch feature, including automations; 10 new remote sessions per rolling seven days; 5 hours on a cloud computer. No credit card required. |
 | **Cloud — $15/month** | The same features with unlimited remote sessions and 120 cloud computer hours a month. |
-| **Self-hosted Core** | Operate the app, control plane, and relay yourself, with no Bivy usage limits. |
+| **Self-hosted** | Operate the whole stack yourself — app, control plane, relay, and the fleet that runs cloud machines — with no Bivy usage limits. |
 
 Manual and automated sessions share the Cloud allowance. Resuming existing
 sessions and viewing history do not consume it. A cloud computer counts hours
@@ -374,6 +374,9 @@ separate. See [current pricing](https://bivy.sh#pricing).
 
 **Self-host anywhere:** deploy the public control-plane (including the web app)
 and relay images with Postgres and [a small set of environment variables](docs/deploy-images.md).
+Add the fleet image and a provider token and your own deployment hands out
+cloud machines too — one sleeping computer per account, like Bivy Cloud does
+([cloud machines](docs/ephemeral-sessions.md#run-the-fleet-yourself)).
 Your server or container platform handles HTTPS. Set up owner access in the
 browser—no SSH, external authentication provider, or Bivy Cloud account required.
 For a bare VPS, the [Compose installer](docs/self-host-quickstart.md) automates the
@@ -392,8 +395,8 @@ bivy relay:setup \
 
 Self-hosting is community-supported: you own TLS, backups, upgrades, and
 hardening. Public multi-architecture images are available as
-`ghcr.io/bivysh/bivy-control-plane` and `ghcr.io/bivysh/bivy-relay`; pin a release
-version or full commit SHA.
+`ghcr.io/bivysh/bivy-control-plane`, `ghcr.io/bivysh/bivy-relay` and
+`ghcr.io/bivysh/bivy-fleet`; pin a release version or full commit SHA.
 
 [Deploy the images anywhere →](docs/deploy-images.md) ·
 [Optional VPS installer →](docs/self-host-quickstart.md) ·

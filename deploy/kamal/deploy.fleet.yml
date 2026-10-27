@@ -1,0 +1,54 @@
+# Kamal 2: the fleet that runs Bivy's cloud machines, on the control plane's
+# server. Optional — without it, sessions run only on machines people connect
+# themselves. Deploy the control plane first (deploy.yml), and set
+# DEPLOYMENT_COMPUTE_URL=http://bivy-fleet:4600 on it.
+#
+#   kamal setup -c deploy/kamal/deploy.fleet.yml
+#
+# It publishes no port and gets no proxy host: only the control plane talks to
+# it, over the kamal network. See docs/ephemeral-sessions.md.
+
+service: bivy-fleet
+image: bivy-fleet
+
+servers:
+  web:
+    hosts:
+      - <%= ENV.fetch("BIVY_HOST") %>
+    proxy: false
+
+registry:
+  server: localhost:5555
+
+builder:
+  arch: <%= ENV.fetch("BIVY_ARCH", "amd64") %>
+  context: deploy/kamal
+  dockerfile: deploy/kamal/Dockerfile.fleet
+  args:
+    BIVY_VERSION: <%= ENV.fetch("BIVY_VERSION") %>
+
+env:
+  clear:
+    NODE_ENV: production
+    PORT: "4600"
+    FLEET_CORE_URL: http://bivy-control-plane:4400
+    FLEET_PROVIDER: <%= ENV.fetch("BIVY_FLEET_PROVIDER", "fly") %>
+    FLEET_IMAGE: <%= ENV.fetch("BIVY_FLEET_IMAGE") %>
+    FLEET_REGION: <%= ENV.fetch("BIVY_FLEET_REGION", "iad") %>
+    # Caps, so no one account can spend the whole provider budget. 0 = no cap.
+    FLEET_MONTHLY_HOURS: <%= ENV.fetch("BIVY_FLEET_MONTHLY_HOURS", "0") %>
+    FLEET_MAX_MACHINES: <%= ENV.fetch("BIVY_FLEET_MAX_MACHINES", "0") %>
+    # You have checked the image's egress and process controls. Required here.
+    FLEET_GUEST_HARDENING_ATTESTED: "1"
+  secret:
+    - DEPLOYMENT_COMPUTE_TOKEN
+    - FLEET_PROVIDER_TOKEN_FLY
+    - DATABASE_URL
+
+aliases:
+  logs: app logs -f
+
+secrets_path: deploy/kamal/secrets
+
+ssh:
+  user: <%= ENV.fetch("BIVY_SSH_USER", "root") %>
