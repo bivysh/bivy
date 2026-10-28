@@ -173,6 +173,16 @@ test("session coordinator owns draft creation ordering and first prompt framing"
   }, workflow);
   coordinator.newSession();
   assert.deepEqual(events, ["navigate", "focus", "clear", "reset", "defaults", "runtimes", "models", "settings", "repos", "branches"]);
+  // Starting from an open session's repo overrides the remembered one, and its
+  // branches are what get listed.
+  events.length = 0;
+  let draftRepo = "owner/repo";
+  workflow.draftRepo = () => draftRepo;
+  workflow.chooseRepo = (slug: string) => { draftRepo = slug; events.push(`choose:${slug}`); };
+  workflow.listBranches = (repo: string) => events.push(`branches:${repo}`);
+  coordinator.newSession({ repo: "acme/api" });
+  assert.deepEqual(events.slice(4, 6), ["defaults", "choose:acme/api"]);
+  assert.equal(events.at(-1), "branches:acme/api");
   events.length = 0;
   coordinator.sendPrompt("  hello  ");
   assert.equal(pending.frame.kind, "session.new");
