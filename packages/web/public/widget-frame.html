@@ -3,14 +3,18 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; connect-src 'none'; frame-src 'none'; worker-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'">
 <title>Widget</title>
 <!--
   The frame every chat widget runs in. See docs/widgets.md.
 
-  It is served with its own Content-Security-Policy, including the `sandbox`
-  directive, so whatever it loads runs in an OPAQUE origin no matter who frames
-  it: the widget can never read the app's storage, cookies or DOM. The app
-  frames it with the same sandbox attribute as a second layer.
+  Its policy travels with it, in the meta tag above, so it holds whichever
+  server hands the page out (the control plane, a node's direct listener, Vite):
+  no network calls, frames or form submissions. The page is always framed with
+  the `sandbox` attribute (no allow-same-origin), so whatever it loads runs in an
+  OPAQUE origin and can never read the app's storage, cookies or DOM; servers
+  also send the `sandbox` directive as a header, which covers the page opened
+  any other way. A meta policy cannot be loosened by markup written after it.
 
   The handshake is the MCP Apps sandbox proxy's: this page says
   `ui/notifications/sandbox-proxy-ready`, the host answers with

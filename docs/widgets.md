@@ -54,13 +54,15 @@ The app's design tokens are set on the widget's root under their own names
 A widget is agent-written code, and an agent's output can be shaped by what it
 reads. The widget therefore runs with nothing of the app's:
 
-- **Opaque origin.** The frame page is served with a Content-Security-Policy
-  `sandbox` directive, and framed with the `sandbox` attribute too, without
-  `allow-same-origin`. The widget cannot read the app's storage, cookies, DOM
-  or API, and cannot navigate the app.
-- **No network calls.** `connect-src 'none'`: no `fetch`, XHR, WebSocket or
-  form submission. Scripts, styles, fonts and images may load from `https://`
-  CDNs. Live data comes through `bivy.call`, which runs on the machine.
+- **Opaque origin.** The frame is always framed with the `sandbox` attribute,
+  without `allow-same-origin`, and servers also send the `sandbox` directive as
+  a header. The widget cannot read the app's storage, cookies, DOM or API, and
+  cannot navigate the app.
+- **No network calls.** The frame page carries its own Content-Security-Policy
+  (a meta tag, so it holds whichever server hands the page out, and markup
+  written after it cannot loosen it): `connect-src 'none'`, so no `fetch`, XHR,
+  WebSocket or form submission. Scripts, styles, fonts and images may load from
+  `https://` CDNs. Live data comes through `bivy.call`, which runs on the machine.
 - **The person causes every message.** `bivy.send` is refused unless the frame
   has focus (the person clicked or typed in it), the widget's session is the one
   open, and the last message from that widget was more than a second ago.

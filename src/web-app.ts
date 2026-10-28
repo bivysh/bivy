@@ -42,6 +42,9 @@ export function webAppRouter(dirs: string[]): express.Router | null {
       setHeaders(res, filePath) {
         const name = path.basename(filePath);
         if (name === "index.html" || name === "sw.js" || name.startsWith("workbox-")) noStore(res);
+        // The chat widget frame carries its own policy (a meta tag); the
+        // sandbox directive can only be a header. See docs/widgets.md.
+        if (name === "widget-frame.html") res.setHeader("Content-Security-Policy", "sandbox allow-scripts allow-forms");
       },
     }));
   }

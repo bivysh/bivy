@@ -5,16 +5,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import express from "express";
+import fs from "node:fs";
 import { serveWidgetFrame } from "../src/widget-frame.js";
 
-test("the widget frame is sandboxed without same-origin, offline, and frameable by the app", async () => {
+const frame = fs.readFileSync(new URL("../../../packages/web/public/widget-frame.html", import.meta.url));
+
+test("the real widget frame is served sandboxed without same-origin, offline, and frameable by the app", async () => {
   const app = express();
   app.use((_req, res, next) => {
     res.setHeader("X-Frame-Options", "DENY");
     res.setHeader("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'");
     next();
   });
-  app.get("/widget-frame.html", serveWidgetFrame(Buffer.from("<!doctype html><title>frame</title>")));
+  app.get("/widget-frame.html", serveWidgetFrame(frame));
   const server = app.listen(0, "127.0.0.1");
   await new Promise<void>((resolve) => server.once("listening", resolve));
   try {
@@ -32,4 +35,8 @@ test("the widget frame is sandboxed without same-origin, offline, and frameable 
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+});
+
+test("a frame page without its own policy is refused at boot", () => {
+  assert.throws(() => serveWidgetFrame(Buffer.from("<!doctype html><title>frame</title>")), /must carry its Content-Security-Policy/);
 });

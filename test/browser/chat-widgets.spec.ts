@@ -6,7 +6,7 @@
 // agent only when the person used it, and keeps what it saved.
 import { expect, test, themes, type WebApp } from "./fixtures.js";
 import { fileURLToPath } from "node:url";
-import { WIDGET_FRAME_POLICY } from "../../services/control-plane/src/widget-frame.js";
+import { widgetFramePolicy } from "../../services/control-plane/src/widget-frame.js";
 
 let server: WebApp;
 let origin: string;
@@ -79,7 +79,7 @@ for (const theme of themes) {
     // The frame with the policy production serves it under, not Vite's bare file.
     await page.route(`${origin}/widget-frame.html`, async (route) => {
       const response = await route.fetch();
-      await route.fulfill({ response, headers: { ...response.headers(), "content-security-policy": WIDGET_FRAME_POLICY } });
+      await route.fulfill({ response, headers: { ...response.headers(), "content-security-policy": widgetFramePolicy(await response.text()) } });
     });
     await page.goto(`${origin}/widget-test`);
 
