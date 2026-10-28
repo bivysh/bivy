@@ -563,7 +563,7 @@ app.get("/", (_req, res) => {
 });
 // Chat widgets' sandboxed frame, with its own policy (see widget-frame.ts).
 const widgetFrameFile = path.join(reactAppDir, "widget-frame.html");
-if (fs.existsSync(widgetFrameFile)) app.get("/widget-frame.html", serveWidgetFrame(widgetFrameFile));
+if (fs.existsSync(widgetFrameFile)) app.get("/widget-frame.html", serveWidgetFrame(fs.readFileSync(widgetFrameFile)));
 if (hasReactApp) {
   // The app's own hashed assets, service worker and manifest. Never long-cache
   // the entry document or the SW so a deploy is picked up on the next load.

@@ -27,11 +27,12 @@ export const WIDGET_FRAME_POLICY = [
   "object-src 'none'",
 ].join("; ");
 
-export function serveWidgetFrame(file: string) {
+/** Serve the page from memory (read once at boot), so a request touches no file. */
+export function serveWidgetFrame(html: Buffer) {
   return (_req: Request, res: Response) => {
     res.removeHeader("X-Frame-Options");
     res.setHeader("Content-Security-Policy", WIDGET_FRAME_POLICY);
     res.setHeader("Cache-Control", "public, max-age=300");
-    res.sendFile(file);
+    res.type("html").send(html);
   };
 }
