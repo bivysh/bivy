@@ -131,7 +131,28 @@ A git source is cloned shallowly into a temporary folder first. Install copies
 the plugin's folder into the store: regular files only, no symlinks, no
 dot-directories such as `.git`, at most 2000 files and 50 MB. It never runs an
 install script or downloads dependencies, so a tool that needs packages ships
-them in the folder. Sharing a plugin is pushing its folder to a repository.
+them in the folder.
+
+Sharing a plugin is pushing its folder to a repository and giving the
+repository the `bivy-plugin` topic. There is no registry to publish to:
+`bivy plugin search [words]` finds tagged repositories on GitHub and prints the
+install command for each.
+
+### Kits: a whole setup
+
+A kit is several plugins and a theme in one folder, listed in `bivy.kit.yaml`:
+
+```yaml
+apiVersion: bivy.sh/v1alpha1
+kind: Kit
+metadata: { id: my-setup, name: My setup }
+plugins: [plugins/standup, plugins/dusk]
+theme: dusk
+```
+
+`bivy kit export <dir>` writes the plugins installed on this machine (and the
+chosen theme) as one; `bivy kit apply github:owner/repo` installs one. Tag a
+shared kit's repository `bivy-kit`.
 
 ## Terminology and boundaries
 
@@ -421,8 +442,10 @@ of the selected Bivy execution path:
   `authOwner` and the existing runtime credential rules. Review the executable,
   manifest, and requested model/provider behavior before installation.
 
-There is no central plugin registry: a plugin is a folder, shared as a git
-repository. Install from sources you trust and pin a tag (`#v1.2.0`).
+There is no central plugin registry or review: a plugin is a folder, shared as
+a git repository, and `bivy plugin search` lists what people tagged. Read a
+plugin before installing it, install from sources you trust, and pin a tag
+(`#v1.2.0`).
 
 ## Current limitations and roadmap
 

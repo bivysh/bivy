@@ -80,5 +80,11 @@ The file needs a `# Title` line and a `Summary: …` line.
     bivy guide <topic>                 # read a guide back
 
 Then show the result: place the widget in your reply, or say which theme is
-set. To share a plugin, push its folder to a git repository; anyone installs it
-with `bivy plugin install github:owner/repo[/path]`.
+set.
+
+Before building, `bivy plugin search <words>` shows what others shared; read one
+before installing it. To share a plugin, push its folder to a git repository
+with the topic `bivy-plugin`; anyone installs it with
+`bivy plugin install github:owner/repo[/path]`. `bivy kit export <dir>` packs
+every plugin on this machine and the chosen theme into one folder to push
+(topic `bivy-kit`); `bivy kit apply github:owner/repo` sets one up.

@@ -29,7 +29,7 @@ run your first agent Session.
 | Start checked work from failed CI, an issue, a schedule, or a webhook | [Capability recipes](capability-recipes.md#let-events-start-runs) | [Automations as code](automations-as-code.md) |
 | Bring any ACP agent or CLI, or write an adapter for one | [Add any agent](add-an-agent.md) | [Plugins](plugins.md) |
 | Let the user pick, fill in or adjust something right in the chat | [Chat widgets](widgets.md) | [Plugins](plugins.md) |
-| Make Bivy do more: a reusable widget, a tool, a theme, a playbook | [Plugins](plugins.md) | [CLI reference](cli-reference.md#bivy-plugin-initvalidatedoctortestinstalldevlistremove) |
+| Make Bivy do more: a reusable widget, a tool, a theme, a playbook | [Plugins](plugins.md) | [CLI reference](cli-reference.md#bivy-plugin-initvalidatedoctortestinstalldevsearchlistremove) |
 | Understand what leaves my Machine | [Why Bivy](why-bivy.md#a-precise-trust-boundary) | [Security model](security-model.md) |
 
 The reference organization below remains the fastest path when you already know

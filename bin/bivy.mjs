@@ -6790,10 +6790,11 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       process.exit(await run(nodeBin, [...nodeScriptArgs(credentialsEntry), ...forwardArgs], { cwd: repoRoot, env: process.env }));
       break;
     }
-    // `bivy tools …` and `bivy theme …` are plugin contributions, handled by the plugin CLI.
+    // `bivy tools …`, `bivy theme …` and `bivy kit …` are plugin contributions, handled by the plugin CLI.
     case "plugin":
     case "tools":
-    case "theme": {
+    case "theme":
+    case "kit": {
       if (!(await ensureDeps())) process.exit(1);
       const pluginEnv = { ...process.env };
       const configuredAgents = loadConfig().env?.BIVY_CUSTOM_AGENTS;
