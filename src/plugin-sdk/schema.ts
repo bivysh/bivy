@@ -5,7 +5,7 @@ export const PLUGIN_MANIFEST_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: "https://bivy.sh/schemas/plugin/v1alpha1.json",
   title: "Bivy plugin manifest",
-  description: "A declarative Bivy agent plugin manifest.",
+  description: "A declarative Bivy plugin manifest: agents, chat widgets, tools, themes and guides.",
   type: "object",
   additionalProperties: false,
   required: ["apiVersion", "kind", "metadata", "contributes"],
@@ -39,18 +39,86 @@ export const PLUGIN_MANIFEST_SCHEMA = {
     contributes: {
       type: "object",
       additionalProperties: false,
-      required: ["agents"],
+      minProperties: 1,
       properties: {
-        agents: {
-          type: "array",
-          minItems: 1,
-          maxItems: 20,
-          items: { $ref: "#/$defs/agent" },
-        },
+        agents: { type: "array", maxItems: 20, items: { $ref: "#/$defs/agent" } },
+        widgets: { type: "array", maxItems: 20, items: { $ref: "#/$defs/widget" } },
+        tools: { type: "array", maxItems: 50, items: { $ref: "#/$defs/tool" } },
+        themes: { type: "array", maxItems: 20, items: { $ref: "#/$defs/theme" } },
+        guides: { type: "array", maxItems: 20, items: { $ref: "#/$defs/guide" } },
       },
     },
   },
   $defs: {
+    relativeFile: {
+      type: "string",
+      minLength: 1,
+      maxLength: 200,
+      pattern: "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\\\]+$",
+    },
+    widget: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "name", "entry"],
+      properties: {
+        id: { type: "string", pattern: "^[a-z][a-z0-9-]{1,47}$" },
+        name: { type: "string", minLength: 1, maxLength: 120 },
+        description: { type: "string", minLength: 1, maxLength: 500 },
+        entry: { allOf: [{ $ref: "#/$defs/relativeFile" }, { pattern: "\\.html?$" }] },
+      },
+    },
+    tool: {
+      type: "object",
+      additionalProperties: false,
+      required: ["name", "description", "command"],
+      properties: {
+        name: { type: "string", pattern: "^[a-z][a-z0-9_]{1,63}$" },
+        description: { type: "string", minLength: 1, maxLength: 1000 },
+        input: {
+          type: "object",
+          maxProperties: 32,
+          additionalProperties: {
+            type: "object",
+            additionalProperties: false,
+            required: ["type"],
+            properties: {
+              type: { enum: ["string", "number", "boolean", "array", "object"] },
+              description: { type: "string", maxLength: 500 },
+              required: { type: "boolean" },
+            },
+          },
+        },
+        command: { type: "string", minLength: 1, maxLength: 500 },
+        args: { $ref: "#/$defs/stringArgs" },
+        timeoutSeconds: { type: "integer", minimum: 1, maximum: 300 },
+        widgets: { type: "boolean" },
+      },
+    },
+    theme: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "name", "colors"],
+      properties: {
+        id: { type: "string", pattern: "^[a-z][a-z0-9-]{1,47}$" },
+        name: { type: "string", minLength: 1, maxLength: 120 },
+        mode: { enum: ["light", "dark"] },
+        colors: {
+          type: "object",
+          additionalProperties: false,
+          required: ["background", "foreground"],
+          properties: Object.fromEntries(["background", "foreground", "accent", "selection", "muted", "red", "green", "yellow", "blue", "magenta", "cyan", "orange"].map((key) => [key, { type: "string", pattern: "^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$" }])),
+        },
+      },
+    },
+    guide: {
+      type: "object",
+      additionalProperties: false,
+      required: ["topic", "file"],
+      properties: {
+        topic: { type: "string", pattern: "^[a-z][a-z0-9-]{1,47}$" },
+        file: { allOf: [{ $ref: "#/$defs/relativeFile" }, { pattern: "\\.md$" }] },
+      },
+    },
     stringArgs: {
       type: "array",
       maxItems: 100,

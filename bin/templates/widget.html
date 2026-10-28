@@ -34,22 +34,31 @@
     bivy.ready(function () {
       var data = bivy.data;
       document.getElementById("question").textContent = data.question || "Pick one";
-      var chosen = bivy.state.choice;
+      var buttons = [];
+      // Once answered, the choice stays marked and the others step back.
+      function settle(choice) {
+        buttons.forEach(function (b) {
+          var picked = b.textContent === choice;
+          b.className = picked ? "primary" : "";
+          b.setAttribute("aria-pressed", String(picked));
+          b.disabled = !picked;
+          if (picked) b.onclick = null;
+        });
+        document.getElementById("status").textContent = "You picked " + choice + ".";
+      }
       (data.options || ["Yes", "No"]).forEach(function (option) {
         var button = document.createElement("button");
+        button.type = "button";
         button.textContent = option;
-        if (option === chosen) button.className = "primary";
-        button.disabled = Boolean(chosen);
         button.onclick = function () {
           bivy.setState({ choice: option });
           bivy.send("I pick: " + option);
-          document.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
-          button.className = "primary";
-          document.getElementById("status").textContent = "Sent.";
+          settle(option);
         };
+        buttons.push(button);
         document.getElementById("options").appendChild(button);
       });
-      if (chosen) document.getElementById("status").textContent = "You picked " + chosen + ".";
+      if (bivy.state.choice) settle(bivy.state.choice);
     });
   </script>
 </body>

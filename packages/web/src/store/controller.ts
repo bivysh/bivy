@@ -1649,7 +1649,7 @@ export class AppController {
 
   /** A chat widget's saved state and tools, on the machine its session runs
    *  on (see src/controllers/widget-commands.ts). Rejects with the node's reason. */
-  async widgetCommand(kind: "widgets.state.get" | "widgets.state.set" | "widgets.tool", sessionId: string, fields: Record<string, unknown> = {}): Promise<ServerEvent> {
+  async widgetCommand(kind: "widgets.state.get" | "widgets.state.set" | "widgets.source" | "widgets.tool", sessionId: string, fields: Record<string, unknown> = {}): Promise<ServerEvent> {
     if (this.store.getState().connection.status !== "online") throw new Error("Connect to the machine to use this widget.");
     return this.awaitAck({ kind, sessionId, ...fields }, 30_000);
   }

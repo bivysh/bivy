@@ -47,6 +47,8 @@ import { createAppCommands } from "./controllers/app-commands.js";
 import { createFileCommands } from "./controllers/file-commands.js";
 import { createWidgetCommands } from "./controllers/widget-commands.js";
 import { WidgetStateStore } from "./widgets/state.js";
+import { readPluginWidget } from "./plugins/contributions.js";
+import { runPluginTool, widgetTool } from "./plugins/tools.js";
 import { bindClientCommandRoutes } from "./http/client-command-routes.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, catalogReplyEvent, warmSessionCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
@@ -105,7 +107,7 @@ import { canOpenBrowser, openBrowser } from "./browser-open.js";
 import { openOAuthLoginOnNode } from "./runtime/oauth/oauth-node-open.js";
 import { collectNodeStats } from "./node-stats.js";
 import { SessionEventCoalescer } from "./session-event-coalescer.js";
-import { readMachineTheme, watchMachineTheme } from "./machine-theme.js";
+import { readMachineTheme, SELECTED_THEME_DIR, watchMachineTheme } from "./machine-theme.js";
 import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed, markRemoteListener } from "./auth.js";
 import { PairCodes } from "./pair-codes.js";
 import { accessReport, type AccessReport } from "./access.js";
@@ -2001,7 +2003,8 @@ const CLIENT_BACKPRESSURE_BYTES = 8 * 1024 * 1024;
 let projectClientMessage: ReturnType<typeof createClientProjection> | undefined;
 
 // The machine's desktop theme (Omarchy), so every connected app can match it.
-let machineTheme = readMachineTheme();
+const selectedThemeDir = path.join(appDir, SELECTED_THEME_DIR);
+let machineTheme = readMachineTheme(os.homedir(), selectedThemeDir);
 const machineThemeEvent = () => ({ type: "node.theme", theme: machineTheme });
 
 function broadcast(payload: unknown) {
@@ -2641,9 +2644,14 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   // Chat widgets: their saved state, and tools plugins provide to them.
   ...createWidgetCommands({
     store: new WidgetStateStore(path.join(appDir, "widget-state")),
-    callTool: async (_sessionId, name) => {
-      throw new Error(`No plugin on this machine provides a tool called "${name}".`);
+    callTool: async (sessionId, name, args) => {
+      const tool = widgetTool(name);
+      const record = resolveSession(sessionId);
+      const meta = metadata.getSession(sessionId);
+      const cwd = (record ? harnessDirFor(record) : meta?.worktree || meta?.workspace) || os.homedir();
+      return runPluginTool(tool, args, { cwd, sessionId });
     },
+    widgetSource: (name) => readPluginWidget(name),
   }),
   ...createArtifactCommands({
     sessionIds: () => new Set([...metadata.listSessions().map((session) => session.id), ...[...openSessions.values()].map((record) => record.id)]),
@@ -12391,7 +12399,7 @@ const server = app.listen(port, host, async () => {
   watchMachineTheme((theme) => {
     machineTheme = theme;
     broadcast(machineThemeEvent());
-  });
+  }, os.homedir(), 1500, selectedThemeDir);
   void reloadDirectListener().catch((error) => console.error("[direct] Could not start the direct listener:", error instanceof Error ? error.message : error));
   void syncAgentBridges().catch((error) => console.warn("[bridges] Could not install agent bridges; they will install on first use:", error instanceof Error ? error.message : error));
   if (appGateway) {

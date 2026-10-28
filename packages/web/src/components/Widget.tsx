@@ -7,6 +7,7 @@
 //   ::view{src=widgets/poll.html}                        a page in the workspace
 //   ```bivy {"type":"widget","url":"widgets/poll.html","data":{…}}```
 //   ```bivy {"type":"widget","html":"<button>…</button>"}```   small and inline
+//   ```bivy {"type":"widget","widget":"poll","data":{…}}```    one a plugin provides
 //
 // The page runs in /widget-frame.html, in an opaque origin (see that file), so
 // it cannot read anything of the app's. Everything it can do goes through
@@ -76,8 +77,10 @@ export interface WidgetProps {
 
 export function Widget({ spec, attachment, path, attrs, sessionId, streaming }: WidgetProps) {
   const inline = typeof spec?.html === "string" ? spec.html : null;
+  const named = typeof spec?.widget === "string" ? spec.widget : null;
   const data = useMemo(() => (spec?.data && typeof spec.data === "object" && !Array.isArray(spec.data) ? (spec.data as Record<string, unknown>) : {}), [spec]);
-  const title = (typeof attrs.caption === "string" && attrs.caption) || (typeof spec?.title === "string" && spec.title) || path || "Widget";
+  const [pluginName, setPluginName] = useState<string | null>(null);
+  const title = (typeof attrs.caption === "string" && attrs.caption) || (typeof spec?.title === "string" && spec.title) || pluginName || path || named || "Widget";
   const caption = typeof attrs.caption === "string" ? attrs.caption : typeof spec?.caption === "string" ? spec.caption : undefined;
   const declaredHeight = Number(attrs.height ?? spec?.height) || DEFAULT_HEIGHT;
 
@@ -86,6 +89,25 @@ export function Widget({ spec, attachment, path, attrs, sessionId, streaming }: 
     if (inline !== null) {
       setSource({ state: "ready", html: inline, source: inline });
       return;
+    }
+    if (named !== null) {
+      // A plugin's widget is read from the machine each time it is shown, so
+      // updating the plugin updates every message that uses it.
+      if (!sessionId) return setSource({ state: "error", reason: "This widget comes from a plugin on the session's machine." });
+      let cancelled = false;
+      void controller.widgetCommand("widgets.source", sessionId, { name: named }).then(
+        (reply) => {
+          if (cancelled) return;
+          const widget = (reply as { widget?: { html?: string; name?: string } }).widget;
+          if (typeof widget?.html !== "string") return setSource({ state: "error", reason: "This widget could not be read." });
+          if (widget.name) setPluginName(widget.name);
+          setSource({ state: "ready", html: widget.html, source: `plugin:${named}` });
+        },
+        (error: unknown) => !cancelled && setSource({ state: "error", reason: error instanceof Error ? error.message : "This widget could not be read." }),
+      );
+      return () => {
+        cancelled = true;
+      };
     }
     if (!attachment) {
       setSource({ state: "loading" });
@@ -111,7 +133,7 @@ export function Widget({ spec, attachment, path, attrs, sessionId, streaming }: 
     return () => {
       cancelled = true;
     };
-  }, [inline, attachment, path]);
+  }, [inline, named, sessionId, attachment, path]);
 
   const key = useMemo(
     () => (source.state === "ready" ? widgetKey({ id: attrs.id ?? spec?.id, source: source.source, data }) : null),

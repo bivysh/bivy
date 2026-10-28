@@ -366,6 +366,7 @@ export class DirectTransport implements Transport {
         case "files.read":
         case "widgets.state.get":
         case "widgets.state.set":
+        case "widgets.source":
         case "widgets.tool":
         case "access.get":
         case "secrets.list":

@@ -3,9 +3,15 @@
 /**
  * Versioned, declarative Bivy plugin manifest.
  *
- * v1alpha1 intentionally supports only agent contributions. A manifest never
- * executes code inside the daemon: process agents are ordinary child processes;
- * ACP agents are launched through Bivy's existing out-of-process ACP bridge.
+ * A manifest never executes code inside the daemon. What a plugin contributes
+ * is data or a separate process:
+ *   - agents: process agents are ordinary child processes; ACP agents are
+ *     launched through Bivy's existing out-of-process ACP bridge;
+ *   - widgets: HTML pages that run sandboxed inside chat messages;
+ *   - tools: commands run as child processes with JSON in and out;
+ *   - themes: a palette for the app;
+ *   - guides: markdown playbooks agents read with `bivy guide`.
+ * Adding a contribution type is a parser below and a row in CONTRIBUTION_TYPES.
  */
 import { parse as parseSemver, satisfies, valid, validRange } from "semver";
 import { parse as parseYaml } from "yaml";
@@ -58,6 +64,49 @@ export interface PluginAgentContribution {
   adapter: ProcessAgentAdapter | AcpAgentAdapter;
 }
 
+export interface PluginWidgetContribution {
+  id: string;
+  name: string;
+  description?: string;
+  /** The page, relative to the plugin directory. */
+  entry: string;
+}
+
+/** One input field of a tool, in the same shape as Bivy's own command tools. */
+export interface PluginToolInputField {
+  type: "string" | "number" | "boolean" | "array" | "object";
+  description?: string;
+  required?: boolean;
+}
+
+export interface PluginToolContribution {
+  name: string;
+  description: string;
+  input?: Record<string, PluginToolInputField>;
+  /** Run with `{plugin}` in args replaced by the installed plugin's directory. */
+  command: string;
+  args?: string[];
+  timeoutSeconds?: number;
+  /** Chat widgets may call it too (`bivy.call`), not only agents. */
+  widgets?: boolean;
+}
+
+export const THEME_COLORS = ["background", "foreground", "accent", "selection", "muted", "red", "green", "yellow", "blue", "magenta", "cyan", "orange"] as const;
+export type ThemeColor = (typeof THEME_COLORS)[number];
+
+export interface PluginThemeContribution {
+  id: string;
+  name: string;
+  mode?: "light" | "dark";
+  colors: Partial<Record<ThemeColor, string>> & { background: string; foreground: string };
+}
+
+export interface PluginGuideContribution {
+  topic: string;
+  /** Markdown with a `# Title` line and a `Summary: …` line, relative to the plugin directory. */
+  file: string;
+}
+
 export interface PluginManifest {
   apiVersion: typeof PLUGIN_API_VERSION;
   kind: typeof PLUGIN_KIND;
@@ -73,6 +122,10 @@ export interface PluginManifest {
   };
   contributes: {
     agents: PluginAgentContribution[];
+    widgets?: PluginWidgetContribution[];
+    tools?: PluginToolContribution[];
+    themes?: PluginThemeContribution[];
+    guides?: PluginGuideContribution[];
   };
 }
 
@@ -290,6 +343,152 @@ function parseAgent(value: unknown, index: number, errors: string[]): PluginAgen
   };
 }
 
+/** A file inside the plugin directory: relative, no `..`, no backslashes. */
+function relativeFile(value: unknown, at: string, errors: string[], extensions: readonly string[]): string | undefined {
+  const file = requiredString(value, at, errors, 200);
+  if (!file) return undefined;
+  if (file.startsWith("/") || file.includes("\\") || file.includes("\0") || file.split("/").some((part) => part === ".." || part === "")) {
+    errors.push(`${at} must be a relative path inside the plugin directory`);
+    return undefined;
+  }
+  if (!extensions.some((ext) => file.toLowerCase().endsWith(ext))) {
+    errors.push(`${at} must end in ${extensions.join(" or ")}`);
+    return undefined;
+  }
+  return file;
+}
+
+function slug(value: unknown, at: string, errors: string[]): string | undefined {
+  const id = requiredString(value, at, errors, 48)?.toLowerCase();
+  if (id && !ID_RE.test(id)) {
+    errors.push(`${at} must be a lowercase slug (2-48 characters)`);
+    return undefined;
+  }
+  return id;
+}
+
+function parseWidget(raw: Record<string, unknown>, at: string, errors: string[]): PluginWidgetContribution | undefined {
+  rejectUnknown(raw, ["id", "name", "description", "entry"], at, errors);
+  const id = slug(raw.id, `${at}.id`, errors);
+  const name = requiredString(raw.name, `${at}.name`, errors, 120);
+  const description = optionalString(raw.description, `${at}.description`, errors, 500);
+  const entry = relativeFile(raw.entry, `${at}.entry`, errors, [".html", ".htm"]);
+  if (!id || !name || !entry) return undefined;
+  return { id, name, ...(description ? { description } : {}), entry };
+}
+
+const TOOL_NAME_RE = /^[a-z][a-z0-9_]{1,63}$/;
+const INPUT_TYPES = new Set(["string", "number", "boolean", "array", "object"]);
+
+function parseTool(raw: Record<string, unknown>, at: string, errors: string[]): PluginToolContribution | undefined {
+  rejectUnknown(raw, ["name", "description", "input", "command", "args", "timeoutSeconds", "widgets"], at, errors);
+  const name = requiredString(raw.name, `${at}.name`, errors, 64);
+  if (name && !TOOL_NAME_RE.test(name)) errors.push(`${at}.name must be lowercase letters, digits and underscores (2-64 characters)`);
+  const description = requiredString(raw.description, `${at}.description`, errors, 1000);
+  const command = requiredString(raw.command, `${at}.command`, errors, 500);
+  if (command?.includes("\0")) errors.push(`${at}.command must not contain NUL bytes`);
+  const args = stringList(raw.args, `${at}.args`, errors);
+  let timeoutSeconds: number | undefined;
+  if (raw.timeoutSeconds !== undefined) {
+    timeoutSeconds = Number(raw.timeoutSeconds);
+    if (!Number.isInteger(timeoutSeconds) || timeoutSeconds < 1 || timeoutSeconds > 300) errors.push(`${at}.timeoutSeconds must be an integer from 1 to 300`);
+  }
+  if (raw.widgets !== undefined && typeof raw.widgets !== "boolean") errors.push(`${at}.widgets must be true or false`);
+  let input: Record<string, PluginToolInputField> | undefined;
+  if (raw.input !== undefined) {
+    const fields = object(raw.input);
+    if (!fields || Object.keys(fields).length > 32) errors.push(`${at}.input must be an object of at most 32 fields`);
+    else {
+      input = {};
+      for (const [key, value] of Object.entries(fields)) {
+        const fieldAt = `${at}.input.${key}`;
+        const field = object(value);
+        if (!/^[a-z][a-zA-Z0-9_]{0,63}$/.test(key) || !field) { errors.push(`${fieldAt} must be an object under a simple name`); continue; }
+        rejectUnknown(field, ["type", "description", "required"], fieldAt, errors);
+        if (!INPUT_TYPES.has(String(field.type))) { errors.push(`${fieldAt}.type must be one of ${[...INPUT_TYPES].join(", ")}`); continue; }
+        const fieldDescription = optionalString(field.description, `${fieldAt}.description`, errors, 500);
+        input[key] = { type: field.type as PluginToolInputField["type"], ...(fieldDescription ? { description: fieldDescription } : {}), ...(field.required === true ? { required: true } : {}) };
+      }
+    }
+  }
+  if (!name || !TOOL_NAME_RE.test(name) || !description || !command) return undefined;
+  return {
+    name, description, command,
+    ...(input ? { input } : {}),
+    ...(args ? { args } : {}),
+    ...(timeoutSeconds ? { timeoutSeconds } : {}),
+    ...(raw.widgets === true ? { widgets: true } : {}),
+  };
+}
+
+const COLOR_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+function parseTheme(raw: Record<string, unknown>, at: string, errors: string[]): PluginThemeContribution | undefined {
+  rejectUnknown(raw, ["id", "name", "mode", "colors"], at, errors);
+  const id = slug(raw.id, `${at}.id`, errors);
+  const name = requiredString(raw.name, `${at}.name`, errors, 120);
+  if (raw.mode !== undefined && raw.mode !== "light" && raw.mode !== "dark") errors.push(`${at}.mode must be light or dark`);
+  const colorsRaw = object(raw.colors);
+  const colors: Partial<Record<ThemeColor, string>> = {};
+  if (!colorsRaw) errors.push(`${at}.colors must be an object`);
+  else {
+    rejectUnknown(colorsRaw, THEME_COLORS, `${at}.colors`, errors);
+    for (const key of THEME_COLORS) {
+      const value = colorsRaw[key];
+      if (value === undefined) continue;
+      if (typeof value !== "string" || !COLOR_RE.test(value)) errors.push(`${at}.colors.${key} must be a #rgb or #rrggbb color`);
+      else colors[key] = value;
+    }
+    if (!colors.background || !colors.foreground) errors.push(`${at}.colors needs background and foreground`);
+  }
+  if (!id || !name || !colors.background || !colors.foreground) return undefined;
+  return { id, name, ...(raw.mode ? { mode: raw.mode as "light" | "dark" } : {}), colors: colors as PluginThemeContribution["colors"] };
+}
+
+function parseGuide(raw: Record<string, unknown>, at: string, errors: string[]): PluginGuideContribution | undefined {
+  rejectUnknown(raw, ["topic", "file"], at, errors);
+  const topic = slug(raw.topic, `${at}.topic`, errors);
+  const file = relativeFile(raw.file, `${at}.file`, errors, [".md"]);
+  if (!topic || !file) return undefined;
+  return { topic, file };
+}
+
+/**
+ * Every contribution type other than agents: its key, how many a plugin may
+ * declare, how to parse one, and which field must be unique. Data, so a new
+ * type is one row.
+ */
+const CONTRIBUTION_TYPES = [
+  { key: "widgets", max: 20, parse: parseWidget, id: (v: PluginWidgetContribution) => v.id },
+  { key: "tools", max: 50, parse: parseTool, id: (v: PluginToolContribution) => v.name },
+  { key: "themes", max: 20, parse: parseTheme, id: (v: PluginThemeContribution) => v.id },
+  { key: "guides", max: 20, parse: parseGuide, id: (v: PluginGuideContribution) => v.topic },
+] as const;
+
+export const CONTRIBUTION_KEYS = ["agents", ...CONTRIBUTION_TYPES.map((type) => type.key)] as const;
+
+function parseList<T>(value: unknown, key: string, max: number, parse: (raw: Record<string, unknown>, at: string, errors: string[]) => T | undefined, idOf: (v: T) => string, errors: string[]): T[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > max) {
+    errors.push(`contributes.${key} must be a list of at most ${max} entries`);
+    return undefined;
+  }
+  const out: T[] = [];
+  const ids = new Set<string>();
+  value.forEach((item, index) => {
+    const at = `contributes.${key}[${index}]`;
+    const raw = object(item);
+    if (!raw) { errors.push(`${at} must be an object`); return; }
+    const parsed = parse(raw, at, errors);
+    if (!parsed) return;
+    const id = idOf(parsed);
+    if (ids.has(id)) errors.push(`contributes.${key} contains duplicate ${id}`);
+    ids.add(id);
+    out.push(parsed);
+  });
+  return out;
+}
+
 export function validatePluginManifest(value: unknown): PluginManifestResult {
   const errors: string[] = [];
   const root = object(value);
@@ -333,11 +532,19 @@ export function validatePluginManifest(value: unknown): PluginManifestResult {
 
   const contributesRaw = object(root.contributes);
   let agents: PluginAgentContribution[] = [];
+  const extra: Record<string, unknown[]> = {};
   if (!contributesRaw) errors.push("contributes must be an object");
   else {
-    rejectUnknown(contributesRaw, ["agents"], "contributes", errors);
-    if (!Array.isArray(contributesRaw.agents) || contributesRaw.agents.length === 0 || contributesRaw.agents.length > 20) {
-      errors.push("contributes.agents must be a non-empty list of at most 20 agents");
+    rejectUnknown(contributesRaw, CONTRIBUTION_KEYS, "contributes", errors);
+    for (const type of CONTRIBUTION_TYPES) {
+      const list = parseList(contributesRaw[type.key], type.key, type.max, type.parse as (raw: Record<string, unknown>, at: string, errors: string[]) => unknown, type.id as (v: unknown) => string, errors);
+      if (list?.length) extra[type.key] = list;
+    }
+    const hasOther = Object.keys(extra).length > 0;
+    if (contributesRaw.agents === undefined && hasOther) {
+      // A plugin may contribute only widgets, tools, themes or guides.
+    } else if (!Array.isArray(contributesRaw.agents) || (contributesRaw.agents.length === 0 && !hasOther) || contributesRaw.agents.length > 20) {
+      errors.push(hasOther ? "contributes.agents must be a list of at most 20 agents" : "contributes must declare at least one agent, widget, tool, theme or guide");
     } else {
       agents = contributesRaw.agents.map((agent, index) => parseAgent(agent, index, errors)).filter((agent): agent is PluginAgentContribution => Boolean(agent));
       const ids = new Set<string>();
@@ -357,7 +564,7 @@ export function validatePluginManifest(value: unknown): PluginManifestResult {
       kind: PLUGIN_KIND,
       metadata,
       ...(requirements ? { requires: requirements } : {}),
-      contributes: { agents },
+      contributes: { agents, ...extra } as PluginManifest["contributes"],
     },
   };
 }
