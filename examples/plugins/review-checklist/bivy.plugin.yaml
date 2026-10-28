@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/bivysh/bivy/main/packages/plugin-sdk/schema/bivy.plugin.schema.json
+# A widget, the tool that feeds it live data, and the guide that tells agents
+# when to use them. Install with: bivy plugin install examples/plugins/review-checklist
+apiVersion: bivy.sh/v1alpha1
+kind: Plugin
+metadata:
+  id: review-checklist
+  name: Review checklist
+  version: 0.1.0
+  description: A checklist of the files changed in the workspace, ticked off in the chat.
+requires:
+  bivy: ">=0.21.0 <1.0.0"
+contributes:
+  widgets:
+    - id: review-checklist
+      name: Review checklist
+      description: Ticks off changed files (or any items) and sends what is done and what is left.
+      entry: widgets/checklist.html
+  tools:
+    - name: changed_files
+      description: Files with uncommitted changes in the session's workspace, with their git status. Use to see what a review should cover.
+      command: node
+      args: ["{plugin}/tools/changed-files.mjs"]
+      timeoutSeconds: 10
+      widgets: true
+  guides:
+    - topic: review-checklist
+      file: guides/review-checklist.md

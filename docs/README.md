@@ -51,6 +51,7 @@ which subsystem or command you need.
 | [agent-shim.md](agent-shim.md) | Users wrapping an agent's native terminal session with Bivy. |
 | [add-an-agent.md](add-an-agent.md) | Anyone adding an ACP agent or CLI from `config.yaml`, or writing an adapter for one. |
 | [widgets.md](widgets.md) | Anyone (or any agent) putting interactive HTML widgets inside chat messages: API, security model, MCP Apps protocol. |
+| [contracts.md](contracts.md) | Anyone building on Bivy: every versioned surface (plugins, kits, widgets, apps, automations, CLI) and how they change. |
 | [plugins.md](plugins.md) | Anyone (usually their agent) extending Bivy on their machine: widgets, tools, themes, guides and agents as a plugin folder. |
 | [automations-as-code.md](automations-as-code.md) | Developers defining, validating, simulating, and applying automations from YAML. |
 | [automation-evaluator.md](automation-evaluator.md) | Contributors touching automation matching/preflight — the shared first-match, overlap, and checklist logic behind config-as-code, the control plane, and the PWA. |
