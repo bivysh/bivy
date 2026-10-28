@@ -132,6 +132,25 @@ async function makePhone(store: PairingStore, nodeId: string, phoneSession: stri
   return phone;
 }
 
+/** Send one `pair.account` over the relay and resolve with the node's answer. */
+async function accountPair(nodeId: string, ticketBearer: string, grant: string, devicePublicKeyB64: string): Promise<any> {
+  const ticket = (await http("/client/relay-ticket", {}, ticketBearer)).json.ticket;
+  const ws = new WebSocket(`ws://localhost:${RELAY}/client?ticket=${ticket}&nodeId=${nodeId}`);
+  try {
+    return await new Promise((resolve, reject) => {
+      ws.on("message", (d) => {
+        const env = JSON.parse(d.toString());
+        if (env.t === "ready") ws.send(JSON.stringify({ t: "pair", p: JSON.stringify({ k: "pair.account", sessionToken: grant, devicePublicKeyB64, ephemeral: true }) }));
+        else if (env.t === "pair") resolve(JSON.parse(env.p));
+      });
+      ws.once("error", reject);
+      setTimeout(() => reject(new Error("pair.account got no answer")), 8000);
+    });
+  } finally {
+    ws.close();
+  }
+}
+
 function phoneSend(phone: Phone, data: unknown) {
   phone.ws.send(JSON.stringify({ t: "frame", p: sealFrame(phone.roomKey!, data) }));
 }
@@ -186,6 +205,18 @@ async function main() {
   await delay(500);
   ok(a.saw.length > beforeA && a.saw.some((p) => p.type === "session.event"), "surviving phone A still decrypts after rotation");
   ok(b.saw.length === beforeB, "revoked phone B can no longer decrypt node events");
+
+  // 4. Account pairing. The grant crosses the relay inside `pair.account`, so
+  // a relay that reads it must not be able to pair a key of its own with it,
+  // replay it, or use a reusable link grant in its place.
+  const device = generatePairingKeypair();
+  const relayKey = generatePairingKeypair();
+  const pairGrant = (await http("/client/pair-grant", { nodeId: "node_pair_1", devicePublicKeyB64: device.publicKeyB64 }, login.json.token)).json.grant;
+  ok((await accountPair("node_pair_1", phoneSession, pairGrant, relayKey.publicKeyB64)).k === "pair.error", "a pair grant does not pair a different device key");
+  const welcome = await accountPair("node_pair_1", phoneSession, pairGrant, device.publicKeyB64);
+  ok(welcome.k === "pair.welcome" && unwrapRoomKey(deriveWrapKey(device.privateKeyB64, store.nodePublicKeyB64(), "pair"), welcome.wrapped).equals(store.roomKey()), "a pair grant pairs the device key it was minted for");
+  ok((await accountPair("node_pair_1", phoneSession, pairGrant, device.publicKeyB64)).k === "pair.error", "a pair grant works only once");
+  ok((await accountPair("node_pair_1", phoneSession, phoneSession, relayKey.publicKeyB64)).k === "pair.error", "a reusable link grant does not pair");
 
   connector.stop();
   console.log("\nAll X25519 pairing e2e checks passed.");

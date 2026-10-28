@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **A relay can no longer pair itself with your machine.** Account pairing sent a reusable grant over the relay, so a malicious relay could replay it with its own key and receive the room key. Pair grants are now bound to the device key that requested them, single-use, and accepted nowhere else; sibling replicas and `bivy run --node` use them too. Devices and nodes on older Bivy versions must update before they can account-pair.
+
 ### Changed
 
 - The README now leads with what Bivy lets you do: use the agents you already pay for and switch when one hits a limit, add any agent (your agent can write the adapter), sign in once on every machine, run on your computer, a cloud computer or a fresh runner, follow along from your phone, try the app, and let events start the work. Self-hosting the whole stack has its own short section, and the page is 320 lines instead of 540.

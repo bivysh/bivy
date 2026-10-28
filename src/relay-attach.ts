@@ -161,9 +161,12 @@ async function main(): Promise<void> {
 
   // 1. grant (enrollment-scoped) → 2. single-use relay ticket.
   note(c.dim(`Linking to ${c.cyan(args.nodeName)} over the relay…`));
-  const grantRes = await postJson(`${cp}/node/sibling-link-grant`, relay.enrollmentToken, { nodeId: args.nodeId });
+  // `grant` mints the relay ticket over TLS; `pairGrant`, bound to this
+  // keypair and single-use, is the only one that crosses the relay.
+  const grantRes = await postJson(`${cp}/node/sibling-link-grant`, relay.enrollmentToken, { nodeId: args.nodeId, devicePublicKeyB64: keypair.publicKeyB64 });
   const grant = String(grantRes.grant ?? "");
   if (!grant) throw new Error("sibling-link-grant returned no grant");
+  const pairGrant = String(grantRes.pairGrant ?? grant);
   const ticketRes = await postJson(`${cp}/client/relay-ticket`, grant, { nodeId: args.nodeId });
   const ticket = String(ticketRes.ticket ?? "");
   if (!ticket) throw new Error("relay-ticket returned no ticket");
@@ -217,7 +220,7 @@ async function main(): Promise<void> {
         // `ephemeral`: this is a transient CLI bridge, not a user device — the
         // control plane authorizes it but keeps it out of the account's
         // "Signed-in devices" list.
-        p: JSON.stringify({ k: "pair.account", sessionToken: grant, devicePublicKeyB64: keypair.publicKeyB64, label: args.label, ephemeral: true }),
+        p: JSON.stringify({ k: "pair.account", sessionToken: pairGrant, devicePublicKeyB64: keypair.publicKeyB64, label: args.label, ephemeral: true }),
       }),
     );
   };

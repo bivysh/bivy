@@ -202,18 +202,27 @@ key. Worst case it can make a pairing attempt fail; it cannot leak the room key.
 ### Account pairing (the control plane vouches for the device)
 
 A browser that is already signed in to the app can link a node without a QR.
-It sends `pair.account` over the relay with its X25519 public key and its
-account session token; the node forwards both to the control plane
-(`POST /node/authorize-client`, `authorizeAccountPairing` in
-`src/remote/relay-client.ts`) and, on an `ok`, wraps the room key for that
+It first asks the control plane, over TLS, for a pair grant
+(`POST /client/pair-grant`) bound to the node and to its own X25519 public key.
+It then sends `pair.account` over the relay with that key and the grant; the
+node forwards both to the control plane (`POST /node/authorize-client`,
+`authorizeAccountPairing` in `src/remote/relay-client.ts`), which consumes the
+grant only if the key matches, and, on an `ok`, wraps the room key for that
 device key exactly as in step 4 above (`PairingStore.trustDevice`,
-`src/device-registry.ts`). The browser, for its part, learns the node's public
+`src/device-registry.ts`). The relay sees the grant, but it is single-use, opens
+only for the key it was minted for, and is not a bearer anywhere else, so the
+relay can neither pair a key of its own nor replay it. The browser, for its part, learns the node's public
 key from the first pairing frame it receives over the relay
 (`handlePairFrame` in `packages/core/src/transport-relay.ts`) — trust on first
 use — rather than from an out-of-band QR.
 
-The relay still cannot read anything: the room key is wrapped under ECDH
-between the node and the device, and the relay holds neither private key. What
+The relay still cannot obtain the room key: it is wrapped under ECDH between
+the node and the device, and the relay holds neither private key. One gap
+remains on a device's *first* account pairing with a node: the device takes the
+node's public key from the first pairing frame, so a malicious relay could
+answer in the node's place with a room key of its own. It still cannot reach
+the node, but it could read what that device sends until the device pairs for
+real. What
 changes is *who decides which device keys get the room key*: on this path it is
 the control plane. A malicious or compromised control plane could authorize a
 device it controls, or collude with the relay to substitute public keys during

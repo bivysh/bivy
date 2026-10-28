@@ -1181,6 +1181,12 @@ export interface AccountAuthRepository {
   // Client tokens (relay)
   createLinkGrant(accountId: string, nodeId: string, ttlMs?: number): Promise<string>;
   resolveClient(token: string | null): Promise<ResolvedClient | undefined>;
+  // A pair grant travels over the relay inside `pair.account`, so it is bound
+  // to the one device key it was minted for, is single-use, and is never a
+  // bearer anywhere else: a relay that reads it can neither replay it nor
+  // pair a key of its own. Consuming returns the account, or undefined.
+  createPairGrant(accountId: string, nodeId: string, devicePublicKeyB64: string, ttlMs?: number): Promise<string>;
+  consumePairGrant(token: string, nodeId: string, devicePublicKeyB64: string): Promise<{ accountId: string } | undefined>;
   registerPairedDevice(accountId: string, publicKeyB64: string, label?: string): Promise<void>;
   countPairedDevices(accountId: string): Promise<number>;
   listPairedDevices(accountId: string): Promise<PairedDeviceInfo[]>;

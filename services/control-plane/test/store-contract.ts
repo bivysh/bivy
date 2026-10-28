@@ -83,6 +83,16 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(await store.consumeRelayTicket(ticket), undefined);
   });
 
+  await test("pair grants open only for their node and device key, once, and are no bearer", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-pair@example.com");
+    const grant = await store.createPairGrant(acct.id, "node-x", "device-key");
+    assert.equal(await store.resolveClient(grant), undefined);
+    assert.equal(await store.consumePairGrant(grant, "node-x", "relay-key"), undefined);
+    assert.equal(await store.consumePairGrant(grant, "node-y", "device-key"), undefined);
+    assert.equal((await store.consumePairGrant(grant, "node-x", "device-key"))?.accountId, acct.id);
+    assert.equal(await store.consumePairGrant(grant, "node-x", "device-key"), undefined);
+  });
+
   // --- Session index ---------------------------------------------------------
   await test("session index merges a node's adverts and is account-scoped", async (store) => {
     const acct = await store.findOrCreateAccount("contract-index@example.com");

@@ -410,7 +410,9 @@ export class RelayTransport implements Transport {
       const res = await this.fetchImpl(`${this.cpBase()}/client/pair-grant`, {
         method: "POST",
         headers: { "content-type": "application/json", authorization: `Bearer ${this.store.s}` },
-        body: JSON.stringify({ nodeId: this.store.cur }),
+        // The grant is bound to this device key: the relay sees it in the pair
+        // frame below and must not be able to pair a key of its own with it.
+        body: JSON.stringify({ nodeId: this.store.cur, devicePublicKeyB64: dev.pub }),
       });
       const out: { grant?: string } = await res.json().catch(() => ({}));
       if (!res.ok || !out?.grant) throw new Error("Could not create pairing grant");

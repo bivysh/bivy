@@ -273,6 +273,14 @@ export class PostgresStore implements ControlPlaneStore {
         expires_at  TIMESTAMPTZ NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS pair_grants (
+        token_hash  TEXT PRIMARY KEY,
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        node_id     TEXT NOT NULL,
+        device_pub  TEXT NOT NULL,
+        expires_at  TIMESTAMPTZ NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS relay_tickets (
         token_hash  TEXT PRIMARY KEY,
         role        TEXT NOT NULL,
@@ -1092,6 +1100,24 @@ export class PostgresStore implements ControlPlaneStore {
     );
     if (!rows[0]) return undefined;
     return { accountId: rows[0].account_id, nodeId: rows[0].node_id };
+  }
+
+  async createPairGrant(accountId: string, nodeId: string, devicePublicKeyB64: string, ttlMs = 2 * 60_000): Promise<string> {
+    const token = `pgr_${randomBytes(24).toString("base64url")}`;
+    await this.query(
+      `INSERT INTO pair_grants (token_hash, account_id, node_id, device_pub, expires_at) VALUES ($1, $2, $3, $4, $5)`,
+      [hashToken(token), accountId, nodeId, devicePublicKeyB64, new Date(Date.now() + ttlMs)],
+    );
+    return token;
+  }
+
+  async consumePairGrant(token: string, nodeId: string, devicePublicKeyB64: string): Promise<{ accountId: string } | undefined> {
+    if (!token || !devicePublicKeyB64) return undefined;
+    const { rows } = await this.query(
+      `DELETE FROM pair_grants WHERE token_hash = $1 AND node_id = $2 AND device_pub = $3 AND expires_at > now() RETURNING account_id`,
+      [hashToken(token), nodeId, devicePublicKeyB64],
+    );
+    return rows[0] ? { accountId: rows[0].account_id } : undefined;
   }
 
   async registerPairedDevice(accountId: string, publicKeyB64: string, label = "Device"): Promise<void> {
@@ -3268,7 +3294,7 @@ export class PostgresStore implements ControlPlaneStore {
     // there is no cross-table transaction requirement (each row is independently
     // safe to drop once past its own expiry).
     let total = 0;
-    for (const table of ["login_tokens", "sessions", "link_grants", "relay_tickets", "device_logins", "oauth_states", "central_install_states", "central_github_installer_attestations", "node_claims"]) {
+    for (const table of ["login_tokens", "sessions", "link_grants", "pair_grants", "relay_tickets", "device_logins", "oauth_states", "central_install_states", "central_github_installer_attestations", "node_claims"]) {
       const { rowCount } = await this.query(`DELETE FROM ${table} WHERE expires_at < $1`, [nowIso]);
       total += rowCount ?? 0;
     }

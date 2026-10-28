@@ -87,11 +87,15 @@ export class SiblingClient {
   async connect(): Promise<void> {
     const cp = this.opts.controlPlaneUrl.replace(/\/$/, "");
     // 1. Mint a client grant for the sibling using our enrollment token.
+    // `grant` mints the relay ticket over TLS; `pairGrant`, bound to this
+    // keypair and single-use, is the only one that crosses the relay.
     const grantRes = await this.postJson(`${cp}/node/sibling-link-grant`, this.opts.enrollmentToken, {
       nodeId: this.opts.siblingNodeId,
+      devicePublicKeyB64: this.keypair.publicKeyB64,
     });
     const grant = String(grantRes.grant ?? "");
     if (!grant) throw new Error("sibling-link-grant returned no grant");
+    const pairGrant = String(grantRes.pairGrant ?? grant);
     const relayFromGrant = typeof grantRes.relayUrl === "string" ? grantRes.relayUrl : undefined;
     // 2. Exchange the grant for a single-use relay ticket.
     const ticketRes = await this.postJson(`${cp}/client/relay-ticket`, grant, { nodeId: this.opts.siblingNodeId });
@@ -109,7 +113,7 @@ export class SiblingClient {
       this.resolvePaired = resolve;
       this.rejectPaired = reject;
     });
-    ws.on("message", (data: unknown) => this.onMessage(String(data), grant));
+    ws.on("message", (data: unknown) => this.onMessage(String(data), pairGrant));
     ws.on("close", () => this.handleClose());
     ws.on("error", (err: Error) => this.rejectPaired?.(err));
     // A sibling that never answers pairing (offline behind a stale "online",
@@ -136,7 +140,7 @@ export class SiblingClient {
     } catch {
       return;
     }
-    if (msg.t === "ready" || msg.t === "peer.online") {
+    if ((msg.t === "ready" || msg.t === "peer.online") && !this.cipher) {
       // Begin account pairing to obtain the sibling's room key.
       // `ephemeral`: a sibling replica is a node↔node bridge, not a user device —
       // authorized for the room key but never listed as a signed-in device.
