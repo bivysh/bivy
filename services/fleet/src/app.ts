@@ -4,6 +4,7 @@
 // The fleet's HTTP surface: the compute questions the control plane asks, on a
 // private network behind one shared bearer token. Nothing here is reachable
 // from the public internet in any supported deployment.
+import { createHash, timingSafeEqual } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { CloudComputers } from "./computers.js";
 import type { Runners } from "./runners.js";
@@ -174,9 +175,16 @@ function bearerAuth(expected: string) {
   return (req: Request, res: Response, next: NextFunction) => {
     const header = req.headers.authorization ?? "";
     const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-    if (!expected || token !== expected) return void res.status(401).json({ error: "Unauthorized" });
+    if (!expected || !sameSecret(token, expected)) return void res.status(401).json({ error: "Unauthorized" });
     next();
   };
+}
+
+/** Constant-time comparison: digests make the lengths equal, so neither the
+ * length nor a matching prefix shows in the response time. */
+function sameSecret(presented: string, expected: string): boolean {
+  const digest = (value: string) => createHash("sha256").update(value).digest();
+  return timingSafeEqual(digest(presented), digest(expected));
 }
 
 function accountOf(req: Request): string {

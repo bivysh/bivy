@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The control plane's internal compute and relay endpoints, and the fleet's API, now compare their shared tokens in constant time.
 - **Answer an agent's question by just replying.** A message typed while a question card is open now answers it: the card closes and the agent reads your message as the answer, for every agent and for `bivy ask` (which reports `replied`). The agent used to stay blocked on the card until it timed out after 10 minutes.
 - Codex chats can be steered from the composer again. Its app-server shim has supported steering a running turn, but the agent catalog the web app reads didn't say so, so the composer offered only Stop while Codex worked.
 
