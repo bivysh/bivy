@@ -2507,9 +2507,10 @@ export class PostgresStore implements ControlPlaneStore {
     id: string,
     triggerAccess: "everyone" | "contributor" | "collaborator" | undefined,
   ): Promise<InboundHook | undefined> {
-    // "everyone" is stored as NULL (same as unset) — it's the no-restriction
-    // default, so there's nothing meaningful to distinguish it from "never set".
-    const value = triggerAccess === "contributor" || triggerAccess === "collaborator" ? triggerAccess : null;
+    // "everyone" is stored explicitly: unset (NULL) means the collaborator-only
+    // default (see meetsTriggerAccess), so opening mentions to any GitHub user
+    // must be a recorded choice.
+    const value = triggerAccess === "everyone" || triggerAccess === "contributor" || triggerAccess === "collaborator" ? triggerAccess : null;
     const { rows } = await this.query(
       `UPDATE inbound_hooks SET trigger_access = $3 WHERE id = $2 AND account_id = $1 RETURNING *`,
       [accountId, id, value],
@@ -3349,7 +3350,7 @@ function mapHook(row: any): InboundHook {
     installCount: row.install_count ?? undefined,
     installsSyncedAt: row.installs_synced_at ? new Date(row.installs_synced_at).toISOString() : undefined,
     defaultNode: row.default_node ?? undefined,
-    triggerAccess: row.trigger_access === "contributor" || row.trigger_access === "collaborator" ? row.trigger_access : undefined,
+    triggerAccess: row.trigger_access === "everyone" || row.trigger_access === "contributor" || row.trigger_access === "collaborator" ? row.trigger_access : undefined,
     servingNodeId: row.serving_node_id ?? undefined,
     servingNodeSeenAt: row.serving_node_seen_at ? new Date(row.serving_node_seen_at).toISOString() : undefined,
     enabled: row.enabled ?? true,

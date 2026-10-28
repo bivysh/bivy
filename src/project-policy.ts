@@ -118,8 +118,33 @@ export function resolveProjectSafety(
   const sandboxRank = { "read-only": 0, "workspace-write": 1, "danger-full-access": 2 } as const;
   const cap = safety?.maxSandbox;
   const sandbox = cap && sandboxRank[cap] < sandboxRank[requestedSandbox] ? cap : requestedSandbox;
-  const approvalRank = { never: 0, autonomous: 0, risky: 1, always: 2 } as const;
   const floor = safety?.approvalFloor;
-  const approval = floor && approvalRank[floor] > approvalRank[requestedApproval] ? floor : requestedApproval;
+  const approval = floor && APPROVAL_STRICTNESS[floor] > APPROVAL_STRICTNESS[requestedApproval] ? floor : requestedApproval;
   return { sandbox, approval };
+}
+
+type Sandbox = "read-only" | "workspace-write" | "danger-full-access";
+type Approval = "never" | "risky" | "always" | "autonomous";
+
+/** Higher is stricter. `never` drops the checks `autonomous` still keeps
+ * (force-push, publish, deploy, sudo), so it ranks below it. */
+const APPROVAL_STRICTNESS: Record<Approval, number> = { never: 0, autonomous: 1, risky: 2, always: 3 };
+const SANDBOX_STRICTNESS: Record<Sandbox, number> = { "danger-full-access": 0, "workspace-write": 1, "read-only": 2 };
+
+/**
+ * Safety for work a session starts on its behalf (a delegated Run): what was
+ * asked for, but never looser than the parent. Otherwise an agent — possibly
+ * steered by a malicious repo — could escape its own approval and sandbox by
+ * delegating to itself with `--approval never --sandbox danger-full-access`.
+ */
+export function childSafety(
+  parent: { approval?: Approval; sandbox?: Sandbox },
+  requested: { approval?: Approval; sandbox?: Sandbox },
+): { approval?: Approval; sandbox?: Sandbox } {
+  const stricter = <T extends string>(rank: Record<T, number>, a?: T, b?: T): T | undefined =>
+    a === undefined ? b : b === undefined ? a : rank[a] >= rank[b] ? a : b;
+  return {
+    approval: stricter(APPROVAL_STRICTNESS, parent.approval, requested.approval),
+    sandbox: stricter(SANDBOX_STRICTNESS, parent.sandbox, requested.sandbox),
+  };
 }

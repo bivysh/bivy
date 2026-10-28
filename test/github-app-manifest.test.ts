@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { buildAppManifest, convertManifest, renderManifestForm } from "../src/github-app-manifest.js";
+import { buildAppManifest, convertManifest, createManifestStates, renderManifestForm } from "../src/github-app-manifest.js";
 
 let failures = 0;
 async function check(name: string, fn: () => void | Promise<void>) {
@@ -34,6 +34,18 @@ await check("buildAppManifest: requests the queue's permissions + events, points
   assert.equal(m.default_permissions.pull_requests, "write");
   assert.equal(m.default_permissions.actions, "read");
   assert.equal(m.default_permissions.checks, "read");
+});
+
+await check("manifest states: only an issued, unexpired state completes, once", () => {
+  let clock = 0;
+  const states = createManifestStates(1000, () => clock);
+  states.issue("hook_1");
+  states.issue("hook_2");
+  assert.equal(states.take("hook_forged"), false);
+  assert.equal(states.take("hook_1"), true);
+  assert.equal(states.take("hook_1"), false);
+  clock = 1000;
+  assert.equal(states.take("hook_2"), false);
 });
 
 await check("renderManifestForm: auto-submits the manifest to GitHub with state", () => {

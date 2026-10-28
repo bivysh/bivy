@@ -245,14 +245,14 @@ await test("automation schema accepts provider-native JSON as untrusted context"
   assert.equal(parseAutomationEvent(null), undefined);
 });
 
-await test("trigger access (issue #259): 'everyone' allows all, 'contributor'/'collaborator' gate on author_association", () => {
-  // Unset (undefined) and the explicit "everyone" value both mean no restriction —
-  // hooks created before this setting existed must keep working unchanged.
-  for (const access of [undefined, "everyone" as const]) {
-    assert.equal(meetsTriggerAccess("NONE", access), true);
-    assert.equal(meetsTriggerAccess(undefined, access), true);
-    assert.equal(meetsTriggerAccess("OWNER", access), true);
-  }
+await test("trigger access (issue #259): 'everyone' allows all, unset means collaborators, 'contributor'/'collaborator' gate on author_association", () => {
+  // Only an explicit "everyone" lets any GitHub user trigger a run.
+  assert.equal(meetsTriggerAccess("NONE", "everyone"), true);
+  assert.equal(meetsTriggerAccess(undefined, "everyone"), true);
+  // Unset is collaborators only: a stranger's mention on a public repo is ignored.
+  assert.equal(meetsTriggerAccess("NONE", undefined), false);
+  assert.equal(meetsTriggerAccess("CONTRIBUTOR", undefined), false);
+  assert.equal(meetsTriggerAccess("OWNER", undefined), true);
   // "contributor": any prior relationship with the repo passes; a stranger doesn't.
   assert.equal(meetsTriggerAccess("OWNER", "contributor"), true);
   assert.equal(meetsTriggerAccess("MEMBER", "contributor"), true);

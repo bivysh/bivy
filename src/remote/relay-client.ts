@@ -429,11 +429,17 @@ export class RelayConnector {
     ws.on("message", (data) => {
       if (this.ws !== ws) return;
       let env: { t?: string; p?: string; clients?: unknown; previewOrigin?: unknown; ticket?: unknown };
+      const raw = data.toString();
       try {
-        env = JSON.parse(data.toString());
+        env = JSON.parse(raw);
       } catch {
         return;
       }
+      // The relay forwards a client's message without parsing it when it starts
+      // like a frame or pair envelope. A duplicate key (`{"t":"frame","t":"ready"}`)
+      // would then parse here as a relay control message, so anything that
+      // starts as a forward is only ever handled as one.
+      if (/^\{"t":"(?:frame|pair)"/.test(raw) && env.t !== "frame" && env.t !== "pair") return;
       if (env.t === "ready") {
         this.ready = true;
         this.lastErrorMessage = undefined;

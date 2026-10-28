@@ -126,7 +126,7 @@ import { createPrDetection } from "./session/pr-detection.js";
 import { forceAbortTurn } from "./session/abort-recovery.js";
 import { runRequiredAutomationChecks } from "./automation-checks.js";
 import { configToLegacySettings, mergeLegacyIntoNodeConfig, readNodeConfig, writeNodeConfig, type NodeConfig } from "./node-config.js";
-import { loadProjectPolicy, resolveProjectSafety } from "./project-policy.js";
+import { childSafety, loadProjectPolicy, resolveProjectSafety } from "./project-policy.js";
 import type { ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { SessionAllowRules } from "./policy/session-allow.js";
@@ -237,7 +237,7 @@ import {
   privateKeyIdFor,
   type GitHubAppRecord,
 } from "./github-apps.js";
-import { buildAppManifest, convertManifest, renderManifestForm } from "./github-app-manifest.js";
+import { createManifestStates, buildAppManifest, convertManifest, renderManifestForm } from "./github-app-manifest.js";
 import {
   encryptGithubAppEnvelope,
   decryptGithubAppEnvelope,
@@ -776,6 +776,11 @@ const runDelegation = new RunDelegationService({
         throw new Error(`Agent "${input.agent}" is not installed on ${machine} (it has: ${agents.map((agent) => agent.id).join(", ") || "none"})`);
       }
     }
+    const parent = openSessions.get(sessionId);
+    const safety = childSafety(
+      { approval: parent?.approvalMode, sandbox: parent?.sandbox },
+      { approval: input.safety?.approval, sandbox: input.safety?.sandbox },
+    );
     return delegatedRunRequest("/node/automation-runs", {
       method: "POST",
       body: JSON.stringify({
@@ -789,11 +794,12 @@ const runDelegation = new RunDelegationService({
         runtimeId: input.agent,
         model: input.model,
         // A child acts for the same user in the same context as its parent, so
-        // it inherits the parent session's safety unless the caller set one. The
-        // queue's own default ("risky" with nobody to approve) denied ordinary
-        // commands, leaving children that could only describe what they'd do.
-        approvalMode: input.safety?.approval ?? openSessions.get(sessionId)?.approvalMode,
-        sandbox: input.safety?.sandbox ?? openSessions.get(sessionId)?.sandbox,
+        // it inherits the parent session's safety; the caller may tighten it but
+        // never loosen it (childSafety). The queue's own default ("risky" with
+        // nobody to approve) denied ordinary commands, leaving children that
+        // could only describe what they'd do.
+        approvalMode: safety.approval,
+        sandbox: safety.sandbox,
         maxAttempts: input.safety?.maxAttempts ?? 2,
         idempotencyKey: input.idempotencyKey,
         parentSessionId: provenance.parentSessionId,
@@ -11567,6 +11573,9 @@ function defaultAppName(): string {
  * browser relays the code back to the node (which alone exchanges it, keeping
  * the private key off the control plane).
  */
+// Manifest-flow states this node handed to GitHub; a callback must return one.
+const manifestStates = createManifestStates();
+
 async function startAppManifest(input: { redirectBase: string; org?: string; name?: string }): Promise<{
   action: string;
   manifest: Record<string, unknown>;
@@ -11583,7 +11592,7 @@ async function startAppManifest(input: { redirectBase: string; org?: string; nam
   const action = input.org
     ? `https://github.com/organizations/${encodeURIComponent(input.org)}/settings/apps/new?state=${encodeURIComponent(hook.id)}`
     : `https://github.com/settings/apps/new?state=${encodeURIComponent(hook.id)}`;
-  return { action, manifest, state: hook.id };
+  return { action, manifest, state: manifestStates.issue(hook.id) };
 }
 
 /**
@@ -11593,14 +11602,15 @@ async function startAppManifest(input: { redirectBase: string; org?: string; nam
  * by every entry point.
  */
 async function completeAppManifest(input: { code: string; state: string }): Promise<{ installUrl: string; appId: string }> {
+  if (!manifestStates.take(input.state)) throw new Error("This GitHub App setup was not started on this node, or it expired. Start it again.");
   const app0 = await convertManifest(input.code);
-  // Private key → node vault; only a secret:// reference is written to cli.json.
-  new SecretVault(appDir).setLocal("github.app-private-key", app0.pem, "GitHub App private key");
   // The webhook secret GitHub generated must match what the control plane verifies.
   await setControlPlaneHookSecret(input.state, app0.webhookSecret);
   // The app slug is the unique `@`-mention handle; register it (+ name) so it
   // routes correctly and the settings UI shows what's connected.
   await setControlPlaneHookAppMeta(input.state, { mention: app0.slug, name: app0.name, appId: app0.appId });
+  // Private key → node vault; only a secret:// reference is written to cli.json.
+  new SecretVault(appDir).setLocal("github.app-private-key", app0.pem, "GitHub App private key");
   const label = process.env.BIVY_GITHUB_LABEL?.trim() || "bivy";
   process.env.BIVY_GITHUB_APP_ID = app0.appId;
   process.env.BIVY_GITHUB_APP_PRIVATE_KEY = "secret://github.app-private-key";
@@ -11778,6 +11788,14 @@ function disconnectGithubApp({ appId, hookId }: { appId?: string; hookId?: strin
   invalidateGithubListingCaches(); // repo/branch listings may change with auth
 }
 
+// The manifest pages live outside /api (a browser reaches them by navigation,
+// so they carry no bearer), but they still create hooks and write the vault:
+// refuse a rebound public Host or a cross-site Origin like /api does.
+app.use("/github", (req, res, next) => {
+  if (!requestOriginAllowed(req)) return res.status(403).type("text").send("Forbidden origin");
+  next();
+});
+
 app.get("/github/app/manifest/new", async (req, res, next) => {
   try {
     const base = `${req.protocol}://${req.get("host")}`;
@@ -11800,7 +11818,7 @@ app.get("/github/app/manifest/new", async (req, res, next) => {
       "Content-Security-Policy",
       `default-src 'none'; base-uri 'none'; frame-ancestors 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; form-action https://github.com`,
     );
-    res.type("html").send(renderManifestForm(manifest, { org, state: hook.id, nonce }));
+    res.type("html").send(renderManifestForm(manifest, { org, state: manifestStates.issue(hook.id), nonce }));
   } catch (error) {
     next(error);
   }

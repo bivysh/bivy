@@ -49,6 +49,7 @@ import {
   parseSlackCommand,
   applyDefaultNode,
   meetsTriggerAccess,
+  DEFAULT_TRIGGER_ACCESS,
   parseAutomationEvent,
   normalizeAutomationRepo,
   parseGithubWorkflowRunFailure,
@@ -2691,7 +2692,7 @@ app.post("/account/github-app/trigger-access", asyncHandler(async (req, res) => 
   if (raw && raw !== "everyone" && raw !== "contributor" && raw !== "collaborator") {
     return res.status(400).json({ error: "triggerAccess must be 'everyone', 'contributor', or 'collaborator'" });
   }
-  const triggerAccess = raw === "contributor" || raw === "collaborator" ? raw : undefined;
+  const triggerAccess = raw === "everyone" || raw === "contributor" || raw === "collaborator" ? raw : undefined;
   const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() : "";
   const targets = await githubAppSettingsHooks(client.accountId, appId);
   if (!targets.length) return res.status(404).json({ error: "No GitHub App connected" });
@@ -2699,7 +2700,7 @@ app.post("/account/github-app/trigger-access", asyncHandler(async (req, res) => 
   for (const target of targets) {
     updated = (await store.setInboundHookTriggerAccess(client.accountId, target.id, triggerAccess)) ?? updated;
   }
-  res.json({ ok: true, triggerAccess: updated?.triggerAccess ?? "everyone" });
+  res.json({ ok: true, triggerAccess: updated?.triggerAccess ?? DEFAULT_TRIGGER_ACCESS });
 }));
 
 // Disconnect the account's GitHub App: drop the inbound hook so it stops routing

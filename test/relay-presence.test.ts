@@ -57,3 +57,29 @@ test("real relay frames retain viewing clients and release teardown after the la
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 });
+
+test("a forwarded client message with a duplicate type key is not taken as a relay control message", async () => {
+  const server = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+  await new Promise<void>((resolve) => server.once("listening", resolve));
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const connector = new RelayConnector({ url: `ws://127.0.0.1:${address.port}`, room: "test-room", roomToken: "test-token" }, () => {}, { pairing: { roomKey: () => Buffer.alloc(32) } as never });
+  let peer: WebSocket | undefined;
+  server.on("connection", (socket) => { peer = socket; socket.send(JSON.stringify({ t: "ready" })); });
+  try {
+    connector.start();
+    await waitFor(() => connector.connected);
+    // The relay forwards anything starting `{"t":"frame"` unparsed; JSON.parse
+    // keeps the last `t`.
+    peer!.send('{"t":"frame","t":"peer.online","clients":7}');
+    // A real count-less peer.online raises the count to at least 1, so it
+    // reads 7 only if the smuggled message above was applied.
+    peer!.send(JSON.stringify({ t: "peer.online" }));
+    await waitFor(() => connector.clientCount > 0);
+    assert.equal(connector.clientCount, 1);
+  } finally {
+    connector.stop();
+    for (const client of server.clients) client.terminate();
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
+});
