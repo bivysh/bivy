@@ -209,8 +209,29 @@ reference the exact full-SHA manifest built for
 that commit. A manual `service-images.yml` dispatch with `core_ref` can backfill
 an older tag or SHA.
 
+### Cloud runner image
+
+```text
+ghcr.io/bivysh/bivy-ephemeral-runner:<full-sha|version|latest>
+```
+
+The image a cloud computer boots (`deploy/Dockerfile.ephemeral-runner`): Bivy,
+the agents' CLIs, Chromium and the system tools agents use. It is where
+people's code and AI sign-ins run, so it is built here from this repository's
+source, like the service images, and any deployment can run or audit it.
+
+`runner-image.yml` builds it for every `main` commit, natively for `linux/amd64`
+and `linux/arm64`, with SBOM and provenance attestations. It tags the
+multi-platform index with the full commit SHA, checks that it can be pulled
+anonymously, and records a `runner-image/published` commit status. Pull requests
+that change the Dockerfile build it for amd64 without publishing. It is not
+built in the merge queue, so a release cut right after a merge may find it
+missing; the release then skips the runner's version tags with a warning. A
+deployment pins the full-SHA tag either way. Backfill an older commit with
+`gh workflow run runner-image.yml -f core_ref=<sha>`.
+
 GHCR visibility cannot be changed through the Packages REST API. Before enabling
-the image workflow, use the package settings UI to make both packages **public**
+the image workflows, use the package settings UI to make the packages **public**
 and grant `bivysh/bivy` Actions **admin** access. The workflow verifies anonymous
 pulls and records an exact-SHA commit status only after that check passes.
 

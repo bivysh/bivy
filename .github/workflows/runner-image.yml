@@ -1,0 +1,210 @@
+name: Cloud runner image
+
+# The image a cloud computer boots (deploy/Dockerfile.ephemeral-runner): Bivy,
+# the agents' CLIs and the system tools agents use. It is where people's code
+# and AI sign-ins run, so it is built here, from public source, and published
+# as a public, attested image any deployment can run or audit. A deployment
+# pulls ghcr.io/bivysh/bivy-ephemeral-runner:<full Core SHA>.
+on:
+  # A deployment pins every Core commit it runs, so every main commit gets an
+  # image. Layers below the Bivy package come from the registry cache.
+  push:
+    branches: [main]
+  # Build the Dockerfile before merge when it changes. Changes elsewhere only
+  # change the packed Bivy, which the main build covers.
+  pull_request:
+    branches: [main]
+    paths:
+      - deploy/Dockerfile.ephemeral-runner
+      - .github/workflows/runner-image.yml
+  workflow_dispatch:
+    inputs:
+      core_ref:
+        description: "Core ref to build (for backfills). Blank uses the selected workflow ref."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('runner-image-validate-{0}', github.event.pull_request.number) || 'runner-image-publish' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/bivysh/bivy-ephemeral-runner
+
+jobs:
+  validate:
+    if: github.event_name == 'pull_request'
+    name: Build runner image (amd64)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Create Buildx builder
+        run: docker buildx create --name bivy-runner --driver docker-container --use
+      - name: Build image
+        run: |
+          docker buildx build \
+            --file deploy/Dockerfile.ephemeral-runner \
+            --platform linux/amd64 \
+            --build-arg "OS_PATCH_EPOCH=$(date -u +%G-W%V)" \
+            --cache-from "type=registry,ref=$IMAGE:buildcache-amd64" \
+            --output type=cacheonly \
+            .
+
+  resolve:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: read
+    outputs:
+      core_sha: ${{ steps.version.outputs.core_sha }}
+      published: ${{ steps.receipt.outputs.published }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.core_ref || github.sha }}
+      - name: Resolve immutable version
+        id: version
+        run: echo "core_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - name: Check for an existing publication receipt
+        id: receipt
+        env:
+          CORE_SHA: ${{ steps.version.outputs.core_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          count="$(gh api "/repos/$GITHUB_REPOSITORY/commits/$CORE_SHA/status" \
+            --jq '[.statuses[] | select(.context == "runner-image/published" and .state == "success")] | length')"
+          if [ "$count" -gt 0 ]; then
+            echo "$CORE_SHA already has a verified public runner image."
+            echo "published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Each architecture builds natively and pushes by digest; publish joins them.
+  build:
+    if: github.event_name != 'pull_request' && needs.resolve.outputs.published != 'true'
+    needs: resolve
+    name: Build runner image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.core_sha }}
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Create Buildx builder
+        run: docker buildx create --name bivy-runner --driver docker-container --use
+
+      # A full-SHA tag is write-once: a rerun repairs a missing architecture but
+      # never replaces a published image.
+      - name: Build and push by digest
+        env:
+          CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          if docker buildx imagetools inspect "$IMAGE:$CORE_SHA" >/dev/null 2>&1; then
+            echo "$IMAGE:$CORE_SHA already exists; preserving it."
+            exit 0
+          fi
+          # OS_PATCH_EPOCH (the ISO week) re-runs the apt layer weekly, so cached
+          # builds still pick up Debian security updates.
+          docker buildx build \
+            --file deploy/Dockerfile.ephemeral-runner \
+            --platform "linux/$ARCH" \
+            --build-arg "GITHUB_SHA=$CORE_SHA" \
+            --build-arg "OS_PATCH_EPOCH=$(date -u +%G-W%V)" \
+            --output "type=image,name=$IMAGE,push-by-digest=true,name-canonical=true,push=true" \
+            --metadata-file metadata.json \
+            --label "org.opencontainers.image.source=https://github.com/bivysh/bivy" \
+            --label "org.opencontainers.image.revision=$CORE_SHA" \
+            --label "org.opencontainers.image.licenses=MIT" \
+            --provenance=true \
+            --sbom=true \
+            --cache-from "type=registry,ref=$IMAGE:buildcache-$ARCH" \
+            --cache-to "type=registry,ref=$IMAGE:buildcache-$ARCH,mode=max" \
+            .
+          mkdir -p digests
+          jq -r '."containerimage.digest"' metadata.json > "digests/$ARCH"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: runner-digest-${{ matrix.arch }}
+          path: digests/
+          if-no-files-found: ignore
+          retention-days: 1
+
+  publish:
+    if: github.event_name != 'pull_request' && needs.resolve.outputs.published != 'true'
+    needs: [resolve, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: write
+      statuses: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: runner-digest-*
+          path: digests
+          merge-multiple: true
+
+      - name: Tag the multi-platform manifest
+        env:
+          CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
+        run: |
+          set -euo pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          if docker buildx imagetools inspect "$IMAGE:$CORE_SHA" >/dev/null 2>&1; then
+            echo "$IMAGE:$CORE_SHA already exists; preserving it."
+            exit 0
+          fi
+          docker buildx imagetools create --tag "$IMAGE:$CORE_SHA" \
+            "$IMAGE@$(cat digests/amd64)" "$IMAGE@$(cat digests/arm64)"
+
+      # GHCR visibility is UI-only; check the property every publication relies on.
+      - name: Verify anonymous multi-platform pulls
+        env:
+          CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
+        run: |
+          set -euo pipefail
+          docker logout ghcr.io >/dev/null 2>&1 || true
+          manifest="$(docker buildx imagetools inspect --raw "$IMAGE:$CORE_SHA")"
+          for arch in amd64 arm64; do
+            jq -e --arg arch "$arch" \
+              '.manifests | any(.platform.os == "linux" and .platform.architecture == $arch)' \
+              <<<"$manifest" >/dev/null \
+              || { echo "::error::$IMAGE:$CORE_SHA has no linux/$arch manifest"; exit 1; }
+          done
+
+      - name: Record published SHA
+        env:
+          CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method POST "/repos/$GITHUB_REPOSITORY/statuses/$CORE_SHA" \
+            -f state=success \
+            -f context=runner-image/published \
+            -f description="Public cloud runner image verified" \
+            -f target_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            >/dev/null
