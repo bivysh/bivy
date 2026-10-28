@@ -340,6 +340,7 @@ The hosted endpoints all derive from one domain, so you normally set nothing.
 | `BIVY_DEVICE_TOKEN` | token | unset | Supported — bearer for those clients. `--token` wins |
 | `BIVY_UPDATE_REGISTRY_URL` | URL | the channel's `manifest.json` on GitHub Releases | Supported — endpoint the node polls for update notices; it must answer `{ "version": … }` |
 | `BIVY_RELEASES_URL` | URL | `https://github.com/bivysh/bivy/releases` | Supported — where `install.sh`, `bivy update` and the update notice find release archives; point at a mirror with the same layout |
+| `BIVY_SKIP_ATTESTATION` | `1` | unset | Supported — install or update without checking the archive's GitHub build attestation (a fork's own builds). Archives are still checked against their digest |
 | `BIVY_MODEL_CATALOG_URL` | URL | `https://bivy.sh/api/models/local-catalog.json` | Supported — remote local-model presets. Fetched best-effort with a 2.5 s timeout; failure is silent |
 
 ## GitHub work queue

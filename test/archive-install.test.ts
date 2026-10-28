@@ -23,7 +23,8 @@ function release(work: string, version: string) {
   const bytes = fs.readFileSync(file);
   const manifest = { version, archives: { [target]: { file: `${name}.tar.gz`, sha256: crypto.createHash("sha256").update(bytes).digest("hex") } } };
   const download = (_url: string, dest: string) => fs.writeFileSync(dest, bytes);
-  return { manifest, download, archiveUrl: () => "https://releases.test/archive" };
+  const verifyProvenance = async () => {};
+  return { manifest, download, archiveUrl: () => "https://releases.test/archive", verifyProvenance };
 }
 
 test("updates stage beside the running version, swap current, and keep one previous", async () => {
@@ -49,6 +50,9 @@ test("updates stage beside the running version, swap current, and keep one previ
     const bad = release(work, "1.3.0");
     bad.manifest.archives[target].sha256 = "0".repeat(64);
     await assert.rejects(stageArchive({ installRoot, target, ...bad }), /failed verification/);
+    // A digest that matches but whose build attestation doesn't is refused too.
+    const unattested = { ...release(work, "1.3.0"), verifyProvenance: async () => { throw new Error("not attested"); } };
+    await assert.rejects(stageArchive({ installRoot, target, ...unattested }), /not attested/);
     assert.equal(activeVersion(installRoot), dirs[2]);
     assert.deepEqual(fs.readdirSync(path.join(installRoot, "versions")).sort(), ["1.1.0-linux-x64", "1.2.0-linux-x64"]);
   } finally {
