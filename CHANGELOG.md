@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A chat widget whose page never reaches the app (the file was missing, outside the agent's workspace or too big) now says it couldn't be read, instead of staying an empty loading box.
 - **A first app no longer looks like a failure.** `bivy app shot` on a machine with agent screenshots off, or with no browser, now succeeds with no pictures and says why, instead of failing. Such a turn showed a red dot and "2 failed". It no longer tells the agent how to turn the setting on, so agents stop switching on a setting that is yours to choose.
 - An app the agent presents shows one card in the chat, not a launcher card and a review card for the same app.
 - Agents' step summaries (reasoning) render their Markdown, instead of showing `**Planning the layout**` with the asterisks.
