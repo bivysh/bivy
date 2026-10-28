@@ -10,7 +10,7 @@
  * connect to a node. Runtime discovery may augment this snapshot but does not
  * own these provider identities.
  */
-export const BIVY_PROVIDER_CATALOG_VERSION = "2026-08-14";
+export const BIVY_PROVIDER_CATALOG_VERSION = "2026-10-28";
 
 export type ProviderAuthMethod =
   | { kind: "api_key"; label: string; helpUrl?: string }
@@ -55,9 +55,9 @@ export const BIVY_PROVIDER_CATALOG: readonly BivyProviderDefinition[] = [
     { id: "gpt-4o", name: "GPT-4o" },
   ] },
   { id: "openai-codex", name: "OpenAI — ChatGPT subscription", aliases: ["codex"], authMethods: [oauth("ChatGPT Plus / Pro", "openai-codex")], compatibility: "openai", models: [
-    { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", reasoning: true },
-    { id: "gpt-5.3-codex-spark", name: "GPT-5.3 Codex Spark", reasoning: true },
-    { id: "gpt-5-codex", name: "GPT-5 Codex", reasoning: true },
+    { id: "gpt-6-luna", name: "GPT-6 Luna", reasoning: true },
+    { id: "gpt-5.6-terra", name: "GPT-5.6 Terra", reasoning: true },
+    { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", reasoning: true },
   ] },
   { id: "google", name: "Google Gemini", aliases: ["gemini"], authMethods: [apiKey("Gemini API key", "https://aistudio.google.com/app/apikey"), reference], env: ["GEMINI_API_KEY", "GOOGLE_API_KEY"], compatibility: "google", helpUrl: "https://ai.google.dev/gemini-api/docs", models: [
     { id: "gemini-2.5-pro", name: "Gemini 2.5 Pro", reasoning: true },

@@ -36,6 +36,13 @@ try {
     { provider: "anthropic", id: "claude-opus-4-8" },
   ];
   assert.deepEqual(withinAccount(catalog, new Map([["openai-codex", ids!]])).map((m) => m.id), ["gpt-5.6-terra", "claude-opus-4-8"], "other providers pass through");
+  // OpenCode names the plan `openai`, keeps the prefix in ACP ids, and lists speed tiers.
+  const opencode = [
+    { provider: "openai", id: "openai/gpt-6-sol" },
+    { provider: "openai", id: "openai/gpt-5.6-terra-fast" },
+    { provider: "openai", id: "openai/gpt-5.6-luna" },
+  ];
+  assert.deepEqual(withinAccount(opencode, new Map([["openai-codex", ids!]]), { openai: "openai-codex" }).map((m) => m.id), ["openai/gpt-5.6-terra-fast", "openai/gpt-5.6-luna"], "an aliased agent provider is gated by the plan's list");
 
   resetAccountModels();
   globalThis.fetch = (async () => new Response("nope", { status: 500 })) as typeof fetch;

@@ -37,7 +37,7 @@ const USAGE = `Usage: bivy exec [options] "<prompt>"   (or pipe the prompt on st
 One-shot headless turn: prints the final answer to stdout, progress to stderr.
 
   -a, --agent <id>       Agent to run (default: the node's default agent)
-  -m, --model <model>    Model id, bare or provider-qualified (gpt-5.6-sol, openai-codex/gpt-5.6-sol)
+  -m, --model <model>    Model id, bare or provider-qualified (gpt-5.6-terra, openai-codex/gpt-5.6-terra)
   -n, --name <label>     Session name
   -w, --workspace <dir>  Workspace directory
       --session <ref>    Continue an existing session instead of starting one
