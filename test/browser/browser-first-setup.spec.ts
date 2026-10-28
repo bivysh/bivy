@@ -9,7 +9,7 @@ test.beforeAll(async ({ webApp }) => {
 });
 
 for (const theme of themes) {
-  test(`first machine advances to a first task that runs the loop (${theme})`, async ({ page }, testInfo) => {
+  test(`first machine connects its AI and lands on the composer (${theme})`, async ({ page }, testInfo) => {
     page.on("pageerror", error => console.error(error.message));
     await page.addInitScript((theme) => {
       localStorage.setItem("bivy_session", "sess_private_never_in_command");
@@ -50,12 +50,6 @@ for (const theme of themes) {
     await page.evaluate(async () => {
       const module = "/src/store/useStore.ts";
       const { controller } = await import(module);
-      // The machine's running servers, before any session exists; none at first.
-      const w = window as unknown as { offers: unknown[]; sent: unknown[][] };
-      w.offers = []; w.sent = [];
-      controller.appCommand = async (kind: string) => kind === "apps.offers" ? { offers: w.offers } : {};
-      controller.pushStatus = async () => ({ supported: false, subscribed: false, permission: "default" });
-      controller.sendPrompt = (...args: unknown[]) => { w.sent.push(args); };
       controller.switchNode = (id: string) => {
         controller.store.setCurrentNode(id);
         controller.store.setStatus("online");
@@ -100,7 +94,8 @@ for (const theme of themes) {
     await expect(page.locator(".ai-account-ok")).toHaveText("✓ Connected");
     await page.screenshot({ path: testInfo.outputPath(`connect-ai-${theme}.png`), fullPage: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.getByRole("button", { name: "Continue" }).click();
+    // Connecting a plan is the last step: no Continue to press.
+    await expect(page.getByRole("button", { name: "Continue" })).toHaveCount(0);
     await expect(page.getByRole("status", { name: "Setup readiness" })).toContainText("Validating the model credential", { timeout: 10_000 });
     await expect(page.getByRole("status", { name: "Setup readiness" })).not.toContainText("invalid");
     await page.evaluate(async () => {
@@ -108,22 +103,20 @@ for (const theme of themes) {
       const { controller } = await import(module);
       controller.store.apply({ type: "activation.readiness", credential: { configured: true, probed: true, ok: true }, repository: { chosen: false, probed: true, ok: true, authed: false } });
     });
-    await expect(page.getByRole("heading", { name: "Give your agent a first task" })).toBeVisible();
+    // Setup done: the composer leads, with no suggested first task in front of it.
     await expect(page.getByRole("status", { name: "Setup readiness" })).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "Use starter task" })).toHaveCount(0);
+    await expect(page.locator(".readiness")).toHaveCount(0);
     await expect(page.locator(".composer-input")).toHaveValue("");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`first-task-${theme}.png`), fullPage: true });
     // Cloud drafts must not show machine setup, even for an online account
-    // with no prior sessions. Switching back preserves first-machine onboarding.
+    // with no prior sessions.
     for (const computeSource of ["managed", "user"]) {
       await page.evaluate(async (computeSource) => {
         const module = "/src/store/useStore.ts";
         const { controller } = await import(module);
         controller.store.setDraftEphemeralConfig({ id: "cloud", name: "Cloud", provider: "fly", computeSource, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
       }, computeSource);
-      await expect(page.getByRole("button", { name: "Use starter task" })).toHaveCount(0);
-      await expect(page.getByText("Start with a small task", { exact: true })).toHaveCount(0);
       await expect(page.getByRole("status", { name: "Setup readiness" })).toHaveCount(0);
       await expect(page.locator(".composer-input")).toHaveValue("");
       // The account-backed picker must be reachable before Cloud provisioning.
@@ -132,45 +125,11 @@ for (const theme of themes) {
       // Long selected model names may ellipsize, but must not widen the page.
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     }
-    await page.evaluate(async () => {
-      const module = "/src/store/useStore.ts";
-      const { controller } = await import(module);
-      controller.store.setDraftEphemeralConfig(null);
-    });
-    await expect(page.getByRole("heading", { name: "Give your agent a first task" })).toBeVisible();
-    await page.locator(".composer-input").focus();
-    await expect(page.locator(".composer-input")).toBeFocused();
-    await page.locator(".composer-input").fill("Explain the API authentication flow instead.");
-    await expect(page.locator(".composer-input")).toHaveValue("Explain the API authentication flow instead.");
-    // Nothing running: one tap asks for a small change, reported back by push.
-    await page.getByRole("button", { name: "Make one small improvement" }).click();
-    expect(await page.evaluate(() => (window as unknown as { sent: string[][] }).sent[0][0])).toMatch(/^I'm new to Bivy\. Make one small, useful change/);
-    // A dev server running on the machine becomes the first task: the session
-    // starts in the app's own folder, not the draft repository.
-    await page.evaluate(async () => {
-      const module = "/src/store/useStore.ts";
-      const { controller } = await import(module);
-      (window as unknown as { offers: unknown[] }).offers = [{ port: 5173, pid: 42, command: "node vite --port 5173", project: "/home/me/code/shop" }];
-      controller.store.setDraftEphemeralConfig({ id: "cloud", name: "Cloud", provider: "fly", computeSource: "managed", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-    });
-    await expect(page.getByRole("heading", { name: "Give your agent a first task" })).toHaveCount(0);
-    await page.evaluate(async () => {
-      const module = "/src/store/useStore.ts";
-      const { controller } = await import(module);
-      controller.store.setDraftEphemeralConfig(null);
-    });
-    await expect(page.getByRole("heading", { name: "Mark what's wrong in shop" })).toBeVisible();
-    await page.screenshot({ path: testInfo.outputPath(`first-task-app-${theme}.png`), fullPage: true });
-    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.getByRole("button", { name: "Open shop and mark what's wrong" }).click();
-    const [text, , start] = await page.evaluate(() => (window as unknown as { sent: unknown[][] }).sent[1]) as [string, unknown, Record<string, unknown>];
-    expect(text).toContain("port 5173");
-    expect(start).toMatchObject({ workspace: "/home/me/code/shop" });
   });
 }
 
 for (const theme of themes) {
-  test(`choosing Bivy Cloud starts the cloud machine and signs in there (${theme})`, async ({ page }, testInfo) => {
+  test(`Bivy Cloud starts by default and signs in there (${theme})`, async ({ page }, testInfo) => {
     page.on("pageerror", error => console.error(error.message));
     await page.addInitScript((theme) => {
       localStorage.setItem("bivy_session", "sess_private_never_in_command");
@@ -211,13 +170,11 @@ for (const theme of themes) {
         ] });
       };
     });
-    await expect(page.getByRole("heading", { name: "Where should your agents run?" })).toBeVisible({ timeout: 20_000 });
-    // The install screen never flashed before the choice (it would create an install command).
+    // No choice to make: the AI sign-in is on screen while the cloud machine starts.
+    await expect(page.getByRole("heading", { name: "Connect your AI" })).toBeVisible({ timeout: 20_000 });
+    // The install screen never flashed first (it would create an install command).
     expect(installCommands).toBe(0);
-    await page.screenshot({ path: testInfo.outputPath(`place-choice-${theme}.png`), fullPage: true });
-    await page.getByRole("button", { name: /Bivy Cloud/ }).click();
-    // The AI sign-in is on screen while the machine starts.
-    await expect(page.getByRole("heading", { name: "Connect your AI" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Use my own computer instead" })).toBeVisible();
     await expect(page.getByRole("status")).toContainText("Starting your cloud computer");
     await expect(page.getByRole("button", { name: "Sign in with Claude" })).toBeDisabled();
     await page.screenshot({ path: testInfo.outputPath(`connect-ai-starting-${theme}.png`), fullPage: true });

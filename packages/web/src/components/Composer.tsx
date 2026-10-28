@@ -555,6 +555,15 @@ export function Composer({
     });
   }
 
+  // Choosing a model from the picker Send opened sends the message it held.
+  const sendOnModel = useRef(false);
+  const chosenModelId = state.catalogs.currentModel?.id || state.catalogs.currentModelId;
+  useEffect(() => {
+    if (!sendOnModel.current || !chosenModelId || chosenModelId === "unknown") return;
+    sendOnModel.current = false;
+    submit();
+  });
+
   function submit() {
     const value = text.trim();
     if ((!value && !attachments.length) || disabled || blockedByTurn) return;
@@ -912,8 +921,9 @@ export function Composer({
       {(picker === "model" || picker === "model-to-send") && modelSelectable && (
         <ModelPicker
           state={state}
-          hint={picker === "model-to-send" ? "Choose a model to send your message. Your draft is kept." : undefined}
+          hint={picker === "model-to-send" ? "Choose a model to send your message." : undefined}
           onClose={() => setPicker(null)}
+          onChosen={picker === "model-to-send" ? () => { sendOnModel.current = true; } : undefined}
         />
       )}
       {/* Portal to <body>. Like the pickers' Sheet, the viewer is

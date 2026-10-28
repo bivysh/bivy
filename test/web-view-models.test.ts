@@ -189,6 +189,8 @@ test("first run: own-computer sign-ins stay on that machine, and the agent follo
   const codex = { id: "codex", credentialRequirements: { owner: "agent" as const, strategy: "one-of" as const, providers: ["openai-codex", "openai"] } };
   assert.equal(agentForProviders([claude, codex], "claude-code", ["openai-codex"])?.id, "codex");
   assert.equal(agentForProviders([claude, codex], "claude-code", ["anthropic", "openai-codex"]), undefined, "the selected agent can already run");
+  const pi = { id: "pi", credentialRequirements: { owner: "mixed" as const, strategy: "one-of" as const, providers: [] } };
+  assert.equal(agentForProviders([pi, claude, codex], "pi", ["openai-codex"])?.id, "codex", "the plan's own agent, not one that needs a model picked");
 });
 
 test("presence wakes the sleeping cloud computer only for someone who works on it", () => {

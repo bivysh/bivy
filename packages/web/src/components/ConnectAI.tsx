@@ -1,19 +1,20 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// First run, right after choosing where agents run: sign in with the AI plans
-// the user already pays for. The sign-in runs on the machine the agents use (the
-// user's cloud machine, or their own computer), so the browser never handles
-// the tokens.
+// First run, right after sign-in: sign in with the AI plans the user already
+// pays for. The sign-in runs on the machine the agents use (the user's cloud
+// machine, or their own computer), so the browser never handles the tokens.
+// The first connected plan picks its agent and hands over to the composer.
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { modelAuthApiKeyProvider, type AppState } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { AI_ACCOUNTS, agentForProviders, rememberConnectAiDone, signInMachineOnline, signInSync, type RunPlace } from "../onboarding.js";
+import { AddNodeSheet } from "./AddNodeSheet.js";
 import { ProviderConnectForm } from "./ProviderConnect.js";
 import { Spinner } from "./Spinner.js";
 
-export function ConnectAI({ state, place, startError, onRetry, onDone, deferrable = true }: {
+export function ConnectAI({ state, place, startError, onRetry, onDone, onUseOwn, deferrable = true }: {
   state: AppState;
   place: RunPlace | null;
   /** Offer "Set up later" (only the first time it's asked). */
@@ -22,8 +23,11 @@ export function ConnectAI({ state, place, startError, onRetry, onDone, deferrabl
   startError?: string;
   onRetry: () => void;
   onDone: () => void;
+  /** Bivy Cloud is the default; this switches the first run to the user's own computer. */
+  onUseOwn: () => void;
 }) {
   const [open, setOpen] = useState<string | null>(null);
+  const [addingOwn, setAddingOwn] = useState(false);
   const nodeId = state.connection.currentNodeId;
   const online = signInMachineOnline(state.connection, controller.direct);
   // The selected machine decides, once there is one: picking your own computer
@@ -47,6 +51,15 @@ export function ConnectAI({ state, place, startError, onRetry, onDone, deferrabl
     rememberConnectAiDone();
     onDone();
   };
+  // Once a plan is connected (and the machine has listed its agents, so the
+  // plan's agent can be chosen), there is nothing left to confirm.
+  const finished = useRef(false);
+  const runtimesListed = state.catalogs.runtimes.length > 0;
+  useEffect(() => {
+    if (!ready || !runtimesListed || finished.current) return;
+    finished.current = true;
+    finish();
+  });
 
   return (
     <section className="card readiness" aria-labelledby="connect-ai-title">
@@ -103,10 +116,13 @@ export function ConnectAI({ state, place, startError, onRetry, onDone, deferrabl
         })}
       </ul>
 
-      <div className="get-started-actions">
-        <button type="button" className="btn sm primary" disabled={!ready} onClick={finish}>Continue</button>
-        {!ready && online && deferrable && <button type="button" className="btn sm ghost" onClick={finish}>Set up later</button>}
-      </div>
+      {((online && deferrable) || cloud) && (
+        <div className="get-started-actions">
+          {online && deferrable && <button type="button" className="btn sm ghost" onClick={finish}>Set up later</button>}
+          {cloud && <button type="button" className="btn sm ghost" onClick={() => { onUseOwn(); setAddingOwn(true); }}>Use my own computer instead</button>}
+        </div>
+      )}
+      {addingOwn && <AddNodeSheet onClose={() => setAddingOwn(false)} />}
     </section>
   );
 }

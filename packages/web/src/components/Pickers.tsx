@@ -768,11 +768,13 @@ function modelMeta(m: ModelInfo, account?: string): string {
   return [(m as any).provider, account, ctx ? `${Math.round(ctx / 1000)}k ctx` : null].filter(Boolean).join(" · ");
 }
 
-export function ModelPicker({ state, hint, onClose }: {
+export function ModelPicker({ state, hint, onClose, onChosen }: {
   state: AppState;
   /** Why the picker opened, when the user didn't ask for it (Send without a model). */
   hint?: string;
   onClose: () => void;
+  /** Called after a model row is chosen (not when the picker is dismissed). */
+  onChosen?: () => void;
 }) {
   const [q, setQ] = useState("");
   const [accountModel, setAccountModel] = useState<ModelInfo | null>(null);
@@ -931,6 +933,7 @@ export function ModelPicker({ state, hint, onClose }: {
             onClick={() => {
               controller.chooseModel(m);
               onClose();
+              onChosen?.();
             }}
           />;
         })}

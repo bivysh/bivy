@@ -63,13 +63,14 @@ const usesProvider = (runtime: RuntimeInfo, provider: string) => {
 };
 
 /** The agent to use once these providers are connected: the selected one when
- *  it can use any of them (or declares nothing), otherwise the first available
- *  agent that can. Undefined when no change is needed or possible. */
+ *  it names one of them, otherwise the first available agent that does. A
+ *  plan's own agent wins over one that names no provider (it would need a model
+ *  picked first). Undefined when no change is needed or possible. */
 export function agentForProviders(runtimes: readonly RuntimeInfo[], selectedId: string, connected: readonly string[]): RuntimeInfo | undefined {
   if (connected.length === 0) return undefined;
   const available = runtimes.filter((runtime) => String(runtime.status ?? "available") === "available");
   const selected = available.find((runtime) => runtime.id === selectedId);
-  if (selected && (!selected.credentialRequirements?.providers?.length || connected.some((provider) => usesProvider(selected, provider)))) return undefined;
+  if (selected && connected.some((provider) => usesProvider(selected, provider))) return undefined;
   for (const provider of connected) {
     const match = available.find((runtime) => usesProvider(runtime, provider));
     if (match) return match;

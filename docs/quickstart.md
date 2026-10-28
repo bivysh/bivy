@@ -18,14 +18,9 @@ Zero to your first agent reply. Start in your browser or phone.
    the newly enrolled machine when it comes online. If several machines are
    already connected, you can choose one explicitly.
 5. Confirm a suggested repository, browse your available GitHub repositories,
-   or use the machine's default workspace. The first task is one tap, and
-   you'll see its message in the chat. If a dev server is already running on
-   the machine, **Open ‹app› and mark what's wrong** opens its preview. Mark
-   what's off, and the agent fixes it and sends you a share link. Otherwise,
-   **Make one small improvement** has the agent make one small change and
-   notify your phone when it's done. Or type your own task instead. A prompt
-   isn't a sandbox guarantee; check the session's protection setting before
-   running work.
+   or use the machine's default workspace, then type your first task. A
+   prompt isn't a sandbox guarantee; check the session's protection setting
+   before running work.
 6. Read the answer, steer the session, and review any changes or artifacts in
    the same interface.
 

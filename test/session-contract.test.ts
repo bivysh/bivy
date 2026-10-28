@@ -32,6 +32,8 @@ test("computeSessionContract: maps RuntimeInfo protectionLevel/authOwner/capabil
   assert.equal(contract.resume.advertised, true);
   assert.equal(contract.sandbox.runtimeEnforcement, "native-sandbox");
   assert.equal(contract.sandbox.evidenceClass, "enforced");
+  assert.ok(contract.degradedReasons.some((r) => r.code === "auth_unknown"), "the unknown credential kind is still disclosed");
+  assert.equal(contract.requiresAcknowledgement, false, "an unknown credential kind alone never asks for acknowledgement");
 });
 
 test("computeSessionContract: an agent with no native sandbox and no tool interception is honestly unavailable, not guessed guaranteed", () => {
