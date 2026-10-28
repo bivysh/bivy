@@ -14,6 +14,7 @@ import path from "node:path";
 import { once } from "node:events";
 import type { RegisteredView } from "../apps/registry.js";
 import { takeShots, type Shot } from "../apps/screenshot.js";
+import { checkWidgetScripts } from "./check.js";
 
 export interface WidgetShotRequest {
   html: string;
@@ -31,6 +32,8 @@ export interface WidgetShotResult {
   errors: string[];
   /** The height the widget asked for, at the last width shot. */
   height?: number;
+  /** Why there are no screenshots, when there is no browser to take them. */
+  note?: string;
 }
 
 function readAsset(relative: string): string {
@@ -93,7 +96,9 @@ addEventListener("message", async (event) => {
 export async function shootWidget(request: WidgetShotRequest, outDir: string, take: typeof takeShots = takeShots): Promise<WidgetShotResult> {
   const frame = readAsset("./widget-frame.html");
   const tokens = readAsset("../apps/tokens.css");
-  const errors: string[] = [];
+  // Checked without a browser first, so a page whose script cannot parse is
+  // caught on every machine.
+  const errors: string[] = checkWidgetScripts(request.html);
   let height: number | undefined;
   const harness = harnessHtml(tokens);
   const params = JSON.stringify({ html: request.html, data: request.data ?? {}, state: request.state ?? {} });
@@ -134,7 +139,13 @@ export async function shootWidget(request: WidgetShotRequest, outDir: string, ta
   try {
     // A stand-in for a published view: the shooter only reads its id, name and target.
     const view = { view: { id: "widget00", name: "Widget" }, target: { kind: "service", port } } as unknown as RegisteredView;
-    const shots: Shot[] = await take([view], { widths: request.widths ?? [390, 1024], themes: request.themes ?? ["light", "dark"], path: "/", settleMs: 1500 }, outDir);
+    let shots: Shot[];
+    try {
+      shots = await take([view], { widths: request.widths ?? [390, 1024], themes: request.themes ?? ["light", "dark"], path: "/", settleMs: 1500 }, outDir);
+    } catch (error) {
+      if (!/No Chrome or Chromium/.test((error as Error).message)) throw error;
+      return { shots: [], errors, note: "No Chrome or Chromium on this machine, so there are no screenshots; its scripts were checked. Set BIVY_CHROME to a browser to see it." };
+    }
     return { shots: shots.map(({ width, theme, file }) => ({ width, theme, file })), errors, ...(height ? { height } : {}) };
   } finally {
     server.close();

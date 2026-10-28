@@ -33,8 +33,10 @@ session, put it in a plugin: `bivy guide extend-bivy`.
 
 renders it as the user will see it — in the chat's frame, light and dark, at
 phone and desktop width — and prints the PNG paths and every error the page
-raised. Look at the images and fix every error first. Plugin tools it calls
-run for real; `--widget <name>` shoots a plugin's widget.
+raised. Look at the images and fix every error first: one syntax error stops
+the whole script, so the widget would show and do nothing. Without a browser on
+the machine it still checks that every script parses. Plugin tools it calls run
+for real; `--widget <name>` shoots a plugin's widget.
 
 ## What the page can use
 

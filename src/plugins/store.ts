@@ -4,6 +4,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { currentBivyVersion } from "../app-version.js";
+import { checkWidgetScripts } from "../widgets/check.js";
 import { defaultDataDir } from "../data-dir.js";
 import {
   checkPluginCompatibility,
@@ -194,6 +195,9 @@ export function installPlugin(input: string, opts: { dataDir?: string; force?: b
       copyPluginFiles(path.dirname(file), temp);
       const missing = missingFiles(manifest, temp);
       if (missing.length) throw new Error(`The manifest names files that are not in the plugin directory: ${missing.join(", ")}`);
+      // A widget whose script cannot parse would show and do nothing.
+      const broken = (manifest.contributes.widgets ?? []).flatMap((widget) => checkWidgetScripts(fs.readFileSync(path.join(temp, widget.entry), "utf8"), widget.entry));
+      if (broken.length) throw new Error(`A widget's script does not parse: ${broken.join("; ")}`);
     }
     const output = path.join(temp, PLUGIN_MANIFEST_FILE);
     fs.writeFileSync(output, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });

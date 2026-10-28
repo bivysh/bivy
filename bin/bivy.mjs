@@ -2688,13 +2688,14 @@ async function cmdWidget(args = []) {
     if (res instanceof Error) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node: ${res.message}`, next: "bivy status", exit: EXIT.unavailable });
     const body = await res.json().catch(() => ({}));
     if (!res.ok || body.error) return fail({ code: "shot_failed", message: `Widget shot failed: ${body.error || res.status}`, exit: EXIT.failed });
-    const result = { shots: body.shots ?? [], errors: body.errors ?? [], height: body.height };
+    const result = { shots: body.shots ?? [], errors: body.errors ?? [], height: body.height, ...(body.note ? { note: body.note } : {}) };
     if (json) console.log(JSON.stringify(result));
     else {
       for (const shot of result.shots) console.log(`${shot.width}px ${shot.theme}: ${shot.file}`);
+      if (result.note) console.log(c.yellow(result.note));
       if (result.height) console.log(`It asks for ${result.height}px of height${result.height > 720 ? " (more than the 720px a widget gets inline; it will scroll)" : ""}.`);
       for (const error of result.errors) console.error(c.red(`error: ${error}`));
-      if (!result.errors.length) console.log(c.green("No errors. Look at the PNGs before placing it."));
+      if (!result.errors.length) console.log(c.green(result.shots.length ? "No errors. Look at the PNGs before placing it." : "No errors found."));
     }
     if (result.errors.length) process.exitCode = EXIT.failed;
     return;
