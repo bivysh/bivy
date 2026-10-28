@@ -14,7 +14,7 @@ import { resolveWebhookAuth, verifyWebhookAuth, DEFAULT_WEBHOOK_HEADER, type Web
 import { matchGithubItemTrigger } from "./github-item-trigger.js";
 import { CLOUD_RUNNER_CONFIG_ID, validateCapabilityTags } from "@bivy/core";
 import { notificationLink } from "./notification-link.js";
-import { type Account, type NodeRecord, type NotificationKind, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
+import { type Account, type ResolvedClient, type NodeRecord, type NotificationKind, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity, mintHostedInstallationToken, listHostedRepositories } from "./central-github-app.js";
 import { hostedEncryptionAvailable, hostedPrimaryKid, initializeHostedKeyring, safeEqual } from "./hosted-crypto.js";
 import { webRuntimeConfigScript } from "./web-runtime-config.js";
@@ -107,9 +107,6 @@ function assertProductionConfig() {
     // spoofed Host would send a genuine email pointing at the attacker's host
     // and leak the single-use login token. Require it in production.
     problems.push("PUBLIC_CONTROL_PLANE_URL must be set in production (sign-in link URLs must not be derived from request headers)");
-  }
-  if (Boolean(process.env.JANITOR_SERVICE_URL) !== Boolean(process.env.JANITOR_PROXY_SECRET)) {
-    problems.push("JANITOR_SERVICE_URL and JANITOR_PROXY_SECRET must be configured together");
   }
   if (Boolean(process.env.BIVY_CENTRAL_GITHUB_APP_ID) !== Boolean(process.env.BIVY_CENTRAL_GITHUB_APP_PRIVATE_KEY)) {
     // Half-configured would silently disable the central app while the operator
@@ -544,36 +541,6 @@ function noStorePwaShell(res: Response) {
   res.setHeader("Cache-Control", "no-store, max-age=0");
 }
 
-// Janitor is deployed as a private Kamal accessory. The control plane is its
-// only public ingress: API/artifact requests require the user's existing Bivy
-// bearer token, and the accessory receives only the resolved account id plus a
-// server-to-server secret. Model keys never pass through the browser.
-const janitorServiceUrl = process.env.JANITOR_SERVICE_URL?.replace(/\/$/, "");
-const janitorProxySecret = process.env.JANITOR_PROXY_SECRET;
-if (janitorServiceUrl && janitorProxySecret) {
-  app.all(/^\/janitor(?:\/.*)?$/, asyncHandler(async (req, res) => {
-    const protectedPath = req.path === "/janitor/api" || req.path.startsWith("/janitor/api/") || req.path.startsWith("/janitor/artifacts/");
-    const account = protectedPath ? await store.accountFromSession(bearer(req)) : null;
-    if (protectedPath && !account) return res.status(401).json({ error: "Sign in to Bivy to use Janitor." });
-    const suffix = req.originalUrl.slice("/janitor".length) || "/";
-    const headers: Record<string, string> = {
-      accept: String(req.headers.accept ?? "*/*"),
-      "x-janitor-proxy-secret": janitorProxySecret,
-      "x-bivy-account-id": account?.id ?? "public-shell",
-    };
-    let body: string | undefined;
-    if (req.method !== "GET" && req.method !== "HEAD") {
-      headers["content-type"] = "application/json";
-      body = JSON.stringify(req.body ?? {});
-    }
-    const upstream = await fetch(`${janitorServiceUrl}${suffix}`, { method: req.method, headers, body, signal: AbortSignal.timeout(210_000) });
-    for (const name of ["content-type", "cache-control", "etag", "last-modified"]) {
-      const value = upstream.headers.get(name); if (value) res.setHeader(name, value);
-    }
-    res.status(upstream.status).send(Buffer.from(await upstream.arrayBuffer()));
-  }));
-}
-
 // Serve the React/Vite PWA (@bivy/web) — Bivy's single web client — at the root
 // so the bare domain (app.bivy.sh) loads the app directly. It renders its own
 // sign-in screen on a cold visit; the GitHub OAuth callback and magic-link
@@ -668,8 +635,11 @@ function validEmail(email: string): boolean {
 // Fleet-wide fixed-window limits for unauthenticated, side-effecting auth
 // endpoints. The shared Postgres counter means adding replicas cannot multiply
 // the email/OAuth allowance and requests need no load-balancer affinity.
+// req.ip honours TRUST_PROXY: X-Forwarded-For names the client only when it was
+// set by a configured proxy, so a direct caller cannot pick a fresh address per
+// request to dodge the per-IP limits.
 function clientIp(req: Request): string {
-  return String(req.headers["x-forwarded-for"] ?? "").split(",")[0].trim() || req.socket.remoteAddress || "unknown";
+  return req.ip || req.socket.remoteAddress || "unknown";
 }
 /** True (and responds 429) if this IP or email has exceeded the auth-email budget. */
 async function authEmailRateLimited(req: Request, res: Response, email: string): Promise<boolean> {
@@ -1618,6 +1588,15 @@ function withEffectiveOnline<T extends { online: boolean; lastSeenAt: string | n
   return recentlySeen ? { ...node, online: true } : node;
 }
 
+// The caller of an account-wide route: an account session only. A node-scoped
+// link grant (a linking QR, a sibling or saved node grant) reaches one node and
+// nothing else, so it must not read or change the account's settings,
+// automations, machines or push subscriptions.
+async function resolveAccountClient(req: Request): Promise<ResolvedClient | undefined> {
+  const client = await store.resolveClient(bearer(req));
+  return client && !client.nodeId ? client : undefined;
+}
+
 // Lists the caller's nodes. Accepts an account session (all nodes), a
 // node-scoped link grant from a linking QR (only that one node), or a node's own
 // enrollment token (its account's nodes — so `bivy nodes` on an installed node
@@ -1924,7 +1903,7 @@ app.post("/internal/notifications/hints", requireNode, asyncHandler(async (req, 
 // A client reads the merged session list across all of its nodes. A node-scoped
 // link grant only sees that one node's sessions.
 async function listClientSessions(req: Request, res: Response) {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const all = await store.listAccountSessions(client.accountId);
   const scoped = client.nodeId ? all.filter((s) => s.nodeId === client.nodeId) : all;
@@ -1983,7 +1962,7 @@ app.get("/.well-known/apple-app-site-association", (_req, res) => {
 });
 
 app.get("/api/push/native", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client || client.nodeId) return res.status(401).json({ error: "Account authentication required" });
   res.json({ enabled: Boolean(apns) });
 }));
@@ -2001,7 +1980,7 @@ app.post("/api/push/native", asyncHandler(async (req, res) => {
 }));
 
 app.delete("/api/push/native", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client || client.nodeId) return res.status(401).json({ error: "Account authentication required" });
   const deviceToken = req.body?.token;
   if (typeof deviceToken !== "string" || !/^[a-f0-9]{64,200}$/.test(deviceToken)) return res.status(400).json({ error: "Invalid device token" });
@@ -2014,7 +1993,7 @@ app.get("/api/push/vapid-public-key", (_req, res) => {
 });
 
 app.post("/api/push/subscribe", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const subscription = req.body?.subscription ?? req.body;
   const endpoint = pushSubscriptionEndpoint(subscription);
@@ -2024,7 +2003,7 @@ app.post("/api/push/subscribe", asyncHandler(async (req, res) => {
 }));
 
 app.delete("/api/push/subscribe", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const endpoint = String(req.body?.endpoint ?? "");
   if (endpoint) await store.removePushSubscription(client.accountId, endpoint);
@@ -2035,14 +2014,14 @@ app.delete("/api/push/subscribe", asyncHandler(async (req, res) => {
 // scoped so the choice syncs across all of a user's devices; enforced in
 // `sendPushToAccount`.
 app.get("/api/push/preferences", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const preferences = await store.getNotificationPreferences(client.accountId);
   res.json({ preferences });
 }));
 
 app.put("/api/push/preferences", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const body = (req.body ?? {}) as Record<string, unknown>;
   // Accept only known kinds with boolean values; silently ignore anything else.
@@ -2443,7 +2422,7 @@ app.post("/node/github-app/installations", requireNode, asyncHandler(async (req,
 // The signed-in account's connected GitHub App (name + mention handle), for the
 // settings UI. Returns { connected: false } when no app is set up.
 app.get("/account/github-app", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const hooks = await store.listGithubAppHooks(client.accountId);
   const central = centralGithubAppConfig();
@@ -2669,7 +2648,7 @@ async function githubAppSettingsHooks(accountId: string, appId: string) {
 }
 
 app.post("/account/github-app/default-node", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const appId = typeof req.body?.appId === "string" ? req.body.appId.trim() : "";
   // The default node is an account-level preference stored per hook. Without an
@@ -2694,7 +2673,7 @@ app.post("/account/github-app/default-node", asyncHandler(async (req, res) => {
 // run. Account-wide preference stored per hook, same shape as default-node:
 // without an appId it applies to every connected app.
 app.post("/account/github-app/trigger-access", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const raw = typeof req.body?.triggerAccess === "string" ? req.body.triggerAccess.trim() : "";
   if (raw && raw !== "everyone" && raw !== "contributor" && raw !== "collaborator") {
@@ -2715,7 +2694,7 @@ app.post("/account/github-app/trigger-access", asyncHandler(async (req, res) => 
 // and the UI no longer shows it as connected. The node clears its own copy of the
 // key separately (github.app.disconnect). Idempotent — ok if nothing is connected.
 app.delete("/account/github-app", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   // Scope precedence: by app id, else by a single hook id (a stale app from an
   // abandoned create flow has a hook but no App ID — it must be removable on its
@@ -2744,7 +2723,7 @@ app.delete("/account/github-app", asyncHandler(async (req, res) => {
 // Recent incoming work items for the account, for the queue UI. Each carries a
 // status (pending → not picked up yet; claimed → a node is running it; done).
 app.get("/account/work-items", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 30));
   const items = await store.listWorkItems(client.accountId, limit);
@@ -3126,14 +3105,14 @@ async function ensureSourceAutomations(accountId: string): Promise<void> {
 }
 
 app.get("/account/automations", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   await ensureSourceAutomations(client.accountId);
   res.json((await store.listAutomationDefinitions(client.accountId)).map((d) => publicAutomation(d, req)));
 }));
 
 app.post("/account/automations", automationWriteRateLimit, asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
   if (!name) return res.status(400).json({ error: "name is required" });
@@ -3250,7 +3229,7 @@ app.post("/account/automations", automationWriteRateLimit, asyncHandler(async (r
 }));
 
 app.put("/account/automations/:id", automationWriteRateLimit, asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
   if (!current) return res.status(404).json({ error: "Automation not found" });
@@ -3390,7 +3369,7 @@ app.put("/account/automations/:id", automationWriteRateLimit, asyncHandler(async
 // Rotate a webhook automation's signing secret. The new secret is returned once;
 // the old one stops working immediately.
 app.post("/account/automations/:id/webhook/rotate", automationWriteRateLimit, asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
   if (!current) return res.status(404).json({ error: "Automation not found" });
@@ -3402,7 +3381,7 @@ app.post("/account/automations/:id/webhook/rotate", automationWriteRateLimit, as
 }));
 
 app.delete("/account/automations/:id", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
   if (!current) return res.status(404).json({ error: "Automation not found" });
@@ -3468,7 +3447,7 @@ function buildSimulateDraft(accountId: string, body: Record<string, unknown>): A
 // existing automation (optionally previewing an unsaved edit via `draft`) or a
 // brand-new draft that has never been saved.
 app.post("/account/automations/simulate", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const definitions = await store.listAutomationDefinitions(client.accountId);
   const draftBody = req.body?.draft && typeof req.body.draft === "object" && !Array.isArray(req.body.draft)
@@ -3512,7 +3491,7 @@ app.post("/account/automations/simulate", asyncHandler(async (req, res) => {
 }));
 
 app.post("/account/automations/:id/run", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const definition = await store.getAutomationDefinition(client.accountId, String(req.params.id));
   if (!definition) return res.status(404).json({ error: "Automation not found" });
@@ -3520,7 +3499,7 @@ app.post("/account/automations/:id/run", asyncHandler(async (req, res) => {
 }));
 
 app.get("/account/automation-runs", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const limit = Math.max(1, Math.min(100, Number(req.query.limit) || 50));
   const runs = await store.listAutomationRuns(client.accountId, limit);
@@ -3555,7 +3534,7 @@ app.get("/account/automation-runs", asyncHandler(async (req, res) => {
 // both return the same 404 so the endpoint never leaks Run existence across
 // accounts.
 app.get("/account/automation-runs/:id", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const run = await store.getAutomationRun(client.accountId, String(req.params.id));
   if (!run) return res.status(404).json({ error: "Automation run not found" });
@@ -3563,7 +3542,7 @@ app.get("/account/automation-runs/:id", asyncHandler(async (req, res) => {
 }));
 
 app.get("/account/automation-triggers", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   res.json(await store.listTriggerEvents(client.accountId, Number(req.query.limit) || 50));
 }));
@@ -3572,7 +3551,7 @@ app.get("/account/automation-triggers", asyncHandler(async (req, res) => {
 // durably; repeating a cancellation is a successful no-op, while a different
 // terminal outcome cannot be rewritten.
 app.post("/account/automation-runs/:id/cancel", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const result = await store.cancelAutomationRun(client.accountId, String(req.params.id));
   if (!result) return res.status(404).json({ error: "Automation run not found" });
@@ -3594,7 +3573,7 @@ app.post("/account/automation-runs/:id/cancel", asyncHandler(async (req, res) =>
 }));
 
 app.post("/account/automation-runs/:id/retry", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const result = await store.retryAutomationRun(client.accountId, String(req.params.id));
   if (!result) return res.status(404).json({ error: "Automation run not found" });
@@ -3609,7 +3588,7 @@ app.post("/account/automation-runs/:id/retry", asyncHandler(async (req, res) => 
 }));
 
 app.post("/account/automation-runs", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const title = typeof req.body?.title === "string" ? req.body.title.trim() : "";
   if (!title) return res.status(400).json({ error: "title is required" });
@@ -3674,7 +3653,7 @@ app.post("/account/automation-runs", asyncHandler(async (req, res) => {
 // `bivy` when no node is given) and records an optional agent/model override, then
 // nudges the target node's relay so it picks the item up promptly.
 app.post("/account/work-items/:id/assign", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const node = typeof req.body?.node === "string" ? req.body.node.trim() : "";
   const runtimeId = typeof req.body?.runtimeId === "string" ? req.body.runtimeId.trim() : "";
@@ -3695,7 +3674,7 @@ app.post("/account/work-items/:id/assign", asyncHandler(async (req, res) => {
 // The deployment-provided cloud profiles ("Bivy Cloud") an account can pick.
 // They are created and reconciled by the server only.
 app.get("/account/ephemeral-configs", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   // Existing users may have completed onboarding before managed Cloud existed.
   // Listing the picker is the universal idempotent adoption seam: self-hosted
@@ -3711,13 +3690,13 @@ app.get("/account/ephemeral-configs", asyncHandler(async (req, res) => {
 }));
 
 app.get("/account/queue-routing", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   res.json(await store.getQueueRouting(client.accountId));
 }));
 
 app.put("/account/queue-routing", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   res.json(await store.setQueueRouting(client.accountId, (req.body ?? {}) as QueueRouting));
 }));
@@ -3726,14 +3705,14 @@ app.put("/account/queue-routing", asyncHandler(async (req, res) => {
 // status (never tokens). SECURITY: enabling this stores repo/cloud credentials
 // on the control plane — see store.ts.
 app.get("/account/hosted-provisioning", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const status = await store.getHostedProvisioningStatus(client.accountId);
   res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid(), execution: await cloudComputerReadiness(store, client.accountId, managedComputeEnabled() && await accountMachineMode(client.accountId)) });
 }));
 
 app.put("/account/hosted-provisioning", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const body = (req.body ?? {}) as Record<string, unknown>;
   // Fail closed: never accept secrets to store unless encryption is configured.
@@ -3762,7 +3741,7 @@ app.put("/account/hosted-provisioning", asyncHandler(async (req, res) => {
 
 // Audit trail of hosted-credential use (never contains secrets).
 app.get("/account/hosted-audit", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   res.json(await store.listHostedAudit(client.accountId, 50));
 }));
@@ -3820,7 +3799,7 @@ async function syncCentralInstallationsForAccount(accountId: string) {
 // (see central-github-app.ts).
 
 app.get("/account/github/central-app", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const central = centralGithubAppConfig();
   const installations = central ? await syncCentralInstallationsForAccount(client.accountId) : [];
@@ -3839,7 +3818,7 @@ app.get("/account/github/central-app", asyncHandler(async (req, res) => {
 // setup callback to THIS account, plus the install URL to open. The state is
 // the only proof of account ownership in the whole flow.
 app.post("/account/github/central-app/install-state", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const central = centralGithubAppConfig();
   if (!central) return res.status(404).json({ error: "Central GitHub App is not configured" });
@@ -3922,7 +3901,7 @@ app.get("/github/central-app/setup", asyncHandler(async (req, res) => {
 // and the listing uses an on-demand app JWT → installation token, server-side
 // only; nothing is persisted.
 app.get("/account/github/central-app/installations/:installationId/repos", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const central = centralGithubAppConfig();
   if (!central) return res.status(404).json({ error: "Central GitHub App is not configured" });
@@ -3940,7 +3919,7 @@ app.get("/account/github/central-app/installations/:installationId/repos", async
 // Unlink an installation from this account (does not uninstall on GitHub —
 // that side is handled by the installation.deleted webhook when it happens).
 app.delete("/account/github/central-app/installations/:installationId", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const installationId = String(req.params.installationId || "").trim();
   const removed = await store.deleteCentralGithubInstallation(installationId, client.accountId);
@@ -3957,7 +3936,7 @@ app.delete("/account/github/central-app/installations/:installationId", asyncHan
 // explicit allowlist so deployment bookkeeping fields never leak by accident.
 // Escrowed room keys live in separate stores and are never returned here.
 app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   if (!(await accountMachineMode(client.accountId))) return res.json([]);
   const nodes = await store.listNodes(client.accountId);
@@ -3981,7 +3960,7 @@ app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
 // Destroy the account's cloud computer and its disk. The deployment confirms
 // the release; the API never reports success for a machine that may remain.
 app.delete("/account/hosted-machines/:nodeId", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const nodeId = String(req.params.nodeId || "").trim();
   if (!nodeId) return res.status(400).json({ error: "nodeId is required" });
@@ -3997,7 +3976,7 @@ app.delete("/account/hosted-machines/:nodeId", asyncHandler(async (req, res) => 
 // Re-seal this account's hosted credentials under the current primary key
 // (key rotation): a decrypt-with-old-kid + encrypt-with-primary round-trip.
 app.post("/account/hosted-provisioning/rotate", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   if (!hostedEncryptionAvailable()) return res.status(503).json({ error: "Credential encryption is not configured (set HOSTED_CREDENTIAL_KEY)." });
   await store.setHostedProvisioning(client.accountId, {}); // re-encrypts under the primary key
@@ -4033,7 +4012,7 @@ app.post("/node/hosted-repos", requireNode, asyncHandler(async (req, res) => {
 // Clear the whole queue: remove every *pending* item (the "Clear queue" action).
 // Registered before the :id route so "clear" can't be read as an item id.
 app.delete("/account/work-items", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const removed = await store.clearPendingWorkItems(client.accountId);
   res.json({ ok: true, removed });
@@ -4041,7 +4020,7 @@ app.delete("/account/work-items", asyncHandler(async (req, res) => {
 
 // Remove a single item from the queue (the "×" on a row).
 app.delete("/account/work-items/:id", asyncHandler(async (req, res) => {
-  const client = await store.resolveClient(bearer(req));
+  const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const removed = await store.deleteWorkItem(client.accountId, String(req.params.id));
   if (!removed) return res.status(404).json({ error: "No work item with that id" });
