@@ -218,6 +218,11 @@ async function main() {
   ok((await accountPair("node_pair_1", phoneSession, pairGrant, device.publicKeyB64)).k === "pair.error", "a pair grant works only once");
   ok((await accountPair("node_pair_1", phoneSession, phoneSession, relayKey.publicKeyB64)).k === "pair.error", "a reusable link grant does not pair");
 
+  // A linking QR's grant reaches its one node, never the account's settings.
+  const automations = (bearer: string) => fetch(`http://localhost:${CP}/account/automations`, { headers: { authorization: `Bearer ${bearer}` } });
+  ok((await automations(phoneSession)).status === 401, "a node-scoped link grant cannot read account-wide routes");
+  ok((await automations(login.json.token)).status === 200, "an account session can");
+
   connector.stop();
   console.log("\nAll X25519 pairing e2e checks passed.");
   done(0);
