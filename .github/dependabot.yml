@@ -1,9 +1,14 @@
 version: 2
+# Every ecosystem waits `cooldown` days after a release before proposing it.
+# Hijacked npm and Actions releases are usually caught and pulled within days,
+# so this keeps them from ever reaching a PR. Security updates are not delayed.
 updates:
   - package-ecosystem: npm
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     groups:
       production-dependencies:
         dependency-type: production
@@ -23,6 +28,8 @@ updates:
     directory: /services/control-plane
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     ignore:
       - dependency-name: '@sentry/node'
         update-types: ['version-update:semver-major']
@@ -31,11 +38,22 @@ updates:
     directory: /services/relay
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
     ignore:
       - dependency-name: '@sentry/node'
         update-types: ['version-update:semver-major']
+
+  - package-ecosystem: npm
+    directory: /services/fleet
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7

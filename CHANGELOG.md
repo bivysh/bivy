@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Releases can't pick up a dependency published minutes earlier.** Release archives are resolved by npm, which has no cooldown; every version they resolve must now already be in the reviewed `pnpm-lock.yaml` or be past pnpm's one-day `minimumReleaseAge`, or the release fails.
+- Agent bridges (Claude Agent SDK, Pi) install with `--ignore-scripts` on your machine, as do the relay and fleet images and CI's service installs, so a hijacked transitive dependency's install script never runs. Dependabot waits seven days before proposing a new version and now covers the fleet.
 - **Signing in a terminal or app now asks the browser to approve it.** Device sign-in (`bivy` setup, the installed app) completed as soon as anyone opened its link, so someone could start a sign-in and send you the GitHub or email link: one click handed them your session. The browser now shows an approval page with a code that the terminal or app also shows, and nothing signs in until you approve.
 - **`bivy update` checks each release's build attestation.** The checksum it already checked comes from the same release as the archive, so anyone able to replace release files could replace both. An update now installs only an archive that GitHub's attestation shows was built by Bivy's release workflow for that version, verified with Sigstore. `install.sh` makes the same check when the GitHub CLI is installed and signed in.
 - The relay drops the `Domain` attribute from cookies a preview app sets, so one user's preview can't plant cookies on everyone else's previews under the shared preview domain, even from a modified node.

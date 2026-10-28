@@ -7,7 +7,9 @@ WORKDIR /app
 # caret ranges to the newest published version on every build, which breaks
 # deploys when a brand-new release hasn't fully propagated to the registry CDN.
 COPY --chown=node:node services/fleet/package.json services/fleet/package-lock.json ./
-RUN npm ci
+# --ignore-scripts: no dependency needs an install script (esbuild falls back
+# to its JS shim), and a hijacked release's postinstall would otherwise run here.
+RUN npm ci --ignore-scripts
 COPY --chown=node:node services/fleet/ ./
 # Bundle to plain JS at build time; the container runs `node`, not tsx.
 RUN npm run build

@@ -169,6 +169,9 @@ function applyNestedOverrides(dir) {
  * directory is an ordinary npm project that keeps earlier bridges and carries
  * Bivy's security overrides. Optional dependencies are omitted: bridges run as
  * libraries against the operator's own agent CLI, never their bundled binaries.
+ * Install scripts are off: no package in a bridge's tree needs one (pnpm, which
+ * builds only allowlisted packages, installs the same trees), and a dependency's
+ * preinstall/postinstall is how a hijacked npm release runs code on install.
  *
  * `stdio: "inherit"` streams npm's output (CLI); otherwise it is captured.
  * Installs in one process run one at a time, since they share a directory.
@@ -197,7 +200,7 @@ function installNow(names, { dir = bridgesDir(), stdio = "pipe" } = {}) {
   fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
   return new Promise((resolve, reject) => {
-    const child = spawn("npm", ["install", "--omit=optional", "--no-audit", "--no-fund"], {
+    const child = spawn("npm", ["install", "--omit=optional", "--ignore-scripts", "--no-audit", "--no-fund"], {
       cwd: dir,
       stdio: stdio === "inherit" ? "inherit" : ["ignore", "pipe", "pipe"],
     });
