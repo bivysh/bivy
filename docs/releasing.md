@@ -225,9 +225,12 @@ and `linux/arm64`, with SBOM and provenance attestations. It tags the
 multi-platform index with the full commit SHA, checks that it can be pulled
 anonymously, and records a `runner-image/published` commit status. Pull requests
 that change the Dockerfile build it for amd64 without publishing. It is not
-built in the merge queue, so a release cut right after a merge may find it
-missing; the release then skips the runner's version tags with a warning. A
-deployment pins the full-SHA tag either way. Backfill an older commit with
+built in the merge queue (that would add minutes to every merge), so a release
+cut right after a merge may find it missing. Whichever comes second adds the
+version tags: the release when the image is already published, otherwise
+`runner-image.yml` when it publishes for a commit a `vX.Y.Z` tag points at
+(`latest` only for the highest stable tag). A deployment pins the full-SHA tag
+either way. Backfill an older commit with
 `gh workflow run runner-image.yml -f core_ref=<sha>`.
 
 GHCR visibility cannot be changed through the Packages REST API. Before enabling

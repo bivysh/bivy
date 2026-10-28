@@ -197,6 +197,27 @@ jobs:
               || { echo "::error::$IMAGE:$CORE_SHA has no linux/$arch manifest"; exit 1; }
           done
 
+      # The image is published after merge, so a release tag can land first;
+      # then the release could not tag the runner, and this does. `latest`
+      # moves only for the highest stable tag, so a backfill never rolls it back.
+      - name: Tag a release that already points at this commit
+        env:
+          CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
+        run: |
+          set -euo pipefail
+          tags="$(git ls-remote --tags "https://github.com/$GITHUB_REPOSITORY.git" 'refs/tags/v*' \
+            | awk '{ sub("refs/tags/", "", $2); print $1, $2 }')"
+          # Annotated tags list the tag object and the peeled commit (^{}).
+          version="$(awk -v sha="$CORE_SHA" '$1 == sha { t = $2; sub(/\^\{\}$/, "", t); print t }' <<<"$tags" \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+          [ -n "$version" ] || { echo "No release tag points at $CORE_SHA."; exit 0; }
+          newest="$(awk '{ t = $2; sub(/\^\{\}$/, "", t); print t }' <<<"$tags" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -uV | tail -n 1)"
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+          aliases=(--tag "$IMAGE:${version#v}" --tag "$IMAGE:$version")
+          [ "$version" = "$newest" ] && aliases+=(--tag "$IMAGE:latest")
+          docker buildx imagetools create "${aliases[@]}" "$IMAGE:$CORE_SHA"
+          echo "Tagged $IMAGE:$CORE_SHA as ${aliases[*]}."
+
       - name: Record published SHA
         env:
           CORE_SHA: ${{ needs.resolve.outputs.core_sha }}

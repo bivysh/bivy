@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A release cut right after a merge now still gets its cloud runner image tagged `X.Y.Z`, `vX.Y.Z` and `latest`: the runner build adds them when it finishes after the tag.
+
 ## [0.22.0] - 2026-10-28
 
 ### Added
