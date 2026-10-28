@@ -104,6 +104,22 @@ curl --proto =https,file --proto-redir =https --tlsv1.2 -fSL --progress-bar -o "
 GOT="$(file_sha256 "$TMP_DIR/$FILE")"
 [ "$GOT" = "$WANT" ] || die "$FILE failed verification (sha256 $GOT, SHA256SUMS says $WANT). Nothing was changed; re-run to retry."
 
+# The digest above only proves the download is intact: SHA256SUMS comes from the
+# same release. The build attestation proves Bivy's release workflow built this
+# file. Check it with the GitHub CLI when it is installed and signed in;
+# `bivy update` checks it on every update without needing gh.
+REPO=""
+case "$RELEASES_URL" in
+  https://github.com/*/releases | https://github.com/*/releases/)
+    REPO="${RELEASES_URL#https://github.com/}"; REPO="${REPO%/}"; REPO="${REPO%/releases}"
+    case "$REPO" in */*/* | /* | */ | *[!A-Za-z0-9._/-]*) REPO="" ;; */*) ;; *) REPO="" ;; esac ;;
+esac
+if [ -n "$REPO" ] && [ "${BIVY_SKIP_ATTESTATION:-}" != "1" ] && command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  gh attestation verify "$TMP_DIR/$FILE" --repo "$REPO" --signer-workflow "$REPO/.github/workflows/release.yml" >/dev/null 2>&1 \
+    || die "$FILE has no valid build attestation from $REPO's release workflow. Nothing was changed."
+  info "Verified the build attestation"
+fi
+
 mkdir -p "$INSTALL_DIR/versions"
 STAGE="$(mktemp -d "$INSTALL_DIR/versions/.stage-XXXXXX")"
 trap 'rm -rf "$TMP_DIR" "$STAGE"' EXIT

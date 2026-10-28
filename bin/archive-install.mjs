@@ -16,6 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { releaseRepo, verifyReleaseAttestation } from "./release-attestation.mjs";
 
 export const RELEASES_URL = "https://github.com/bivysh/bivy/releases";
 export const ARCHIVE_INFO = "bivy-archive.json";
@@ -83,11 +84,26 @@ export function curlDownload(url, dest) {
 }
 
 /**
+ * How an archive's provenance is checked, by where releases come from. GitHub
+ * releases must carry the release workflow's build attestation (see
+ * release-attestation.mjs). Any other source (a mirror, a `file://` release in
+ * tests) has no attestation service, so only its digest is checked, and the
+ * user is told. BIVY_SKIP_ATTESTATION=1 skips the check, for a fork's own
+ * builds.
+ */
+export function attestationCheck(releasesUrl = process.env.BIVY_RELEASES_URL || RELEASES_URL, env = process.env) {
+  const repo = releaseRepo(releasesUrl);
+  if (env.BIVY_SKIP_ATTESTATION === "1") return async () => console.warn("BIVY_SKIP_ATTESTATION=1: installing without checking the build attestation.");
+  if (!repo) return async () => console.warn(`${releasesUrl} is not a GitHub release; checked the archive's digest only.`);
+  return ({ manifest, file, sha256 }) => verifyReleaseAttestation({ repo, version: manifest.version, file, sha256 });
+}
+
+/**
  * Download, verify and extract one archive into versions/. Returns its
  * directory. Nothing outside versions/ changes, so a failure here leaves the
  * running install untouched.
  */
-export async function stageArchive({ installRoot, manifest, target, archiveUrl, download = curlDownload }) {
+export async function stageArchive({ installRoot, manifest, target, archiveUrl, download = curlDownload, verifyProvenance = attestationCheck() }) {
   const entry = manifest.archives[target];
   if (!entry) throw new Error(`Bivy ${manifest.version} has no archive for ${target}`);
   const versions = path.join(installRoot, "versions");
@@ -98,6 +114,7 @@ export async function stageArchive({ installRoot, manifest, target, archiveUrl, 
     await download(archiveUrl(manifest, entry.file), tarball);
     const sha256 = crypto.createHash("sha256").update(fs.readFileSync(tarball)).digest("hex");
     if (sha256 !== entry.sha256) throw new Error(`${entry.file} failed verification: sha256 ${sha256}, the manifest says ${entry.sha256}`);
+    await verifyProvenance({ manifest, file: entry.file, sha256 });
 
     const tar = spawnSync("tar", ["-xzf", tarball, "-C", work], { encoding: "utf8" });
     if (tar.status !== 0) throw new Error(`Could not extract ${entry.file}: ${tar.stderr}`);

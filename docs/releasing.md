@@ -63,6 +63,16 @@ The archives avoid that liability:
 - each archive carries a GitHub build attestation (Sigstore's short-lived,
   transparency-logged certificates, issued to the workflow's OIDC identity),
   recording the workflow, repository and commit that built it;
+- `bivy update` refuses an archive unless GitHub holds an attestation for its
+  digest that names that file, was signed by `release.yml` in this repository
+  at `refs/tags/vX.Y.Z` (or `refs/heads/main` for staging), and verifies against
+  Sigstore (`bin/release-attestation.mjs`, using the Sigstore client npm ships
+  in the bundled Node runtime). The installed version checks the new one, so
+  a release asset swapped by someone holding a repository token is refused.
+  `install.sh` does the same check with `gh attestation verify` when the GitHub
+  CLI is installed and signed in. Releases from a non-GitHub mirror are checked
+  by digest only; `BIVY_SKIP_ATTESTATION=1` skips the check for a fork's own
+  builds;
 - publishing uses the workflow's own `GITHUB_TOKEN`, so there is no release key
   or registry token to leak, rotate or guard.
 
