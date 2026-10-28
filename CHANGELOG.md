@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.0] - 2026-10-28
+
 ### Added
 
 - **The cloud runner image is built and published from this repository.** `ghcr.io/bivysh/bivy-ephemeral-runner` (what a cloud computer boots, where your code and AI sign-ins run) now comes from the public source here, for amd64 and arm64, with SBOM and build provenance, tagged per commit and per release. Any deployment can run or audit the exact image.
