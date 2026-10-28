@@ -16,7 +16,7 @@ import { CLOUD_RUNNER_CONFIG_ID, validateCapabilityTags } from "@bivy/core";
 import { notificationLink } from "./notification-link.js";
 import { type Account, type NodeRecord, type NotificationKind, type EphemeralNodeConfig, type QueueRouting, type HostedProvisioning, type AutomationDefinition, type AutomationRun, type InboundHook, type NodeClaim, GITHUB_IDENTITY_MODES, type GithubIdentityMode, LOGIN_TOKEN_TTL_MS, NOTIFICATION_KINDS } from "./store.js";
 import { centralGithubAppConfig, centralInstallUrl, applyCentralInstallationEvent, resolveGithubIdentity, mintHostedInstallationToken, listHostedRepositories } from "./central-github-app.js";
-import { hostedEncryptionAvailable, hostedPrimaryKid, initializeHostedKeyring } from "./hosted-crypto.js";
+import { hostedEncryptionAvailable, hostedPrimaryKid, initializeHostedKeyring, safeEqual } from "./hosted-crypto.js";
 import { webRuntimeConfigScript } from "./web-runtime-config.js";
 import { publicManagedLaunchError } from "./managed-launch-error.js";
 import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation, mintInstallationToken } from "./hosted-github-auth.js";
@@ -4972,7 +4972,9 @@ async function wakeCloudComputerIfAsleep(accountId: string, reason = "connect"):
 function requireDeploymentExtension(req: Request, res: Response, next: NextFunction) {
   const presented = bearer(req);
   const accepted = [process.env.DEPLOYMENT_COMPUTE_TOKEN, process.env.DEPLOYMENT_EXTENSION_TOKEN].filter((token): token is string => Boolean(token));
-  if (!presented || !accepted.includes(presented)) return res.status(401).json({ error: "Unauthorized" });
+  // Compare every accepted token in constant time; no early exit on a match.
+  const matched = accepted.reduce((hit, token) => safeEqual(presented ?? "", token) || hit, false);
+  if (!presented || !matched) return res.status(401).json({ error: "Unauthorized" });
   next();
 }
 
@@ -5062,7 +5064,7 @@ app.post("/internal/compute/notice", requireDeploymentExtension, asyncHandler(as
 // routing metadata (ids), never session content.
 function requireRelay(req: Request, res: Response, next: NextFunction) {
   const secret = process.env.RELAY_SECRET ?? "dev-relay-secret";
-  if (bearer(req) !== secret) return res.status(401).json({ error: "Unauthorized relay" });
+  if (!safeEqual(bearer(req) ?? "", secret)) return res.status(401).json({ error: "Unauthorized relay" });
   next();
 }
 
