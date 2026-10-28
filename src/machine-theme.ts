@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// The desktop theme of the machine a node runs on, so the app can match it.
-// Today that is Omarchy: `omarchy-theme-set` stages the active theme's
+// The theme of the machine a node runs on, so the app can match it: one chosen
+// in Bivy (`bivy theme set`, from a plugin), else the desktop's. Today the
+// desktop is Omarchy: `omarchy-theme-set` stages the active theme's
 // `colors.toml`, which this reads, resolves the way Omarchy does (legacy names
 // and ANSI fallbacks) and sends to clients as `node.theme`. Another desktop is
-// another row in THEME_SOURCES.
+// another row in THEME_SOURCES; a theme chosen in Bivy is written in the same
+// format, so both take the same path.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -87,10 +89,50 @@ function titleCase(slug: string): string {
   return slug.replace(/(^|-)([a-z])/g, (_m, sep: string, c: string) => `${sep ? " " : ""}${c.toUpperCase()}`);
 }
 
-/** The machine's active theme, or null when no known desktop theme is present. */
-export function readMachineTheme(home = os.homedir()): MachineTheme | null {
-  for (const source of THEME_SOURCES) {
-    const colorsPath = path.join(home, source.colors);
+/** Where a theme chosen in Bivy itself is kept (`bivy theme set`), inside the data dir. */
+export const SELECTED_THEME_DIR = "theme";
+
+/**
+ * Choose a palette for this machine (`bivy theme set`): written in the same
+ * format as the desktop's, so it takes the same path to the app. `null` clears
+ * the choice and the desktop's theme (if any) shows again.
+ */
+export function selectTheme(dataDir: string, theme: { id: string; name: string; mode?: "light" | "dark"; colors: Record<string, string> } | null): void {
+  const dir = path.join(dataDir, SELECTED_THEME_DIR);
+  if (!theme) {
+    fs.rmSync(dir, { recursive: true, force: true });
+    return;
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  const lines = Object.entries(theme.colors).filter(([key, value]) => /^[a-z]+$/.test(key) && HEX.test(value)).map(([key, value]) => `${key} = "${value}"`);
+  if (theme.mode) lines.push(`mode = "${theme.mode}"`);
+  fs.writeFileSync(path.join(dir, "colors.toml"), `${lines.join("\n")}\n`);
+  fs.writeFileSync(path.join(dir, "theme.name"), `${theme.name}\n`);
+  fs.writeFileSync(path.join(dir, "theme.id"), `${theme.id}\n`);
+}
+
+/** The id of the palette chosen with `bivy theme set`, if any. */
+export function selectedThemeId(dataDir: string): string | null {
+  try {
+    return fs.readFileSync(path.join(dataDir, SELECTED_THEME_DIR, "theme.id"), "utf8").trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Every place a palette may be, as absolute paths, the theme chosen in Bivy first. */
+function themeSources(home: string, selectedDir?: string): { colors: string; name: string | null }[] {
+  const selected = selectedDir ? [{ colors: path.join(selectedDir, "colors.toml"), name: path.join(selectedDir, "theme.name") }] : [];
+  return [...selected, ...THEME_SOURCES.map((source) => ({ colors: path.join(home, source.colors), name: source.name ? path.join(home, source.name) : null }))];
+}
+
+/**
+ * The machine's active theme, or null when there is none: one chosen with
+ * `bivy theme set` (a plugin's theme) wins over the desktop's.
+ */
+export function readMachineTheme(home = os.homedir(), selectedDir?: string): MachineTheme | null {
+  for (const source of themeSources(home, selectedDir)) {
+    const colorsPath = source.colors;
     let text: string;
     try {
       text = fs.readFileSync(colorsPath, "utf8");
@@ -100,7 +142,7 @@ export function readMachineTheme(home = os.homedir()): MachineTheme | null {
     const dir = path.dirname(colorsPath);
     let slug = "";
     try {
-      slug = source.name ? fs.readFileSync(path.join(home, source.name), "utf8").trim() : path.basename(fs.realpathSync(dir));
+      slug = source.name ? fs.readFileSync(source.name, "utf8").trim() : path.basename(fs.realpathSync(dir));
     } catch {
       /* unnamed theme */
     }
@@ -114,16 +156,16 @@ export function readMachineTheme(home = os.homedir()): MachineTheme | null {
  * replaces the staged directory, so this polls the file's stat rather than
  * holding an inotify watch on a directory that goes away). Returns a stop function.
  */
-export function watchMachineTheme(onChange: (theme: MachineTheme | null) => void, home = os.homedir(), intervalMs = 1500): () => void {
-  let last = JSON.stringify(readMachineTheme(home));
+export function watchMachineTheme(onChange: (theme: MachineTheme | null) => void, home = os.homedir(), intervalMs = 1500, selectedDir?: string): () => void {
+  let last = JSON.stringify(readMachineTheme(home, selectedDir));
   const check = () => {
-    const theme = readMachineTheme(home);
+    const theme = readMachineTheme(home, selectedDir);
     const next = JSON.stringify(theme);
     if (next === last) return;
     last = next;
     onChange(theme);
   };
-  const paths = THEME_SOURCES.flatMap((source) => [source.colors, source.name]).filter((p): p is string => !!p).map((p) => path.join(home, p));
+  const paths = themeSources(home, selectedDir).flatMap((source) => [source.colors, source.name]).filter((p): p is string => !!p);
   for (const p of paths) fs.watchFile(p, { interval: intervalMs, persistent: false }, check);
   return () => { for (const p of paths) fs.unwatchFile(p, check); };
 }

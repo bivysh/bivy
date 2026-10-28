@@ -16,6 +16,9 @@ import {
 
 export const PLUGIN_MANIFEST_FILE = "manifest.json";
 export const MAX_PLUGIN_MANIFEST_BYTES = 1024 * 1024;
+/** Bounds on a plugin's files (widget pages, tool scripts, guides). */
+export const MAX_PLUGIN_FILES = 2000;
+export const MAX_PLUGIN_BYTES = 50 * 1024 * 1024;
 
 export interface InstalledPlugin {
   id: string;
@@ -133,8 +136,49 @@ export function installedAgentContributions(dataDir = defaultDataDir(), bivyVers
   return { agents, errors };
 }
 
+/** Whether a manifest refers to files that must be installed with it. */
+function needsFiles(manifest: PluginManifest): boolean {
+  return Boolean(manifest.contributes.widgets?.length || manifest.contributes.tools?.length || manifest.contributes.guides?.length);
+}
+
+/**
+ * Copy a plugin's directory into the store: regular files only (symlinks are
+ * skipped, so nothing outside the directory comes along), dot-directories such
+ * as .git left out, and the whole copy bounded.
+ */
+function copyPluginFiles(from: string, to: string): void {
+  let files = 0;
+  let bytes = 0;
+  const walk = (dir: string, rel: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
+      const source = path.join(dir, entry.name);
+      const target = path.join(to, rel, entry.name);
+      if (entry.isDirectory()) {
+        fs.mkdirSync(target, { recursive: true });
+        walk(source, path.join(rel, entry.name));
+      } else if (entry.isFile()) {
+        if (++files > MAX_PLUGIN_FILES) throw new Error(`Plugin directory has more than ${MAX_PLUGIN_FILES} files; keep the plugin in its own folder`);
+        bytes += fs.statSync(source).size;
+        if (bytes > MAX_PLUGIN_BYTES) throw new Error(`Plugin directory is larger than ${MAX_PLUGIN_BYTES / 1024 / 1024} MB; keep the plugin in its own folder`);
+        fs.copyFileSync(source, target);
+      }
+    }
+  };
+  walk(from, "");
+}
+
+/** Files the manifest names, which must be in the copy. */
+function missingFiles(manifest: PluginManifest, dir: string): string[] {
+  const named = [
+    ...(manifest.contributes.widgets ?? []).map((widget) => widget.entry),
+    ...(manifest.contributes.guides ?? []).map((guide) => guide.file),
+  ];
+  return named.filter((file) => !fs.statSync(path.join(dir, file), { throwIfNoEntry: false })?.isFile());
+}
+
 export function installPlugin(input: string, opts: { dataDir?: string; force?: boolean; bivyVersion?: string } = {}): { manifest: PluginManifest; path: string; replaced: boolean } {
-  const { manifest } = readPluginManifest(input);
+  const { file, manifest } = readPluginManifest(input);
   const compatibility = checkPluginCompatibility(manifest, opts.bivyVersion ?? currentBivyVersion());
   if (!compatibility.compatible) throw new Error(compatibility.message);
   const root = pluginStoreDir(opts.dataDir);
@@ -146,6 +190,11 @@ export function installPlugin(input: string, opts: { dataDir?: string; force?: b
   const temp = fs.mkdtempSync(path.join(root, `.${manifest.metadata.id}.tmp-`));
   const backup = path.join(root, `.${manifest.metadata.id}.backup-${process.pid}-${Date.now()}`);
   try {
+    if (needsFiles(manifest)) {
+      copyPluginFiles(path.dirname(file), temp);
+      const missing = missingFiles(manifest, temp);
+      if (missing.length) throw new Error(`The manifest names files that are not in the plugin directory: ${missing.join(", ")}`);
+    }
     const output = path.join(temp, PLUGIN_MANIFEST_FILE);
     fs.writeFileSync(output, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
     if (existed) fs.renameSync(target, backup);

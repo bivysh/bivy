@@ -313,27 +313,60 @@ bivy agent remove company-agent
 `add` never imports agent code into the daemon; the agent runs out of process.
 `--force` replaces an existing entry. See [Add any agent](add-an-agent.md).
 
-### `bivy plugin <init|validate|doctor|test|install|list|remove>`
+### `bivy plugin <init|validate|doctor|test|install|dev|list|remove>`
 
-Develop and manage node-local declarative agent plugins:
+Extend this machine's Bivy with plugins: agents, chat widgets, tools, themes and
+guides. Agents build and install them for the user; see [plugins.md](plugins.md).
 
 ```bash
-bivy plugin init ./company-agent --adapter acp
-bivy plugin validate ./company-agent
-bivy plugin doctor ./company-agent
-bivy plugin test ./company-agent
-bivy plugin install ./company-agent
+bivy plugin init ./standup --kind widget      # or tool, theme, guide, agent
+bivy plugin dev ./standup                     # install, then reinstall on every change
+bivy plugin validate ./standup
+bivy plugin doctor ./standup
+bivy plugin test ./standup
+bivy plugin install ./standup                 # a folder or a manifest
+bivy plugin install github:owner/repo/path#v1 # or any git URL
 bivy plugin list --json
-bivy plugin remove company-agent
+bivy plugin remove standup
 ```
 
-`doctor` checks the declared Bivy compatibility range and executable resolution.
-`test` additionally performs a live ACP initialize/session handshake; process
-adapters remain static-only so the test cannot spend money or mutate a workspace.
-`install` accepts `--force` to replace the same plugin id and rejects an
-incompatible `requires.bivy` range. Install/remove require `bivy restart`. Plugin
-installation validates and copies a manifest; it never downloads a package or
-runs an installer. See [plugins.md](plugins.md).
+`init --kind` writes a working plugin of that kind. `doctor` checks the declared
+Bivy compatibility range and executable resolution. `test` additionally performs
+a live ACP initialize/session handshake; process adapters remain static-only so
+the test cannot spend money or mutate a workspace. `install` accepts `--force` to
+replace the same plugin id and rejects an incompatible `requires.bivy` range. It
+copies the plugin's folder (regular files only, without dot-directories) into the
+store, clones a git source first, and never runs an installer. Widgets, tools,
+themes and guides take effect at once; agents appear in the picker at once.
+
+### `bivy tools <list|run>`
+
+Tools installed plugins add: commands that take JSON and answer with JSON.
+
+```bash
+bivy tools list [--json]
+bivy tools run ci_status --input '{"branch":"main"}'
+bivy tools run greet name=Ada
+```
+
+`run` checks the input against the tool's declared fields, runs the command in
+the current directory with the input on stdin, and prints its answer; `--json`
+prints the MCP-shaped result (`content`, `structuredContent`). Every plugin tool
+is also an MCP tool in `bivy mcp-serve`, and one declared with `widgets: true`
+can be called from a chat widget (`bivy.call`).
+
+### `bivy theme <list|set|clear>`
+
+Choose the app's theme from those installed plugins provide.
+
+```bash
+bivy theme list
+bivy theme set tokyo-night
+bivy theme clear                              # back to the machine's own theme
+```
+
+The chosen palette replaces the desktop's (Omarchy) for this machine, and every
+app showing the **Machine** theme (the default) follows within seconds.
 
 ### `bivy agents:install`
 

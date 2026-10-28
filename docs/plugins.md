@@ -1,12 +1,137 @@
 # Plugins
 
-Bivy plugins add agents without requiring a Bivy source change. The first plugin
-API is deliberately narrow and safe: a plugin is a strict declarative manifest,
-and its agent runs out of process through Bivy's existing process or ACP adapter.
-Bivy does not import third-party JavaScript into the node.
+A plugin makes Bivy do more on your machine: a **chat widget** any session can
+place, a **tool** agents and widgets can call, a **theme** for the app, a
+**guide** agents read, or another **agent**. It is a folder with a
+`bivy.plugin.yaml`.
 
-The API is alpha (`bivy.sh/v1alpha1`). Pin and review manifests like any other
-executable tool configuration; fields may evolve before a stable v1.
+You do not have to write it. Ask the agent in any session — "add a standup
+checklist I can tick off every morning", "make the app look like my editor",
+"let widgets show CI status" — and it builds the plugin, installs it on this
+machine and shows you the result (`bivy guide extend-bivy` is the playbook it
+follows). Nothing goes through a pull request or a release.
+
+The API is alpha (`bivy.sh/v1alpha1`): fields may still change before a stable v1.
+A manifest never runs code inside the node. Widgets run sandboxed in the chat,
+tools and agents run as separate processes, and themes and guides are data.
+
+| Kind | What it adds | Used with |
+|---|---|---|
+| `widgets` | An HTML page placed in a message by name | ```` ```bivy {"type":"widget","widget":"<id>"} ``` ````, `bivy widget list` |
+| `tools` | A command, JSON in and out | `bivy tools run`, MCP (every agent), `bivy.call` in widgets |
+| `themes` | A palette for the app | `bivy theme set <id>` |
+| `guides` | A markdown playbook | `bivy guide <topic>` (and MCP resources) |
+| `agents` | An ACP or CLI agent | the agent picker; see [Add any agent](add-an-agent.md) |
+
+## Quick start: widget, tool, theme, guide
+
+```bash
+bivy plugin init ~/bivy-plugins/standup --kind widget   # or tool, theme, guide, agent
+bivy plugin dev ~/bivy-plugins/standup                  # install, then reinstall on every change
+```
+
+`init` writes a plugin that already works; `dev` installs it and reinstalls on
+every save, and each change takes effect at once. A plugin may combine kinds:
+
+```yaml
+apiVersion: bivy.sh/v1alpha1
+kind: Plugin
+metadata:
+  id: standup
+  name: Standup
+  version: 0.1.0
+requires:
+  bivy: ">=0.21.0 <1.0.0"
+contributes:
+  widgets:
+    - id: standup
+      name: Standup
+      description: Yesterday, today, blockers — tick off and send.
+      entry: widgets/standup.html
+  tools:
+    - name: ci_status
+      description: Latest CI result for a branch. Use before saying CI is green.
+      input:
+        branch: { type: string, description: Branch name., required: true }
+      command: node
+      args: ["{plugin}/tools/ci.mjs"]
+      widgets: true
+  themes:
+    - id: dusk
+      name: Dusk
+      mode: dark
+      colors: { background: "#101018", foreground: "#e0e0f0", accent: "#88aaff" }
+  guides:
+    - topic: standups
+      file: guides/standups.md
+```
+
+### Widgets
+
+`entry` is an HTML page in the plugin folder, written like any
+[chat widget](widgets.md): the `window.bivy` runtime, the app's tokens, the same
+sandbox. An agent places it by name and hands it data:
+
+````text
+```bivy
+{"type":"widget","widget":"standup","data":{"date":"2026-10-28"}}
+```
+````
+
+A plugin widget is read from the machine each time it is shown, so updating the
+plugin updates every message that uses it. Removing the plugin leaves a card
+that names the widget.
+
+### Tools
+
+A tool is a command. Bivy starts it as a child process in the session's
+workspace, writes the input as JSON on stdin, and reads JSON (or text) from
+stdout; a non-zero exit is an error and the last lines of stderr are the
+message. `{plugin}` in `command` or `args` is the installed plugin's folder, and
+the process gets `BIVY_SESSION_ID`, `BIVY_PLUGIN_ROOT` and `BIVY_TOOL`.
+
+| Field | |
+|---|---|
+| `name` | `lowercase_with_underscores`, unique across plugins |
+| `description` | What it does and when to call it; agents read this |
+| `input` | Fields: `{ type: string\|number\|boolean\|array\|object, description, required }`. Input is checked against them; unknown fields are refused. |
+| `command`, `args` | What to run |
+| `timeoutSeconds` | 1–300, default 30 |
+| `widgets` | `true` lets chat widgets call it (`bivy.call`). Off by default: a widget is agent-written code, so a tool is offered to widgets only on purpose. |
+
+Agents call tools with `bivy tools run <name> key=value` or `--input '<json>'`.
+Every plugin tool is also served by `bivy mcp-serve`, so it appears in the tool
+list of every agent Bivy injects that server into. A plugin cannot shadow
+Bivy's own tools.
+
+### Themes
+
+A theme is a palette: `background` and `foreground` (required), and `accent`,
+`selection`, `muted`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`,
+`orange`, as `#rgb` or `#rrggbb`, plus an optional `mode`. `bivy theme set <id>`
+makes it this machine's theme. It replaces a desktop (Omarchy) theme, and every
+app showing the **Machine** theme (the default) follows within seconds.
+`bivy theme clear` goes back.
+
+### Guides
+
+A guide is markdown with a `# Title` line and a `Summary: …` line. `bivy guide`
+lists it with the built-in guides, and `bivy mcp-serve` serves it as a resource.
+A plugin cannot replace a built-in topic.
+
+## Install from anywhere, share as a repository
+
+```bash
+bivy plugin install ./standup                          # a folder (or its manifest)
+bivy plugin install github:owner/repo/plugins/standup#v1.2.0
+bivy plugin install https://gitlab.com/team/bivy-plugins.git
+```
+
+A git source is cloned shallowly into a temporary folder first. Install copies
+the plugin's folder into the store: regular files only, no symlinks, no
+dot-directories such as `.git`, at most 2000 files and 50 MB. It never runs an
+install script or downloads dependencies, so a tool that needs packages ships
+them in the folder. Sharing a plugin is pushing its folder to a repository.
 
 ## Terminology and boundaries
 
@@ -175,9 +300,17 @@ metadata:
   homepage: https://example.com
 requires:
   bivy: ">=0.21.0 <1.0.0" # optional semver range; recommended
-contributes:
-  agents: []                # 1-20 entries in v1alpha1
+contributes:                # at least one entry across these
+  agents: []                # up to 20
+  widgets: []               # up to 20: id, name, description?, entry (.html)
+  tools: []                 # up to 50: name, description, input?, command, args?, timeoutSeconds?, widgets?
+  themes: []                # up to 20: id, name, mode?, colors
+  guides: []                # up to 20: topic, file (.md)
 ```
+
+Paths (`entry`, `file`) are relative to the plugin folder and may not contain
+`..`. Ids, tool names and topics must be unique within a manifest; one that two
+installed plugins both claim is used by neither, and `bivy plugin list` says so.
 
 An agent contribution supports:
 
@@ -225,26 +358,32 @@ A complete runnable plugin is available under
 ## CLI
 
 ```bash
-bivy plugin init [directory] [--id <slug>] [--name <name>] [--adapter acp|process] [--json]
+bivy plugin init [directory] [--kind agent|widget|tool|theme|guide] [--id <slug>] [--name <name>] [--adapter acp|process] [--json]
 bivy plugin validate <file-or-directory> [--json]
 bivy plugin doctor <file-or-directory> [--json]
 bivy plugin test <file-or-directory> [--json]
-bivy plugin install <file-or-directory> [--force] [--json]
+bivy plugin install <file-or-directory|git URL|github:owner/repo[/path][#ref]> [--force] [--json]
+bivy plugin dev <directory>
 bivy plugin list [--json]
 bivy plugin remove <plugin-id> [--json]
+bivy tools list|run <name> [--input '<json>'] [key=value …] [--json]
+bivy theme list|set <id>|clear [--json]
+bivy widget list [--json]
 ```
 
 When a directory is supplied, Bivy looks for `bivy.plugin.yaml`,
 `bivy.plugin.yml`, `bivy.plugin.json`, `manifest.yaml`, or `manifest.json`.
 
-Installed manifests are canonicalized into:
+Installed manifests are canonicalized into the plugin's copied folder:
 
 ```text
 <data-dir>/plugins/<plugin-id>/manifest.json
+<data-dir>/plugins/<plugin-id>/widgets/…, tools/…, guides/…
 ```
 
 Writes and replacements are atomic. The node reads the store each time it lists
-agents, so an install or removal takes effect without a restart.
+agents, shows a plugin widget or runs a tool, so an install or removal takes
+effect without a restart.
 Set `BIVY_PLUGIN_DIR` to override the store location for testing or managed
 deployments.
 
@@ -257,7 +396,18 @@ warning.
 
 ## Trust and protection
 
-Installing a manifest authorizes Bivy to launch the declared executable with the
+A plugin is installed by you, or by an agent working for you, on your own
+machine. Treat one from someone else like any other program you install.
+
+- **Widgets** run in the chat's widget sandbox ([security model](widgets.md#security-model)):
+  no access to the app, no network calls. They reach tools only when a tool sets
+  `widgets: true`.
+- **Tools** run as your OS user, in the session's workspace, with the input
+  checked against their declared fields, bounded output and a timeout.
+- **Themes and guides** are data. A guide is text agents read, never a
+  permission.
+
+Installing an agent authorizes Bivy to launch the declared executable with the
 session workspace as its working directory. The executable has the permissions
 of the selected Bivy execution path:
 
@@ -271,18 +421,15 @@ of the selected Bivy execution path:
   `authOwner` and the existing runtime credential rules. Review the executable,
   manifest, and requested model/provider behavior before installation.
 
-There is no public plugin registry yet. Distribute manifests and executables
-through channels you already trust, pin their versions, and install locally.
+There is no central plugin registry: a plugin is a folder, shared as a git
+repository. Install from sources you trust and pin a tag (`#v1.2.0`).
 
 ## Current limitations and roadmap
 
-`v1alpha1` supports agent contributions only. It does not yet support:
+`v1alpha1` does not yet support:
 
-- MCP tool contributions or OAuth connection forms;
-- trigger connectors, checks, artifacts, or compute providers;
-- plugin install scripts or dependency downloads;
-- arbitrary daemon or web UI hooks;
-- plugin lockfiles, signatures, or marketplace trust tiers;
-- `plugin dev` hot reload and distributable `plugin pack` archives.
-
-Further contribution types remain future work.
+- MCP server contributions or OAuth connection forms (a tool can wrap a CLI);
+- trigger connectors, checks, artifacts or compute providers;
+- install scripts or dependency downloads;
+- daemon hooks, or UI outside chat widgets and themes;
+- lockfiles, signatures or trust tiers.

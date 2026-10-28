@@ -19,6 +19,7 @@ Here are the three layouts. Pick one and I'll build it:
 | `::view{src=widgets/x.html}` | A page in the session workspace. Any `.html` file shown this way runs as a widget. |
 | ` ```bivy {"type":"widget","url":"widgets/x.html","data":{…}} ``` ` | The same page, handed data (`bivy.data`). `title`, `caption`, `height` and `id` are optional. |
 | ` ```bivy {"type":"widget","html":"<button>…</button>"} ``` ` | A small page inline, with no file (16 KB). |
+| ` ```bivy {"type":"widget","widget":"standup","data":{…}} ``` ` | A widget a [plugin](plugins.md) on the machine provides, by name (`bivy widget list`). |
 
 The page is captured when the message is written, the same way an image is,
 so the message shows the same widget on every device and after the file
@@ -38,7 +39,7 @@ The frame writes a small runtime into every widget, `window.bivy`:
 | `bivy.send(text)` | Sends `text` to the agent as the user's next message. |
 | `bivy.openLink(url)` | Opens an `http(s)` page in a new tab. |
 | `bivy.expand()` / `bivy.collapse()` | Full screen and back, without reloading. |
-| `bivy.call(name, args)` | Calls a tool a plugin on the machine provides. |
+| `bivy.call(name, args)` | Calls a [plugin tool](plugins.md#tools) offered to widgets (`widgets: true`); resolves to its JSON answer. |
 
 The agent reads what widgets saved with `bivy widget state` (MCP tool
 `widget_state`).

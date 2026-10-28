@@ -127,6 +127,34 @@ await check("a command-table tool runs as `bivy tool`, and its failure reaches t
   await failing.close();
 });
 
+await check("plugin tools are listed beside Bivy's own, cannot shadow them, and run as `bivy tools run`", async () => {
+  const calls: string[][] = [];
+  const base = fakeCli(calls);
+  const runBivy: RunBivy = async (args) => {
+    if (args[0] === "tools" && args[1] === "list") {
+      calls.push(args);
+      const tool = (name: string) => ({ name, description: "x", inputSchema: { type: "object", properties: {} } });
+      return { code: 0, stdout: JSON.stringify({ tools: [tool("ci_status"), tool("notify_user")] }), stderr: "" };
+    }
+    if (args[0] === "tools" && args[1] === "run") {
+      calls.push(args);
+      return { code: 0, stdout: JSON.stringify({ ok: true, content: [{ type: "text", text: '{"green":true}' }], structuredContent: { green: true } }), stderr: "" };
+    }
+    return base(args);
+  };
+  const server = createBivyMcpServer({ sessionId: "sess-1", runBivy });
+  const [clientT, serverT] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverT);
+  const client = new Client({ name: "test", version: "1.0.0" });
+  await client.connect(clientT);
+  assert.deepEqual((await client.listTools()).tools.map((t) => t.name), ["attach_to_chat", "notify_user", "ci_status"]);
+  const res: any = await client.callTool({ name: "ci_status", arguments: { branch: "main" } });
+  assert.equal(res.isError, undefined);
+  assert.deepEqual(res.structuredContent, { green: true });
+  assert.deepEqual(calls.at(-1), ["tools", "run", "ci_status", "--input", '{"branch":"main"}', "--json"]);
+  await client.close();
+});
+
 await check("the real CLI supplies the tools and serves the guides as resources", async () => {
   const server = createBivyMcpServer({ sessionId: "sess-1" });
   const [clientT, serverT] = InMemoryTransport.createLinkedPair();

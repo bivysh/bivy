@@ -19,6 +19,7 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
   "files.read": Type.Object({ ...request, ...session, path: Type.String({ minLength: 1, maxLength: 4096 }) }),
   "widgets.state.get": Type.Object({ ...request, ...session }),
   "widgets.state.set": Type.Object({ ...request, ...session, key: Type.String({ minLength: 1, maxLength: 128 }), state: Type.Unknown() }),
+  "widgets.source": Type.Object({ ...request, ...session, name: Type.String({ minLength: 1, maxLength: 48 }) }),
   "widgets.tool": Type.Object({ ...request, ...session, name: Type.String({ minLength: 1, maxLength: 128 }), arguments: Type.Optional(Type.Record(Type.String(), Type.Unknown())) }),
   "access.get": Type.Object(request),
   "secrets.list": Type.Object(request),

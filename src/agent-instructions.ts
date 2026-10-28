@@ -55,6 +55,8 @@ export const BIVY_AGENT_NOTE = [
   "- Let the user DO something in your reply (pick, fill in, tick off) with a widget: a small HTML page shown with " +
     "`::view{src=widgets/x.html}` that runs inside the message and can reply to you. `bivy widget init <file>` " +
     "starts one; `bivy guide widgets` has the rest.",
+  "- When the user wants Bivy itself to do more (a widget any session can use, a tool, a theme, a playbook, another " +
+    "agent), build a plugin and install it on this machine: `bivy guide extend-bivy`. They never write code for it.",
   "- Send a file WITHOUT writing a reply (or from a script): run " +
     '`bivy attach <path> [--caption "short note"]`, or call the `attach_to_chat` tool if you have it.',
   "- Put a published app's preview INSIDE your reply: `::view{app=<app id>}` on its own line. It frames the app " +

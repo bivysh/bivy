@@ -2634,10 +2634,10 @@ async function cmdTitle(args = []) {
 // `bivy widget init <file.html>` writes a starter widget; `bivy widget state`
 // prints what this session's widgets saved (the user's choices and inputs).
 async function cmdWidget(args = []) {
-  const usage = "Usage: bivy widget init <file.html> | bivy widget state [--key <key>] [--session <id>] [--json]";
+  const usage = "Usage: bivy widget init <file.html> | bivy widget list | bivy widget state [--key <key>] [--session <id>] [--json]";
   const [sub, ...rest] = args;
   if (!sub || sub === "-h" || sub === "--help") {
-    console.log(`${usage}\n\nA widget is a small HTML page that runs inside your chat reply: a form, a picker, a checklist.\n  init   write a starter widget to <file.html>\n  state  what this session's widgets saved, keyed by widget\n\nShow one with ::view{src=<file.html>} on its own line. More: bivy guide widgets.`);
+    console.log(`${usage}\n\nA widget is a small HTML page that runs inside your chat reply: a form, a picker, a checklist.\n  init   write a starter widget to <file.html>\n  list   widgets installed plugins provide, to place by name\n  state  what this session's widgets saved, keyed by widget\n\nShow one with ::view{src=<file.html>} on its own line. More: bivy guide widgets.`);
     return;
   }
   const json = wantsJson(rest);
@@ -2651,6 +2651,16 @@ async function cmdWidget(args = []) {
     fs.writeFileSync(target, template);
     if (json) { console.log(JSON.stringify({ ok: true, path: target, show: `::view{src=${target}}` })); return; }
     console.log(`${c.green("Wrote")} ${target}. Show it in your reply with ::view{src=${target}} on its own line.`);
+    return;
+  }
+  if (sub === "list" || sub === "ls") {
+    const widgets = installedPluginManifests().flatMap(({ manifest }) => (manifest.contributes?.widgets ?? []).map((widget) => ({
+      widget: widget.id, name: widget.name, description: widget.description ?? null, plugin: manifest.metadata.id,
+      place: `\`\`\`bivy {"type":"widget","widget":"${widget.id}","data":{}}\`\`\``,
+    })));
+    if (json) { console.log(JSON.stringify({ widgets })); return; }
+    if (!widgets.length) { console.log("No plugin widgets installed. Write one for this message with: bivy widget init <file.html>"); return; }
+    for (const widget of widgets) console.log(`  ${c.cyan(widget.widget)}  ${widget.name}${widget.description ? ` — ${widget.description}` : ""}  (${widget.plugin})\n      ${widget.place}`);
     return;
   }
   if (sub !== "state") return fail({ code: "usage", message: usage, exit: EXIT.usage });
@@ -6429,19 +6439,48 @@ function cmdHelp(args = []) {
   console.log(`Usage: ${row.usage}\n\n${row.summary}${row.aliases.length ? `\nAliases: ${row.aliases.join(", ")}` : ""}${row.subcommands.length ? `\nSubcommands: ${row.subcommands.join(", ")}` : ""}\n\nFull options: ${row.help}`);
 }
 
+// Installed plugins' canonical manifests (src/plugins/store.ts writes them),
+// read directly so listing guides and widgets needs no node and no build.
+function installedPluginManifests() {
+  const root = process.env.BIVY_PLUGIN_DIR?.trim() ? path.resolve(process.env.BIVY_PLUGIN_DIR.trim()) : path.join(appDir, "plugins");
+  let entries = [];
+  try { entries = fs.readdirSync(root, { withFileTypes: true }); } catch { return []; }
+  return entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith(".")).flatMap((entry) => {
+    try {
+      const manifest = JSON.parse(fs.readFileSync(path.join(root, entry.name, "manifest.json"), "utf8"));
+      return manifest?.metadata?.id === entry.name ? [{ dir: path.join(root, entry.name), manifest }] : [];
+    } catch { return []; }
+  });
+}
+
+function guideFrom(topic, markdown, extra = {}) {
+  return {
+    topic,
+    title: markdown.match(/^# (.+)$/m)?.[1] ?? topic,
+    summary: markdown.match(/^Summary: (.+)$/m)?.[1] ?? "",
+    markdown: markdown.replace(/^Summary: .+\n\n?/m, ""),
+    ...extra,
+  };
+}
+
 // `bivy guide [topic]` — short playbooks for agents, one markdown file per
-// topic in bin/guides (a "# Title" line, then "Summary: …").
+// topic in bin/guides (a "# Title" line, then "Summary: …"), then the guides
+// installed plugins add. A plugin cannot replace a built-in topic.
 function readGuides() {
   const dir = path.join(__dirname, "guides");
-  return fs.readdirSync(dir).filter((file) => file.endsWith(".md")).sort().map((file) => {
-    const markdown = fs.readFileSync(path.join(dir, file), "utf8");
-    return {
-      topic: file.slice(0, -3),
-      title: markdown.match(/^# (.+)$/m)?.[1] ?? file,
-      summary: markdown.match(/^Summary: (.+)$/m)?.[1] ?? "",
-      markdown: markdown.replace(/^Summary: .+\n\n?/m, ""),
-    };
-  });
+  const builtIn = fs.readdirSync(dir).filter((file) => file.endsWith(".md")).sort().map((file) => guideFrom(file.slice(0, -3), fs.readFileSync(path.join(dir, file), "utf8")));
+  const taken = new Set(builtIn.map((guide) => guide.topic));
+  const fromPlugins = [];
+  for (const { dir: pluginDir, manifest } of installedPluginManifests()) {
+    for (const guide of manifest.contributes?.guides ?? []) {
+      if (taken.has(guide.topic)) continue;
+      try {
+        fromPlugins.push(guideFrom(guide.topic, fs.readFileSync(path.join(pluginDir, guide.file), "utf8"), { plugin: manifest.metadata.id }));
+        taken.add(guide.topic);
+      } catch { /* a missing file is reported by bivy plugin list */ }
+    }
+  }
+  return [...builtIn, ...fromPlugins];
 }
 
 // `bivy tool <name> '<json>'` — how `bivy mcp-serve` runs a tool: map the input
@@ -6664,12 +6703,16 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
       process.exit(await run(nodeBin, [...nodeScriptArgs(credentialsEntry), ...forwardArgs], { cwd: repoRoot, env: process.env }));
       break;
     }
-    case "plugin": {
+    // `bivy tools …` and `bivy theme …` are plugin contributions, handled by the plugin CLI.
+    case "plugin":
+    case "tools":
+    case "theme": {
       if (!(await ensureDeps())) process.exit(1);
       const pluginEnv = { ...process.env };
       const configuredAgents = loadConfig().env?.BIVY_CUSTOM_AGENTS;
       if (configuredAgents && pluginEnv.BIVY_CUSTOM_AGENTS === undefined) pluginEnv.BIVY_CUSTOM_AGENTS = String(configuredAgents);
-      process.exit(await run(nodeBin, [...nodeScriptArgs(pluginEntry), ...args], { cwd: process.cwd(), env: pluginEnv }));
+      const pluginArgs = entry.name === "plugin" ? args : [entry.name, ...args];
+      process.exit(await run(nodeBin, [...nodeScriptArgs(pluginEntry), ...pluginArgs], { cwd: process.cwd(), env: pluginEnv }));
       break;
     }
     case "stop":
