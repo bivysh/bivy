@@ -8,7 +8,7 @@
 // straight to it. Module scripts and data blocks are left to the browser.
 import vm from "node:vm";
 
-const SCRIPT = /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/gi;
+const SCRIPT = /<script\b([^>]*)>([\s\S]*?)<\/script\b[^>]*>/gi;
 const CLASSIC = /^\s*$|^\s*(?:text|application)\/(?:java|ecma)script\s*$/i;
 
 export function checkWidgetScripts(html: string, name = "widget"): string[] {
