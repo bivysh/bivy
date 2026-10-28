@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A tab whose session has ended (signed out on another device, or the account was deleted) now signs out, instead of showing cached sessions and a machine that never answers.
+
 ## [0.21.19] - 2026-10-28
 
 ### Changed

@@ -282,10 +282,20 @@ function cpBase(store: LocalStore): string {
 }
 
 /** List the nodes enrolled on the signed-in account (bearer = session token). */
+/** The control plane no longer accepts this device's session: it was revoked
+ *  (signed out elsewhere) or its account was deleted. */
+export class SessionEndedError extends Error {
+  constructor() {
+    super("This session has ended. Sign in again.");
+    this.name = "SessionEndedError";
+  }
+}
+
 export async function fetchAccountNodes(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<AccountNode[]> {
   const res = await fetchImpl(`${cpBase(store)}/nodes`, {
     headers: { authorization: `Bearer ${store.s}` },
   });
+  if (res.status === 401) throw new SessionEndedError();
   if (!res.ok) throw new Error(`nodes request failed: ${res.status}`);
   const data: unknown = await res.json();
   return Array.isArray(data) ? (data as AccountNode[]) : [];

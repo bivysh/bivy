@@ -22,6 +22,7 @@ import {
   createLocalStore,
   consumeLinkPayload,
   fetchAccountNodes,
+  SessionEndedError,
   fetchCentralGithubApp,
   createCentralGithubInstall,
   createManagedAuthRunner,
@@ -1337,6 +1338,8 @@ export class AppController {
   }
 
   /** Pull the account node list into the store (for the header switcher). */
+  /** Set once a refresh found the session ended, so concurrent refreshes sign out once. */
+  private sessionEnded = false;
   async refreshNodes(): Promise<void> {
     if (this.direct || !this.signedIn) return;
     this.lastNodeRefreshAt = Date.now();
@@ -1362,8 +1365,14 @@ export class AppController {
         else this.clearCurrentNode();
       }
       void this.refreshAccountSessions();
-    } catch {
-      /* non-fatal; header just shows the current node */
+    } catch (error) {
+      // A revoked session or deleted account would otherwise keep showing
+      // cached sessions and a machine that never answers.
+      if (error instanceof SessionEndedError && !this.sessionEnded) {
+        this.sessionEnded = true;
+        void this.signOut();
+      }
+      /* otherwise non-fatal; header just shows the current node */
     }
   }
 
