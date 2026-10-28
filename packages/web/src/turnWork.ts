@@ -25,6 +25,14 @@ export function entryTurnKind(entry: TranscriptEntry, isPlan: (tool: NonNullable
   return entry.app || entry.review || entry.notice || entry.pin || entry.delegation || entry.attachments?.length ? "output" : "prose";
 }
 
+/** The transcript without an app's launcher card once a review card for the
+ *  same app exists: the review card already opens it, so one card is enough. */
+export function withoutReviewedLaunchers(entries: TranscriptEntry[]): TranscriptEntry[] {
+  const reviewed = new Set(entries.flatMap((entry) => entry.review ? [entry.review.appId] : []));
+  if (!reviewed.size) return entries;
+  return entries.filter((entry) => !entry.app || entry.text || !reviewed.has(entry.app.appId));
+}
+
 /**
  * Split a turn's response into one collapsible work group and what stays in the
  * transcript. Everything up to the last work step is work (interim prose

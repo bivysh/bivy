@@ -9,7 +9,7 @@ import { EventLog } from "../src/session/event-log.js";
 import { renderHistory } from "../packages/core/src/store-render.js";
 import { SessionStore } from "../packages/core/src/store.js";
 import { foldTranscriptEvent, freshTranscriptDraft, type TranscriptFoldValue } from "../packages/core/src/transcript-event-fold.js";
-import { entryTurnKind } from "../packages/web/src/turnWork.js";
+import { entryTurnKind, withoutReviewedLaunchers } from "../packages/web/src/turnWork.js";
 
 const app = { appId: "a".repeat(32), sessionId: "s", name: "Invoice workbench" };
 test("app launchers survive history replay without persisting any access grants", () => {
@@ -36,6 +36,10 @@ test("live app publications deduplicate and stay visible beside the work line", 
   assert.equal(second.transcript.length, 1);
   assert.equal(foldTranscriptEvent(initial, { type: "app_published", app: { name: "invalid" } }, 1).value.transcript.length, 0);
   assert.equal(entryTurnKind(second.transcript[0]!, () => false), "output");
+  // Once the agent presents the app, its review card is the one card for it.
+  const review = { id: "r1", sessionId: "s", appId: app.appId, viewId: "v", name: app.name, view: "Main", path: "/", trigger: "present", at: 1 };
+  const reviewed = foldTranscriptEvent(second, { type: "app_review", review }, 3).value;
+  assert.deepEqual(withoutReviewedLaunchers(reviewed.transcript).map((entry) => entry.id), ["r1"]);
 });
 
 test("session envelopes deliver launchers to the focused chat without starting a turn", () => {

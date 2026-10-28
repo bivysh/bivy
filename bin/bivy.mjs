@@ -3332,8 +3332,8 @@ it exits.
 Terminal commands run with the node user's permissions, not in a new sandbox.
 "shot" screenshots the session's web views (or one app) with a local headless
 Chrome/Chromium (desktop apps: straight from their display) and prints the PNG paths — look at them before saying the UI is
-done. It is off by default: turn it on in Bivy → Settings → this machine, or
-run: bivy config set sessions.appScreenshots true
+done. It is off unless the user turns it on in Bivy → Settings → this machine;
+while it's off (or there's no browser), it says so and returns no pictures.
 click/type/key/scroll/drag/move use a desktop app like a person would, in the
 pixels of its screenshot (bivy app shot), and print a new screenshot after
 (when screenshots are on) — look at it to see what happened. --app picks the

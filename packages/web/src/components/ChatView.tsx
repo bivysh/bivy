@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { applyPlanUpdate, handoffSeedOf, looksLikeAuthFailure, looksLikeModelFailure, planUpdateOf, stripAttachmentPlaceholders, toHtml, type PlanEntry, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
+import { applyPlanUpdate, handoffSeedOf, looksLikeAuthFailure, inline, looksLikeModelFailure, planUpdateOf, stripAttachmentPlaceholders, toHtml, type PlanEntry, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
 import { AppMessage } from "./AppMessage.js";
 import { ReviewCard } from "./ReviewCard.js";
@@ -11,7 +11,7 @@ import { NoticeCard } from "./NoticeCard.js";
 import { DelegationCard } from "./DelegationCard.js";
 import { ToolGroup } from "./ToolGroup.js";
 import { TurnWork } from "./TurnWork.js";
-import { entryTurnKind, noteSnippet, rowsBefore, splitTurn, startBefore, turnSpans, turnStartOf, type TurnItemKind } from "../turnWork.js";
+import { entryTurnKind, noteSnippet, rowsBefore, splitTurn, startBefore, turnSpans, turnStartOf, withoutReviewedLaunchers, type TurnItemKind } from "../turnWork.js";
 import { PlanCard } from "./PlanCard.js";
 import { HandoffSeedLine } from "./HandoffSeedLine.js";
 import { MessageAttachments } from "./AttachmentChip.js";
@@ -370,8 +370,9 @@ const EntryView = memo(function EntryView({
         <EntryActions actions={entry.actions} onAction={onAction} size="sm" />
       </div>
     );
+  // Reasoning summaries use inline Markdown ("**Planning the layout**"); inline() escapes the text.
   if (entry.role === "thinking")
-    return <div className={`msg thinking${entry.streaming ? " streaming" : ""}`}>{entry.text}</div>;
+    return <div className={`msg thinking${entry.streaming ? " streaming" : ""}`} dangerouslySetInnerHTML={{ __html: inline(entry.text) }} />;
   if (entry.role === "error") {
     const [summary = "The agent hit an error", ...detailLines] = entry.text.split("\n");
     const details = detailLines.join("\n").trim();
@@ -643,7 +644,7 @@ export function ChatView({
   const scrollRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const [pinned, setPinned] = useState(true);
-  const source = entries;
+  const source = useMemo(() => withoutReviewedLaunchers(entries), [entries]);
   const total = source.length;
   const spans = useMemo(() => turnSpans(source, entryTurnRole, entryKind), [source]);
   const scrollMemory = useRef(new Map<string, ChatScrollMemory>());
