@@ -271,7 +271,7 @@ jobs:
             if docker buildx imagetools inspect "$runner:$RELEASE_SHA" >/dev/null 2>&1; then
               docker buildx imagetools create --tag "$runner:$VERSION" --tag "$runner:v$VERSION" --tag "$runner:latest" "$runner:$RELEASE_SHA"
             else
-              echo "::warning::$runner:$RELEASE_SHA is not published yet; it was not tagged $VERSION. Re-run this workflow once runner-image.yml has published it."
+              echo "$runner:$RELEASE_SHA is not published yet; runner-image.yml tags it $VERSION when it publishes."
             fi
           ) & images=$!
           node scripts/build-release.mjs --archives release-archives
