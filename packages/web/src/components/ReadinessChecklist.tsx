@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Setup checks until setup passes (then GetStarted takes this slot).
+// Setup checks until setup passes (then the slot is empty and the composer leads).
 
 import type { Activation, ActivationCheckState, ActivationRemediationKind } from "@bivy/core";
 

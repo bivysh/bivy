@@ -105,7 +105,7 @@ export interface SessionContract {
    *  "unavailable" state and a reason here, not a guessed guarantee. */
   degradedReasons: SessionContractDegradedReason[];
   /** True when this is a release-tested profile with at least one protection-
-   *  relevant area (auth/resume/toolInterception/sandbox) degraded or unavailable,
+   *  relevant area (resume/toolInterception/sandbox) degraded or unavailable,
    *  and no acknowledgement has been recorded yet. Callers (the launch gate, the
    *  picker) must not silently proceed while this is true. Supported wrappers that
    *  are only adapter-tested keep running with their capability gaps disclosed. */
@@ -160,7 +160,9 @@ function degradedReason(area: SessionContractArea, code: string): SessionContrac
   return { area, code, message: LIMITATIONS[code] ?? code };
 }
 
-const PROTECTION_AREAS = new Set<SessionContractArea>(["auth", "resume", "toolInterception", "sandbox"]);
+// Auth is disclosed but never gates: the credential kind is only known once a
+// session runs, so counting it would make every release-tested agent ask first.
+const PROTECTION_AREAS = new Set<SessionContractArea>(["resume", "toolInterception", "sandbox"]);
 
 /**
  * Resolve an Effective Session Contract from already-observed facts. Never

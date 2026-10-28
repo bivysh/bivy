@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
-import { activationFromState, authProviderForRuntime, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, githubIssueRefFromSource, recordProductMetric, repoFromSource, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionAppsResult, type SessionSummary } from "@bivy/core";
+import { activationFromState, authProviderForRuntime, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, githubIssueRefFromSource, recordProductMetric, repoFromSource, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionSummary } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { BivyMark } from "./components/BivyMark.js";
@@ -49,11 +49,9 @@ import { NoticeToast } from "./components/NoticeToast.js";
 import { Spinner } from "./components/Spinner.js";
 import { StatusDot } from "./components/StatusDot.js";
 import { FirstRunModelAuthSheet } from "./components/FirstRunModelAuth.js";
-import { GetStarted, FIRST_CHANGE_PROMPT, openAppPrompt } from "./components/GetStarted.js";
 import { NodePicker } from "./components/Pickers.js";
 import { ConnectRunner } from "./components/ConnectRunner.js";
 import { ConnectAI } from "./components/ConnectAI.js";
-import { PlaceChoice } from "./components/PlaceChoice.js";
 import { connectAiDone, readRunPlace, rememberRunPlace, type RunPlace } from "./onboarding.js";
 import { EPHEMERAL_MACHINES_ENABLED } from "./flags.js";
 import { PwaLifecycleNotice } from "./components/PwaLifecycleNotice.js";
@@ -163,27 +161,6 @@ export function App() {
   useEffect(() => { if (appsSheet) showInSidePane("apps"); }, [appsSheet, showInSidePane]);
   // Leaving the session closes it; coming back must not reopen it.
   useEffect(() => setAppsSheet(null), [state.activeSession.activeSessionId]);
-  // The first task's app: the agent publishes it from its own workspace (a
-  // checkout's session works in a worktree, which the server already running
-  // doesn't serve). The preview opens once it's published, so the user can
-  // start marking, not before, when there's nothing to show.
-  const firstAppPending = useRef(false);
-  useEffect(() => {
-    const sessionId = state.activeSession.activeSessionId;
-    if (!firstAppPending.current || !sessionId) return;
-    firstAppPending.current = false;
-    let done = false;
-    return controller.onAppsChanged((changed) => {
-      if (done || changed !== sessionId) return;
-      void controller.appCommand("apps.list", sessionId).then((event) => {
-        const app = (event as unknown as SessionAppsResult).apps.find((item) => item.views.some((view) => view.kind === "web"));
-        const view = app?.views.find((item) => item.kind === "web");
-        if (done || !app || !view) return;
-        done = true;
-        setAppsSheet({ sessionId, appId: app.id, openView: { viewId: view.id } });
-      }, () => {});
-    });
-  }, [state.activeSession.activeSessionId]);
   // Fork sheet opened from an inline notice (e.g. "reached its usage limit —
   // Fork to another agent"), so the way past a limit is one tap from the chat.
   const [forkSheetOpen, setForkSheetOpen] = useState(false);
@@ -784,8 +761,9 @@ export function App() {
   // the repo picker can authorize GitHub only when the user requests it.
   const needsNode = !controller.direct && state.connection.signedIn && !state.connection.currentNodeId;
 
-  // First run: where agents run (when the deployment offers a cloud), then the
-  // AI accounts they use. Both are asked once, before the first session.
+  // First run: agents run on Bivy Cloud when the deployment offers it and the
+  // account has no computer of its own (the user can switch to their own), then
+  // the AI accounts they use, asked once before the first session.
   const firstRun = !state.activeSession.activeSessionId && state.sessionIndex.sessions.length === 0;
   const [runPlace, setRunPlace] = useState<RunPlace | null>(readRunPlace);
   const [aiDone, setAiDone] = useState(connectAiDone);
@@ -813,13 +791,13 @@ export function App() {
       (error: unknown) => setCloudStart({ error: error instanceof Error ? error.message : String(error) }),
     );
   }, []);
-  // Having chosen the cloud, a reload or a failed start must not strand the
-  // user on the choice screen or an "Offline" header: connect to the cloud
-  // computer once it is online, or start it again (once) after a reload.
+  const cloudDefault = cloudAvailable === true && (runPlace === "cloud" || (runPlace === null && !state.connection.nodes.some((node) => !node.id.startsWith("eph-"))));
+  // Connect to the cloud computer once it is online, or start it (once): on the
+  // first run, and again after a reload or a failed start.
   const cloudNodeOnline = state.connection.nodes.find((node) => node.id.startsWith("eph-") && node.online)?.id;
   const cloudResumed = useRef(false);
   useEffect(() => {
-    if (!needsNode || runPlace !== "cloud" || cloudAvailable !== true) return;
+    if (!needsNode || !cloudDefault) return;
     if (cloudNodeOnline) {
       controller.switchNode(cloudNodeOnline);
       setCloudStart(null);
@@ -827,14 +805,17 @@ export function App() {
       cloudResumed.current = true;
       startCloud();
     }
-  }, [needsNode, runPlace, cloudAvailable, cloudNodeOnline, cloudStart, startCloud]);
-  const choosingPlace = needsNode && cloudAvailable === true && runPlace !== "own" && !state.connection.nodes.some((node) => !node.id.startsWith("eph-"));
-  const needsNodeTitle = choosingPlace || cloudStart ? "Get started" : "Connect a Machine";
-  const choosePlace = useCallback((place: RunPlace) => {
-    if (place === "cloud") return startCloud();
+  }, [needsNode, cloudDefault, cloudNodeOnline, cloudStart, startCloud]);
+  // Before the first session: the AI sign-in, then any setup check still
+  // failing. Once both pass, the composer leads.
+  const setupCard = !needsNode && !state.draft.ephemeralConfig && firstRun && state.activeSession.transcript.length === 0
+    && (!aiDone || activation.blockingCheckId === "credential_valid" || !activation.activated);
+  const needsNodeTitle = cloudDefault || cloudStart ? "Get started" : "Connect a Machine";
+  const useOwnComputer = useCallback(() => {
     rememberRunPlace("own");
     setRunPlace("own");
-  }, [startCloud]);
+    setCloudStart(null);
+  }, []);
 
   // Hosted control plane, not signed in yet: show the sign-in screen instead of a
   // dead shell. Once signed in we always render the normal app — a node is picked
@@ -1116,27 +1097,13 @@ export function App() {
           </div>
         )}
 
-        {!needsNode && !state.draft.ephemeralConfig && !state.activeSession.activeSessionId && state.activeSession.transcript.length === 0 && state.sessionIndex.sessions.length === 0 && (
+        {setupCard && (
           <Suspense fallback={null}>
             {/* A missing AI sign-in is always asked for the same way, also after
                 "Set up later" and on a newly added machine (own machines keep
                 their sign-ins to themselves). */}
             {!aiDone || activation.blockingCheckId === "credential_valid" ? (
-              <ConnectAI state={state} place={runPlace} startError={cloudStart?.error} onRetry={startCloud} onDone={() => setAiDone(true)} deferrable={!aiDone} />
-            ) : activation.activated ? (
-              <GetStarted
-                machineName={state.connection.nodes.find((n) => n.id === state.connection.currentNodeId)?.name || undefined}
-                onOpenApp={(app) => {
-                  firstAppPending.current = true;
-                  setTurnActive(true);
-                  // The session starts in the app's own folder, never a fresh clone.
-                  controller.sendPrompt(openAppPrompt(app), undefined, { workspace: app.project, repo: undefined, branch: undefined });
-                }}
-                onFirstChange={() => {
-                  setTurnActive(true);
-                  controller.sendPrompt(FIRST_CHANGE_PROMPT);
-                }}
-              />
+              <ConnectAI state={state} place={runPlace} startError={cloudStart?.error} onRetry={startCloud} onDone={() => setAiDone(true)} onUseOwn={useOwnComputer} deferrable={!aiDone} />
             ) : <ReadinessChecklist
               activation={activation}
               onRemediate={{
@@ -1151,10 +1118,8 @@ export function App() {
 
         {needsNode && (
           <div className="connect-runner-scroll">
-            {cloudStart ? (
-              <ConnectAI state={state} place="cloud" startError={cloudStart.error} onRetry={startCloud} onDone={() => setAiDone(true)} />
-            ) : choosingPlace ? (
-              <PlaceChoice onChoose={choosePlace} />
+            {cloudStart || cloudDefault ? (
+              <ConnectAI state={state} place="cloud" startError={cloudStart?.error} onRetry={startCloud} onDone={() => setAiDone(true)} onUseOwn={useOwnComputer} />
             ) : askCloud && cloudAvailable === null ? null : (
               <ConnectRunner
                 nodes={state.connection.nodes}
@@ -1233,7 +1198,7 @@ export function App() {
               // `/settings/*` while Settings is open without changing (or clearing)
               // whatever session is open behind it.
               draftRoute={!state.activeSession.activeSessionId}
-              greeting={state.sessionIndex.sessions.length > 0 ? "What should we work on?" : undefined}
+              greeting={setupCard ? undefined : "What should we work on?"}
               opening={state.activeSession.opening}
               sessionKey={state.activeSession.activeSessionId}
               onAction={runCommand}

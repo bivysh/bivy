@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Fewer steps from sign-up to the first answer.** Where the deployment offers Bivy Cloud, the cloud computer now starts right after sign-in, with no "Where should your agents run?" question; **Use my own computer instead** is on the AI sign-in card. Connecting the first plan finishes setup by itself (no **Continue**), and the app goes straight to the composer instead of a suggested first task. The agent now follows the plan you connect: ChatGPT picks Codex and Claude picks Claude Code, instead of keeping Pi, which then asked for a model.
+- If Send still has to ask for a model, choosing one sends the message.
+
+### Fixed
+
+- Choosing Claude Code or Codex no longer asks you to confirm that "Bivy couldn't check which sign-in this agent will use". The sign-in kind is only known once a session runs, so it no longer counts as reduced protection; it is still listed in the agent's details.
+
 ## [0.21.18] - 2026-10-28
 
 ### Security
