@@ -88,10 +88,19 @@ function sha256File(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
-async function download(url, dest) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`GET ${url}: ${res.status}`);
-  fs.writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
+/** GET `url` into `dest`. A stalled transfer is cut off and retried, never waited on forever. */
+async function download(url, dest, attempts = 3) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+      if (!res.ok) throw new Error(`GET ${url}: ${res.status}`);
+      fs.writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
+      return;
+    } catch (error) {
+      if (attempt >= attempts) throw error;
+      console.warn(`GET ${url} failed (${error.message}); retrying (${attempt}/${attempts - 1})`);
+    }
+  }
 }
 
 /** Download (once) and verify the Node build for a target against nodejs.org's SHASUMS256. */
