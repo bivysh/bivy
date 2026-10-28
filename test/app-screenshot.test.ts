@@ -13,9 +13,12 @@ import { findChrome } from "../src/apps/screenshot.js";
 
 const terminals = { start: async () => "t", has: () => true, close: () => {} };
 
-test("agent screenshots are refused while the machine setting is off", async () => {
+test("agent screenshots answer without pictures while the machine setting is off", async () => {
   const service = new AppService(new AppRegistry(), undefined, terminals);
-  await assert.rejects(service.shot("s", undefined, {}), /bivy config set sessions\.appScreenshots true/);
+  const result = await service.shot("s", undefined, {});
+  assert.deepEqual(result.shots, []);
+  assert.match(result.message ?? "", /off on this machine/);
+  assert.doesNotMatch(result.message ?? "", /bivy config set/, "never hands the agent the switch");
 });
 
 // Real browser, real pages: widths map to image sizes, and the theme is

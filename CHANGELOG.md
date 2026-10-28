@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A first app no longer looks like a failure.** `bivy app shot` on a machine with agent screenshots off, or with no browser, now succeeds with no pictures and says why, instead of failing. Such a turn showed a red dot and "2 failed". It no longer tells the agent how to turn the setting on, so agents stop switching on a setting that is yours to choose.
+- An app the agent presents shows one card in the chat, not a launcher card and a review card for the same app.
+- Agents' step summaries (reasoning) render their Markdown, instead of showing `**Planning the layout**` with the asterisks.
 - Choosing Claude Code or Codex no longer asks you to confirm that "Bivy couldn't check which sign-in this agent will use". The sign-in kind is only known once a session runs, so it no longer counts as reduced protection; it is still listed in the agent's details.
 
 ## [0.21.18] - 2026-10-28

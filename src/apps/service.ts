@@ -49,6 +49,10 @@ export interface AppDisplayProvider {
   ensure(id: string, name: string, scale?: number): Promise<{ socket: string; env: Record<string, string>; wm: { count: number }; launch?: string[]; control?: string }>;
   stop(id: string): void;
 }
+/** What an agent hears when the user left agent screenshots off. It must not
+ * read as a fix to apply: the setting is the user's. */
+const SHOTS_OFF = "Agent screenshots are off on this machine, so there's no picture to check. That is the user's setting; leave it as it is.";
+
 /** Where review cards go: the server stores screenshots as encrypted
  * attachments, logs the card and broadcasts it. `publish` returns the card
  * with its screenshots' hashes; `expire` drops an older card's images,
@@ -510,9 +514,11 @@ export class AppService {
     }
   }
   /** Screenshots of a session's web views (one app, or all), for agents to
-   * check their own UI. One browser at a time node-wide; PNGs in a temp dir. */
-  async shot(sessionId: string, appId: string | undefined, input: Partial<ShotRequest>): Promise<{ shots: Shot[] }> {
-    if (!this.screenshots.enabled()) throw new Error("Agent screenshots are off on this machine. Turn on “Let agents screenshot their app previews” in Bivy → Settings → this machine, or run: bivy config set sessions.appScreenshots true");
+   * check their own UI. One browser at a time node-wide; PNGs in a temp dir.
+   * Screenshots switched off, or no browser, is an answer, not a failure:
+   * the agent carries on without pictures. */
+  async shot(sessionId: string, appId: string | undefined, input: Partial<ShotRequest>): Promise<{ shots: Shot[]; message?: string }> {
+    if (!this.screenshots.enabled()) return { shots: [], message: SHOTS_OFF };
     const widths = input.widths ?? [390, 1280];
     const themes = input.themes ?? ["light"];
     const page = input.path ?? "/";
@@ -526,7 +532,12 @@ export class AppService {
     const outDir = path.join(os.tmpdir(), "bivy-shots", sessionId.replace(/[^A-Za-z0-9_-]/g, "_"), String(Date.now()));
     const run = this.shooting.catch(() => {}).then(() => this.screenshots.take(views, { widths, themes: [...new Set(themes)], path: page }, outDir));
     this.shooting = run;
-    return { shots: await run };
+    try {
+      return { shots: await run };
+    } catch (error) {
+      if (!/No Chrome or Chromium/.test((error as Error).message)) throw error;
+      return { shots: [], message: "No Chrome or Chromium on this machine, so there are no screenshots this time. Describe what you built instead." };
+    }
   }
   /** Computer use: an agent clicks, types, presses keys and scrolls in one of
    * its desktop apps, in the pixels of the app's screenshot, the way a viewer
@@ -538,7 +549,7 @@ export class AppService {
     if (!entry.display) await this.windowShown(entry);
     if (!entry.display) throw new Error("The app isn't running. Check its Logs in the Apps sheet.");
     const { width, height } = await sendInput(entry.display, inputEvents(action));
-    if (!this.screenshots.enabled()) return { width, height, message: "Done. Agent screenshots are off on this machine, so there's no picture of the result: bivy config set sessions.appScreenshots true" };
+    if (!this.screenshots.enabled()) return { width, height, message: `Done. ${SHOTS_OFF}` };
     return { width, height, shot: await this.after(entry, sessionId), message: "Done. The shot is the app now." };
   }
   /** A desktop app's menu bar: listed, or one item chosen by its path of
@@ -550,7 +561,7 @@ export class AppService {
     if (!entry.displayControl) throw new Error("This machine's desktop apps don't expose their menus (macOS only). Use keyboard shortcuts: bivy app key.");
     if (!item) return { menus: await readMenus(entry.displayControl) };
     await pressMenu(entry.displayControl, item);
-    if (!this.screenshots.enabled()) return { message: "Chosen. Agent screenshots are off on this machine, so there's no picture of the result." };
+    if (!this.screenshots.enabled()) return { message: `Chosen. ${SHOTS_OFF}` };
     return { shot: await this.after(entry, sessionId), message: "Chosen. The shot is the app now." };
   }
   /** The app a moment after an action, as a screenshot. */

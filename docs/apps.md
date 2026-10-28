@@ -113,8 +113,9 @@ running as the node user.
 **Off by default.** Turn it on in Bivy → Settings → this machine, *Let agents
 screenshot their app previews*. From a terminal, run
 `bivy config set sessions.appScreenshots true` (or set
-`BIVY_APP_SCREENSHOTS=1`). While it's off, the command explains how to turn it
-on.
+`BIVY_APP_SCREENSHOTS=1`). While it's off, or the machine has no browser, the
+command succeeds with no pictures and a message saying why, so an agent carries
+on without them.
 
 ### Review cards (`bivy app present`)
 

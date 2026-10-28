@@ -42,7 +42,8 @@ A manifest with a server Bivy starts on first open:
     bivy app shot --widths 390,1280 --themes light,dark
 
 prints PNG paths. Look at them. Screenshots are off until the user turns them
-on (`bivy config set sessions.appScreenshots true`).
+on; until then the command says so and returns no pictures. Leave the setting
+to the user.
 
 ## Hand it over
 
