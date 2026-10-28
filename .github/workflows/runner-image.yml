@@ -128,6 +128,13 @@ jobs:
           fi
           # OS_PATCH_EPOCH (the ISO week) re-runs the apt layer weekly, so cached
           # builds still pick up Debian security updates.
+          # Only main writes the cache: a backfill of an old commit (its own,
+          # older Dockerfile) would otherwise replace it and make the next main
+          # build start cold.
+          cache_to=()
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            cache_to=(--cache-to "type=registry,ref=$IMAGE:buildcache-$ARCH,mode=max")
+          fi
           docker buildx build \
             --file deploy/Dockerfile.ephemeral-runner \
             --platform "linux/$ARCH" \
@@ -141,7 +148,7 @@ jobs:
             --provenance=true \
             --sbom=true \
             --cache-from "type=registry,ref=$IMAGE:buildcache-$ARCH" \
-            --cache-to "type=registry,ref=$IMAGE:buildcache-$ARCH,mode=max" \
+            "${cache_to[@]}" \
             .
           mkdir -p digests
           jq -r '."containerimage.digest"' metadata.json > "digests/$ARCH"
