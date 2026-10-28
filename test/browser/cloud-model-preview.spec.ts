@@ -58,7 +58,7 @@ for (const theme of themes) test(`Cloud model selection before any machine exist
   await expect(picker).toBeVisible();
   await page.evaluate("globalThis.loadModels()");
   await expect(picker.getByText("Claude Opus 4.8", { exact: true })).toBeVisible();
-  await expect(picker.getByText("GPT-5.6 Sol", { exact: true })).toBeVisible();
+  await expect(picker.getByText("GPT-6 Luna", { exact: true })).toBeVisible();
   expect(await page.evaluate("globalThis.models().some(model => model.provider === 'openai')")).toBe(false);
   await page.evaluate("globalThis.staleModels()");
   await expect(picker.getByText("Claude Opus 4.8", { exact: true })).toBeVisible();
