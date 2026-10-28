@@ -35,6 +35,16 @@ COPY README.md LICENSE ./
 ARG GITHUB_SHA=
 RUN GITHUB_SHA="$GITHUB_SHA" node scripts/build-release.mjs --pack /out --without-web
 
+# Agent SDK bridges at Bivy's pinned versions, installed by Bivy's own installer
+# (with its security overrides). This stage reads only package.json and the
+# installer, so ordinary commits reuse it.
+FROM node:22-bookworm-slim AS bridges
+WORKDIR /repo
+COPY package.json ./
+COPY src/agent-bridges.mjs ./src/agent-bridges.mjs
+RUN node --input-type=module -e "const m = await import('/repo/src/agent-bridges.mjs'); \
+      await m.installBridges(Object.values(m.AGENT_BRIDGES).flatMap((b) => b.packages), { dir: '/bridges', stdio: 'inherit' });"
+
 FROM node:22-bookworm-slim
 LABEL org.opencontainers.image.source="https://github.com/bivysh/bivy"
 LABEL org.opencontainers.image.description="Credential-free prebuilt Bivy ephemeral runner"
@@ -50,21 +60,8 @@ RUN echo "os patch epoch: ${OS_PATCH_EPOCH:-unset}" \
   && apt-get install -y -qq --no-install-recommends ca-certificates curl git openssh-client tini \
      chromium fonts-liberation \
   && rm -rf /var/lib/apt/lists/*
-COPY --from=build /out/bivy-latest.tar.gz /tmp/bivy.tar.gz
-# Agent SDK bridges install outside the Bivy package and outside the node's
-# state dir, so they are baked into the image once. Their CLIs (Pi's `pi`) are
-# exposed from the bridge directory's bin rather than one symlink per agent.
-ENV BIVY_BRIDGES_DIR=/usr/local/lib/bivy-bridges
-ENV PATH="/usr/local/lib/bivy-bridges/node_modules/.bin:${PATH}"
-# Install the common Bivy layer once for every runtime-specific image. The
-# terminal addon is prebuilt, so no compiler toolchain is needed.
-RUN npm install -g /tmp/bivy.tar.gz \
-  && rm /tmp/bivy.tar.gz \
-  && bivy agents:install --bridges \
-  && rm -rf /root/.npm \
-  && command -v bivy \
-  && command -v pi \
-  && node -e "require('/usr/local/lib/node_modules/@bivy/bivy/node_modules/@lydell/node-pty')"
+# Layers run from least to most often changed, so an ordinary commit reuses
+# (and does not re-upload) everything above the Bivy package at the end.
 # `all` is the compatibility/auth image. Interactive sessions can use the much
 # smaller `claude`, `codex`, or `pi` variants selected by the requested runtime,
 # avoiding a cold pull of unrelated agent binaries.
@@ -78,8 +75,24 @@ RUN case "$BIVY_RUNNER_AGENT" in \
     esac \
   && rm -rf /root/.npm \
   && { [ "$BIVY_RUNNER_AGENT" != all ] && [ "$BIVY_RUNNER_AGENT" != codex ] || command -v codex; } \
-  && { [ "$BIVY_RUNNER_AGENT" != all ] && [ "$BIVY_RUNNER_AGENT" != claude ] || command -v claude; } \
-  && command -v pi
+  && { [ "$BIVY_RUNNER_AGENT" != all ] && [ "$BIVY_RUNNER_AGENT" != claude ] || command -v claude; }
+# Agent SDK bridges live outside the Bivy package and outside the node's state
+# dir, so they are baked into the image once. Their CLIs (Pi's `pi`) are
+# exposed from the bridge directory's bin rather than one symlink per agent.
+ENV BIVY_BRIDGES_DIR=/usr/local/lib/bivy-bridges
+ENV PATH="/usr/local/lib/bivy-bridges/node_modules/.bin:${PATH}"
+COPY --from=bridges /bridges /usr/local/lib/bivy-bridges
+# The Bivy package changes with every commit, so it is the last large layer.
+# The terminal addon is prebuilt, so no compiler toolchain is needed.
+# `agents:install --bridges` finds the baked bridges and only confirms them.
+COPY --from=build /out/bivy-latest.tar.gz /tmp/bivy.tar.gz
+RUN npm install -g /tmp/bivy.tar.gz \
+  && rm /tmp/bivy.tar.gz \
+  && bivy agents:install --bridges \
+  && rm -rf /root/.npm \
+  && command -v bivy \
+  && command -v pi \
+  && node -e "require('/usr/local/lib/node_modules/@bivy/bivy/node_modules/@lydell/node-pty')"
 RUN mkdir -p /etc/bivy /workspace \
   && chmod 700 /etc/bivy
 ENV BIVY_DATA_DIR=/etc/bivy
