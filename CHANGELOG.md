@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **GitHub mentions trigger runs for collaborators by default.** A mention from anyone on GitHub used to queue a run on your machine unless you had restricted it. Unset now means collaborators with write access; choose "Anyone on GitHub" in Settings → GitHub App to open it up again.
+- **A delegated run can't loosen its parent's safety.** `bivy delegate --approval never --sandbox danger-full-access` from a session in `risky` mode ran the child unattended and unsandboxed; children now keep the stricter of what they ask for and what the parent has. A project's `approvalFloor: autonomous` also stops `never`, which drops checks `autonomous` keeps.
+- The node's GitHub App setup pages check the Host and Origin like the API does, and the callback only finishes a setup this node started, so another site can no longer swap in an app and private key of its own.
+- The node ignores a forwarded client message that parses as a relay control message (a duplicate `"t"` key), and agent MCP configs Bivy writes are readable only by you.
+- `install.sh` downloads over HTTPS only, redirects included.
 - **A linking QR reaches its one machine and nothing else.** Its node-scoped grant was also accepted by the account's settings, automations, cloud-machine, GitHub App and push routes. Those now require an account session; a device linked only by QR signs in to the account to use them, push notifications included.
 - Sign-in rate limits count the client address that `TRUST_PROXY` vouches for instead of any `X-Forwarded-For` header, so a direct caller can't dodge them by changing the header.
 - **A relay can no longer pair itself with your machine.** Account pairing sent a reusable grant over the relay, so a malicious relay could replay it with its own key and receive the room key. Pair grants are now bound to the device key that requested them, single-use, and accepted nowhere else; sibling replicas and `bivy run --node` use them too. Devices and nodes on older Bivy versions must update before they can account-pair.

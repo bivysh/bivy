@@ -331,17 +331,16 @@ await test("setInboundHookTriggerAccess sets/clears who can trigger a run, scope
   const store = await makeStore();
   const acct = await store.findOrCreateAccount("trigger-access@example.com");
   const hook = await store.createInboundHook(acct.id, "github_app");
-  // Unset by default — "everyone" (no restriction), the behavior before this
-  // setting existed.
+  // Unset by default, which meetsTriggerAccess reads as collaborators only.
   assert.equal((await store.getInboundHook(hook.id))?.triggerAccess, undefined);
   let updated = await store.setInboundHookTriggerAccess(acct.id, hook.id, "contributor");
   assert.equal(updated?.triggerAccess, "contributor");
   assert.equal((await store.getInboundHook(hook.id))?.triggerAccess, "contributor");
   updated = await store.setInboundHookTriggerAccess(acct.id, hook.id, "collaborator");
   assert.equal(updated?.triggerAccess, "collaborator");
-  // Setting back to "everyone" clears it (stored the same as unset).
+  // "everyone" is a recorded choice, distinct from unset.
   updated = await store.setInboundHookTriggerAccess(acct.id, hook.id, "everyone");
-  assert.equal(updated?.triggerAccess, undefined);
+  assert.equal(updated?.triggerAccess, "everyone");
   updated = await store.setInboundHookTriggerAccess(acct.id, hook.id, "collaborator");
   updated = await store.setInboundHookTriggerAccess(acct.id, hook.id, undefined);
   assert.equal(updated?.triggerAccess, undefined);

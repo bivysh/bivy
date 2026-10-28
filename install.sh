@@ -90,7 +90,7 @@ trap 'rm -rf "$TMP_DIR"' EXIT
 
 TARGET="$(archive_target)" || die "Bivy has no build for $(uname -s) $(uname -m) yet."
 BASE="$(archive_base)"
-SUMS="$(curl -fsSL "$BASE/SHA256SUMS")" || die "Could not read $BASE/SHA256SUMS. Check the version or channel and your connection."
+SUMS="$(curl --proto =https,file --proto-redir =https --tlsv1.2 -fsSL "$BASE/SHA256SUMS")" || die "Could not read $BASE/SHA256SUMS. Check the version or channel and your connection."
 LINE="$(printf '%s\n' "$SUMS" | grep -E "^[0-9a-f]{64}  bivy-[^ ]+-${TARGET}\.tar\.gz$" | head -n1 || true)"
 [ -n "$LINE" ] || die "That release has no build for $TARGET."
 WANT="${LINE%% *}"
@@ -100,7 +100,7 @@ VERSION="${NAME#bivy-}"
 VERSION="${VERSION%-"$TARGET"}"
 
 info "Downloading Bivy $VERSION for $TARGET"
-curl -fSL --progress-bar -o "$TMP_DIR/$FILE" "$BASE/$FILE" || die "Could not download $BASE/$FILE."
+curl --proto =https,file --proto-redir =https --tlsv1.2 -fSL --progress-bar -o "$TMP_DIR/$FILE" "$BASE/$FILE" || die "Could not download $BASE/$FILE."
 GOT="$(file_sha256 "$TMP_DIR/$FILE")"
 [ "$GOT" = "$WANT" ] || die "$FILE failed verification (sha256 $GOT, SHA256SUMS says $WANT). Nothing was changed; re-run to retry."
 

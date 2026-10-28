@@ -294,15 +294,20 @@ const TRIGGER_ACCESS_ASSOCIATIONS: Record<Exclude<TriggerAccess, "everyone">, Se
   collaborator: new Set(["OWNER", "MEMBER", "COLLABORATOR"]),
 };
 
+/** Who may trigger when the account never chose. A mention runs an agent on
+ * the user's machine, so a stranger on a public repo must not get that by
+ * default; "everyone" has to be picked explicitly. */
+export const DEFAULT_TRIGGER_ACCESS = "collaborator" satisfies TriggerAccess;
+
 /**
  * Whether `association` (a GitHub `author_association` value, case-
  * insensitive) clears the bar set by `access`. `undefined`/unrecognized
- * `access` behaves like `"everyone"` so hooks created before this setting
- * existed keep working exactly as before.
+ * `access` means DEFAULT_TRIGGER_ACCESS.
  */
 export function meetsTriggerAccess(association: string | undefined, access: TriggerAccess | undefined): boolean {
-  if (access !== "contributor" && access !== "collaborator") return true;
-  return TRIGGER_ACCESS_ASSOCIATIONS[access].has(String(association ?? "").trim().toUpperCase());
+  if (access === "everyone") return true;
+  const bar = access === "contributor" || access === "collaborator" ? access : DEFAULT_TRIGGER_ACCESS;
+  return TRIGGER_ACCESS_ASSOCIATIONS[bar].has(String(association ?? "").trim().toUpperCase());
 }
 
 /**

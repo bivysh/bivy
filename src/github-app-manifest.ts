@@ -110,3 +110,23 @@ export function renderManifestForm(manifest: Record<string, unknown>, opts: { or
 <script${opts.nonce ? ` nonce="${opts.nonce}"` : ""}>document.getElementById("f").submit()</script>
 </body></html>`;
 }
+
+/**
+ * The manifest-flow states (hook ids) a node handed to GitHub. A callback can
+ * only finish a flow this node started, so a `code` for an app someone else
+ * created can't replace the node's GitHub App and private key. Single-use.
+ */
+export function createManifestStates(ttlMs = 60 * 60_000, now: () => number = Date.now) {
+  const pending = new Map<string, number>();
+  return {
+    issue(state: string): string {
+      pending.set(state, now() + ttlMs);
+      return state;
+    },
+    take(state: string): boolean {
+      const expires = pending.get(state);
+      pending.delete(state);
+      return expires !== undefined && expires > now();
+    },
+  };
+}

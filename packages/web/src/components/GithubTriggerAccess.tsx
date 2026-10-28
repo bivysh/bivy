@@ -5,7 +5,7 @@ import { controller } from "../store/controller.js";
 
 export function GithubTriggerAccess({ info, onChanged }: { info: GithubAppInfo; onChanged?: () => void }) {
   const id = useId();
-  const initial = info.apps.find((app) => app.triggerAccess)?.triggerAccess ?? info.triggerAccess ?? "everyone";
+  const initial = info.apps.find((app) => app.triggerAccess)?.triggerAccess ?? info.triggerAccess ?? "collaborator";
   const [access, setAccess] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");

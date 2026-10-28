@@ -203,7 +203,9 @@ export function injectBivyToolsForSession(agentId: string, ctx: BivyToolsContext
 
   try {
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, nextContent);
+    // The server entry carries the session's BIVY_SESSION_TOKEN; a file we
+    // create is readable by this user only (an existing one keeps its mode).
+    fs.writeFileSync(target, nextContent, { mode: 0o600 });
   } catch {
     return { injected: [], restore: () => {} };
   }

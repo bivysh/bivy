@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { configToLegacySettings, mergeLegacyIntoNodeConfig, parseNodeConfig, readNodeConfig, setConfigValue, writeNodeConfig } from "../src/node-config.js";
-import { parseProjectPolicy, resolveProjectSafety } from "../src/project-policy.js";
+import { childSafety, parseProjectPolicy, resolveProjectSafety } from "../src/project-policy.js";
 
 const valid = `
 version: 1
@@ -174,4 +174,14 @@ ruleset:
     sandbox: "read-only",
     approval: "always",
   });
+});
+
+test("a delegated run may tighten its parent's safety but never loosen it", () => {
+  const parent = { approval: "risky", sandbox: "workspace-write" } as const;
+  assert.deepEqual(childSafety(parent, { approval: "never", sandbox: "danger-full-access" }), parent);
+  assert.deepEqual(childSafety(parent, { approval: "always", sandbox: "read-only" }), { approval: "always", sandbox: "read-only" });
+  assert.deepEqual(childSafety({ approval: "autonomous" }, { approval: "never" }), { approval: "autonomous", sandbox: undefined });
+  assert.deepEqual(childSafety({}, { approval: "never" }), { approval: "never", sandbox: undefined });
+  // An `autonomous` floor still holds the checks `never` drops.
+  assert.equal(resolveProjectSafety({ approvalFloor: "autonomous" }, "workspace-write", "never").approval, "autonomous");
 });

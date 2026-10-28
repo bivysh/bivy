@@ -186,20 +186,20 @@ wins over the default.
 
 ### Who can trigger runs
 
-On a **public** repository, anyone can open an issue or leave a comment —
-by default, `@`-mentioning the bot there queues a run for whoever wrote it,
-same as a collaborator would get. Applying a routing label is unaffected
-(GitHub itself only lets collaborators/triage-access users add labels), but
-the `@`-mention trigger has no such implicit protection on its own.
+On a **public** repository, anyone can open an issue or leave a comment. By
+default only collaborators with write access can start a run by
+`@`-mentioning the bot; a mention from anyone else is ignored. Applying a
+routing label is unaffected (GitHub itself only lets collaborators/triage-access
+users add labels).
 
-Set **Settings → GitHub App → Who can trigger runs** to restrict it, based on
+Set **Settings → GitHub App → Who can trigger runs** to change it, based on
 GitHub's own `author_association` for the issue/comment author:
 
 | Setting | Who can trigger | GitHub `author_association` |
 | --- | --- | --- |
-| Everyone (default) | Any GitHub user | any, including `NONE` |
+| Everyone | Any GitHub user | any, including `NONE` |
 | Contributors | Anyone with a prior relationship to the repo | `CONTRIBUTOR`, `COLLABORATOR`, `MEMBER`, `OWNER` |
-| Collaborators only | Push access only | `COLLABORATOR`, `MEMBER`, `OWNER` |
+| Collaborators only (default) | Push access only | `COLLABORATOR`, `MEMBER`, `OWNER` |
 
 This is one account-wide preference applied to every connected app. A blocked
 mention is acknowledged to GitHub (so it doesn't retry the delivery) but
