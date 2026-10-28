@@ -7,10 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- The control plane's `/janitor` proxy (`JANITOR_SERVICE_URL`, `JANITOR_PROXY_SECRET`) for a separate app that no longer ships with Bivy.
+
 ### Security
 
 - **A linking QR reaches its one machine and nothing else.** Its node-scoped grant was also accepted by the account's settings, automations, cloud-machine, GitHub App and push routes. Those now require an account session; a device linked only by QR signs in to the account to use them, push notifications included.
-- The Janitor proxy decides whether a request needs sign-in from the path the upstream actually receives, so encoded dot-segments (`/janitor/x/%2e%2e/api/…`) no longer skip it.
 - Sign-in rate limits count the client address that `TRUST_PROXY` vouches for instead of any `X-Forwarded-For` header, so a direct caller can't dodge them by changing the header.
 - **A relay can no longer pair itself with your machine.** Account pairing sent a reusable grant over the relay, so a malicious relay could replay it with its own key and receive the room key. Pair grants are now bound to the device key that requested them, single-use, and accepted nowhere else; sibling replicas and `bivy run --node` use them too. Devices and nodes on older Bivy versions must update before they can account-pair.
 
