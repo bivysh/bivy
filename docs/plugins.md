@@ -119,6 +119,12 @@ A guide is markdown with a `# Title` line and a `Summary: …` line. `bivy guide
 lists it with the built-in guides, and `bivy mcp-serve` serves it as a resource.
 A plugin cannot replace a built-in topic.
 
+## See and manage them in the app
+
+**Settings → this machine → Plugins** lists every installed plugin and what it
+adds. Remove one there, or choose between plugin themes. Installing stays with
+agents and the CLI.
+
 ## Install from anywhere, share as a repository
 
 ```bash

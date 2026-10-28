@@ -14,6 +14,7 @@ export const CLIENT_COMMAND_ROUTES: readonly ClientCommandRoute[] = [
   { method: "post", path: "/api/artifacts/list", kind: "artifacts.list" },
   ...["list", "read"].map((action) => ({ method: "post" as const, path: `/api/files/${action}`, kind: `files.${action}` })),
   { method: "post", path: "/api/access/get", kind: "access.get" },
+  ...["remove", "theme"].map((action) => ({ method: "post" as const, path: `/api/plugins/${action}`, kind: `plugins.${action}` })),
   // Direct transport maps `widgets.state.get` to `/api/widgets/state.get` (first dot only).
   ...["state.get", "state.set", "source", "shot", "tool"].map((action) => ({ method: "post" as const, path: `/api/widgets/${action}`, kind: `widgets.${action}` })),
   ...["list", "remove"].map((action) => ({ method: "post" as const, path: `/api/secrets/${action}`, kind: `secrets.${action}` })),
