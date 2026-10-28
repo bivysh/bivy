@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- qs 6.16.1 (GHSA-6pq8-jhm2-2vcw: `qs.stringify` crash with `arrayFormat: 'comma'`).
 - Agent pins: Claude Agent SDK 0.3.312, Codex 0.165.0.
 
 ## [0.21.15] - 2026-10-27
