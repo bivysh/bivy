@@ -8,7 +8,7 @@ import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
 import { WebSocket, WebSocketServer } from "ws";
-import { PreviewRelay } from "../services/relay/src/preview.js";
+import { PreviewRelay, responseHeaders } from "../services/relay/src/preview.js";
 import { RemotePreview } from "../src/apps/remote-preview.js";
 import { AppRegistry } from "../src/apps/registry.js";
 import { AppService } from "../src/apps/service.js";
@@ -202,4 +202,11 @@ test("live service HTTP uploads, cookies and WebSockets traverse the outbound tu
     for (const ws of wsBackend.clients) ws.terminate();
     wsBackend.close(); backend.close(); backend.closeAllConnections(); await f.close();
   }
+});
+
+test("the relay keeps a preview's cookies host-only even when a node sends a Domain", () => {
+  // The preview domain is one site for every user; a node is the tenant's to
+  // modify, so the relay drops Domain itself rather than trusting the gateway.
+  const out = responseHeaders({ "set-cookie": ["a=1; Domain=preview.example.net; Path=/", "b=2;domain = .preview.example.net", "c=3; Path=/"] });
+  assert.deepEqual(out["set-cookie"], ["a=1; Path=/", "b=2", "c=3; Path=/"]);
 });

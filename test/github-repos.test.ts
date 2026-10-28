@@ -19,10 +19,10 @@ assert.deepEqual(userRepos[100], { slug: "bivysh/bivy", description: "Bivy", pri
 await assert.rejects(listGithubUserRepos("token", (async () => new Response("", { status: 401 })) as typeof fetch), /GitHub responded 401/);
 await assert.rejects(listGithubUserRepos("token", (async () => Response.json({})) as typeof fetch), /invalid repository listing/);
 
-const appRepo = { slug: "pettersj/janitor", description: "Bivy automation", private: true, defaultBranch: "trunk" };
+const appRepo = { slug: "pettersj/automation-bot", description: "Bivy automation", private: true, defaultBranch: "trunk" };
 const sources = {
   appRepos: async () => [appRepo],
-  userRepos: async () => [...userRepos, { ...appRepo, slug: "PETTERSJ/JANITOR" }],
+  userRepos: async () => [...userRepos, { ...appRepo, slug: "PETTERSJ/AUTOMATION-BOT" }],
   ghInstalled: async () => { throw new Error("Do not probe gh when credentials are available"); },
 };
 const combined = await discoverGithubRepos(sources);
