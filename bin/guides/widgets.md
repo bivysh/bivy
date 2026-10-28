@@ -37,6 +37,9 @@ session, put it in a plugin: `bivy guide extend-bivy`.
     bivy.expand()        full screen; bivy.collapse() to return
     bivy.call(name, args) a plugin tool offered to widgets (`bivy tools list`)
 
+- Put the content in the widget itself — swatches for colours, a preview for
+  layouts, the numbers on a slider — and do not repeat it as a list around it.
+  The starter is text buttons; change it to show what is being chosen.
 - `bivy.send` works only from a click or key press in the widget. Send a short,
   readable sentence ("I pick: B"), because it shows in the chat as theirs.
 - Save choices with `bivy.setState` (or `localStorage`, which is saved the same
