@@ -31,9 +31,11 @@ precacheAndRoute(self.__WB_MANIFEST);
 //  - /auth: full-page sign-in navigations (OAuth start/callback, magic-link
 //    consume) that must reach the server so it can 302 to GitHub / redirect
 //    back with the session. Mirrors the old `navigateFallbackDenylist`.
+//  - /widget-frame.html: the chat widget frame, whose sandboxing policy is a
+//    response header only the network copy carries.
 registerRoute(
   new NavigationRoute(createHandlerBoundToURL("index.html"), {
-    denylist: [/^\/api/, /^\/ws/, /^\/auth/],
+    denylist: [/^\/api/, /^\/ws/, /^\/auth/, /^\/widget-frame\.html$/],
   }),
 );
 

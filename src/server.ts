@@ -45,6 +45,8 @@ import type { AppPin, AppReview, ReviewShot } from "./apps/types.js";
 import { createDisplayHost } from "./apps/display.js";
 import { createAppCommands } from "./controllers/app-commands.js";
 import { createFileCommands } from "./controllers/file-commands.js";
+import { createWidgetCommands } from "./controllers/widget-commands.js";
+import { WidgetStateStore } from "./widgets/state.js";
 import { bindClientCommandRoutes } from "./http/client-command-routes.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
 import { aggregateModelCatalog, catalogReplyEvent, warmSessionCatalog, mergeProviderCatalog } from "./runtime/model-catalog.js";
@@ -2635,6 +2637,13 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     if (record) return harnessDirFor(record);
     const meta = metadata.getSession(id);
     return meta?.worktree || meta?.workspace || runTerms.liveRun(id)?.workspace;
+  }),
+  // Chat widgets: their saved state, and tools plugins provide to them.
+  ...createWidgetCommands({
+    store: new WidgetStateStore(path.join(appDir, "widget-state")),
+    callTool: async (_sessionId, name) => {
+      throw new Error(`No plugin on this machine provides a tool called "${name}".`);
+    },
   }),
   ...createArtifactCommands({
     sessionIds: () => new Set([...metadata.listSessions().map((session) => session.id), ...[...openSessions.values()].map((record) => record.id)]),

@@ -47,11 +47,14 @@ export const BIVY_AGENT_NOTE = [
     "workspace; a remote `https://` image works too. No tool call needed.",
   "- Show a FILE (a report, a log, data they asked for) inside your reply: put " +
     '`::view{src=relative/path.pdf caption="what it is"}` on its own line, where you want it. Same workspace-only ' +
-    "rule. A `.csv`/`.tsv` renders as a table; anything else arrives as a download.",
+    "rule. A `.csv`/`.tsv` renders as a table, `.html` runs as a widget (below); anything else arrives as a download.",
   "- Show a NUMBER or a CHART inside your reply: fence a spec as ```bivy. A number is " +
     '`{"type":"metric","value":"4 650 kWh","label":"per year"}`; a chart is a plain Vega-Lite spec with its data ' +
     "inline, or pointing at a workspace data file with `\"data\":{\"url\":\"data/use.csv\"}` (.csv/.tsv/.json). " +
     "A chart cannot fetch a remote URL.",
+  "- Let the user DO something in your reply (pick, fill in, tick off) with a widget: a small HTML page shown with " +
+    "`::view{src=widgets/x.html}` that runs inside the message and can reply to you. `bivy widget init <file>` " +
+    "starts one; `bivy guide widgets` has the rest.",
   "- Send a file WITHOUT writing a reply (or from a script): run " +
     '`bivy attach <path> [--caption "short note"]`, or call the `attach_to_chat` tool if you have it.',
   "- Put a published app's preview INSIDE your reply: `::view{app=<app id>}` on its own line. It frames the app " +

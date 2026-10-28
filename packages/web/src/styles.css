@@ -3835,3 +3835,27 @@ p.setup-note .btn.link { min-height: 44px; margin-block: calc((1lh - 44px) / 2);
 }
 .inline-app figcaption { display: flex; gap: var(--space-2); align-items: baseline; justify-content: space-between; margin-top: var(--space-2); }
 .inline-app-open { flex: none; }
+/* A widget the agent placed: the same bordered figure as a chart or an inline
+   app. The frame grows to its content (the widget reports its height); the
+   placeholder holds the declared height so the message does not jump. */
+.widget-component { margin: 0; }
+.widget-frame {
+  display: block; width: 100%; border: 1px solid var(--line);
+  border-radius: var(--radius-sm); background: var(--surface);
+  transition: height var(--dur-fast) var(--ease-standard);
+}
+.widget-placeholder { background: var(--surface-2); }
+.widget-component figcaption { margin-top: var(--space-2); }
+/* Full screen: the same element, restyled in place, so the widget keeps
+   running instead of reloading in a new parent. */
+.widget-component[data-mode="fullscreen"] {
+  position: fixed; inset: 0; z-index: var(--z-modal);
+  display: flex; flex-direction: column; background: var(--bg);
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+.widget-component[data-mode="fullscreen"] .widget-frame { flex: 1; height: auto; border: 0; border-radius: 0; }
+.widget-toolbar {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-2);
+  min-height: var(--toolbar-h); padding: 0 var(--space-3); border-bottom: 1px solid var(--line);
+}
+.widget-title { font-weight: var(--weight-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

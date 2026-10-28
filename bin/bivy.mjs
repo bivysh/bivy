@@ -2631,6 +2631,49 @@ async function cmdTitle(args = []) {
   console.log(c.green(`Renamed this session to "${body.title}".`));
 }
 
+// `bivy widget init <file.html>` writes a starter widget; `bivy widget state`
+// prints what this session's widgets saved (the user's choices and inputs).
+async function cmdWidget(args = []) {
+  const usage = "Usage: bivy widget init <file.html> | bivy widget state [--key <key>] [--session <id>] [--json]";
+  const [sub, ...rest] = args;
+  if (!sub || sub === "-h" || sub === "--help") {
+    console.log(`${usage}\n\nA widget is a small HTML page that runs inside your chat reply: a form, a picker, a checklist.\n  init   write a starter widget to <file.html>\n  state  what this session's widgets saved, keyed by widget\n\nShow one with ::view{src=<file.html>} on its own line. More: bivy guide widgets.`);
+    return;
+  }
+  const json = wantsJson(rest);
+  const fail = (error) => cliError(error, { json, paint: c.red });
+  if (sub === "init") {
+    const target = rest.find((a) => !a.startsWith("-"));
+    if (!target) return fail({ code: "usage", message: usage, exit: EXIT.usage });
+    if (fs.existsSync(target) && !rest.includes("--force")) return fail({ code: "exists", message: `${target} already exists.`, hint: "Pass --force to replace it.", exit: EXIT.conflict });
+    fs.mkdirSync(path.dirname(path.resolve(target)), { recursive: true });
+    const template = fs.readFileSync(path.join(__dirname, "templates", "widget.html"), "utf8").replaceAll("PATH", target);
+    fs.writeFileSync(target, template);
+    if (json) { console.log(JSON.stringify({ ok: true, path: target, show: `::view{src=${target}}` })); return; }
+    console.log(`${c.green("Wrote")} ${target}. Show it in your reply with ::view{src=${target}} on its own line.`);
+    return;
+  }
+  if (sub !== "state") return fail({ code: "usage", message: usage, exit: EXIT.usage });
+  const flags = parseSessionArgs(rest, ["--key", "--session"]);
+  if (flags.error) return fail({ code: "usage", message: flags.error, exit: EXIT.usage });
+  const sessionId = resolveAttachSessionId({ sessionFlag: flags.one("--session"), env: process.env });
+  if (!sessionId) return fail({ code: "no_session", message: "No session id.", hint: "Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.", next: "bivy sessions --json", exit: EXIT.usage });
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable });
+  const token = await sessionAuth(config, sessionId);
+  const res = await fetch(`${url(config)}/api/widgets/state.get`, {
+    method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify({ sessionId }),
+  }).catch((error) => error);
+  if (res instanceof Error) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node: ${res.message}`, next: "bivy status", exit: EXIT.unavailable });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok || body.error) return fail(sessionHttpError("Widget state", res.status, body));
+  const key = flags.one("--key");
+  const states = Object.fromEntries(Object.entries(body.states ?? {}).filter(([k]) => !key || k === key).map(([k, v]) => [k, { state: v.state, updatedAt: new Date(v.updatedAt).toISOString() }]));
+  if (json) { console.log(JSON.stringify({ states })); return; }
+  if (!Object.keys(states).length) { console.log(key ? `No widget saved state under ${key}.` : "No widget in this session has saved anything yet."); return; }
+  console.log(JSON.stringify(states, null, 2));
+}
+
 // Flags shared by the session commands: `--name value` pairs and bare switches,
 // with every other word collected as positional text.
 function parseSessionArgs(args, valueFlags) {
@@ -6544,6 +6587,9 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       break;
     case "title":
       await cmdTitle(args);
+      break;
+    case "widget":
+      await cmdWidget(args);
       break;
     case "notify":
       await cmdNotify(args);

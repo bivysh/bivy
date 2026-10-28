@@ -540,6 +540,20 @@ bivy ask "Sign in to GitHub" --url https://github.com/login/device --code ABCD-1
 bivy ask "ffmpeg needs a system install. Run this, then tap Done" --run "sudo apt-get install -y ffmpeg" --option Done --option "It failed"
 ```
 
+### `bivy widget <init|state>`
+
+Widgets are small HTML pages an agent shows inside its reply (`::view{src=…}`)
+that run in the chat and can answer back. See [Chat widgets](widgets.md).
+
+```bash
+bivy widget init widgets/pick.html     # write a starter widget (--force to replace)
+bivy widget state [--key <key>]        # what this session's widgets saved
+```
+
+`state` reads what each widget saved with `bivy.setState` or `localStorage`, keyed
+by widget, so the agent can see what the user picked or filled in. The MCP tool
+is `widget_state`. `--json` prints `{"states": {<key>: {"state", "updatedAt"}}}`.
+
 ### `bivy app <subcommand>`
 
 Live previews of what the agent built: a web server's port, a static build, a
