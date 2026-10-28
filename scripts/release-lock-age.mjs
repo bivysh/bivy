@@ -50,7 +50,7 @@ export function npmLockedPackages(lock) {
 }
 
 async function publishedAt({ name, version }) {
-  const response = await fetch(`https://registry.npmjs.org/${name.replace("/", "%2F")}`, {
+  const response = await fetch(`https://registry.npmjs.org/${name.replaceAll("/", "%2F")}`, {
     headers: { accept: "application/json" },
     signal: AbortSignal.timeout(30_000),
   });
