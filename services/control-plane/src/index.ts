@@ -722,8 +722,9 @@ function sendDeviceSignedIn(res: Response, email: string): void {
 // someone forwarded to them.
 const USER_CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXZ23456789";
 function deviceUserCode(deviceId: string): string {
-  const digest = createHash("sha256").update(`device-user-code:${deviceId}`).digest();
-  const chars = [...digest.subarray(0, 8)].map((byte) => USER_CODE_ALPHABET[byte % USER_CODE_ALPHABET.length]);
+  // The id is `dev_<random uuid>`; its hex digits are already random.
+  const hex = deviceId.replace(/[^0-9a-f]/gi, "").slice(-16).padStart(16, "0");
+  const chars = (hex.match(/../g) ?? []).map((pair) => USER_CODE_ALPHABET[parseInt(pair, 16) % USER_CODE_ALPHABET.length]);
   return `${chars.slice(0, 4).join("")}-${chars.slice(4).join("")}`;
 }
 
@@ -1070,7 +1071,13 @@ app.post("/auth/device/poll", asyncHandler(async (req, res) => {
 // The approval page's two buttons. The single-use approval token in the form is
 // what authorizes them, so a cross-site post without it does nothing.
 const deviceApprovalForm = express.urlencoded({ extended: false, limit: "4kb" });
+async function deviceApprovalRateLimited(req: Request, res: Response): Promise<boolean> {
+  if (!(await store.rateLimitExceeded("device-approval-ip", clientIp(req), 30, 60_000))) return false;
+  res.status(429).type("text").send("Too many requests. Please wait a minute and try again.");
+  return true;
+}
 app.post("/auth/device/approve", deviceApprovalForm, asyncHandler(async (req, res) => {
+  if (await deviceApprovalRateLimited(req, res)) return;
   const approved = await store.approveDeviceLogin(String(req.body?.approval ?? ""));
   if (!approved) return sendSignInFailed(res, 410, "This sign-in request has expired or was already used. Start signing in again from your terminal or app.", "device_approval");
   const account = await store.getAccount(approved.accountId);
@@ -1079,6 +1086,7 @@ app.post("/auth/device/approve", deviceApprovalForm, asyncHandler(async (req, re
 }));
 
 app.post("/auth/device/deny", deviceApprovalForm, asyncHandler(async (req, res) => {
+  if (await deviceApprovalRateLimited(req, res)) return;
   await store.denyDeviceLogin(String(req.body?.approval ?? ""));
   recordFunnelEvent("sign_in_failed", "device_denied");
   res.setHeader("Cache-Control", "no-store");
