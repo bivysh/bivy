@@ -43,6 +43,7 @@
     "lint:all": "eslint . --cache --cache-location node_modules/.cache/eslint/",
     "build:web": "pnpm --filter @bivy/web run build",
     "dev:web": "pnpm --filter @bivy/web run dev",
+    "dev:all": "node scripts/dev-all.mjs",
     "test:core": "pnpm --filter @bivy/core run test",
     "typecheck:web": "pnpm --filter @bivy/core run typecheck && pnpm --filter @bivy/web run typecheck",
     "check:licenses": "node scripts/check-licenses.mjs",

@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Make Bivy do more for you, today
+    url: https://github.com/bivysh/bivy/blob/main/docs/plugins.md
+    about: A widget, tool, theme, guide or agent just for you is a plugin your own agent can build and install on your machine — no issue needed. Ask it in any session.
+  - name: Questions and ideas
+    url: https://github.com/bivysh/bivy/discussions
+    about: Ask, share a plugin you made, or think out loud.
+  - name: Report a security vulnerability
+    url: https://github.com/bivysh/bivy/security/policy
+    about: Please report vulnerabilities privately, as SECURITY.md describes.

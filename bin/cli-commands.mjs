@@ -64,6 +64,7 @@ export const COMMANDS = [
 
   // Agents and sessions
   { name: "run", group: "sessions", scope: "node", usage: "run <agent> [--chat] [--name …] [--model …] [--node …] [--workspace …]", summary: "Run an agent (native CLI/TUI) as a session the app can see" },
+  { name: "contribute", group: "sessions", scope: "node", json: true, usage: "contribute [<issue>] [--agent …] [--dir …] [--no-start]", summary: "Work on Bivy itself with your agent: a branch of bivysh/bivy and a session on the issue" },
   { name: "exec", group: "sessions", scope: "node", json: true, usage: 'exec "<prompt>" [--agent …] [--session …]', summary: "One-shot headless session: prints the answer to stdout" },
   { name: "send", group: "sessions", scope: "node", json: true, usage: 'send <id> "<message>"', summary: "Send a prompt to an existing session and stream the reply" },
   { name: "tui", group: "sessions", scope: "node", usage: "tui", summary: "Sessions across your machines in the terminal: transcripts, approvals, messages" },

@@ -147,10 +147,11 @@ const config: UserConfig = {
     sourcemap: false,
   },
   server: {
-    // `npm run dev:web` proxies API/WS to a locally running node daemon.
+    // `npm run dev:web` proxies API/WS to a locally running node daemon:
+    // the default port, or the one `pnpm dev:all` started (BIVY_DEV_NODE_PORT).
     proxy: {
-      "/api": "http://localhost:4317",
-      "/ws": { target: "ws://localhost:4317", ws: true },
+      "/api": `http://localhost:${process.env.BIVY_DEV_NODE_PORT ?? "4317"}`,
+      "/ws": { target: `ws://localhost:${process.env.BIVY_DEV_NODE_PORT ?? "4317"}`, ws: true },
     },
   },
 };
