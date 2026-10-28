@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A tab whose session has ended (signed out on another device, or the account was deleted) now signs out, instead of showing cached sessions and a machine that never answers.
 
+### Changed
+
+- Cloud computers include Chromium, so agents there can check what they built: `bivy widget shot`, and `bivy app shot` and review-card pictures when you turn on agent screenshots.
+
 ## [0.21.19] - 2026-10-28
 
 ### Changed

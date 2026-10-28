@@ -41,10 +41,14 @@ LABEL org.opencontainers.image.description="Credential-free prebuilt Bivy epheme
 # Changing OS_PATCH_EPOCH (CI passes the ISO week) re-runs this layer, so cached
 # builds still pick up Debian security updates the base image hasn't shipped yet.
 ARG OS_PATCH_EPOCH=
+# Chromium lets agents check what they built (`bivy app shot` when the user
+# allows it, `bivy widget shot`, review card pictures); a cloud computer has
+# no browser of its own.
 RUN echo "os patch epoch: ${OS_PATCH_EPOCH:-unset}" \
   && apt-get update -qq \
   && apt-get upgrade -y -qq \
   && apt-get install -y -qq --no-install-recommends ca-certificates curl git openssh-client tini \
+     chromium fonts-liberation \
   && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/bivy-latest.tar.gz /tmp/bivy.tar.gz
 # Agent SDK bridges install outside the Bivy package and outside the node's
