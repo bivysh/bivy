@@ -526,7 +526,7 @@ jobs:
           node-version: '22.19.0'
           cache: npm
           cache-dependency-path: services/control-plane/package-lock.json
-      - run: npm ci
+      - run: npm ci --ignore-scripts
         working-directory: services/control-plane
       - run: npm audit --omit=dev --audit-level=high
         working-directory: services/control-plane
@@ -552,7 +552,7 @@ jobs:
           node-version: '22.19.0'
           cache: npm
           cache-dependency-path: services/fleet/package-lock.json
-      - run: npm ci
+      - run: npm ci --ignore-scripts
         working-directory: services/fleet
       - run: npm audit --omit=dev --audit-level=high
         working-directory: services/fleet
@@ -578,9 +578,11 @@ jobs:
           cache-dependency-path: |
             services/relay/package-lock.json
             services/control-plane/package-lock.json
-      - run: npm ci
+      # --ignore-scripts skips the postinstall that builds automation-core; the
+      # relay suites boot a control plane, so build it explicitly.
+      - run: npm ci --ignore-scripts && npm run build:automation-core
         working-directory: services/control-plane
-      - run: npm ci
+      - run: npm ci --ignore-scripts
         working-directory: services/relay
       - run: npm audit --omit=dev --audit-level=high
         working-directory: services/relay
@@ -604,8 +606,8 @@ jobs:
       - name: Install services
         run: >-
           node scripts/ci-parallel.mjs
-          "npm ci --prefix services/control-plane"
-          "npm ci --prefix services/relay"
+          "npm ci --ignore-scripts --prefix services/control-plane && npm run build:automation-core --prefix services/control-plane"
+          "npm ci --ignore-scripts --prefix services/relay"
       - name: Remote e2e suites
         run: >-
           node scripts/ci-parallel.mjs

@@ -69,6 +69,12 @@ allowBuilds:
   # preinstall is literally `echo 'preinstall: no-op'`.
   "@google/genai": false
 
+# Refuse any version published less than a day ago (minutes). This is pnpm 11's
+# default, stated here because scripts/release-lock-age.mjs holds the published
+# artifact, which npm resolves, to the same cooldown. Exclusions are exact
+# versions of agent SDKs taken by hand on release day.
+minimumReleaseAge: 1440
+
 minimumReleaseAgeExclude:
   - '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286 || 0.3.310 || 0.3.311 || 0.3.312'
   - '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.246 || 0.3.252 || 0.3.258 || 0.3.263 || 0.3.278 || 0.3.284 || 0.3.285 || 0.3.286 || 0.3.310 || 0.3.311 || 0.3.312'

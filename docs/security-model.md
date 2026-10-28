@@ -497,6 +497,27 @@ Slack `xox[baprs]-…`).
 
 This is pattern-based. It does not catch a secret shape Bivy has no pattern for.
 
+## Supply chain
+
+Bivy installs third-party code in three places: the repo's own dependencies,
+the published release, and the agent bridges a node installs on first use.
+
+- **Cooldown.** pnpm refuses any version younger than `minimumReleaseAge`
+  (`pnpm-workspace.yaml`, one day). Release archives are resolved by npm, which
+  has no cooldown, so `scripts/release-lock-age.mjs` fails a release that
+  resolves a version neither in the reviewed `pnpm-lock.yaml` nor past that
+  same cooldown. Dependabot waits seven days before proposing a version.
+- **No install scripts.** pnpm builds only the packages allowlisted in
+  `allowBuilds`. Release archives, agent bridges (`src/agent-bridges.mjs`), the
+  service images and CI's service installs all run npm with `--ignore-scripts`.
+- **Pinned CI.** Every GitHub Action is pinned to a commit SHA; release
+  archives carry build-provenance attestations and a `SHA256SUMS` that the
+  installer checks.
+
+Agent bridges pin their top-level version but resolve transitive dependencies
+on the user's machine at install time, so they get the install-script guard but
+not the cooldown.
+
 ## Known limitations for 0.x
 
 Bivy is early 0.x software. Know these before trusting it with anything

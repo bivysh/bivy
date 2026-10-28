@@ -19,6 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
+import { assertReleaseLockAged } from "./release-lock-age.mjs";
 
 /** Platforms a release ships. Adding one is a row here. */
 export const ARCHIVE_TARGETS = [
@@ -87,10 +88,19 @@ function sha256File(file) {
   return crypto.createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 }
 
-async function download(url, dest) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`GET ${url}: ${res.status}`);
-  fs.writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
+/** GET `url` into `dest`. A stalled transfer is cut off and retried, never waited on forever. */
+async function download(url, dest, attempts = 3) {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+      if (!res.ok) throw new Error(`GET ${url}: ${res.status}`);
+      fs.writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
+      return;
+    } catch (error) {
+      if (attempt >= attempts) throw error;
+      console.warn(`GET ${url} failed (${error.message}); retrying (${attempt}/${attempts - 1})`);
+    }
+  }
 }
 
 /** Download (once) and verify the Node build for a target against nodejs.org's SHASUMS256. */
@@ -130,6 +140,7 @@ export async function buildArchives({ app, outDir, targets = ARCHIVE_TARGETS, co
     fs.mkdirSync(lockDir);
     fs.copyFileSync(path.join(app, "package.json"), path.join(lockDir, "package.json"));
     run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: lockDir });
+    await assertReleaseLockAged(path.join(lockDir, "package-lock.json"));
 
     const sums = path.join(cache, `SHASUMS256-v${NODE_VERSION}.txt`);
     if (!fs.existsSync(sums)) await download(`https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt`, sums);

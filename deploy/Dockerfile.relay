@@ -8,7 +8,9 @@ WORKDIR /app
 # deploys when a brand-new release (e.g. @sentry/node) hasn't fully propagated
 # to the registry CDN yet and its tarball 404s.
 COPY --chown=node:node services/relay/package.json services/relay/package-lock.json ./
-RUN npm ci
+# --ignore-scripts: no dependency needs an install script (esbuild falls back
+# to its JS shim), and a hijacked release's postinstall would otherwise run here.
+RUN npm ci --ignore-scripts
 COPY --chown=node:node services/relay/ ./
 # Bundle to plain JS at build time; the container runs `node`, not tsx.
 RUN npm run build
