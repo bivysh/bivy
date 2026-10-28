@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- The relay drops the `Domain` attribute from cookies a preview app sets, so one user's preview can't plant cookies on everyone else's previews under the shared preview domain, even from a modified node.
 - **GitHub mentions trigger runs for collaborators by default.** A mention from anyone on GitHub used to queue a run on your machine unless you had restricted it. Unset now means collaborators with write access; choose "Anyone on GitHub" in Settings → GitHub App to open it up again.
 - **A delegated run can't loosen its parent's safety.** `bivy delegate --approval never --sandbox danger-full-access` from a session in `risky` mode ran the child unattended and unsandboxed; children now keep the stricter of what they ask for and what the parent has. A project's `approvalFloor: autonomous` also stops `never`, which drops checks `autonomous` keeps.
 - The node's GitHub App setup pages check the Host and Origin like the API does, and the callback only finishes a setup this node started, so another site can no longer swap in an app and private key of its own.

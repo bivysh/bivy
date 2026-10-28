@@ -21,6 +21,17 @@ function headers(input: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
   return Object.fromEntries(Object.entries(input).filter(([key]) => !blocked.has(key) && !key.startsWith("x-forwarded-") && key !== "forwarded"));
 }
 
+/** Response headers from a node's app. A cookie's Domain attribute is dropped,
+ * so it stays host-only: the preview domain is one registrable site for every
+ * user, and `Domain=<preview domain>` would plant a cookie on everyone else's
+ * previews. The node strips it too, but a node is the tenant's to modify. */
+export function responseHeaders(input: http.IncomingHttpHeaders): http.OutgoingHttpHeaders {
+  const out = headers(input);
+  const cookies = out["set-cookie"];
+  if (Array.isArray(cookies)) out["set-cookie"] = cookies.map((cookie) => cookie.replace(/;\s*domain\s*=[^;]*/gi, ""));
+  return out;
+}
+
 /** Preview delivery is a separate HTTPS trust boundary, NOT encrypted session
  * frames. Only this dedicated domain accepts browser traffic. The authenticated
  * node connection supplies routing; one-use tickets attach bounded byte streams
@@ -149,7 +160,7 @@ export class PreviewRelay {
     const send = (retry: boolean): void => {
       upstream = this.request(req, peer, abort.signal, pooled ? "pooled" : "once");
       upstream.once("response", (response) => {
-        res.writeHead(response.statusCode ?? 502, headers(response.headers));
+        res.writeHead(response.statusCode ?? 502, responseHeaders(response.headers));
         response.on("error", () => res.destroy());
         response.pipe(res);
       });
@@ -198,7 +209,7 @@ export class PreviewRelay {
     const upstream = this.request(req, route.peer, abort.signal, "upgrade");
     socket.once("close", () => { abort.abort(); upstream.destroy(); });
     upstream.once("upgrade", (response, peer, upstreamHead) => {
-      const result = { ...headers(response.headers), connection: "Upgrade", upgrade: "websocket" };
+      const result = { ...responseHeaders(response.headers), connection: "Upgrade", upgrade: "websocket" };
       socket.write(`HTTP/1.1 101 Switching Protocols\r\n${Object.entries(result).flatMap(([key, value]) => value === undefined ? [] : (Array.isArray(value) ? value : [value]).map((v) => `${key}: ${v}\r\n`)).join("")}\r\n`);
       if (upstreamHead.length) socket.write(upstreamHead);
       if (head.length) peer.write(head);
