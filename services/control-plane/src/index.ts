@@ -4782,7 +4782,10 @@ app.post("/node/sibling-link-grant", requireNode, asyncHandler(async (req, res) 
   const owns = (await store.listNodes(node.accountId)).some((n) => n.id === siblingId);
   if (!owns) return res.status(404).json({ error: "Unknown sibling node" });
   const grant = await store.createLinkGrant(node.accountId, siblingId, LINK_GRANT_TTL_MS);
-  res.json({ ok: true, grant, nodeId: siblingId, relayUrl: relayUrlForNode(siblingId) });
+  // `grant` mints relay tickets over TLS; `pairGrant` is what crosses the relay.
+  const devicePublicKeyB64 = String(req.body?.devicePublicKeyB64 ?? "").trim();
+  const pairGrant = devicePublicKeyB64 ? await store.createPairGrant(node.accountId, siblingId, devicePublicKeyB64) : undefined;
+  res.json({ ok: true, grant, ...(pairGrant ? { pairGrant } : {}), nodeId: siblingId, relayUrl: relayUrlForNode(siblingId) });
 }));
 
 // The current owner declares (or clears) the standby for a session it owns.
@@ -4850,16 +4853,19 @@ app.post("/node/relay-ticket", requireNode, asyncHandler(async (req, res) => {
   }
 }));
 
-// A signed-in browser/app mints a short-lived, node-scoped pairing grant. The
-// client sends this grant to the node over the relay for account-based pairing,
-// so the relay never sees the user's long-lived account session token.
+// A signed-in browser/app mints a pairing grant for one node and one device
+// key. The client sends it to the node over the relay in `pair.account`; the
+// relay can read it, so it is bound to the device key and single-use (see
+// createPairGrant) and never accepted as a bearer anywhere else.
 app.post("/client/pair-grant", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const nodeId = String(req.body?.nodeId ?? "").trim();
   if (!nodeId) return res.status(400).json({ error: "Missing nodeId" });
+  const devicePublicKeyB64 = String(req.body?.devicePublicKeyB64 ?? "").trim();
+  if (!devicePublicKeyB64) return res.status(400).json({ error: "Missing devicePublicKeyB64. Update Bivy to pair this device." });
   const ownsNode = (await store.listNodes(account.id)).some((node) => node.id === nodeId);
   if (!ownsNode) return res.status(404).json({ error: "Unknown node" });
-  const grant = await store.createLinkGrant(account.id, nodeId, 2 * 60_000);
+  const grant = await store.createPairGrant(account.id, nodeId, devicePublicKeyB64);
   res.json({ ok: true, grant, nodeId, relayUrl: relayUrlForNode(nodeId) });
 }));
 
@@ -4880,16 +4886,22 @@ app.post("/client/link-grant", requireUser, asyncHandler(async (req, res) => {
   res.json({ ok: true, grant, nodeId, relayUrl: relayUrlForNode(nodeId) });
 }));
 
-// Account-session pairing: a node asks whether a browser/app grant belongs to
-// the same account and is scoped to this node. If yes, the node may trust that
+// Account-session pairing: a node asks whether a pair grant was minted for this
+// node and this device key by its own account. If yes, the node may trust that
 // device and wrap its room key over the relay, removing the QR bootstrap step
-// for signed-in users.
+// for signed-in users. Only pair grants count: any other token here would have
+// crossed the relay, which could replay it with a key of its own.
 app.post("/node/authorize-client", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const token = String(req.body?.sessionToken ?? "").trim();
-  const client = await store.resolveClient(token);
-  if (!client || client.accountId !== node.accountId || (client.nodeId && client.nodeId !== node.id))
-    return res.status(403).json({ ok: false, error: "This device isn't authorized for this node." });
+  const devicePublicKeyB64 = String(req.body?.devicePublicKeyB64 ?? "").trim();
+  const client = await store.consumePairGrant(token, node.id, devicePublicKeyB64);
+  if (!client || client.accountId !== node.accountId) {
+    const error = token && !token.startsWith("pgr_")
+      ? "This device runs an older Bivy that pairs insecurely. Update it, then try again."
+      : "This device isn't authorized for this node.";
+    return res.status(403).json({ ok: false, error });
+  }
   // Transient CLI/relay clients (`bivy run --node`, sibling replicas, probes)
   // pair the same way a phone/browser does, but they are short-lived tool
   // connections — not user devices. Registering them as paired devices spams
@@ -4897,8 +4909,7 @@ app.post("/node/authorize-client", requireNode, asyncHandler(async (req, res) =>
   // never gets cleaned up. When the node marks the pairing ephemeral, authorize
   // it (deliver the room key) but skip the durable device record.
   const ephemeral = req.body?.ephemeral === true;
-  const devicePublicKeyB64 = String(req.body?.devicePublicKeyB64 ?? "").trim();
-  if (devicePublicKeyB64 && !ephemeral) {
+  if (!ephemeral) {
     try {
       await store.registerPairedDevice(node.accountId, devicePublicKeyB64, String(req.body?.label ?? "Device"));
     } catch (err) {
