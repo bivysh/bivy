@@ -1,0 +1,243 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https:; style-src 'unsafe-inline' https:; img-src data: blob: https:; font-src data: https:; media-src data: blob: https:; connect-src 'none'; frame-src 'none'; worker-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'">
+<title>Widget</title>
+<!--
+  The frame every chat widget runs in. See docs/widgets.md.
+
+  Its policy travels with it, in the meta tag above, so it holds whichever
+  server hands the page out (the control plane, a node's direct listener, Vite):
+  no network calls, frames or form submissions. The page is always framed with
+  the `sandbox` attribute (no allow-same-origin), so whatever it loads runs in an
+  OPAQUE origin and can never read the app's storage, cookies or DOM; servers
+  also send the `sandbox` directive as a header, which covers the page opened
+  any other way. A meta policy cannot be loosened by markup written after it.
+
+  The handshake is the MCP Apps sandbox proxy's: this page says
+  `ui/notifications/sandbox-proxy-ready`, the host answers with
+  `ui/notifications/sandbox-resource-ready` carrying the widget's HTML, and the
+  page replaces itself with that document — with the Bivy runtime (window.bivy)
+  and a base stylesheet written in first. From then on the widget talks to the
+  host directly: JSON-RPC 2.0 over postMessage, the MCP Apps protocol.
+-->
+<script>
+(function () {
+  // Top level, or opened by something that is not a frame: there is no host
+  // to talk to, so there is nothing to show.
+  if (window.parent === window) return;
+
+  // The Bivy runtime, written into the widget document before the widget's
+  // own markup. Serialized with Function#toString, so it must not close over
+  // anything from this file.
+  function runtime() {
+    var host = window.parent;
+    var seq = 0;
+    var pending = {};
+    var context = {};
+    var listeners = {};
+    var memory = {};
+    var saveTimer = 0;
+    var initialized = false;
+    var readyCallbacks = [];
+
+    function emit(name, detail) {
+      (listeners[name] || []).slice().forEach(function (fn) { try { fn(detail); } catch (e) { console.error(e); } });
+      try { window.dispatchEvent(new CustomEvent("bivy:" + name, { detail: detail })); } catch (e) { /* old browser */ }
+    }
+
+    function request(method, params) {
+      seq += 1;
+      var id = "bivy-" + seq;
+      return new Promise(function (resolve, reject) {
+        pending[id] = { resolve: resolve, reject: reject };
+        host.postMessage({ jsonrpc: "2.0", id: id, method: method, params: params || {} }, "*");
+      });
+    }
+    function notify(method, params) {
+      host.postMessage({ jsonrpc: "2.0", method: method, params: params || {} }, "*");
+    }
+
+    var root = document.documentElement;
+    function applyContext(next) {
+      for (var key in next) context[key] = next[key];
+      var vars = (context.styles && context.styles.variables) || {};
+      for (var name in vars) if (vars[name]) root.style.setProperty(name, vars[name]);
+      if (context.theme) {
+        root.setAttribute("data-theme", context.theme);
+        root.style.colorScheme = context.theme;
+      }
+      if (context.displayMode) root.setAttribute("data-display-mode", context.displayMode);
+    }
+
+    var api = {
+      /** The input the agent placed the widget with (the spec's `data`). */
+      data: {},
+      /** What this widget saved with setState, the same on every device. */
+      state: {},
+      theme: "light",
+      context: context,
+      /** Run once the widget has its data, theme and saved state. */
+      ready: function (fn) {
+        if (initialized) fn(api);
+        else readyCallbacks.push(fn);
+      },
+      on: function (name, fn) { (listeners[name] = listeners[name] || []).push(fn); },
+      /** Send a message to the agent as the user. Works from a click or a key
+       *  press inside the widget; Bivy refuses one the user did not cause. */
+      send: function (text) {
+        return request("ui/message", { role: "user", content: [{ type: "text", text: String(text) }] });
+      },
+      /** Save state for this widget. Replaces it; pass a function to update. */
+      setState: function (next) {
+        api.state = typeof next === "function" ? next(api.state) : next;
+        return request("bivy/state/set", { state: api.state });
+      },
+      openLink: function (url) { return request("ui/open-link", { url: String(url) }); },
+      expand: function () { return request("ui/request-display-mode", { mode: "fullscreen" }); },
+      collapse: function () { return request("ui/request-display-mode", { mode: "inline" }); },
+      /** Call a tool a Bivy plugin provides on the machine. */
+      call: function (name, args) {
+        return request("tools/call", { name: String(name), arguments: args || {} }).then(function (result) {
+          return result && result.structuredContent !== undefined ? result.structuredContent : result;
+        });
+      },
+      request: request,
+      notify: notify,
+    };
+    window.bivy = api;
+
+    // Storage. An opaque origin has no localStorage, and plenty of pages use
+    // it; this one is kept in the widget's saved state, so it survives a
+    // reload and follows the person to their other devices.
+    function persistStorage() {
+      clearTimeout(saveTimer);
+      saveTimer = setTimeout(function () {
+        var next = {};
+        for (var key in api.state) next[key] = api.state[key];
+        next.localStorage = memory;
+        api.setState(next).catch(function () { /* the widget still works */ });
+      }, 300);
+    }
+    var storage = {
+      getItem: function (k) { k = String(k); return Object.prototype.hasOwnProperty.call(memory, k) ? memory[k] : null; },
+      setItem: function (k, v) { memory[String(k)] = String(v); persistStorage(); },
+      removeItem: function (k) { delete memory[String(k)]; persistStorage(); },
+      clear: function () { memory = {}; persistStorage(); },
+      key: function (i) { return Object.keys(memory)[i] || null; },
+    };
+    Object.defineProperty(storage, "length", { get: function () { return Object.keys(memory).length; } });
+    ["localStorage", "sessionStorage"].forEach(function (name) {
+      try { Object.defineProperty(window, name, { configurable: true, get: function () { return storage; } }); } catch (e) { /* keep the native one */ }
+    });
+
+    window.addEventListener("message", function (event) {
+      if (event.source !== host) return;
+      var msg = event.data;
+      if (!msg || msg.jsonrpc !== "2.0") return;
+      if (msg.id !== undefined && pending[msg.id] && !msg.method) {
+        var call = pending[msg.id];
+        delete pending[msg.id];
+        if (msg.error) call.reject(Object.assign(new Error(msg.error.message || "Refused"), { code: msg.error.code }));
+        else call.resolve(msg.result);
+        return;
+      }
+      if (msg.method === "ui/notifications/host-context-changed") {
+        applyContext(msg.params || {});
+        api.theme = context.theme || api.theme;
+        emit("context", context);
+      } else if (msg.method === "ui/notifications/tool-input") {
+        api.data = (msg.params && msg.params.arguments) || {};
+        emit("data", api.data);
+      } else if (msg.method === "ui/resource-teardown" && msg.id !== undefined) {
+        emit("teardown", msg.params || {});
+        host.postMessage({ jsonrpc: "2.0", id: msg.id, result: {} }, "*");
+      }
+    });
+
+    // Tell the host how tall the content is, so the frame fits it.
+    var lastHeight = 0;
+    function measure() {
+      var height = Math.ceil(Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0));
+      if (height && height !== lastHeight) {
+        lastHeight = height;
+        notify("ui/notifications/size-changed", { width: Math.ceil(document.documentElement.scrollWidth), height: height });
+      }
+    }
+    var scheduled = false;
+    function schedule() {
+      if (scheduled) return;
+      scheduled = true;
+      requestAnimationFrame(function () { scheduled = false; measure(); });
+    }
+    if (typeof ResizeObserver === "function") new ResizeObserver(schedule).observe(document.documentElement);
+    window.addEventListener("load", schedule);
+
+    request("ui/initialize", {
+      protocolVersion: "2026-01-26",
+      appCapabilities: { availableDisplayModes: ["inline", "fullscreen"] },
+      clientInfo: { name: "bivy-widget-runtime", version: "1" },
+    }).then(function (result) {
+      var ctx = (result && result.hostContext) || {};
+      applyContext(ctx);
+      api.theme = ctx.theme || api.theme;
+      var bivyContext = ctx.bivy || {};
+      api.data = bivyContext.data || {};
+      api.state = bivyContext.state && typeof bivyContext.state === "object" ? bivyContext.state : {};
+      if (api.state.localStorage && typeof api.state.localStorage === "object") memory = api.state.localStorage;
+      notify("ui/notifications/initialized", {});
+      initialized = true;
+      readyCallbacks.splice(0).forEach(function (fn) { try { fn(api); } catch (e) { console.error(e); } });
+      emit("ready", api);
+      schedule();
+    }, function (error) { console.error("Bivy did not answer:", error); });
+  }
+
+  // Bivy's look, at zero specificity: a plain HTML page reads like the rest of
+  // the app, and any rule the widget writes wins. The values are the app's
+  // own design tokens, sent by the host in ui/initialize.
+  var BASE_CSS = [
+    ":where(html){background:var(--surface);color:var(--ink);font-family:var(--font-sans);font-size:var(--text-base);line-height:var(--lh-base);-webkit-text-size-adjust:100%}",
+    ":where(body){margin:0;padding:var(--space-3)}",
+    ":where(*,*::before,*::after){box-sizing:border-box}",
+    ":where(h1,h2,h3,h4){margin:0 0 var(--space-2);line-height:1.25;font-weight:var(--weight-semibold)}",
+    ":where(h1){font-size:var(--text-xl)}:where(h2){font-size:var(--text-lg)}:where(h3,h4){font-size:var(--text-md)}",
+    ":where(p){margin:0 0 var(--space-2)}:where(p:last-child){margin-bottom:0}",
+    ":where(a){color:var(--accent)}",
+    ":where(small,.muted){color:var(--muted)}",
+    ":where(button,input,select,textarea){font:inherit;color:inherit}",
+    ":where(button){min-height:36px;padding:0 var(--space-3);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--surface-2);cursor:pointer}",
+    ":where(button:hover){background:var(--surface-3)}",
+    ":where(button.primary,button[type=submit]){background:var(--accent);border-color:var(--accent);color:var(--accent-contrast)}",
+    ":where(button:disabled){opacity:.5;cursor:default}",
+    ":where(input:not([type=checkbox]):not([type=radio]):not([type=range]),select,textarea){min-height:36px;padding:var(--space-1) var(--space-2);border:1px solid var(--line-strong);border-radius:var(--radius-md);background:var(--surface)}",
+    ":where(:focus-visible){outline:2px solid var(--focus-ring);outline-offset:2px}",
+    ":where(table){border-collapse:collapse;width:100%}:where(th,td){padding:var(--space-1) var(--space-2);border-bottom:1px solid var(--line);text-align:left}",
+    ":where(.card){padding:var(--space-3);border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface)}",
+    ":where(.row){display:flex;gap:var(--space-2);align-items:center;flex-wrap:wrap}",
+    ":where(.stack){display:flex;flex-direction:column;gap:var(--space-2)}",
+  ].join("\n");
+
+  function boot(event) {
+    if (event.source !== window.parent) return;
+    var msg = event.data;
+    if (!msg || msg.jsonrpc !== "2.0" || msg.method !== "ui/notifications/sandbox-resource-ready") return;
+    window.removeEventListener("message", boot);
+    var html = String((msg.params && msg.params.html) || "");
+    // The doctype has to come first or the widget renders in quirks mode, so it
+    // is lifted off the widget and written ahead of the runtime.
+    html = html.replace(/^\s*<!doctype[^>]*>/i, "");
+    var close = "</" + "script>";
+    document.open();
+    document.write("<!doctype html><script>(" + runtime.toString() + ")();" + close + "<style>" + BASE_CSS + "</style>" + html);
+    document.close();
+  }
+  window.addEventListener("message", boot);
+  window.parent.postMessage({ jsonrpc: "2.0", method: "ui/notifications/sandbox-proxy-ready", params: {} }, "*");
+})();
+</script>
+</head>
+<body></body>
+</html>

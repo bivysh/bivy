@@ -359,7 +359,7 @@ const EntryView = memo(function EntryView({
     setMounts((current) => (current.length === found.length && current.every((n, i) => n === found[i]) ? current : found));
   }, [entry.role, html]);
   const components = mounts.map((node, i) => createPortal(
-    <MessageComponent placement={placementOf(node)} refs={entry.imageRefs} sessionId={sessionId ?? null} />,
+    <MessageComponent placement={placementOf(node)} refs={entry.imageRefs} sessionId={sessionId ?? null} streaming={entry.streaming} />,
     node,
     `md-component-${i}`,
   ));

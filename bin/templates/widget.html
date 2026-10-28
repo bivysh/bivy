@@ -1,0 +1,56 @@
+<!doctype html>
+<!--
+  A Bivy chat widget. Show it in your reply with:
+
+    ::view{src=PATH}
+
+  or, to hand it data:
+
+    ```bivy
+    {"type":"widget","url":"PATH","data":{"question":"Which one?","options":["A","B"]}}
+    ```
+
+  It runs sandboxed inside the chat with the app's look already applied (plain
+  buttons, inputs and tables are styled; use var(--accent), var(--muted), …).
+  window.bivy:
+    bivy.ready(fn)        run fn once data, theme and saved state are in
+    bivy.data             what you placed it with
+    bivy.state            what it saved; bivy.setState(obj) saves (same on every device)
+    bivy.send(text)       reply to you as the user — only from a click or key press
+    bivy.openLink(url)    open a page in a new tab
+    bivy.expand()         go full screen (bivy.collapse() to return)
+  localStorage works and is saved with the widget's state. Network requests do
+  not; scripts, styles and images from https:// CDNs do.
+  `bivy guide widgets` has more.
+-->
+<html>
+<body>
+  <div class="stack">
+    <strong id="question"></strong>
+    <div class="row" id="options"></div>
+    <small id="status"></small>
+  </div>
+  <script>
+    bivy.ready(function () {
+      var data = bivy.data;
+      document.getElementById("question").textContent = data.question || "Pick one";
+      var chosen = bivy.state.choice;
+      (data.options || ["Yes", "No"]).forEach(function (option) {
+        var button = document.createElement("button");
+        button.textContent = option;
+        if (option === chosen) button.className = "primary";
+        button.disabled = Boolean(chosen);
+        button.onclick = function () {
+          bivy.setState({ choice: option });
+          bivy.send("I pick: " + option);
+          document.querySelectorAll("button").forEach(function (b) { b.disabled = true; });
+          button.className = "primary";
+          document.getElementById("status").textContent = "Sent.";
+        };
+        document.getElementById("options").appendChild(button);
+      });
+      if (chosen) document.getElementById("status").textContent = "You picked " + chosen + ".";
+    });
+  </script>
+</body>
+</html>

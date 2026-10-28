@@ -328,6 +328,8 @@ export function componentKind(opts: { path?: string | null; mimeType?: string | 
   if (mime.startsWith("image/")) return "image";
   const ext = String(opts.path || "").toLowerCase().split(".").pop() ?? "";
   if (ext === "csv" || ext === "tsv") return "table";
+  // A page the agent wrote is a widget: it runs, sandboxed, inside the message.
+  if (ext === "html" || ext === "htm") return "widget";
   // Everything else is a file the reader can open or download. Rows for richer
   // readings of a file — a notebook, a diff — belong here alongside the renderer
   // that can actually draw them. A row added early would promise a kind the view

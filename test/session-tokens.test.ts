@@ -23,6 +23,8 @@ test("a session token reaches its own session's routes and nothing else", () => 
   assert.ok(sessionTokenAllows("s-1", { method: "POST", path: "/api/session/s-1/ask/q/wait" }));
   assert.ok(sessionTokenAllows("s-1", { method: "POST", path: "/api/apps/present", body: { sessionId: "s-1" } }));
   assert.ok(sessionTokenAllows("s-1", { method: "GET", path: "/api/machines" }));
+  assert.ok(sessionTokenAllows("s-1", { method: "POST", path: "/api/widgets/state.get", body: { sessionId: "s-1" } }));
+  assert.ok(!sessionTokenAllows("s-1", { method: "POST", path: "/api/widgets/state.set", body: { sessionId: "s-1" } }), "an agent reads what the user entered in a widget, never writes it");
   assert.ok(!sessionTokenAllows("s-1", { method: "POST", path: "/api/session/s-2/notify" }), "another session's route");
   assert.ok(!sessionTokenAllows("s-1", { method: "POST", path: "/api/apps/present", body: { sessionId: "s-2" } }), "another session in the body");
   assert.ok(!sessionTokenAllows("s-1", { method: "POST", path: "/api/session/prompt", body: { sessionId: "s-1" } }), "driving the session is not an agent route");

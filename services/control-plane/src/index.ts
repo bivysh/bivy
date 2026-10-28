@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { packagedClientCors } from "./packaged-client-cors.js";
+import { serveWidgetFrame } from "./widget-frame.js";
 // Copyright (c) 2026 Petter André Sjulstad
 import path from "node:path";
 import fs from "node:fs";
@@ -560,6 +561,17 @@ app.get("/", (_req, res) => {
   if (hasReactApp) return res.sendFile(reactIndexFile);
   res.status(503).type("html").send("<h1>Bivy</h1><p>Web client not built.</p>");
 });
+// Chat widgets' sandboxed frame, with its own policy (see widget-frame.ts).
+const widgetFrameFile = path.join(reactAppDir, "widget-frame.html");
+if (fs.existsSync(widgetFrameFile)) {
+  try {
+    app.get("/widget-frame.html", serveWidgetFrame(fs.readFileSync(widgetFrameFile)));
+  } catch (error) {
+    // Without its policy the frame is not served at all; widgets then show
+    // that they cannot load, and the rest of the app is unaffected.
+    console.error("[widgets]", error instanceof Error ? error.message : error);
+  }
+}
 if (hasReactApp) {
   // The app's own hashed assets, service worker and manifest. Never long-cache
   // the entry document or the SW so a deploy is picked up on the next load.

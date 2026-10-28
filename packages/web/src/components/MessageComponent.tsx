@@ -23,6 +23,7 @@ import { componentKind, specReferences, type AttachmentRef, type PromptAttachmen
 
 import { AttachmentChip } from "./AttachmentChip.js";
 import { InlineApp } from "./InlineApp.js";
+import { Widget } from "./Widget.js";
 import { MAX_COMPONENT_TEXT_BYTES, useAttachmentText } from "../attachmentUrl.js";
 import { csvToObjects, parseCsv } from "../csv.js";
 import { renderChart, substituteWorkspaceData } from "../vega.js";
@@ -50,6 +51,8 @@ interface RenderArgs {
    *  the active session, so a kind that talks to the machine asks about the
    *  right one and can be rendered on its own in a test. */
   sessionId: string | null;
+  /** The message is still streaming in. */
+  streaming?: boolean;
 }
 
 /** An AttachmentRef is what the node stored; AttachmentChip wants the richer
@@ -295,6 +298,21 @@ const REGISTRY: Record<string, (args: RenderArgs) => React.ReactNode> = {
   metric: ({ placement }) =>
     placement.spec ? <Metric spec={placement.spec} /> : <Unavailable what="A number" why="This component has no value to show." />,
   table: (args) => <Table {...args} />,
+  // A page the agent wrote, running inside the message. A fence names its page
+  // with `url` (resolved like a chart's data) or carries it as `html`.
+  widget: ({ placement, attachment, refs, sessionId, streaming }) => {
+    const url = typeof placement.spec?.url === "string" ? placement.spec.url : null;
+    return (
+      <Widget
+        spec={placement.spec}
+        attachment={url ? refs?.[url] ?? null : attachment}
+        path={url ?? placement.ref}
+        attrs={placement.attrs}
+        sessionId={sessionId}
+        streaming={streaming}
+      />
+    );
+  },
   image: ({ placement, attachment }) =>
     attachment ? (
       <AttachmentChip attachment={asAttachment(attachment, captionOf(placement))} />
@@ -318,7 +336,7 @@ export const RENDERABLE_KINDS = Object.keys(REGISTRY);
  * yet, which is a normal transient while the node reads the file, so that case
  * renders the fallback rather than nothing.
  */
-export function MessageComponent({ placement, refs, sessionId }: { placement: Placement; refs?: Record<string, AttachmentRef>; sessionId: string | null }) {
+export function MessageComponent({ placement, refs, sessionId, streaming }: { placement: Placement; refs?: Record<string, AttachmentRef>; sessionId: string | null; streaming?: boolean }) {
   const attachment = placement.ref ? refs?.[placement.ref] ?? null : null;
   const kind = useMemo(
     () => componentKind({ path: placement.ref, mimeType: attachment?.mimeType, spec: placement.spec }),
@@ -336,7 +354,7 @@ export function MessageComponent({ placement, refs, sessionId }: { placement: Pl
       />
     );
   }
-  return <>{render({ placement, attachment, refs, sessionId })}</>;
+  return <>{render({ placement, attachment, refs, sessionId, streaming })}</>;
 }
 
 /**

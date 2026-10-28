@@ -92,7 +92,9 @@ const config: UserConfig = {
       injectManifest: {
         globPatterns: ["**/*.{js,css,html,svg,png,woff2}"],
         // Deployment flags must come from the live host, never the offline shell.
-        globIgnores: ["**/runtime-config.js"],
+        // The widget frame's security policy is a response header, which only
+        // the network copy carries.
+        globIgnores: ["**/runtime-config.js", "**/widget-frame.html"],
       },
       manifest: {
         id: "/",

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Chat widgets.** An agent can put a small interactive page inside its reply — a picker, a form, a checklist — with `::view{src=widgets/x.html}`, and you use it right in the chat. It looks like the app in light and dark, can send your answer back to the agent when you click, remembers what you entered on every device, and goes full screen. Widgets run sandboxed, with no access to the app or the network, and speak the MCP Apps protocol, so views built for other MCP Apps hosts work too. Agents start one with `bivy widget init` and read your answers with `bivy widget state`. See [Chat widgets](docs/widgets.md).
+
 ### Removed
 
 - The control plane's `/janitor` proxy (`JANITOR_SERVICE_URL`, `JANITOR_PROXY_SECRET`) for a separate app that no longer ships with Bivy.

@@ -334,6 +334,7 @@ describe("componentKind", () => {
     expect(componentKind({ spec: { type: "Metric" } })).toBe("metric");
     expect(componentKind({ path: "a/b.png", mimeType: "image/png" })).toBe("image");
     expect(componentKind({ path: "a/b.csv" })).toBe("table");
+    expect(componentKind({ path: "a/b.html", mimeType: "text/html" })).toBe("widget");
     expect(componentKind({ path: "a/b.pdf", mimeType: "application/pdf" })).toBe("file");
   });
   it("recognises a Vega-Lite spec by its shape, with no type to remember", () => {

@@ -1647,6 +1647,13 @@ export class AppController {
     return this.awaitAck({ kind, sessionId, path }, 30_000);
   }
 
+  /** A chat widget's saved state and tools, on the machine its session runs
+   *  on (see src/controllers/widget-commands.ts). Rejects with the node's reason. */
+  async widgetCommand(kind: "widgets.state.get" | "widgets.state.set" | "widgets.tool", sessionId: string, fields: Record<string, unknown> = {}): Promise<ServerEvent> {
+    if (this.store.getState().connection.status !== "online") throw new Error("Connect to the machine to use this widget.");
+    return this.awaitAck({ kind, sessionId, ...fields }, 30_000);
+  }
+
   /** Everything the account's machines can open right now, across all their
    *  sessions: agent-sent files still stored, and published apps (the sidebar's
    *  Artifacts/Apps pages). Offline machines are skipped; `unreachable` names
