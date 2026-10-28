@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.18] - 2026-10-28
+
 ### Security
 
 - **Releases can't pick up a dependency published minutes earlier.** Release archives are resolved by npm, which has no cooldown; every version they resolve must now already be in the reviewed `pnpm-lock.yaml` or be past pnpm's one-day `minimumReleaseAge`, or the release fails.
