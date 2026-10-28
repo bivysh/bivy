@@ -26,6 +26,9 @@ import { widgetKey } from "../widgets/key.js";
 /** A widget is one self-contained page; libraries come from a CDN. */
 export const MAX_WIDGET_BYTES = 2 * 1024 * 1024;
 const DEFAULT_HEIGHT = 120;
+/** How long a finished message's workspace page may take to arrive (the node
+ *  reads it when the message ends) before the widget says it couldn't. */
+const MISSING_PAGE_MS = 10_000;
 /** One message per widget per this many ms: a click, not a loop. */
 const MESSAGE_INTERVAL_MS = 1000;
 
@@ -85,6 +88,16 @@ export function Widget({ spec, attachment, path, attrs, sessionId, streaming }: 
   const declaredHeight = Number(attrs.height ?? spec?.height) || DEFAULT_HEIGHT;
 
   const [source, setSource] = useState<Source>({ state: "loading" });
+  // A page that never arrives (the file was missing, outside the workspace, or
+  // too big) would otherwise leave the placeholder up for good.
+  const [pageMissing, setPageMissing] = useState(false);
+  const waitsForPage = inline === null && named === null && !attachment && !streaming;
+  useEffect(() => {
+    setPageMissing(false);
+    if (!waitsForPage) return;
+    const timer = setTimeout(() => setPageMissing(true), MISSING_PAGE_MS);
+    return () => clearTimeout(timer);
+  }, [waitsForPage]);
   useEffect(() => {
     if (inline !== null) {
       setSource({ state: "ready", html: inline, source: inline });
@@ -110,7 +123,9 @@ export function Widget({ spec, attachment, path, attrs, sessionId, streaming }: 
       };
     }
     if (!attachment) {
-      setSource({ state: "loading" });
+      setSource(pageMissing
+        ? { state: "error", reason: `${path ? `“${path}”` : "This widget's page"} could not be read. Ask the agent to save it inside its workspace and show it again.` }
+        : { state: "loading" });
       return;
     }
     if (attachment.size > MAX_WIDGET_BYTES) {
@@ -133,7 +148,7 @@ export function Widget({ spec, attachment, path, attrs, sessionId, streaming }: 
     return () => {
       cancelled = true;
     };
-  }, [inline, named, sessionId, attachment, path]);
+  }, [inline, named, sessionId, attachment, path, pageMissing]);
 
   const key = useMemo(
     () => (source.state === "ready" ? widgetKey({ id: attrs.id ?? spec?.id, source: source.source, data }) : null),

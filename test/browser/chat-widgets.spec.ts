@@ -139,6 +139,15 @@ for (const theme of themes) {
     await expect(page.locator(".widget-component figcaption")).toHaveText("This widget hit an error: brokenCall is not defined");
   });
 
+  test(`${theme}: a widget whose page never arrives says so instead of loading forever`, async ({ page }) => {
+    await page.clock.install();
+    await mount(page, theme, "Here it is:\n\n::view{src=widgets/tip.html}");
+    await expect(page.locator(".widget-placeholder")).toBeVisible();
+    await page.clock.runFor(11_000);
+    await expect(page.locator(".md-component")).toContainText("“widgets/tip.html” could not be read");
+    await expect(page.locator(".widget-placeholder")).toHaveCount(0);
+  });
+
   test(`${theme}: a plugin's widget is placed by name and gets live data from a plugin tool`, async ({ page }) => {
     await mount(page, theme, ["CI:", "", "```bivy", JSON.stringify({ type: "widget", widget: "ci", data: { branch: "main" } }), "```"].join("\n"));
     await expect(page.locator(".md-component iframe.widget-frame")).toHaveAttribute("title", "CI status");
