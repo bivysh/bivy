@@ -45,7 +45,21 @@ WORKDIR /repo
 COPY package.json ./
 COPY src/agent-bridges.mjs ./src/agent-bridges.mjs
 RUN node --input-type=module -e "const m = await import('/repo/src/agent-bridges.mjs'); \
-      await m.installBridges(Object.values(m.AGENT_BRIDGES).flatMap((b) => b.packages), { dir: '/bridges', stdio: 'inherit' });"
+      await m.installBridges(Object.values(m.AGENT_BRIDGES).flatMap((b) => b.packages), { dir: '/bridges', stdio: 'inherit' });" \
+  && test -x /bridges/node_modules/.bin/pi
+
+# The Bivy package, installed on a bare base. It changes with every commit, so
+# it is installed here and linked into the image below: building it never
+# needs the image's large layers (Chromium, agent CLIs, bridges) unpacked.
+# The terminal addon is prebuilt, so no compiler toolchain is needed.
+FROM node:22-bookworm-slim AS bivy
+COPY --from=build /out/bivy-latest.tar.gz /tmp/bivy.tar.gz
+RUN npm install -g /tmp/bivy.tar.gz \
+  && rm /tmp/bivy.tar.gz \
+  && rm -rf /root/.npm \
+  && node -e "require('/usr/local/lib/node_modules/@bivy/bivy/node_modules/@lydell/node-pty')" \
+  && mkdir /bivy-bin \
+  && cp -P /usr/local/bin/bivy /bivy-bin/
 
 FROM node:22-bookworm-slim
 LABEL org.opencontainers.image.source="https://github.com/bivysh/bivy"
@@ -83,20 +97,13 @@ RUN case "$BIVY_RUNNER_AGENT" in \
 # exposed from the bridge directory's bin rather than one symlink per agent.
 ENV BIVY_BRIDGES_DIR=/usr/local/lib/bivy-bridges
 ENV PATH="/usr/local/lib/bivy-bridges/node_modules/.bin:${PATH}"
-COPY --from=bridges /bridges /usr/local/lib/bivy-bridges
-# The Bivy package changes with every commit, so it is the last large layer.
-# The terminal addon is prebuilt, so no compiler toolchain is needed.
-# `agents:install --bridges` finds the baked bridges and only confirms them.
-COPY --from=build /out/bivy-latest.tar.gz /tmp/bivy.tar.gz
-RUN npm install -g /tmp/bivy.tar.gz \
-  && rm /tmp/bivy.tar.gz \
-  && bivy agents:install --bridges \
-  && rm -rf /root/.npm \
-  && command -v bivy \
-  && command -v pi \
-  && node -e "require('/usr/local/lib/node_modules/@bivy/bivy/node_modules/@lydell/node-pty')"
+COPY --link --from=bridges /bridges /usr/local/lib/bivy-bridges
 RUN mkdir -p /etc/bivy /workspace \
   && chmod 700 /etc/bivy
+# Last, and linked: an ordinary commit adds only this layer, and the layers
+# above are reused from the registry without being downloaded or unpacked.
+COPY --link --from=bivy /usr/local/lib/node_modules/@bivy /usr/local/lib/node_modules/@bivy
+COPY --link --from=bivy /bivy-bin/ /usr/local/bin/
 ENV BIVY_DATA_DIR=/etc/bivy
 WORKDIR /workspace
 ENTRYPOINT ["/usr/bin/tini", "--"]
