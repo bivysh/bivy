@@ -716,6 +716,54 @@ function sendDeviceSignedIn(res: Response, email: string): void {
   res.type("html").send(deviceSignedInHtml(email));
 }
 
+// A short code shown both by the device that started the sign-in (terminal or
+// app) and on the approval page, so the person approving can check the two
+// match. Not a secret: it only lets a human tell their own request from one
+// someone forwarded to them.
+const USER_CODE_ALPHABET = "BCDFGHJKLMNPQRSTVWXZ23456789";
+function deviceUserCode(deviceId: string): string {
+  // The id is `dev_<random uuid>`; its hex digits are already random.
+  const hex = deviceId.replace(/[^0-9a-f]/gi, "").slice(-16).padStart(16, "0");
+  const chars = (hex.match(/../g) ?? []).map((pair) => USER_CODE_ALPHABET[parseInt(pair, 16) % USER_CODE_ALPHABET.length]);
+  return `${chars.slice(0, 4).join("")}-${chars.slice(4).join("")}`;
+}
+
+function deviceApprovalHtml(email: string, userCode: string, approval: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Approve sign-in</title>
+<style>body{font-family:system-ui,sans-serif;background:#0a0f20;color:#eef2ff;display:grid;place-items:center;min-height:100vh;margin:0;padding:24px;box-sizing:border-box}
+.card{background:#0f1530;border:1px solid #233056;border-radius:16px;padding:32px 40px;text-align:center;max-width:380px}
+h1{font-size:20px;margin:0 0 8px}p{color:#9aa6cf;margin:6px 0;line-height:1.45}
+.code{font:600 24px/1.2 ui-monospace,monospace;letter-spacing:2px;color:#eef2ff;margin:16px 0}
+.actions{display:flex;flex-direction:column;gap:10px;margin-top:20px}
+.btn{display:block;width:100%;padding:11px 16px;border-radius:10px;border:1px solid #2b3a66;background:#1b2545;color:#eef2ff;font:inherit;font-size:15px;cursor:pointer}
+.btn.primary{background:#3b5bdb;border-color:#3b5bdb}.btn.ghost{background:transparent}</style></head>
+<body><div class="card"><h1>Sign in on another device?</h1>
+<p>A terminal or app is asking to sign in to Bivy as <strong>${escapeHtml(email)}</strong>. It will be able to reach your machines.</p>
+<p class="code" aria-label="Sign-in code">${escapeHtml(userCode)}</p>
+<p>Approve only if you started this sign-in yourself and the same code is showing there. If someone sent you this link, deny it.</p>
+<form method="post" class="actions"><input type="hidden" name="approval" value="${escapeHtml(approval)}">
+<button class="btn primary" type="submit" formaction="/auth/device/approve">Approve</button>
+<button class="btn ghost" type="submit" formaction="/auth/device/deny">Deny</button></form></div>
+</body></html>`;
+}
+
+function sendDeviceApproval(res: Response, email: string, deviceId: string, approval: string): void {
+  res.setHeader(
+    "Content-Security-Policy",
+    ["default-src 'none'", "style-src 'unsafe-inline'", "form-action 'self'", "base-uri 'none'", "frame-ancestors 'none'"].join("; "),
+  );
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.type("html").send(deviceApprovalHtml(email, deviceUserCode(deviceId), approval));
+}
+
+/** Hand the signed-in browser the approval page for a pending device login. */
+async function proposeDeviceSignIn(res: Response, deviceId: string, account: Account, source: string): Promise<void> {
+  const approval = await store.proposeDeviceLogin(deviceId, account.id);
+  if (!approval) return sendSignInFailed(res, 410, "This sign-in request has expired or was already used. Start signing in again from your terminal or app.", source);
+  sendDeviceApproval(res, account.email, deviceId, approval);
+}
+
 // The device-flow OAuth/magic-link tab that fails must not be a dead end: give
 // it a way back. "Back to sign in" is a plain same-origin link (always works,
 // even for a tab opened from an email/QR link that can't self-close). "Close
@@ -971,14 +1019,10 @@ app.get("/auth/magic-link/consume", asyncHandler(async (req, res) => {
   const account = await store.consumeLoginToken(loginToken);
   if (!account) return sendSignInFailed(res, 401, "This sign-in link is invalid or has expired. Request a new one from the sign-in screen.", deviceId ? "email_device" : "email_browser");
   recordSignIn(account);
-  // Device-login flow (hands-free CLI sign-in): mark the pending device login
-  // complete and tell the user to return to their terminal. No session is
-  // embedded here — the CLI mints it when it polls.
-  if (deviceId) {
-    await store.completeDeviceLogin(deviceId, account.id);
-    recordFunnelEvent("sign_in_completed", "email_device");
-    return sendDeviceSignedIn(res, account.email);
-  }
+  // Device-login flow (hands-free CLI sign-in): ask this browser to approve the
+  // pending device login (see proposeDeviceSignIn). No session is embedded
+  // here — the CLI mints it when it polls.
+  if (deviceId) return proposeDeviceSignIn(res, deviceId, account, "email_device");
   const session = await store.createSession(account.id);
   recordFunnelEvent("sign_in_completed", "email_browser");
   const payload = b64urlJson({ session, controlPlane: baseUrl(req), relay: relayPublicUrl });
@@ -1002,6 +1046,7 @@ app.post("/auth/device/start", asyncHandler(async (req, res) => {
     sent: result.sent,
     deviceId,
     deviceSecret,
+    userCode: deviceUserCode(deviceId),
     intervalMs: 2000,
     expiresInMs: LOGIN_TOKEN_TTL_MS,
     ...(result.devLink ? { devLink: result.devLink } : {}),
@@ -1021,6 +1066,31 @@ app.post("/auth/device/poll", asyncHandler(async (req, res) => {
     ...result,
     account: { id: account.id, email: account.email },
   });
+}));
+
+// The approval page's two buttons. The single-use approval token in the form is
+// what authorizes them, so a cross-site post without it does nothing.
+const deviceApprovalForm = express.urlencoded({ extended: false, limit: "4kb" });
+async function deviceApprovalRateLimited(req: Request, res: Response): Promise<boolean> {
+  if (!(await store.rateLimitExceeded("device-approval-ip", clientIp(req), 30, 60_000))) return false;
+  res.status(429).type("text").send("Too many requests. Please wait a minute and try again.");
+  return true;
+}
+app.post("/auth/device/approve", deviceApprovalForm, asyncHandler(async (req, res) => {
+  if (await deviceApprovalRateLimited(req, res)) return;
+  const approved = await store.approveDeviceLogin(String(req.body?.approval ?? ""));
+  if (!approved) return sendSignInFailed(res, 410, "This sign-in request has expired or was already used. Start signing in again from your terminal or app.", "device_approval");
+  const account = await store.getAccount(approved.accountId);
+  recordFunnelEvent("sign_in_completed", "device_approval");
+  sendDeviceSignedIn(res, account?.email ?? "");
+}));
+
+app.post("/auth/device/deny", deviceApprovalForm, asyncHandler(async (req, res) => {
+  if (await deviceApprovalRateLimited(req, res)) return;
+  await store.denyDeviceLogin(String(req.body?.approval ?? ""));
+  recordFunnelEvent("sign_in_failed", "device_denied");
+  res.setHeader("Cache-Control", "no-store");
+  res.type("html").send(`<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign-in denied</title></head><body style="font-family:system-ui,sans-serif;text-align:center;padding:48px">Sign-in denied. Nothing was signed in; you can close this tab.</body></html>`);
 }));
 
 // Begin GitHub OAuth. `?device=<id>` ties the login to a hands-free device login
@@ -1086,11 +1156,7 @@ app.get("/auth/github/callback", asyncHandler(async (req, res) => {
   const githubUserId = installTargetIds?.[0];
   if (githubUserId) await store.setGithubIdentity(account.id, githubUserId, installTargetIds ?? []);
   recordSignIn(account);
-  if (stored.deviceId) {
-    await store.completeDeviceLogin(stored.deviceId, account.id);
-    recordFunnelEvent("sign_in_completed", "github_device");
-    return sendDeviceSignedIn(res, account.email);
-  }
+  if (stored.deviceId) return proposeDeviceSignIn(res, stored.deviceId, account, "github_device");
   const session = await store.createSession(account.id);
   recordFunnelEvent("sign_in_completed", "github_browser");
   const payload = b64urlJson({ session, controlPlane: baseUrl(req), relay: relayPublicUrl });
@@ -1106,7 +1172,7 @@ app.post("/auth/device/github/start", asyncHandler(async (req, res) => {
   if (!githubConfigured) return res.status(501).json({ error: "GitHub sign-in not configured" });
   const { deviceId, deviceSecret } = await store.createDeviceLogin();
   const authorizeUrl = `${baseUrl(req)}/auth/github/start?device=${encodeURIComponent(deviceId)}`;
-  res.json({ ok: true, deviceId, deviceSecret, authorizeUrl, intervalMs: 2000, expiresInMs: LOGIN_TOKEN_TTL_MS });
+  res.json({ ok: true, deviceId, deviceSecret, userCode: deviceUserCode(deviceId), authorizeUrl, intervalMs: 2000, expiresInMs: LOGIN_TOKEN_TTL_MS });
 }));
 
 // DEV login remains available for local/staging unless disabled explicitly.

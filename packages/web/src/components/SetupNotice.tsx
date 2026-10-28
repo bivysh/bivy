@@ -110,6 +110,8 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
   // the `await`, etc. — none of that is reliably detectable, so instead of
   // trying to detect it, always give the user a manual way out).
   const [authorizeUrl, setAuthorizeUrl] = useState<string | null>(null);
+  // The code the browser's approval page shows for a device sign-in.
+  const [userCode, setUserCode] = useState<string | null>(null);
   // Non-standalone (browser-tab) sign-in is a real full-page navigation, so
   // there's no busy state to track the round trip — but the click-to-actual-
   // navigation gap can still be a second or two with zero feedback. This just
@@ -211,6 +213,7 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
           setNote({ text: `Check your email — we sent a sign-in link to ${value}. Open it on this device and you'll be signed in here automatically.` });
         }
         setSentTo(value);
+        setUserCode(login.userCode ?? null);
         setEmailWaiting(true);
         void pollEmailDeviceLogin(login, token);
         return;
@@ -263,6 +266,7 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
       // hatch instead of trusting window.open() silently worked.
       if (cancelled.current) return;
       setAuthorizeUrl(login.authorizeUrl);
+      setUserCode(login.userCode ?? null);
       if (isPackagedClient) await openPackagedExternal(login.authorizeUrl);
       else if (tab) tab.location.href = login.authorizeUrl;
       else window.open(login.authorizeUrl, "_blank", "noopener");
@@ -345,6 +349,7 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
         {githubBusy && (
           <div className="setup-note muted">
             <p>Finish signing in on the GitHub tab, then return here — this completes automatically.</p>
+            {userCode && <p>Approve the sign-in there if it shows the code <strong>{userCode}</strong>.</p>}
             {authorizeUrl && (
               <p>
                 Tab didn't open?{" "}
@@ -391,7 +396,8 @@ export function SetupNotice({ onDismiss }: { onDismiss?: () => void } = {}) {
         )}
         {emailWaiting && (
           <p className="setup-note muted">
-            Keep this window open — signing you in automatically once you tap the link.{" "}
+            Keep this window open — signing you in automatically once you tap the link
+            {userCode ? <> and approve the code <strong>{userCode}</strong></> : null}.{" "}
             <button type="button" className="btn link" onClick={cancelEmailSignIn}>
               Cancel
             </button>

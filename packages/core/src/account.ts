@@ -131,6 +131,8 @@ export interface GithubDeviceLogin {
   deviceSecret: string;
   /** GitHub authorize URL to open in a normal browser tab. */
   authorizeUrl: string;
+  /** Code the browser shows on its approval page, so the user can match it. */
+  userCode?: string;
   /** How often to poll, ms. */
   intervalMs: number;
   /** How long the login stays valid, ms. */
@@ -155,6 +157,7 @@ export async function startGithubDeviceLogin(store: LocalStore, fetchImpl: typeo
     deviceId: String(data.deviceId),
     deviceSecret: String(data.deviceSecret),
     authorizeUrl: String(data.authorizeUrl),
+    ...(data.userCode ? { userCode: String(data.userCode) } : {}),
     intervalMs: Number(data.intervalMs) || 2000,
     expiresInMs: Number(data.expiresInMs) || 10 * 60_000,
   };
@@ -169,6 +172,8 @@ export interface EmailDeviceLogin {
   expiresInMs: number;
   /** Whether the email was actually sent (false in dev with no mailer). */
   sent: boolean;
+  /** Code the browser shows on its approval page, so the user can match it. */
+  userCode?: string;
   /** Dev-only: the magic link, surfaced when no mailer is configured. */
   devLink?: string;
 }
@@ -197,6 +202,7 @@ export async function startEmailDeviceLogin(store: LocalStore, email: string, fe
     intervalMs: Number(data.intervalMs) || 2000,
     expiresInMs: Number(data.expiresInMs) || 15 * 60_000,
     sent: Boolean(data.sent),
+    ...(data.userCode ? { userCode: String(data.userCode) } : {}),
     ...(data.devLink ? { devLink: String(data.devLink) } : {}),
   };
 }

@@ -69,10 +69,11 @@ async function checkControlPlane(controlPlaneUrl: string): Promise<void> {
 /** Poll a started device login until it completes; returns the session token. */
 async function pollDevice(
   controlPlaneUrl: string,
-  start: { deviceId: string; deviceSecret: string; intervalMs?: number; expiresInMs?: number },
+  start: { deviceId: string; deviceSecret: string; userCode?: string; intervalMs?: number; expiresInMs?: number },
 ): Promise<string> {
   const intervalMs = Number(start.intervalMs) || 2000;
   const deadline = Date.now() + (Number(start.expiresInMs) || 15 * 60_000);
+  if (start.userCode) console.log(`Your browser will ask you to approve this sign-in. Check it shows the code ${start.userCode}.`);
   process.stdout.write("Waiting for you to finish sign-in");
   while (Date.now() < deadline) {
     await sleep(intervalMs);
