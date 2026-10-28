@@ -101,6 +101,10 @@ test("install copies the plugin's own files only, and refuses a manifest naming 
   assert.ok(!fs.existsSync(path.join(installed.path, "host-link")), "symlinks are not followed or copied");
   assert.equal(readPluginWidget("standup", data).html, "<button>Done</button>");
 
+  const unparsable = pluginDir("unparsable");
+  fs.writeFileSync(path.join(unparsable, "widgets", "standup.html"), "<script>bivy.send(\"x\";</script>");
+  assert.throws(() => installPlugin(unparsable, { dataDir: data }), /widget's script does not parse: SyntaxError: .*widgets\/standup\.html line 1/);
+
   const missing = pluginDir("broken");
   fs.rmSync(path.join(missing, "guides", "standups.md"));
   assert.throws(() => installPlugin(missing, { dataDir: data }), /names files that are not in the plugin directory: guides\/standups\.md/);

@@ -72,6 +72,8 @@ export interface CapabilitiesControllerDeps {
   listConfiguredProviderIds(): Promise<string[]> | string[];
   listLocalEndpoints(): Promise<Array<{ id: string; modelCount: number }>> | Array<{ id: string; modelCount: number }>;
   listPlugins(): CapabilityPluginSummary[];
+  /** The plugin theme chosen for this machine, if any. */
+  selectedTheme?(): string | null;
   countWorkspaces(): number;
   /** Overridable for tests (deterministic success/timeout/failure); defaults
    *  to a real, timeout-protected `docker` probe. */
@@ -124,6 +126,7 @@ export function createCapabilitiesController(deps: CapabilitiesControllerDeps) {
       docker,
       gpu,
       plugins: deps.listPlugins(),
+      theme: deps.selectedTheme?.() ?? null,
       workspaceCount: deps.countWorkspaces(),
       now: now(),
     });

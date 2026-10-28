@@ -1,0 +1,89 @@
+<!doctype html>
+<!--
+  Placed with:  ```bivy {"type":"widget","widget":"review-checklist","data":{"title":"Before merge"}}```
+  data.items:   a list of strings to tick off; without it, the files changed in
+                the workspace (from the changed_files tool).
+-->
+<html>
+<head>
+<style>
+  .item { display: flex; gap: var(--space-2); align-items: center; padding: var(--space-1) 0; border-bottom: 1px solid var(--line); }
+  .item:last-child { border-bottom: 0; }
+  .item label { flex: 1; overflow-wrap: anywhere; }
+  .item input { width: 18px; height: 18px; accent-color: var(--accent); }
+  .tag { font-size: var(--text-xs); color: var(--muted); }
+  .done label { color: var(--muted); text-decoration: line-through; }
+</style>
+</head>
+<body>
+  <div class="stack">
+    <strong id="title"></strong>
+    <div id="items" role="group" aria-labelledby="title"></div>
+    <div class="row">
+      <button class="primary" id="send" type="button">Send</button>
+      <small id="note" class="muted" aria-live="polite"></small>
+    </div>
+  </div>
+  <script>
+    var list = document.getElementById("items");
+    var note = document.getElementById("note");
+    var send = document.getElementById("send");
+
+    function render(items) {
+      var checked = bivy.state.checked || {};
+      list.textContent = "";
+      if (!items.length) { note.textContent = "Nothing to review."; send.disabled = true; return; }
+      items.forEach(function (item, index) {
+        var row = document.createElement("div");
+        row.className = "item" + (checked[item.label] ? " done" : "");
+        var box = document.createElement("input");
+        box.type = "checkbox";
+        box.id = "item-" + index;
+        box.checked = Boolean(checked[item.label]);
+        box.disabled = Boolean(bivy.state.sent);
+        box.onchange = function () {
+          var next = Object.assign({}, bivy.state.checked);
+          next[item.label] = box.checked;
+          row.className = "item" + (box.checked ? " done" : "");
+          bivy.setState(Object.assign({}, bivy.state, { checked: next }));
+        };
+        var label = document.createElement("label");
+        label.htmlFor = box.id;
+        label.textContent = item.label;
+        row.append(box, label);
+        if (item.tag) {
+          var tag = document.createElement("span");
+          tag.className = "tag";
+          tag.textContent = item.tag;
+          row.append(tag);
+        }
+        list.append(row);
+      });
+      send.onclick = function () {
+        var state = bivy.state.checked || {};
+        var done = items.filter(function (i) { return state[i.label]; }).map(function (i) { return i.label; });
+        var left = items.filter(function (i) { return !state[i.label]; }).map(function (i) { return i.label; });
+        bivy.send("Checklist: done " + (done.join(", ") || "nothing") + "; left " + (left.join(", ") || "nothing") + ".");
+        bivy.setState(Object.assign({}, bivy.state, { sent: true }));
+        send.disabled = true;
+        list.querySelectorAll("input").forEach(function (b) { b.disabled = true; });
+        note.textContent = "Sent.";
+      };
+      if (bivy.state.sent) { send.disabled = true; note.textContent = "Sent."; }
+    }
+
+    bivy.ready(function () {
+      document.getElementById("title").textContent = bivy.data.title || "Review checklist";
+      if (Array.isArray(bivy.data.items)) {
+        render(bivy.data.items.map(function (label) { return { label: String(label) }; }));
+        return;
+      }
+      note.textContent = "Reading the workspace…";
+      bivy.call("changed_files").then(function (result) {
+        note.textContent = "";
+        render((result.files || []).map(function (file) { return { label: file.path, tag: file.status }; }));
+      }, function (error) { note.textContent = error.message; });
+    });
+  </script>
+</body>
+</html>

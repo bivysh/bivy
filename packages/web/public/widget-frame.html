@@ -44,7 +44,7 @@
     var readyCallbacks = [];
 
     function emit(name, detail) {
-      (listeners[name] || []).slice().forEach(function (fn) { try { fn(detail); } catch (e) { console.error(e); } });
+      (listeners[name] || []).slice().forEach(function (fn) { try { fn(detail); } catch (e) { report(e && e.message ? e.message : e); } });
       try { window.dispatchEvent(new CustomEvent("bivy:" + name, { detail: detail })); } catch (e) { /* old browser */ }
     }
 
@@ -81,8 +81,8 @@
       context: context,
       /** Run once the widget has its data, theme and saved state. */
       ready: function (fn) {
-        if (initialized) fn(api);
-        else readyCallbacks.push(fn);
+        if (!initialized) { readyCallbacks.push(fn); return; }
+        try { fn(api); } catch (e) { report(e && e.message ? e.message : e); }
       },
       on: function (name, fn) { (listeners[name] = listeners[name] || []).push(fn); },
       /** Send a message to the agent as the user. Works from a click or a key
@@ -131,6 +131,19 @@
     Object.defineProperty(storage, "length", { get: function () { return Object.keys(memory).length; } });
     ["localStorage", "sessionStorage"].forEach(function (name) {
       try { Object.defineProperty(window, name, { configurable: true, get: function () { return storage; } }); } catch (e) { /* keep the native one */ }
+    });
+
+    // A widget that breaks says so: the host shows the first error under it,
+    // and `bivy widget shot` reports every one to the agent that wrote it.
+    function report(text) {
+      notify("notifications/message", { level: "error", logger: "widget", data: String(text).slice(0, 500) });
+    }
+    window.addEventListener("error", function (event) {
+      if (event.message) report(event.message + (event.lineno ? " (line " + event.lineno + ")" : ""));
+    });
+    window.addEventListener("unhandledrejection", function (event) {
+      var reason = event.reason;
+      report("Unhandled rejection: " + (reason && reason.message ? reason.message : String(reason)));
     });
 
     window.addEventListener("message", function (event) {
@@ -189,7 +202,7 @@
       if (api.state.localStorage && typeof api.state.localStorage === "object") memory = api.state.localStorage;
       notify("ui/notifications/initialized", {});
       initialized = true;
-      readyCallbacks.splice(0).forEach(function (fn) { try { fn(api); } catch (e) { console.error(e); } });
+      readyCallbacks.splice(0).forEach(function (fn) { try { fn(api); } catch (e) { report(e && e.message ? e.message : e); } });
       emit("ready", api);
       schedule();
     }, function (error) { console.error("Bivy did not answer:", error); });

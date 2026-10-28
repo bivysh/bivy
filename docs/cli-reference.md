@@ -313,7 +313,7 @@ bivy agent remove company-agent
 `add` never imports agent code into the daemon; the agent runs out of process.
 `--force` replaces an existing entry. See [Add any agent](add-an-agent.md).
 
-### `bivy plugin <init|validate|doctor|test|install|dev|list|remove>`
+### `bivy plugin <init|validate|doctor|test|install|dev|search|list|remove>`
 
 Extend this machine's Bivy with plugins: agents, chat widgets, tools, themes and
 guides. Agents build and install them for the user; see [plugins.md](plugins.md).
@@ -326,6 +326,7 @@ bivy plugin doctor ./standup
 bivy plugin test ./standup
 bivy plugin install ./standup                 # a folder or a manifest
 bivy plugin install github:owner/repo/path#v1 # or any git URL
+bivy plugin search standup                    # shared plugins and kits on GitHub
 bivy plugin list --json
 bivy plugin remove standup
 ```
@@ -338,6 +339,25 @@ replace the same plugin id and rejects an incompatible `requires.bivy` range. It
 copies the plugin's folder (regular files only, without dot-directories) into the
 store, clones a git source first, and never runs an installer. Widgets, tools,
 themes and guides take effect at once; agents appear in the picker at once.
+
+`search` lists GitHub repositories with the `bivy-plugin` or `bivy-kit` topic
+(matching the words given), with the command that installs each. There is no
+registry to publish to: tagging a repository is sharing it.
+
+### `bivy kit <export|apply>`
+
+A kit is a whole setup as one folder: the plugins someone uses and the theme
+they picked, listed in `bivy.kit.yaml`.
+
+```bash
+bivy kit export ~/my-bivy-kit [--id <slug>] [--name <name>]   # this machine's plugins and theme
+bivy kit apply github:owner/my-bivy-kit                        # or a folder or git URL
+```
+
+`export` copies every installed plugin into `plugins/<id>/` with an editable
+`bivy.plugin.yaml`, and records the chosen theme. `apply` installs each listed
+plugin (replacing older copies) and sets the theme. Push an exported kit to a
+repository with the `bivy-kit` topic to share it.
 
 ### `bivy tools <list|run>`
 
@@ -591,15 +611,24 @@ bivy ask "Sign in to GitHub" --url https://github.com/login/device --code ABCD-1
 bivy ask "ffmpeg needs a system install. Run this, then tap Done" --run "sudo apt-get install -y ffmpeg" --option Done --option "It failed"
 ```
 
-### `bivy widget <init|state>`
+### `bivy widget <init|shot|list|state>`
 
 Widgets are small HTML pages an agent shows inside its reply (`::view{src=…}`)
 that run in the chat and can answer back. See [Chat widgets](widgets.md).
 
 ```bash
 bivy widget init widgets/pick.html     # write a starter widget (--force to replace)
+bivy widget shot widgets/pick.html [--data '<json>'] [--widths 390,1024] [--themes light,dark]
+bivy widget shot --widget review-checklist   # a plugin's widget
+bivy widget list                       # widgets installed plugins provide
 bivy widget state [--key <key>]        # what this session's widgets saved
 ```
+
+`shot` renders the widget in the chat's frame and runtime with the app's
+tokens, prints the PNG paths and the height it asks for, and lists every error
+it raised (uncaught exceptions, failed `bivy.call`s); it exits non-zero when
+there are errors. Plugin tools it calls run for real. The MCP tool is
+`widget_shot`.
 
 `state` reads what each widget saved with `bivy.setState` or `localStorage`, keyed
 by widget, so the agent can see what the user picked or filled in. The MCP tool

@@ -1654,6 +1654,12 @@ export class AppController {
     return this.awaitAck({ kind, sessionId, ...fields }, 30_000);
   }
 
+  /** Settings → this machine: remove a plugin, or choose (null: clear) its theme. */
+  async pluginCommand(kind: "plugins.remove" | "plugins.theme", fields: { id: string | null }): Promise<ServerEvent> {
+    if (this.store.getState().connection.status !== "online") throw new Error("Connect to the machine to change its plugins.");
+    return this.awaitAck({ kind, ...fields }, 30_000);
+  }
+
   /** Everything the account's machines can open right now, across all their
    *  sessions: agent-sent files still stored, and published apps (the sidebar's
    *  Artifacts/Apps pages). Offline machines are skipped; `unreachable` names

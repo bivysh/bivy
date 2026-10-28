@@ -11,6 +11,7 @@ import { defaultDataDir } from "./data-dir.js";
 import { selectedThemeId, selectTheme } from "./machine-theme.js";
 import { checkPluginCompatibility, doctorPluginManifest, recommendedBivyRange, type PluginManifest } from "./plugin-sdk/index.js";
 import { findContribution, installedContributions } from "./plugins/contributions.js";
+import { applyKit, exportKit } from "./plugins/kit.js";
 import { installPlugin, listInstalledPlugins, pluginStoreDir, readPluginManifest, removePlugin } from "./plugins/store.js";
 import { runPluginTool, toolInputSchema } from "./plugins/tools.js";
 
@@ -31,10 +32,12 @@ Commands:
                            Install from a folder, a manifest, a git URL or
                            github:owner/repo[/path][#ref]
   dev <directory>          Install, then reinstall on every change
+  search [words]           Find shared plugins and kits (GitHub topic bivy-plugin / bivy-kit)
   list [--json]            List installed plugins and diagnostics
   remove <id>              Remove an installed plugin
 
-Also: bivy tools list|run (plugin tools), bivy theme list|set|clear.
+Also: bivy tools list|run (plugin tools), bivy theme list|set|clear,
+bivy kit export|apply (a whole setup as one repository).
 
 Options:
   --kind <kind>            What init scaffolds (default: agent)
@@ -314,6 +317,72 @@ function theme(args: string[], json: boolean, dataDir: string): void {
   else console.log(`Theme set to ${found.item.name}. The app follows when its theme is "Machine" (the default).`);
 }
 
+/** Topics a shared plugin or kit carries on GitHub, so finding one needs no registry. */
+const SEARCH_TOPICS = { plugin: "bivy-plugin", kit: "bivy-kit" } as const;
+
+async function search(words: string[], json: boolean): Promise<void> {
+  const found: Array<{ kind: string; repo: string; description: string; stars: number; updated: string; install: string }> = [];
+  for (const [kind, topic] of Object.entries(SEARCH_TOPICS)) {
+    const query = encodeURIComponent([...words, `topic:${topic}`].join(" "));
+    const res = await fetch(`https://api.github.com/search/repositories?q=${query}&sort=stars&per_page=20`, { headers: { accept: "application/vnd.github+json", "user-agent": "bivy-cli" } });
+    if (!res.ok) throw new Error(`GitHub search answered ${res.status}${res.status === 403 ? " (rate limited; try again in a minute)" : ""}`);
+    const body = await res.json() as { items?: Array<{ full_name: string; description: string | null; stargazers_count: number; pushed_at: string }> };
+    for (const item of body.items ?? []) {
+      found.push({
+        kind,
+        repo: item.full_name,
+        description: item.description ?? "",
+        stars: item.stargazers_count,
+        updated: item.pushed_at.slice(0, 10),
+        install: kind === "kit" ? `bivy kit apply github:${item.full_name}` : `bivy plugin install github:${item.full_name}`,
+      });
+    }
+  }
+  if (json) { outputJson({ ok: true, results: found }); return; }
+  if (!found.length) {
+    console.log(`Nothing shared yet${words.length ? ` for "${words.join(" ")}"` : ""}. An agent can build it: bivy plugin init <dir> --kind widget|tool|theme|guide|agent`);
+    return;
+  }
+  for (const item of found) console.log(`${item.kind === "kit" ? "kit   " : "plugin"}  ${item.repo}  ★${item.stars}  ${item.updated}\n        ${item.description}\n        ${item.install}`);
+  console.log("\nThese are other people's code: read a plugin before installing it.");
+}
+
+/** `bivy kit export|apply`: a whole setup as one folder or repository. */
+async function kit(args: string[], json: boolean, dataDir: string): Promise<void> {
+  const [sub, ...rest] = args;
+  const target = positionalArgs(rest)[0];
+  if (sub === "export") {
+    if (!target) throw new Error("Usage: bivy kit export <directory> [--id <slug>] [--name <name>]");
+    const dir = path.resolve(target);
+    const id = option(rest, "--id") ?? path.basename(dir).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
+    const exported = exportKit(dir, dataDir, { id, name: option(rest, "--name") ?? id });
+    if (json) outputJson({ ok: true, directory: dir, kit: exported });
+    else {
+      console.log(`Wrote ${exported.plugins.length} plugin(s)${exported.theme ? ` and the theme ${exported.theme}` : ""} to ${dir}.`);
+      console.log("Share it as a git repository with the topic bivy-kit; anyone applies it with: bivy kit apply github:<owner>/<repo>");
+    }
+    return;
+  }
+  if (sub === "apply") {
+    if (!target) throw new Error("Usage: bivy kit apply <directory|git URL|github:owner/repo[/path][#ref]>");
+    const source = resolveSource(target);
+    try {
+      const { kit: applied, installed } = applyKit(source.path, dataDir);
+      let theme: string | null = null;
+      if (applied.theme) {
+        const found = findContribution("themes", applied.theme, dataDir);
+        if (found) { selectTheme(dataDir, found.item); theme = found.item.id; }
+      }
+      if (json) outputJson({ ok: true, kit: applied.metadata.id, installed, theme });
+      else console.log(`Applied ${applied.metadata.name}: ${installed.join(", ")}${theme ? `; theme ${theme}` : ""}.`);
+    } finally {
+      source.cleanup();
+    }
+    return;
+  }
+  throw new Error("Usage: bivy kit export <directory> | bivy kit apply <source>");
+}
+
 /** One line per contribution type, for people and agents reading the output. */
 function contributionSummary(manifest: PluginManifest): Record<string, string[]> {
   const c = manifest.contributes;
@@ -476,6 +545,16 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       const input = positional[0];
       if (!input) fail("Usage: bivy plugin dev <directory>", json);
       await dev(input, dataDir);
+      return;
+    }
+
+    if (command === "search") {
+      await search(positional, json);
+      return;
+    }
+
+    if (command === "kit") {
+      await kit(args, json, dataDir);
       return;
     }
 

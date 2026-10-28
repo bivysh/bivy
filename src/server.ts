@@ -46,8 +46,10 @@ import { createDisplayHost } from "./apps/display.js";
 import { createAppCommands } from "./controllers/app-commands.js";
 import { createFileCommands } from "./controllers/file-commands.js";
 import { createWidgetCommands } from "./controllers/widget-commands.js";
+import { createPluginCommands } from "./controllers/plugin-commands.js";
 import { WidgetStateStore } from "./widgets/state.js";
-import { readPluginWidget } from "./plugins/contributions.js";
+import { shootWidget, widgetShotDir } from "./widgets/shot.js";
+import { installedContributions, readPluginWidget } from "./plugins/contributions.js";
 import { runPluginTool, widgetTool } from "./plugins/tools.js";
 import { bindClientCommandRoutes } from "./http/client-command-routes.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
@@ -107,7 +109,7 @@ import { canOpenBrowser, openBrowser } from "./browser-open.js";
 import { openOAuthLoginOnNode } from "./runtime/oauth/oauth-node-open.js";
 import { collectNodeStats } from "./node-stats.js";
 import { SessionEventCoalescer } from "./session-event-coalescer.js";
-import { readMachineTheme, SELECTED_THEME_DIR, watchMachineTheme } from "./machine-theme.js";
+import { readMachineTheme, SELECTED_THEME_DIR, selectedThemeId, selectTheme, watchMachineTheme } from "./machine-theme.js";
 import { authMiddleware, resolveAuth, isAuthorized, requestOriginAllowed, markRemoteListener } from "./auth.js";
 import { PairCodes } from "./pair-codes.js";
 import { accessReport, type AccessReport } from "./access.js";
@@ -178,7 +180,7 @@ import {
 import { buildLinearTaskPrompt, getLinearIssue, linearBranchName } from "./linear-tasks.js";
 import { PairingStore } from "./device-registry.js";
 import { IntegrationManager, type SessionIdRef } from "./integrations/index.js";
-import { listInstalledPlugins } from "./plugins/store.js";
+import { listInstalledPlugins, removePlugin } from "./plugins/store.js";
 import { createCapabilitiesController } from "./controllers/capabilities.js";
 import { createAccessDeviceController, createLinkedDeviceController } from "./controllers/devices.js";
 import { createSessionControlCommands } from "./controllers/session-control.js";
@@ -1752,7 +1754,16 @@ const capabilitiesController = createCapabilitiesController({
       agentCount: plugin.manifest?.contributes.agents.length ?? 0,
       ...(plugin.manifest?.metadata.name ? { name: plugin.manifest.metadata.name } : {}),
       ...(plugin.manifest?.metadata.version ? { version: plugin.manifest.metadata.version } : {}),
+      ...(plugin.manifest ? {
+        contributions: {
+          widgets: plugin.manifest.contributes.widgets?.length ?? 0,
+          tools: plugin.manifest.contributes.tools?.length ?? 0,
+          guides: plugin.manifest.contributes.guides?.length ?? 0,
+          themes: (plugin.manifest.contributes.themes ?? []).map((theme) => ({ id: theme.id, name: theme.name })),
+        },
+      } : {}),
     })),
+  selectedTheme: () => selectedThemeId(appDir),
   countWorkspaces: () => loadSavedWorkspaces().length,
 });
 
@@ -2577,6 +2588,13 @@ function currentAccess(): AccessReport {
   });
 }
 
+/** Where a session's widget tools run: its workspace, else the owner's home. */
+function widgetWorkspace(sessionId: string): string {
+  const record = resolveSession(sessionId);
+  const meta = metadata.getSession(sessionId);
+  return (record ? harnessDirFor(record) : meta?.worktree || meta?.workspace) || os.homedir();
+}
+
 const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   ...createAppCommands(appService, (id) => { const record = resolveSession(id); return record ? harnessDirFor(record) : runTerms.liveRun(id)?.workspace; }, (app) => {
     const record = resolveSession(app.sessionId);
@@ -2647,17 +2665,33 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     const meta = metadata.getSession(id);
     return meta?.worktree || meta?.workspace || runTerms.liveRun(id)?.workspace;
   }),
-  // Chat widgets: their saved state, and tools plugins provide to them.
+  // Chat widgets: their saved state, plugin widgets and the tools plugins
+  // offer them, and screenshots for the agent that wrote one. A tool runs in
+  // the widget's session workspace.
   ...createWidgetCommands({
     store: new WidgetStateStore(path.join(appDir, "widget-state")),
-    callTool: async (sessionId, name, args) => {
-      const tool = widgetTool(name);
-      const record = resolveSession(sessionId);
-      const meta = metadata.getSession(sessionId);
-      const cwd = (record ? harnessDirFor(record) : meta?.worktree || meta?.workspace) || os.homedir();
-      return runPluginTool(tool, args, { cwd, sessionId });
-    },
+    callTool: (sessionId, name, args) => runPluginTool(widgetTool(name), args, { cwd: widgetWorkspace(sessionId), sessionId }),
     widgetSource: (name) => readPluginWidget(name),
+    shoot: (sessionId, request) => shootWidget({
+      ...request,
+      callTool: (name, args) => runPluginTool(widgetTool(name), args, { cwd: widgetWorkspace(sessionId), sessionId }),
+    }, widgetShotDir(sessionId)),
+  }),
+  // Settings → this machine: remove a plugin, choose its theme.
+  ...createPluginCommands({
+    remove: (id) => {
+      const removed = removePlugin(id, appDir);
+      // A theme from a plugin that is gone no longer applies.
+      const theme = selectedThemeId(appDir);
+      if (removed && theme && !installedContributions("themes", appDir).items.some((entry) => entry.item.id === theme)) selectTheme(appDir, null);
+      return removed;
+    },
+    setTheme: (id) => {
+      if (!id) return selectTheme(appDir, null);
+      const found = installedContributions("themes", appDir).items.find((entry) => entry.item.id === id);
+      if (!found) throw new Error(`No installed theme called ${id}.`);
+      selectTheme(appDir, found.item);
+    },
   }),
   ...createArtifactCommands({
     sessionIds: () => new Set([...metadata.listSessions().map((session) => session.id), ...[...openSessions.values()].map((record) => record.id)]),

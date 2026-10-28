@@ -51,6 +51,8 @@ export interface CapabilityPluginSummary {
   /** Whether the plugin's manifest parsed and validated. */
   valid: boolean;
   agentCount: number;
+  /** What it adds besides agents, so the app can say what each plugin is for. */
+  contributions?: { widgets: number; tools: number; guides: number; themes: Array<{ id: string; name: string }> };
 }
 
 export interface CapabilityLocalEndpointSummary {
@@ -84,6 +86,8 @@ export interface MachineCapabilities {
   docker: CapabilityProbeResult;
   gpu: CapabilityProbeResult;
   plugins: CapabilityPluginSummary[];
+  /** The plugin theme chosen for this machine (`bivy theme set`), if any. */
+  theme?: string | null;
   /** Configured workspace count — a bound, not an enumeration of paths. */
   workspaces: { count: number };
 }
@@ -100,6 +104,7 @@ export interface RawCapabilityInputs {
   docker?: CapabilityProbeResult;
   gpu?: CapabilityProbeResult;
   plugins: CapabilityPluginSummary[];
+  theme?: string | null;
   workspaceCount: number;
   /** Injectable clock for deterministic tests; defaults to `Date.now()`. */
   now?: number;
@@ -165,7 +170,16 @@ export function normalizeCapabilities(raw: RawCapabilityInputs): MachineCapabili
       agentCount: Math.max(0, Math.trunc(plugin.agentCount) || 0),
       ...(plugin.name ? { name: plugin.name } : {}),
       ...(plugin.version ? { version: plugin.version } : {}),
+      ...(plugin.contributions ? {
+        contributions: {
+          widgets: Math.max(0, Math.trunc(plugin.contributions.widgets) || 0),
+          tools: Math.max(0, Math.trunc(plugin.contributions.tools) || 0),
+          guides: Math.max(0, Math.trunc(plugin.contributions.guides) || 0),
+          themes: plugin.contributions.themes.slice(0, 20).map((theme) => ({ id: String(theme.id).slice(0, 48), name: String(theme.name).slice(0, 120) })),
+        },
+      } : {}),
     })),
+    theme: typeof raw.theme === "string" ? raw.theme.slice(0, 48) : null,
     workspaces: { count: Math.max(0, Math.trunc(raw.workspaceCount) || 0) },
   };
 }

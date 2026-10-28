@@ -38,6 +38,8 @@ export interface CapabilityPluginSummary {
   version?: string;
   valid: boolean;
   agentCount: number;
+  /** What it adds besides agents, so the app can say what each plugin is for. */
+  contributions?: { widgets: number; tools: number; guides: number; themes: Array<{ id: string; name: string }> };
 }
 
 export interface CapabilityLocalEndpointSummary {
@@ -64,6 +66,8 @@ export interface MachineCapabilities {
   docker: CapabilityProbeResult;
   gpu: CapabilityProbeResult;
   plugins: CapabilityPluginSummary[];
+  /** The plugin theme chosen for this machine (`bivy theme set`), if any. */
+  theme?: string | null;
   workspaces: { count: number };
 }
 

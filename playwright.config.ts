@@ -10,6 +10,7 @@ const singleViewport = [
   "**/chat-attachments.spec.ts",
   "**/chat-components.spec.ts",
   "**/chat-widgets.spec.ts",
+  "**/machine-plugins.spec.ts",
   "**/chat-inline-app.spec.ts",
   "**/pwa-lifecycle.spec.ts",
   "**/library.spec.ts",

@@ -29,7 +29,7 @@ run your first agent Session.
 | Start checked work from failed CI, an issue, a schedule, or a webhook | [Capability recipes](capability-recipes.md#let-events-start-runs) | [Automations as code](automations-as-code.md) |
 | Bring any ACP agent or CLI, or write an adapter for one | [Add any agent](add-an-agent.md) | [Plugins](plugins.md) |
 | Let the user pick, fill in or adjust something right in the chat | [Chat widgets](widgets.md) | [Plugins](plugins.md) |
-| Make Bivy do more: a reusable widget, a tool, a theme, a playbook | [Plugins](plugins.md) | [CLI reference](cli-reference.md#bivy-plugin-initvalidatedoctortestinstalldevlistremove) |
+| Make Bivy do more: a reusable widget, a tool, a theme, a playbook | [Plugins](plugins.md) | [CLI reference](cli-reference.md#bivy-plugin-initvalidatedoctortestinstalldevsearchlistremove) |
 | Understand what leaves my Machine | [Why Bivy](why-bivy.md#a-precise-trust-boundary) | [Security model](security-model.md) |
 
 The reference organization below remains the fastest path when you already know
@@ -51,6 +51,7 @@ which subsystem or command you need.
 | [agent-shim.md](agent-shim.md) | Users wrapping an agent's native terminal session with Bivy. |
 | [add-an-agent.md](add-an-agent.md) | Anyone adding an ACP agent or CLI from `config.yaml`, or writing an adapter for one. |
 | [widgets.md](widgets.md) | Anyone (or any agent) putting interactive HTML widgets inside chat messages: API, security model, MCP Apps protocol. |
+| [contracts.md](contracts.md) | Anyone building on Bivy: every versioned surface (plugins, kits, widgets, apps, automations, CLI) and how they change. |
 | [plugins.md](plugins.md) | Anyone (usually their agent) extending Bivy on their machine: widgets, tools, themes, guides and agents as a plugin folder. |
 | [automations-as-code.md](automations-as-code.md) | Developers defining, validating, simulating, and applying automations from YAML. |
 | [automation-evaluator.md](automation-evaluator.md) | Contributors touching automation matching/preflight — the shared first-match, overlap, and checklist logic behind config-as-code, the control plane, and the PWA. |
