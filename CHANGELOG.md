@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The README now leads with what Bivy lets you do: use the agents you already pay for and switch when one hits a limit, add any agent (your agent can write the adapter), sign in once on every machine, run on your computer, a cloud computer or a fresh runner, follow along from your phone, try the app, and let events start the work. Self-hosting the whole stack has its own short section, and the page is 320 lines instead of 540.
+
 ### Fixed
 
 - `pnpm release` signs off its version commits (`git commit --signoff`), so the release follow-up PR passes the DCO check.
