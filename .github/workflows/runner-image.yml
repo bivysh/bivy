@@ -54,41 +54,11 @@ jobs:
             --output type=cacheonly \
             .
 
-  resolve:
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      statuses: read
-    outputs:
-      core_sha: ${{ steps.version.outputs.core_sha }}
-      published: ${{ steps.receipt.outputs.published }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ inputs.core_ref || github.sha }}
-      - name: Resolve immutable version
-        id: version
-        run: echo "core_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-      - name: Check for an existing publication receipt
-        id: receipt
-        env:
-          CORE_SHA: ${{ steps.version.outputs.core_sha }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          count="$(gh api "/repos/$GITHUB_REPOSITORY/commits/$CORE_SHA/status" \
-            --jq '[.statuses[] | select(.context == "runner-image/published" and .state == "success")] | length')"
-          if [ "$count" -gt 0 ]; then
-            echo "$CORE_SHA already has a verified public runner image."
-            echo "published=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "published=false" >> "$GITHUB_OUTPUT"
-          fi
-
   # Each architecture builds natively and pushes by digest; publish joins them.
+  # The commit is resolved here rather than in a job of its own, which only
+  # added a runner start before the builds.
   build:
-    if: github.event_name != 'pull_request' && needs.resolve.outputs.published != 'true'
-    needs: resolve
+    if: github.event_name != 'pull_request'
     name: Build runner image (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
@@ -103,10 +73,16 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      core_sha: ${{ steps.version.outputs.core_sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve.outputs.core_sha }}
+          ref: ${{ inputs.core_ref || github.sha }}
+
+      - name: Resolve immutable version
+        id: version
+        run: echo "core_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Log in to GHCR
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -118,7 +94,7 @@ jobs:
       # never replaces a published image.
       - name: Build and push by digest
         env:
-          CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
+          CORE_SHA: ${{ steps.version.outputs.core_sha }}
           ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
@@ -161,8 +137,8 @@ jobs:
           retention-days: 1
 
   publish:
-    if: github.event_name != 'pull_request' && needs.resolve.outputs.published != 'true'
-    needs: [resolve, build]
+    if: github.event_name != 'pull_request'
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -178,7 +154,7 @@ jobs:
 
       - name: Tag the multi-platform manifest
         env:
-          CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
+          CORE_SHA: ${{ needs.build.outputs.core_sha }}
         run: |
           set -euo pipefail
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
@@ -192,7 +168,7 @@ jobs:
       # GHCR visibility is UI-only; check the property every publication relies on.
       - name: Verify anonymous multi-platform pulls
         env:
-          CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
+          CORE_SHA: ${{ needs.build.outputs.core_sha }}
         run: |
           set -euo pipefail
           docker logout ghcr.io >/dev/null 2>&1 || true
@@ -209,7 +185,7 @@ jobs:
       # moves only for the highest stable tag, so a backfill never rolls it back.
       - name: Tag a release that already points at this commit
         env:
-          CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
+          CORE_SHA: ${{ needs.build.outputs.core_sha }}
         run: |
           set -euo pipefail
           tags="$(git ls-remote --tags "https://github.com/$GITHUB_REPOSITORY.git" 'refs/tags/v*' \
@@ -227,7 +203,7 @@ jobs:
 
       - name: Record published SHA
         env:
-          CORE_SHA: ${{ needs.resolve.outputs.core_sha }}
+          CORE_SHA: ${{ needs.build.outputs.core_sha }}
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api --method POST "/repos/$GITHUB_REPOSITORY/statuses/$CORE_SHA" \
