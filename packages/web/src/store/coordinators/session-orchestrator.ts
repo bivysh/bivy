@@ -64,6 +64,7 @@ export interface SessionWorkflowPort {
   getNodeSettings(): void;
   listRepos(): void;
   draftRepo(): string | null;
+  chooseRepo(slug: string): void;
   listBranches(repo: string): void;
   activeSessionId(): string | null;
   isPendingLaunch(id: string): boolean;
@@ -132,13 +133,16 @@ export class SessionOrchestrator {
     return true;
   }
 
-  newSession(opts: { navigate?: boolean } = {}): void {
+  /** `repo`: start the draft on this repository instead of the last-used one
+   *  (e.g. "New session in this repo" from an open session). */
+  newSession(opts: { navigate?: boolean; repo?: string } = {}): void {
     const port = this.workflowPort();
     if (opts.navigate !== false) port.navigateNew();
     port.focusComposer();
     port.clearPendingPromptAndFollowups();
     port.resetActiveSession();
     port.seedDraftDefaults();
+    if (opts.repo) port.chooseRepo(opts.repo);
     port.listRuntimes();
     port.listModels();
     if (!port.hasNodeSettings()) port.getNodeSettings();

@@ -80,6 +80,7 @@ export function SessionMenu({
   sessionId,
   name,
   isRepo,
+  repo,
   node,
   agent,
   workspace,
@@ -93,6 +94,9 @@ export function SessionMenu({
   sessionId: string;
   name: string;
   isRepo: boolean;
+  /** The session's GitHub repository (owner/name), offered as the start of a
+   *  fresh session on the same machine. */
+  repo?: string;
   node?: string;
   agent?: string;
   workspace?: string;
@@ -235,6 +239,17 @@ export function SessionMenu({
           <button className="menu-item session-actions-item" role="menuitem" onClick={rename} disabled={prBusy}>
             Rename
           </button>
+          {repo && (
+            <button
+              className="menu-item session-actions-item"
+              role="menuitem"
+              onClick={() => { close(); controller.newSession({ repo }); }}
+              disabled={prBusy}
+              title={`Start a new session on ${repo}`}
+            >
+              New session in this repo
+            </button>
+          )}
           <button className="menu-item session-actions-item" role="menuitem" onClick={() => { close(); setForkOpen(true); }} disabled={prBusy}>
             Fork / move…
           </button>

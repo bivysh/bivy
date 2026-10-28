@@ -389,6 +389,7 @@ export class AppController {
       getNodeSettings: () => this.getNodeSettings(),
       listRepos: () => this.listRepos(),
       draftRepo: () => this.store.getState().draft.repo,
+      chooseRepo: (slug) => this.chooseRepo(slug),
       listBranches: (repo) => this.listBranches(repo),
       activeSessionId: () => {
         // Selection is the strongest signal for a send. The URL and active
@@ -2337,7 +2338,7 @@ export class AppController {
    * yet — the user can still change node/agent/model/repo — and the real
    * session (bound to those choices) is created lazily by the first sendPrompt.
    */
-  newSession(opts: { navigate?: boolean } = {}): void {
+  newSession(opts: { navigate?: boolean; repo?: string } = {}): void {
     const before = this.store.getState();
     const departingNodeId = before.activeSession.activeSessionId
       ? before.sessionIndex.sessions.find((session) => session.sessionId === before.activeSession.activeSessionId)?.nodeId ?? this.local.cur

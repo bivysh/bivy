@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **New session in this repo.** The session menu (⋯) on a GitHub repository session starts a fresh session on the same repository and machine, instead of the repository you picked last.
 - `FLEET_SWEEP_ORPHANS=0` stops the fleet deleting provider apps that no record of its own owns. Adopting machines another fleet created — a migration, or a restore — starts with an empty store, which the sweep would otherwise read as litter and delete along with every disk. The fleet name used to decide this on its own, and it also names the apps, so there was no way to adopt machines without renaming (and so orphaning) them.
 
 ### Fixed

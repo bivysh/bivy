@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from "react";
-import { activationFromState, authProviderForRuntime, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, recordProductMetric, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionAppsResult, type SessionSummary } from "@bivy/core";
+import { activationFromState, authProviderForRuntime, cancelAutomationRun, deriveApps, deriveArtifacts, fetchAutomationRun, githubIssueRefFromSource, recordProductMetric, repoFromSource, retryAutomationRun, type GithubQueueItem, type NotificationPreferences, type PromptAttachment, type SessionAppsResult, type SessionSummary } from "@bivy/core";
 import { useAppState } from "./store/useStore.js";
 import { SessionList } from "./components/SessionList.js";
 import { BivyMark } from "./components/BivyMark.js";
@@ -871,6 +871,7 @@ export function App() {
     ? `${activeSessionNode.name || activeSessionNode.id} (${activeSessionNode.id})`
     : activeSessionNodeId;
   const isRepoSession = Boolean(activeSession?.source && String(activeSession.source).startsWith("repo:"));
+  const activeSessionRepo = repoFromSource(activeSession?.source) || githubIssueRefFromSource(activeSession?.source)?.repo || undefined;
   const paneTab: SidePaneTabId | null = sidePane.wide && activeSession && !needsNode ? sidePane.tab : null;
   const changedFiles = countUniqueEditedFiles(state.activeSession.changesHistory);
   // Offered once there is something to show. It covers whatever the column
@@ -1069,6 +1070,7 @@ export function App() {
                 sessionId={state.activeSession.activeSessionId}
                 name={state.activeSession.activeTitle}
                 isRepo={isRepoSession}
+                repo={activeSessionRepo}
                 node={activeSessionNodeLabel}
                 agent={activeSession?.agentName || activeSession?.runtimeId}
                 workspace={activeSession?.workspace}
