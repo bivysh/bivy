@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The model picker lists each provider's newest models first and hides a dated model when its "(latest)" version is listed, so connecting Claude no longer shows a long list starting with older models.
 - Cloud computers include Chromium, so agents there can check what they built: `bivy widget shot`, and `bivy app shot` and review-card pictures when you turn on agent screenshots.
 
 ## [0.21.19] - 2026-10-28

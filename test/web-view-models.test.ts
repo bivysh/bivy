@@ -17,6 +17,7 @@ import { modelAccountChoice } from "../packages/web/src/modelAccounts.js";
 import { githubInstallationSettings, githubMentionHandles, githubSourceStatus } from "../packages/web/src/components/githubSource.js";
 import { standbyCopyOf } from "../packages/web/src/standby.js";
 import { cloudComputerToWake, cloudDestinations, nodePresence, runnerDeletionNotice } from "../packages/web/src/cloudDestinations.js";
+import { orderConnectedModels } from "../packages/web/src/modelPickerCatalog.js";
 import { agentForProviders, signInMachineOnline, signInSync } from "../packages/web/src/onboarding.js";
 
 test("account routing follows project, active, default and ambiguity rules", () => {
@@ -203,4 +204,17 @@ test("presence wakes the sleeping cloud computer only for someone who works on i
   assert.equal(cloudComputerToWake([computer], "", "own"), undefined, "chose their own computer");
   assert.equal(cloudComputerToWake([{ ...computer, online: true }], "", "cloud"), undefined, "already up");
   assert.equal(cloudComputerToWake([laptop], laptop.id, "cloud"), undefined, "no cloud computer");
+});
+
+test("the model picker lists each provider's newest models first, without dated duplicates", () => {
+  const m = (provider: string, label: string) => ({ id: label, label, provider });
+  const ordered = orderConnectedModels([
+    m("anthropic", "Claude Haiku 4.5 (latest)"), m("anthropic", "Claude Haiku 4.5"), m("anthropic", "Claude Opus 4.8"),
+    m("anthropic", "Claude Opus 5.5"), m("anthropic", "Claude Sonnet 5"),
+    m("openai-codex", "GPT-5.6 Luna"), m("openai-codex", "GPT-6 Luna"),
+  ]);
+  assert.deepEqual(ordered.map((model) => model.label), [
+    "Claude Opus 5.5", "Claude Sonnet 5", "Claude Opus 4.8", "Claude Haiku 4.5 (latest)",
+    "GPT-6 Luna", "GPT-5.6 Luna",
+  ]);
 });

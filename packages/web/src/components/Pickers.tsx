@@ -17,6 +17,7 @@ import { openSettings } from "../settingsRoute.js";
 import { agentPickerLabel, filterAndSortAgentRuntimes, isTopAgent } from "../agentPickerCatalog.js";
 import { isCloudComputerNodeId, nodePresence, PRESENCE } from "../cloudDestinations.js";
 import { AI_ACCOUNTS } from "../onboarding.js";
+import { orderConnectedModels } from "../modelPickerCatalog.js";
 
 const agentLabel = agentPickerLabel;
 
@@ -840,12 +841,12 @@ export function ModelPicker({ state, hint, onClose, onChosen }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.catalogs.models, state.catalogs.providers, q]);
 
-  // Connected models keep today's behavior (and order) unchanged; anything the
+  // Connected models list newest first, without dated duplicates; anything the
   // node flagged `configured: false` is a per-*provider* summary row (see
   // server.ts publicModelsList — one row per unconnected provider, not one per
   // unconnected model, since Pi's catalog runs to ~1000 models) rendered below
   // as a separate, non-selectable "Other models" section.
-  const connectedModels = models.filter((m) => (m as any).configured !== false);
+  const connectedModels = orderConnectedModels(models.filter((m) => (m as any).configured !== false));
   const unconnected = models.filter((m) => (m as any).configured === false);
   // The plans people already pay for (Claude, ChatGPT) come first, named the
   // way "Connect your AI" names them; every other provider follows.
