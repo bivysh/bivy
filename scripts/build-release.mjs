@@ -75,6 +75,9 @@ for (const file of ["hosted-endpoints.mjs", "hosted-endpoints.d.mts", "agent-bri
 for (const [source, target] of [["packages/ui/tokens.css", "tokens.css"], ["packages/web/src/styles.css", "styles.css"]]) {
   fs.copyFileSync(path.join(root, source), path.join(root, "dist/apps", target));
 }
+// `bivy widget shot` renders a widget in the same frame the app uses.
+fs.mkdirSync(path.join(root, "dist/widgets"), { recursive: true });
+fs.copyFileSync(path.join(root, "packages/web/public/widget-frame.html"), path.join(root, "dist/widgets/widget-frame.html"));
 // macOS desktop previews compile their helper from source on the Mac that runs them.
 fs.copyFileSync(path.join(root, "src/apps/macos-display.swift"), path.join(root, "dist/apps/macos-display.swift"));
 

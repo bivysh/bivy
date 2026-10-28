@@ -51,6 +51,8 @@ export interface WidgetHostDeps {
   setHeight(height: number): void;
   saveState(state: unknown): Promise<void>;
   callTool(name: string, args: Record<string, unknown>): Promise<unknown>;
+  /** The widget logged an error (`notifications/message` at level error). */
+  reportError(message: string): void;
 }
 
 type Handler = (params: Record<string, unknown>, deps: WidgetHostDeps) => unknown | Promise<unknown>;
@@ -178,8 +180,14 @@ export class WidgetHost {
         if (Number.isFinite(height) && height > 0) this.deps.setHeight(Math.ceil(height));
         return;
       }
+      case "notifications/message":
+        if (params.level === "error" || params.level === "critical" || params.level === "alert" || params.level === "emergency") {
+          const data = params.data;
+          this.deps.reportError(typeof data === "string" ? data : JSON.stringify(data ?? "").slice(0, 500));
+        }
+        return;
       default:
-        // notifications/message (logging) and anything newer: nothing to do.
+        // Anything newer: nothing to do.
         return;
     }
   }

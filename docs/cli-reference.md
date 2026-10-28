@@ -611,15 +611,24 @@ bivy ask "Sign in to GitHub" --url https://github.com/login/device --code ABCD-1
 bivy ask "ffmpeg needs a system install. Run this, then tap Done" --run "sudo apt-get install -y ffmpeg" --option Done --option "It failed"
 ```
 
-### `bivy widget <init|state>`
+### `bivy widget <init|shot|list|state>`
 
 Widgets are small HTML pages an agent shows inside its reply (`::view{src=…}`)
 that run in the chat and can answer back. See [Chat widgets](widgets.md).
 
 ```bash
 bivy widget init widgets/pick.html     # write a starter widget (--force to replace)
+bivy widget shot widgets/pick.html [--data '<json>'] [--widths 390,1024] [--themes light,dark]
+bivy widget shot --widget review-checklist   # a plugin's widget
+bivy widget list                       # widgets installed plugins provide
 bivy widget state [--key <key>]        # what this session's widgets saved
 ```
+
+`shot` renders the widget in the chat's frame and runtime with the app's
+tokens, prints the PNG paths and the height it asks for, and lists every error
+it raised (uncaught exceptions, failed `bivy.call`s); it exits non-zero when
+there are errors. Plugin tools it calls run for real. The MCP tool is
+`widget_shot`.
 
 `state` reads what each widget saved with `bivy.setState` or `localStorage`, keyed
 by widget, so the agent can see what the user picked or filled in. The MCP tool

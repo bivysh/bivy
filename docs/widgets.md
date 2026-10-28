@@ -21,6 +21,12 @@ Here are the three layouts. Pick one and I'll build it:
 | ` ```bivy {"type":"widget","html":"<button>…</button>"} ``` ` | A small page inline, with no file (16 KB). |
 | ` ```bivy {"type":"widget","widget":"standup","data":{…}} ``` ` | A widget a [plugin](plugins.md) on the machine provides, by name (`bivy widget list`). |
 
+Agents check a widget before placing it with `bivy widget shot <file>` (MCP
+tool `widget_shot`): it renders the page in the same frame and runtime, light
+and dark, at phone and desktop width, and returns the screenshots and every
+error the page raised. In the chat, a widget that raises an error says so under
+it instead of failing silently.
+
 The page is captured when the message is written, the same way an image is,
 so the message shows the same widget on every device and after the file
 changes. Agents start one with `bivy widget init <file>`, and `bivy guide

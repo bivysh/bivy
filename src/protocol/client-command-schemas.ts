@@ -20,6 +20,7 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
   "widgets.state.get": Type.Object({ ...request, ...session }),
   "widgets.state.set": Type.Object({ ...request, ...session, key: Type.String({ minLength: 1, maxLength: 128 }), state: Type.Unknown() }),
   "widgets.source": Type.Object({ ...request, ...session, name: Type.String({ minLength: 1, maxLength: 48 }) }),
+  "widgets.shot": Type.Object({ ...request, ...session, html: Type.Optional(Type.String({ maxLength: 2 * 1024 * 1024 })), widget: Type.Optional(Type.String({ maxLength: 48 })), data: Type.Optional(Type.Record(Type.String(), Type.Unknown())), widths: Type.Optional(Type.Array(Type.Integer({ minimum: 240, maximum: 2560 }), { minItems: 1, maxItems: 4 })), themes: Type.Optional(Type.Array(Type.Union([Type.Literal("light"), Type.Literal("dark")]), { minItems: 1, maxItems: 2 })) }),
   "widgets.tool": Type.Object({ ...request, ...session, name: Type.String({ minLength: 1, maxLength: 128 }), arguments: Type.Optional(Type.Record(Type.String(), Type.Unknown())) }),
   "access.get": Type.Object(request),
   "secrets.list": Type.Object(request),

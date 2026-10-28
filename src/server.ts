@@ -47,6 +47,7 @@ import { createAppCommands } from "./controllers/app-commands.js";
 import { createFileCommands } from "./controllers/file-commands.js";
 import { createWidgetCommands } from "./controllers/widget-commands.js";
 import { WidgetStateStore } from "./widgets/state.js";
+import { shootWidget, widgetShotDir } from "./widgets/shot.js";
 import { readPluginWidget } from "./plugins/contributions.js";
 import { runPluginTool, widgetTool } from "./plugins/tools.js";
 import { bindClientCommandRoutes } from "./http/client-command-routes.js";
@@ -2577,6 +2578,13 @@ function currentAccess(): AccessReport {
   });
 }
 
+/** Where a session's widget tools run: its workspace, else the owner's home. */
+function widgetWorkspace(sessionId: string): string {
+  const record = resolveSession(sessionId);
+  const meta = metadata.getSession(sessionId);
+  return (record ? harnessDirFor(record) : meta?.worktree || meta?.workspace) || os.homedir();
+}
+
 const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   ...createAppCommands(appService, (id) => { const record = resolveSession(id); return record ? harnessDirFor(record) : runTerms.liveRun(id)?.workspace; }, (app) => {
     const record = resolveSession(app.sessionId);
@@ -2647,17 +2655,17 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     const meta = metadata.getSession(id);
     return meta?.worktree || meta?.workspace || runTerms.liveRun(id)?.workspace;
   }),
-  // Chat widgets: their saved state, and tools plugins provide to them.
+  // Chat widgets: their saved state, plugin widgets and the tools plugins
+  // offer them, and screenshots for the agent that wrote one. A tool runs in
+  // the widget's session workspace.
   ...createWidgetCommands({
     store: new WidgetStateStore(path.join(appDir, "widget-state")),
-    callTool: async (sessionId, name, args) => {
-      const tool = widgetTool(name);
-      const record = resolveSession(sessionId);
-      const meta = metadata.getSession(sessionId);
-      const cwd = (record ? harnessDirFor(record) : meta?.worktree || meta?.workspace) || os.homedir();
-      return runPluginTool(tool, args, { cwd, sessionId });
-    },
+    callTool: (sessionId, name, args) => runPluginTool(widgetTool(name), args, { cwd: widgetWorkspace(sessionId), sessionId }),
     widgetSource: (name) => readPluginWidget(name),
+    shoot: (sessionId, request) => shootWidget({
+      ...request,
+      callTool: (name, args) => runPluginTool(widgetTool(name), args, { cwd: widgetWorkspace(sessionId), sessionId }),
+    }, widgetShotDir(sessionId)),
   }),
   ...createArtifactCommands({
     sessionIds: () => new Set([...metadata.listSessions().map((session) => session.id), ...[...openSessions.values()].map((record) => record.id)]),

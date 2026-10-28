@@ -134,6 +134,11 @@ for (const theme of themes) {
     await expect(page.frameLocator(".md-component iframe.widget-frame").locator("#count")).toHaveText("opened 2");
   });
 
+  test(`${theme}: a widget that breaks says so under it`, async ({ page }) => {
+    await mount(page, theme, ["```bivy", JSON.stringify({ type: "widget", html: "<p>half</p><script>bivy.ready(function () { brokenCall(); });</script>" }), "```"].join("\n"));
+    await expect(page.locator(".widget-component figcaption")).toHaveText("This widget hit an error: brokenCall is not defined");
+  });
+
   test(`${theme}: a plugin's widget is placed by name and gets live data from a plugin tool`, async ({ page }) => {
     await mount(page, theme, ["CI:", "", "```bivy", JSON.stringify({ type: "widget", widget: "ci", data: { branch: "main" } }), "```"].join("\n"));
     await expect(page.locator(".md-component iframe.widget-frame")).toHaveAttribute("title", "CI status");

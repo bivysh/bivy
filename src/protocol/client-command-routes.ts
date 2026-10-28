@@ -15,7 +15,7 @@ export const CLIENT_COMMAND_ROUTES: readonly ClientCommandRoute[] = [
   ...["list", "read"].map((action) => ({ method: "post" as const, path: `/api/files/${action}`, kind: `files.${action}` })),
   { method: "post", path: "/api/access/get", kind: "access.get" },
   // Direct transport maps `widgets.state.get` to `/api/widgets/state.get` (first dot only).
-  ...["state.get", "state.set", "source", "tool"].map((action) => ({ method: "post" as const, path: `/api/widgets/${action}`, kind: `widgets.${action}` })),
+  ...["state.get", "state.set", "source", "shot", "tool"].map((action) => ({ method: "post" as const, path: `/api/widgets/${action}`, kind: `widgets.${action}` })),
   ...["list", "remove"].map((action) => ({ method: "post" as const, path: `/api/secrets/${action}`, kind: `secrets.${action}` })),
   { method: "post", path: "/api/tailnet/machines", kind: "tailnet.machines" },
   { method: "post", path: "/api/auth/credentials/native-preview", kind: "credentials.native.preview" },

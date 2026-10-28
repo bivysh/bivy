@@ -25,6 +25,8 @@ export interface ShotRequest {
    * place of the page's own HTML, at its own URL so styles and images load.
    * Scripts in it are off. */
   html?: string;
+  /** How long to let the page settle after it loads (default 400 ms). */
+  settleMs?: number;
 }
 /** Desktop apps are shot as they are on screen: `theme` is "native" for them.
  * `scroll`: where the page actually scrolled to, when asked to scroll. */
@@ -184,7 +186,7 @@ export async function takeShots(views: RegisteredView[], request: ShotRequest, o
           off?.();
           if (request.html) await cdp.send("Fetch.disable", {}, sessionId).catch(() => {});
         }
-        await new Promise((r) => setTimeout(r, 400)); // let fonts and first effects settle
+        await new Promise((r) => setTimeout(r, request.settleMs ?? 400)); // let fonts and first effects settle
         // Match scrolling inside app panels as well as the document. Marks are
         // viewport positions within these panels; subtract only document scroll.
         let elementScrollsRestored: boolean | undefined;

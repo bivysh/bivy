@@ -217,6 +217,7 @@ export function Widget({ spec, attachment, path, attrs, sessionId, streaming }: 
           throw new WidgetRefusal(error instanceof Error ? error.message : "Could not save.");
         }
       },
+      reportError: (message) => setNotice((current) => current ?? `This widget hit an error: ${message}`),
       callTool: async (name, args) => {
         if (!sessionId) throw new WidgetRefusal("This widget is not in a session.");
         const reply = await controller.widgetCommand("widgets.tool", sessionId, { name, arguments: args });

@@ -15,6 +15,11 @@ workspace. `--artifact` also lists it in the session's Artifacts, for durable
 outputs (reports, coverage, builds). Markdown image syntax with a local path does
 not render; a remote `https://` image does.
 
+## Something they should do, not just read
+
+A choice, a form, a checklist, a slider: put a widget in your reply instead of
+asking them to type an answer. `bivy guide widgets`.
+
 ## Something with a UI
 
 Publish it once; the user opens it from the chat:

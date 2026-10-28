@@ -2634,10 +2634,10 @@ async function cmdTitle(args = []) {
 // `bivy widget init <file.html>` writes a starter widget; `bivy widget state`
 // prints what this session's widgets saved (the user's choices and inputs).
 async function cmdWidget(args = []) {
-  const usage = "Usage: bivy widget init <file.html> | bivy widget list | bivy widget state [--key <key>] [--session <id>] [--json]";
+  const usage = "Usage: bivy widget init <file.html> | bivy widget shot <file.html> [--data '<json>'] | bivy widget list | bivy widget state [--key <key>] [--session <id>] [--json]";
   const [sub, ...rest] = args;
   if (!sub || sub === "-h" || sub === "--help") {
-    console.log(`${usage}\n\nA widget is a small HTML page that runs inside your chat reply: a form, a picker, a checklist.\n  init   write a starter widget to <file.html>\n  list   widgets installed plugins provide, to place by name\n  state  what this session's widgets saved, keyed by widget\n\nShow one with ::view{src=<file.html>} on its own line. More: bivy guide widgets.`);
+    console.log(`${usage}\n\nA widget is a small HTML page that runs inside your chat reply: a form, a picker, a checklist.\n  init   write a starter widget to <file.html>\n  shot   render it as the user will see it (light/dark, phone/desktop) and report its errors\n  list   widgets installed plugins provide, to place by name\n  state  what this session's widgets saved, keyed by widget\n\nShow one with ::view{src=<file.html>} on its own line. More: bivy guide widgets.`);
     return;
   }
   const json = wantsJson(rest);
@@ -2661,6 +2661,42 @@ async function cmdWidget(args = []) {
     if (json) { console.log(JSON.stringify({ widgets })); return; }
     if (!widgets.length) { console.log("No plugin widgets installed. Write one for this message with: bivy widget init <file.html>"); return; }
     for (const widget of widgets) console.log(`  ${c.cyan(widget.widget)}  ${widget.name}${widget.description ? ` — ${widget.description}` : ""}  (${widget.plugin})\n      ${widget.place}`);
+    return;
+  }
+  if (sub === "shot") {
+    const flags = parseSessionArgs(rest, ["--widget", "--data", "--widths", "--themes", "--session"]);
+    if (flags.error) return fail({ code: "usage", message: flags.error, exit: EXIT.usage });
+    const file = flags.positional[0];
+    const widget = flags.one("--widget");
+    if (!file && !widget) return fail({ code: "usage", message: "Usage: bivy widget shot <file.html> | --widget <name> [--data '<json>'] [--widths 390,1024] [--themes light,dark]", exit: EXIT.usage });
+    let data;
+    try { data = flags.one("--data") ? JSON.parse(flags.one("--data")) : undefined; } catch { return fail({ code: "usage", message: "--data must be JSON.", exit: EXIT.usage }); }
+    let html;
+    if (file) {
+      try { html = fs.readFileSync(file, "utf8"); } catch (error) { return fail({ code: "not_found", message: `Could not read ${file}: ${error.message}`, exit: EXIT.notFound }); }
+    }
+    const sessionId = resolveAttachSessionId({ sessionFlag: flags.one("--session"), env: process.env });
+    if (!sessionId) return fail({ code: "no_session", message: "No session id.", hint: "Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.", exit: EXIT.usage });
+    const config = loadConfig();
+    if (!(await ensureNodeRunning(config))) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable });
+    const token = await sessionAuth(config, sessionId);
+    const list = (value) => value ? value.split(",").map((v) => v.trim()).filter(Boolean) : undefined;
+    const res = await fetch(`${url(config)}/api/widgets/shot`, {
+      method: "POST", headers: { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ sessionId, ...(html !== undefined ? { html } : { widget }), ...(data ? { data } : {}), ...(list(flags.one("--widths")) ? { widths: list(flags.one("--widths")).map(Number) } : {}), ...(list(flags.one("--themes")) ? { themes: list(flags.one("--themes")) } : {}) }),
+    }).catch((error) => error);
+    if (res instanceof Error) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node: ${res.message}`, next: "bivy status", exit: EXIT.unavailable });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok || body.error) return fail({ code: "shot_failed", message: `Widget shot failed: ${body.error || res.status}`, exit: EXIT.failed });
+    const result = { shots: body.shots ?? [], errors: body.errors ?? [], height: body.height };
+    if (json) console.log(JSON.stringify(result));
+    else {
+      for (const shot of result.shots) console.log(`${shot.width}px ${shot.theme}: ${shot.file}`);
+      if (result.height) console.log(`It asks for ${result.height}px of height${result.height > 720 ? " (more than the 720px a widget gets inline; it will scroll)" : ""}.`);
+      for (const error of result.errors) console.error(c.red(`error: ${error}`));
+      if (!result.errors.length) console.log(c.green("No errors. Look at the PNGs before placing it."));
+    }
+    if (result.errors.length) process.exitCode = EXIT.failed;
     return;
   }
   if (sub !== "state") return fail({ code: "usage", message: usage, exit: EXIT.usage });

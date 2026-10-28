@@ -62,7 +62,7 @@ export const SESSION_TOKEN_ROUTES: readonly { method: "GET" | "POST"; path: RegE
   { method: "POST", path: /^\/api\/session\/([^/]+)\/automations\/apply$/, session: "path" },
   { method: "GET", path: /^\/api\/session\/([^/]+)\/automations\/apply\/[^/]+$/, session: "path" },
   { method: "POST", path: /^\/api\/apps\/[a-zA-Z]+$/, session: "body" },
-  { method: "POST", path: /^\/api\/widgets\/state\.get$/, session: "body" },
+  { method: "POST", path: /^\/api\/widgets\/(state\.get|shot)$/, session: "body" },
   { method: "POST", path: /^\/api\/session\/fork$/, session: "body" },
   { method: "GET", path: /^\/api\/machines$/, session: "none" },
 ];

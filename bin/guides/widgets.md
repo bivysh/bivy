@@ -27,6 +27,15 @@ One a plugin provides is placed by name: `{"type":"widget","widget":"standup","d
 (`bivy widget list` shows them). To make a widget the user can reuse in every
 session, put it in a plugin: `bivy guide extend-bivy`.
 
+## Check it before you place it
+
+    bivy widget shot widgets/pick.html --data '{"question":"Which plan?","options":["A","B"]}'
+
+renders it as the user will see it — in the chat's frame, light and dark, at
+phone and desktop width — and prints the PNG paths and every error the page
+raised. Look at the images and fix every error first. Plugin tools it calls
+run for real; `--widget <name>` shoots a plugin's widget.
+
 ## What the page can use
 
     bivy.ready(fn)       run fn once data, theme and saved state are in
