@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.19] - 2026-10-28
+
 ### Changed
 
 - **Fewer steps from sign-up to the first answer.** Where the deployment offers Bivy Cloud, the cloud computer now starts right after sign-in, with no "Where should your agents run?" question; **Use my own computer instead** is on the AI sign-in card. Connecting the first plan finishes setup by itself (no **Continue**), and the app goes straight to the composer instead of a suggested first task. The agent now follows the plan you connect: ChatGPT picks Codex and Claude picks Claude Code, instead of keeping Pi, which then asked for a model.
