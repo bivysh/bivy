@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.17] - 2026-10-28
+
 ### Added
 
 - **Plugins can add widgets, tools, themes and guides**, not only agents. Ask any agent to make Bivy do more ("a standup checklist", "a theme like my editor", "let widgets show CI status") and it builds a plugin and installs it on your machine; nothing goes through a pull request or a release. Widgets are placed by name in any session, tools run for every agent (`bivy tools run`, and as MCP tools) and for widgets that need live data, `bivy theme set` restyles the app, and guides appear in `bivy guide`. `bivy plugin init --kind widget|tool|theme|guide` starts a working one, `bivy plugin dev` reinstalls on every change, and `bivy plugin install github:owner/repo` installs one someone shared. See [Plugins](docs/plugins.md).
