@@ -1,0 +1,19 @@
+name: Change to Bivy
+description: Something every Bivy user should get, or a seam plugins cannot reach yet.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Could it be a plugin? A widget, tool, theme, guide or agent for yourself can be built and installed by your agent today (`bivy guide extend-bivy`). Open this when the change belongs in Bivy for everyone.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What you want to do, and what stops you
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: A sketch is enough. If you would like to build it, say so — `bivy contribute <issue>` sets your agent up to.

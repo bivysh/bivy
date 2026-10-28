@@ -384,6 +384,24 @@ Skipped entirely when `BIVY_SKIP_AGENT_PREINSTALL=1`.
 bivy agents:install
 ```
 
+### `bivy contribute [<issue>] [flags]`
+
+Work on Bivy itself with your agent. Uses the Bivy checkout you are in, or
+`--dir`, or clones `bivysh/bivy` into `~/src/bivy`; refuses a checkout with
+uncommitted changes; makes `contrib/<issue>-<slug>` from `origin/main`; and
+starts a chat session there (`--agent`, default your default agent) whose first
+message is the issue and the repository's rules. `--no-start` prepares the
+checkout and prints the task; `--json` prints `{dir, branch, issue, sessionId}`.
+
+```bash
+bivy contribute 1234
+bivy contribute https://github.com/bivysh/bivy/issues/1234 --agent codex
+bivy contribute --no-start --json
+```
+
+Changes a user wants only for themselves are usually a [plugin](plugins.md)
+instead, with no review needed. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+
 ### `bivy exec "<prompt>" [flags]`
 
 One-shot headless run. Creates (or resumes) a session, sends one prompt, waits

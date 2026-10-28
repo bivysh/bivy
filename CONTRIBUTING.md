@@ -2,6 +2,52 @@
 
 Thanks for helping improve Bivy.
 
+## First: does it need to be in Bivy?
+
+Most things people want from Bivy can be a **plugin** on their own machine — a
+chat widget, a tool, a theme, a guide, another agent — built and installed by
+their agent in a session, with no pull request and no wait
+([plugins](docs/plugins.md), `bivy guide extend-bivy`). If you made one others
+would like, push it to a repository with the `bivy-plugin` topic; anyone can
+then `bivy plugin install github:you/repo`.
+
+Contribute here when the change is a fix, something every user should get, or
+a seam plugins cannot reach yet.
+
+## Contribute with your agent
+
+```bash
+bivy contribute 1234      # a checkout of bivysh/bivy, a branch, and an agent session on the issue
+pnpm install
+pnpm dev:all              # a node from this checkout + the web app, on their own port and data dir
+```
+
+`bivy contribute` uses the checkout you are in (or clones one), branches from
+`origin/main`, and starts a chat session whose first message is the issue and
+this repository's rules; `bivy guide contribute` is the playbook the agent
+follows. `pnpm dev:all` prints the app's URL.
+
+## Good first changes are rows
+
+The code prefers data to branches, so a first change is often one row in a
+table, with the rule written at the top of the file:
+
+| To add | Edit |
+|---|---|
+| An agent | `src/agents/profiles.ts` (or a plugin: `bivy plugin init --kind agent`) |
+| A stream parser for a CLI agent's output | `src/runtime/cli-parsers.ts` and the parser ids in `src/plugin-sdk/manifest.ts` |
+| A built-in integration (an authenticated API as tools) | `src/integrations/registry.ts` |
+| A component an agent can place in a message | `componentKind` in `packages/core/src/message-components.ts` and the registry in `packages/web/src/components/MessageComponent.tsx` |
+| A widget protocol method | the request table in `packages/web/src/widgets/host.ts` |
+| A plugin contribution type | `CONTRIBUTION_TYPES` in `src/plugin-sdk/manifest.ts` |
+| A desktop theme source | `THEME_SOURCES` in `src/machine-theme.ts` |
+| A `bivy` command | `bin/cli-commands.mjs`, then `docs/cli-reference.md` (`pnpm run check:cli`) |
+| An agent playbook | a markdown file in `bin/guides/` |
+| A per-agent doc | `docs/agents/` |
+
+Issues labelled `good first issue` are a place to start; `bivy contribute
+<issue>` sets your agent up on one.
+
 ## Development
 
 ```bash

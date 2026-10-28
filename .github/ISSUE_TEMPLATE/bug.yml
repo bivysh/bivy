@@ -1,0 +1,32 @@
+name: Bug
+description: Something in Bivy does not work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected
+      description: Your agent can write this for you — ask it to describe the bug from the session where it happened.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. …\n2. …"
+  - type: input
+    id: version
+    attributes:
+      label: Bivy version
+      description: "`bivy version`"
+  - type: input
+    id: agent
+    attributes:
+      label: Agent and machine
+      description: Which agent (Claude Code, Codex, Pi, …) and OS, if it matters.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output
+      description: "`bivy doctor` output, an error message, or a screenshot. Remove anything private."
+      render: text

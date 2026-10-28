@@ -2684,6 +2684,90 @@ async function cmdWidget(args = []) {
   console.log(JSON.stringify(states, null, 2));
 }
 
+// `bivy contribute [issue]` — work on Bivy itself with your agent: a checkout of
+// bivysh/bivy on a fresh branch, and a chat session there whose first message
+// is the issue plus the repository's rules. Most things a user wants are a
+// plugin (`bivy guide extend-bivy`) and need none of this; this is for changes
+// that belong in Bivy for everyone.
+const BIVY_REPO = "bivysh/bivy";
+
+async function cmdContribute(args = []) {
+  const usage = "Usage: bivy contribute [<issue number|issue URL>] [--agent <id>] [--dir <checkout>] [--no-start] [--json]";
+  if (args.includes("-h") || args.includes("--help")) {
+    console.log(`${usage}\n\nWork on Bivy itself with your agent. Uses the Bivy checkout you are in, or --dir, or clones\n${BIVY_REPO} to ~/src/bivy; makes a branch from origin/main; and starts a chat session there whose\nfirst message is the issue and the repository's rules (AGENTS.md, CONTRIBUTING.md). --no-start\nprepares the checkout and prints the task instead. Open issues: https://github.com/${BIVY_REPO}/issues`);
+    return;
+  }
+  const json = wantsJson(args);
+  const fail = (error) => cliError(error, { json, paint: c.red });
+  const flags = parseSessionArgs(args, ["--agent", "--dir"]);
+  if (flags.error) return fail({ code: "usage", message: flags.error, exit: EXIT.usage });
+  const ref = flags.positional[0];
+  const issueNumber = ref ? Number(/(?:issues|pull)\/(\d+)/.exec(ref)?.[1] ?? ref.replace(/^#/, "")) : undefined;
+  if (ref && !(Number.isInteger(issueNumber) && issueNumber > 0)) return fail({ code: "usage", message: `"${ref}" is not an issue number or URL.`, hint: usage, exit: EXIT.usage });
+
+  // The checkout: this one if it is Bivy, else --dir, else ~/src/bivy (cloned).
+  const git = (cwd, ...gitArgs) => spawnSync("git", gitArgs, { cwd, encoding: "utf8" });
+  const isBivy = (dir) => { try { return ["@bivy/bivy", "bivy"].includes(JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8")).name) && fs.existsSync(path.join(dir, "AGENTS.md")); } catch { return false; } };
+  const top = git(process.cwd(), "rev-parse", "--show-toplevel").stdout?.trim();
+  let dir = flags.one("--dir") ? path.resolve(flags.one("--dir")) : top && isBivy(top) ? top : path.join(os.homedir(), "src", "bivy");
+  if (!fs.existsSync(dir)) {
+    if (!json) console.log(`Cloning ${BIVY_REPO} into ${dir}…`);
+    fs.mkdirSync(path.dirname(dir), { recursive: true });
+    const cloned = spawnSync("git", ["clone", "--quiet", `https://github.com/${BIVY_REPO}.git`, dir], { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" });
+    if (cloned.status !== 0) return fail({ code: "clone_failed", message: `Could not clone ${BIVY_REPO}: ${cloned.stderr?.trim() || "git failed"}`, exit: EXIT.failed });
+  }
+  if (!isBivy(dir)) return fail({ code: "not_bivy", message: `${dir} is not a Bivy checkout.`, hint: "Pass --dir <checkout of bivysh/bivy>, or a missing folder to clone into.", exit: EXIT.usage });
+  if (git(dir, "status", "--porcelain").stdout?.trim()) return fail({ code: "dirty", message: `${dir} has uncommitted changes.`, hint: "Commit or set them aside first, or pass --dir for another checkout.", exit: EXIT.conflict });
+
+  // The issue, read from GitHub's public API.
+  let issue = null;
+  if (issueNumber) {
+    try {
+      const res = await fetch(`https://api.github.com/repos/${BIVY_REPO}/issues/${issueNumber}`, { headers: { accept: "application/vnd.github+json", "user-agent": "bivy-cli" } });
+      if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+      const body = await res.json();
+      issue = { number: issueNumber, title: String(body.title ?? ""), body: String(body.body ?? "").slice(0, 8000), url: String(body.html_url ?? "") };
+    } catch (error) {
+      return fail({ code: "issue_unavailable", message: `Could not read issue #${issueNumber}: ${error?.message || error}`, exit: EXIT.unavailable });
+    }
+  }
+
+  // A fresh branch from the latest main.
+  const slug = (issue?.title ?? "change").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "change";
+  const branch = `contrib/${issue ? `${issue.number}-` : ""}${slug}`;
+  const fetched = git(dir, "fetch", "--quiet", "origin", "main");
+  if (fetched.status !== 0) return fail({ code: "fetch_failed", message: `git fetch failed: ${fetched.stderr?.trim()}`, exit: EXIT.failed });
+  const switched = git(dir, "switch", "--quiet", "-C", branch, "origin/main");
+  if (switched.status !== 0) return fail({ code: "branch_failed", message: `Could not create ${branch}: ${switched.stderr?.trim()}`, exit: EXIT.failed });
+
+  const task = [
+    issue ? `Work on Bivy issue #${issue.number}: ${issue.title}\n${issue.url}\n\n${issue.body}`.trim() : "Make a change to Bivy itself. Ask me what it should be if I have not said.",
+    "",
+    `You are in a checkout of ${BIVY_REPO} on the branch ${branch}. Follow \`bivy guide contribute\`: read AGENTS.md, CONTRIBUTING.md and test/README.md first, keep the change small, add a CHANGELOG entry, run the checks they name, and sign off commits (git commit -s). Show me the result before you push or open a pull request.`,
+  ].join("\n");
+
+  if (flags.has("--no-start")) {
+    if (json) { console.log(JSON.stringify({ ok: true, dir, branch, issue, task })); return; }
+    console.log(`${c.green("Ready:")} ${dir} on ${branch}.\n\n${task}`);
+    return;
+  }
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable });
+  const agent = flags.one("--agent") || resolveDefaultAgent();
+  let started;
+  try {
+    started = await localApi(config, "/api/session/prompt", { method: "POST", body: JSON.stringify({ text: task, workspace: dir, agent }) });
+  } catch (error) {
+    return fail({ code: "start_failed", message: `Could not start a session: ${error?.message || error}`, hint: `The checkout is ready: ${dir} on ${branch}.`, exit: EXIT.failed });
+  }
+  const nodeId = await localApi(config, "/api/node/info").then((info) => String(info?.nodeId || "")).catch(() => "");
+  const sessionPath = `/sessions/${encodeURIComponent(started.sessionId)}${nodeId ? `?node=${encodeURIComponent(nodeId)}` : ""}`;
+  if (json) { console.log(JSON.stringify({ ok: true, dir, branch, issue, sessionId: started.sessionId, agent })); return; }
+  console.log(`${c.green("Started")} ${agent} in ${dir} on ${branch}${issue ? ` for #${issue.number}` : ""}.`);
+  const remote = await openRemoteApp({ open: !flags.has("--no-open"), remotePath: sessionPath });
+  if (remote) console.log(`Follow it in the Bivy app: ${c.cyan(remote.openUrl)}`);
+}
+
 // Flags shared by the session commands: `--name value` pairs and bare switches,
 // with every other word collected as positional text.
 function parseSessionArgs(args, valueFlags) {
@@ -6629,6 +6713,9 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       break;
     case "widget":
       await cmdWidget(args);
+      break;
+    case "contribute":
+      await cmdContribute(args);
       break;
     case "notify":
       await cmdNotify(args);
