@@ -41,6 +41,21 @@ function readJsonObject(file: string): Record<string, unknown> {
 }
 
 /**
+ * OpenCode providers a subscription serves, mapped to the vault provider whose
+ * account model list gates them. A provider the user's own auth.json signs in
+ * with an API key is not a plan, so its full catalog stays.
+ */
+export function opencodeAccountProviders(authPath = opencodeAuthPath()): Record<string, string> {
+  const native = readJsonObject(authPath);
+  const aliases: Record<string, string> = {};
+  for (const row of OPENCODE_SUBSCRIPTIONS) {
+    const own = native[row.opencode] as { type?: unknown } | undefined;
+    if (!own || own.type === "oauth") aliases[row.opencode] = row.vault;
+  }
+  return aliases;
+}
+
+/**
  * `{ OPENCODE_AUTH_CONTENT }` carrying the user's OpenCode logins plus each
  * Bivy-connected subscription they don't already have, or `{}` when there is
  * nothing to add (OpenCode then reads its own file as usual).

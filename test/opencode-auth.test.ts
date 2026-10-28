@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { opencodeAuthEnv } from "../src/runtime/opencode-auth.js";
+import { opencodeAccountProviders, opencodeAuthEnv } from "../src/runtime/opencode-auth.js";
 
 function scratch(vault: Record<string, unknown>, native?: Record<string, unknown>) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-auth-"));
@@ -32,4 +32,9 @@ test("the user's own OpenCode login for a provider wins, and no subscription mea
   assert.deepEqual(await opencodeAuthEnv(own.credsDir, own.authPath), {});
   const none = scratch({});
   assert.deepEqual(await opencodeAuthEnv(none.credsDir, none.authPath), {});
+});
+
+test("OpenCode's openai models are gated by the plan's list unless the user signs in with an API key", () => {
+  assert.deepEqual(opencodeAccountProviders(scratch({}).authPath), { openai: "openai-codex" });
+  assert.deepEqual(opencodeAccountProviders(scratch({}, { openai: { type: "api", key: "sk" } }).authPath), {});
 });

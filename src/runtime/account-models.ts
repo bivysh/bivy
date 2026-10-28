@@ -68,11 +68,20 @@ export async function accountModelLists(credsDir: string): Promise<Map<string, S
   return lists;
 }
 
-/** Drop models the account can't use; providers without a list pass through. */
-export function withinAccount<T extends { provider?: string; id: string }>(models: T[], lists: Map<string, Set<string>>): T[] {
+/**
+ * Drop models the account can't use; providers without a list pass through.
+ * `aliases` maps an agent's own provider name to the list that gates it
+ * (OpenCode calls a ChatGPT plan `openai`). An ACP id keeps its provider prefix
+ * (`openai/gpt-5.6-terra`), and a speed tier rides on the base model's slug
+ * (`gpt-5.6-terra-fast`), so both count as the listed model.
+ */
+export function withinAccount<T extends { provider?: string; id: string }>(models: T[], lists: Map<string, Set<string>>, aliases: Record<string, string> = {}): T[] {
   return models.filter((model) => {
-    const allowed = lists.get(String(model.provider ?? ""));
-    return !allowed || allowed.has(model.id);
+    const provider = String(model.provider ?? "");
+    const allowed = lists.get(aliases[provider] ?? provider);
+    if (!allowed) return true;
+    const id = model.id.startsWith(`${provider}/`) ? model.id.slice(provider.length + 1) : model.id;
+    return [...allowed].some((slug) => id === slug || id.startsWith(`${slug}-`));
   });
 }
 

@@ -63,7 +63,7 @@ import { codexCredentialPreflight } from "./codex-preflight.js";
 import { opencodeCredentialPreflight } from "./opencode-preflight.js";
 import { grokCredentialPreflight } from "./grok-preflight.js";
 import { ensureGrokAuth } from "./grok-auth.js";
-import { opencodeAuthEnv } from "./opencode-auth.js";
+import { opencodeAccountProviders, opencodeAuthEnv } from "./opencode-auth.js";
 import { parserFactoryFor } from "./cli-parsers.js";
 import { sandboxTier, sandboxArgsFor } from "../harness/sandbox.js";
 import type { McpConfig } from "../harness/mcp-config.js";
@@ -116,6 +116,18 @@ const PREPARE_BEHAVIORS: Record<PrepareBehavior, (credsDir: string) => Promise<R
   },
   "opencode-auth": (credsDir) => opencodeAuthEnv(credsDir),
 };
+/** The providers each prepare projects from a subscription, under the agent's
+ * own name -> the vault provider whose account model list gates them. */
+const ACCOUNT_PROVIDER_BEHAVIORS: Record<PrepareBehavior, () => Record<string, string>> = {
+  "grok-auth": () => ({}),
+  "opencode-auth": () => opencodeAccountProviders(),
+};
+
+/** Provider aliases for `withinAccount` when filtering `runtimeId`'s models. */
+export function accountProviderAliases(runtimeId: string): Record<string, string> {
+  const prepare = (AGENT_PROFILES as Record<string, { behaviors?: AgentProfileBehaviors }>)[runtimeId]?.behaviors?.prepare;
+  return prepare ? ACCOUNT_PROVIDER_BEHAVIORS[prepare]() : {};
+}
 const SLASH_COMMAND_BEHAVIORS: Record<SlashCommandsBehavior, () => SlashCommandProvider> = {
   codex: codexSlashCommands,
   opencode: opencodeSlashCommands,

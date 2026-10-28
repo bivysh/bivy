@@ -231,7 +231,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // Approve/Deny + session/load resume + a real model picker), the same bar Pi,
     // Claude Code, and Codex clear. See `acp` below for the version fallback.
     supportTier: "supported",
-    testedVersion: "1.19.4",
+    testedVersion: "1.19.5",
     // Mixed: OpenCode keeps its own logins, and Bivy adds what it holds — API
     // keys as env vars, a connected ChatGPT plan via the opencode-auth prepare.
     authOwner: "mixed",

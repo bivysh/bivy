@@ -16,7 +16,7 @@ import { rateLimit } from "express-rate-limit";
 import { WebSocketServer, WebSocket } from "ws";
 import { bridgesToSync, installBridges, missingBridges } from "./agent-bridges.mjs";
 import { resolveExecutable } from "./executable.js";
-import { listRuntimes, catalogRuntimes, agentInstallSpec, canonicalAgentId, invalidateCliProbeCache, pluginAgentConflictDiagnostics, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor } from "./runtime/index.js";
+import { listRuntimes, catalogRuntimes, accountProviderAliases, agentInstallSpec, canonicalAgentId, invalidateCliProbeCache, pluginAgentConflictDiagnostics, type AgentCommand, type AgentRuntime, type DiscoveredNativeSession, type OpenSessionOptions, type OpenSessionResult, type RuntimeCapabilities, type RuntimeEvent, type RuntimeMessage, type RuntimeSession, type SessionSummary, type ToolInterceptor } from "./runtime/index.js";
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
@@ -40,6 +40,7 @@ import { AppService, type PinSink, type ReviewSink } from "./apps/service.js";
 import { scanListeners, scanMachineListeners } from "./apps/listeners.js";
 import type { AppOffer } from "./apps/types.js";
 import { AGENT_PROFILES } from "./agents/profiles.js";
+import { accountModelLists, withinAccount } from "./runtime/account-models.js";
 import { pngSize, reviewHint } from "./apps/review.js";
 import type { AppPin, AppReview, ReviewShot } from "./apps/types.js";
 import { createDisplayHost } from "./apps/display.js";
@@ -10348,8 +10349,13 @@ function publicModel(model: any, current?: any) {
  * reply (sent on every reconnect, not just when the picker is open) and turn
  * "other models" into an unscrollable wall.
  */
-async function publicModelsList(session: any, current: any) {
-  const connected = (await session.getModels()).map((model: any) => publicModel(model, current));
+async function publicModelsList(session: any, current: any, runtimeId: string) {
+  // Every agent's picker hides the models a subscription refuses (a ChatGPT
+  // plan serves only part of what an agent's own catalog lists), so a model
+  // the user picks is one the account will run.
+  const lists = await accountModelLists(credsDir).catch(() => new Map<string, Set<string>>());
+  const models = withinAccount(await session.getModels(), lists, accountProviderAliases(runtimeId));
+  const connected = models.map((model: any) => publicModel(model, current));
   if (typeof session.getAllModels !== "function") return connected;
   const connectedProviders = new Set(connected.map((m: any) => m.provider));
   const counts = new Map<string, number>();
@@ -10373,7 +10379,7 @@ async function publicModelsList(session: any, current: any) {
 async function modelsListEventFor(record: SessionRecord) {
   const session = record.session;
   const current = session.getCurrentModel();
-  const models = await publicModelsList(session, current);
+  const models = await publicModelsList(session, current, record.runtimeId);
   const thinking = publicThinkingInfo(session);
   return { type: "models.list" as const, sessionId: record.id, runtimeId: record.runtimeId, modelSelection: getRuntime(record.runtimeId).capabilities.modelSelection !== false, current: current ? publicModel(current, current) : null, models, thinking };
 }
@@ -10400,7 +10406,7 @@ app.get("/api/models", async (req, res, next) => {
     record ??= await sessionForModelQuery(wantedRuntimeId);
     const session = record.session;
     const current = session.getCurrentModel();
-    const models = await publicModelsList(session, current);
+    const models = await publicModelsList(session, current, record.runtimeId);
     const thinking = publicThinkingInfo(session);
     res.json({ sessionId: record.id, runtimeId: record.runtimeId, modelSelection: getRuntime(record.runtimeId).capabilities.modelSelection !== false, current: current ? publicModel(current, current) : null, models, thinking });
   } catch (error) {
