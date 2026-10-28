@@ -58,16 +58,31 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(await store.accountFromSession(token), undefined);
   });
 
-  await test("device login: pending → complete mints a session at poll time", async (store) => {
+  await test("device login: pending → proposed → approved mints a session at poll time", async (store) => {
     const acct = await store.findOrCreateAccount("contract-device@example.com");
     const { deviceId, deviceSecret } = await store.createDeviceLogin();
     assert.deepEqual(await store.pollDeviceLogin(deviceId, deviceSecret), { status: "pending" });
-    await store.completeDeviceLogin(deviceId, acct.id);
+    const approval = await store.proposeDeviceLogin(deviceId, acct.id);
+    assert.ok(approval);
+    // Signing in alone does not complete it: the browser must approve.
+    assert.deepEqual(await store.pollDeviceLogin(deviceId, deviceSecret), { status: "pending" });
+    assert.deepEqual(await store.approveDeviceLogin(approval!), { deviceId, accountId: acct.id });
+    assert.equal(await store.approveDeviceLogin(approval!), undefined);
+    assert.equal(await store.proposeDeviceLogin(deviceId, acct.id), undefined, "an approved login takes no new account");
     const done = await store.pollDeviceLogin(deviceId, deviceSecret);
     assert.equal(done.status, "complete");
     if (done.status === "complete") assert.equal((await store.accountFromSession(done.token))?.id, acct.id);
     // Single delivery: a second poll no longer completes.
     assert.equal((await store.pollDeviceLogin(deviceId, deviceSecret)).status, "expired");
+  });
+
+  await test("device login: a denied approval removes the login", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-device-deny@example.com");
+    const { deviceId, deviceSecret } = await store.createDeviceLogin();
+    const approval = await store.proposeDeviceLogin(deviceId, acct.id);
+    await store.denyDeviceLogin(approval!);
+    assert.equal((await store.pollDeviceLogin(deviceId, deviceSecret)).status, "expired");
+    assert.equal(await store.approveDeviceLogin(approval!), undefined);
   });
 
   // --- Link grants & relay tickets ------------------------------------------

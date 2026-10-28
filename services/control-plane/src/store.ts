@@ -1175,7 +1175,13 @@ export interface AccountAuthRepository {
 
   // Device login (hands-free CLI sign-in)
   createDeviceLogin(ttlMs?: number): Promise<{ deviceId: string; deviceSecret: string }>;
-  completeDeviceLogin(deviceId: string, accountId: string): Promise<void>;
+  // The browser that signed in proposes its account for a pending device login;
+  // the login completes only when that browser approves it (approveDeviceLogin),
+  // so a forwarded sign-in link cannot hand its sender a session silently.
+  // Returns the single-use approval token, or undefined if the login is gone.
+  proposeDeviceLogin(deviceId: string, accountId: string): Promise<string | undefined>;
+  approveDeviceLogin(approvalToken: string): Promise<{ deviceId: string; accountId: string } | undefined>;
+  denyDeviceLogin(approvalToken: string): Promise<void>;
   pollDeviceLogin(deviceId: string, deviceSecret: string): Promise<DeviceLoginStatus>;
 
   // Client tokens (relay)

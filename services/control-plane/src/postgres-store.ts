@@ -295,6 +295,8 @@ export class PostgresStore implements ControlPlaneStore {
         account_id   TEXT REFERENCES accounts(id) ON DELETE CASCADE,
         expires_at   TIMESTAMPTZ NOT NULL
       );
+      ALTER TABLE device_logins ADD COLUMN IF NOT EXISTS pending_account_id TEXT REFERENCES accounts(id) ON DELETE CASCADE;
+      ALTER TABLE device_logins ADD COLUMN IF NOT EXISTS approval_hash TEXT;
 
       -- Shared across control-plane replicas: an OAuth callback need not return
       -- to the process that initiated it, and auth throttles cannot be bypassed
@@ -1054,11 +1056,29 @@ export class PostgresStore implements ControlPlaneStore {
     return { deviceId, deviceSecret };
   }
 
-  async completeDeviceLogin(deviceId: string, accountId: string): Promise<void> {
-    await this.query(
-      `UPDATE device_logins SET account_id = $2 WHERE device_id = $1 AND expires_at > now()`,
-      [deviceId, accountId],
+  async proposeDeviceLogin(deviceId: string, accountId: string): Promise<string | undefined> {
+    const approval = randomBytes(24).toString("base64url");
+    const { rows } = await this.query(
+      `UPDATE device_logins SET pending_account_id = $2, approval_hash = $3
+       WHERE device_id = $1 AND account_id IS NULL AND expires_at > now() RETURNING device_id`,
+      [deviceId, accountId, hashToken(approval)],
     );
+    return rows[0] ? approval : undefined;
+  }
+
+  async approveDeviceLogin(approvalToken: string): Promise<{ deviceId: string; accountId: string } | undefined> {
+    if (!approvalToken) return undefined;
+    const { rows } = await this.query(
+      `UPDATE device_logins SET account_id = pending_account_id, approval_hash = NULL
+       WHERE approval_hash = $1 AND account_id IS NULL AND expires_at > now() RETURNING device_id, account_id`,
+      [hashToken(approvalToken)],
+    );
+    return rows[0] ? { deviceId: rows[0].device_id, accountId: rows[0].account_id } : undefined;
+  }
+
+  async denyDeviceLogin(approvalToken: string): Promise<void> {
+    if (!approvalToken) return;
+    await this.query(`DELETE FROM device_logins WHERE approval_hash = $1 AND account_id IS NULL`, [hashToken(approvalToken)]);
   }
 
   async pollDeviceLogin(deviceId: string, deviceSecret: string): Promise<DeviceLoginStatus> {

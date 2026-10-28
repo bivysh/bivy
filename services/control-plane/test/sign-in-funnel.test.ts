@@ -81,6 +81,30 @@ try {
   assert.equal(metric(await scrape(metricsPort), "sign_in_failed", "email_api"), failedBefore + 1, "the successful sign-in did not also bump the failure counter");
 
   console.log("✓ sign-in funnel: failed magic-link consume and successful dev sign-in record disjoint, low-cardinality counters");
+
+  // Device sign-in: opening the emailed link signs the browser in but only
+  // shows an approval page with the terminal's code; the terminal's poll stays
+  // pending until that page's Approve is posted. A forwarded link therefore no
+  // longer hands its sender a session on one click.
+  const device = await request(port, "POST", "/auth/device/start", { email: "device-approval@example.com" });
+  assert.equal(device.status, 200);
+  assert.match(device.body.userCode, /^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
+  const page = await (await fetch(device.body.devLink.replace(/^https?:\/\/[^/]+/, `http://localhost:${port}`))).text();
+  assert.ok(page.includes(device.body.userCode), "the approval page shows the terminal's code");
+  const approval = page.match(/name="approval" value="([^"]+)"/)?.[1];
+  assert.ok(approval);
+  const poll = () => request(port, "POST", "/auth/device/poll", { deviceId: device.body.deviceId, deviceSecret: device.body.deviceSecret });
+  assert.equal((await poll()).body.status, "pending", "signing in alone does not complete the device login");
+  const approved = await fetch(`http://localhost:${port}/auth/device/approve`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ approval }),
+  });
+  assert.equal(approved.status, 200);
+  const done = await poll();
+  assert.equal(done.body.status, "complete");
+  assert.equal(done.body.account.email, "device-approval@example.com");
+  console.log("✓ device sign-in completes only after the browser approves it");
 } finally {
   await stopTestServices(proc ? [proc] : []);
 }
