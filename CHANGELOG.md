@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `pnpm release` signs off its version commits (`git commit --signoff`), so the release follow-up PR passes the DCO check.
+
 ## [0.21.16] - 2026-10-28
 
 ### Added
