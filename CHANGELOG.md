@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.21.16] - 2026-10-28
+
 ### Added
 
 - **New session in this repo.** The session menu (⋯) on a GitHub repository session starts a fresh session on the same repository and machine, instead of the repository you picked last.
