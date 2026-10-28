@@ -50,7 +50,10 @@ export function npmLockedPackages(lock) {
 }
 
 async function publishedAt({ name, version }) {
-  const response = await fetch(`https://registry.npmjs.org/${name.replace("/", "%2F")}`);
+  const response = await fetch(`https://registry.npmjs.org/${name.replace("/", "%2F")}`, {
+    headers: { accept: "application/json" },
+    signal: AbortSignal.timeout(30_000),
+  });
   if (!response.ok) throw new Error(`registry ${response.status} for ${name}`);
   const time = (await response.json()).time?.[version];
   if (!time) throw new Error(`registry lists no publish time for ${name}@${version}`);
@@ -63,6 +66,7 @@ async function publishedAt({ name, version }) {
  */
 export async function tooYoung(lock, { locked = pnpmLockedVersions(), minAgeMinutes = minimumReleaseAge(), now = Date.now(), lookup = publishedAt } = {}) {
   const unreviewed = npmLockedPackages(lock).filter((pkg) => !locked.has(`${pkg.name}@${pkg.version}`));
+  if (unreviewed.length) console.log(`Checking publish dates of ${unreviewed.length} release dependencies not in pnpm-lock.yaml…`);
   const young = [];
   for (let i = 0; i < unreviewed.length; i += 8) {
     const batch = unreviewed.slice(i, i + 8);
