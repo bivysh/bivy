@@ -116,7 +116,7 @@ function openPullRequest(branch, title, body, change) {
   try {
     sh("git", ["worktree", "add", "--quiet", "-b", branch, worktree, "origin/main"]);
     change(worktree);
-    sh("git", ["-C", worktree, "commit", "--quiet", "-am", title]);
+    sh("git", ["-C", worktree, "commit", "--quiet", "--signoff", "-am", title]);
     sh("git", ["-C", worktree, "push", "--quiet", "-u", "origin", branch]);
     const url = sh("gh", ["pr", "create", "--base", "main", "--head", branch, "--title", title, "--body", body]);
     sh("gh", ["pr", "merge", url, "--auto", "--squash"]);
