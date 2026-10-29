@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.1] - 2026-10-29
+
 ### Changed
 
 - When a session hits a usage limit and Bivy will retry at the reset, the chat now says when in your own time zone ("…when the limit resets at 3:10 PM", with the weekday for a weekly limit), instead of a UTC time. This works for every agent.
