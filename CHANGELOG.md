@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The model picker no longer offers ChatGPT-plan models the plan refuses, for any agent. OpenCode listed 20+ OpenAI models (GPT-5.6 Sol, GPT-6 Sol, …) that failed with "not supported when using Codex with a ChatGPT account"; every agent's list is now filtered by the models your plan includes, as Pi's already was. The built-in ChatGPT catalogs now lead with GPT-6 Luna and GPT-5.6 Terra/Luna instead of the retired GPT-5.6 Sol. OpenCode is release-tested against 1.19.5.
 - A release cut right after a merge now still gets its cloud runner image tagged `X.Y.Z`, `vX.Y.Z` and `latest`: the runner build adds them when it finishes after the tag.
 - The control plane and relay are updated to Express 5.3, ws 8.22, pg 8.23.1, @sentry/node 10.78 and current patch releases of their other dependencies.
+- A dependency patch published within the last day no longer blocks release builds. The release now resolves that transitive dependency to the version `pnpm-lock.yaml` already reviewed on the same release line (for example, encodeurl 2.0.1 → 2.0.0) instead of failing the one-day cooldown. Anything it can't hold back still fails the cooldown as before.
 
 ## [0.22.0] - 2026-10-28
 

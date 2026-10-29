@@ -504,9 +504,10 @@ the published release, and the agent bridges a node installs on first use.
 
 - **Cooldown.** pnpm refuses any version younger than `minimumReleaseAge`
   (`pnpm-workspace.yaml`, one day). Release archives are resolved by npm, which
-  has no cooldown, so `scripts/release-lock-age.mjs` fails a release that
-  resolves a version neither in the reviewed `pnpm-lock.yaml` nor past that
-  same cooldown. Dependabot waits seven days before proposing a version.
+  has no cooldown, so `scripts/release-lock-age.mjs` holds a too-new transitive
+  version back to the one `pnpm-lock.yaml` reviewed on the same release line,
+  and fails a release that still resolves a version neither reviewed nor past
+  that same cooldown. Dependabot waits seven days before proposing a version.
 - **No install scripts.** pnpm builds only the packages allowlisted in
   `allowBuilds`. Release archives, agent bridges (`src/agent-bridges.mjs`), the
   service images and CI's service installs all run npm with `--ignore-scripts`.
