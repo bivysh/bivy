@@ -52,7 +52,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         : { sessionId });
       return;
     case "session/set_config_option":
-      if (process.env.BIVY_TEST_CONFIG_DUMP) fs.writeFileSync(process.env.BIVY_TEST_CONFIG_DUMP, JSON.stringify(params));
+      if (process.env.BIVY_TEST_CONFIG_DUMP) {
+        // Write then rename, so a reader polling for the file never sees it empty.
+        fs.writeFileSync(`${process.env.BIVY_TEST_CONFIG_DUMP}.tmp`, JSON.stringify(params));
+        fs.renameSync(`${process.env.BIVY_TEST_CONFIG_DUMP}.tmp`, process.env.BIVY_TEST_CONFIG_DUMP);
+      }
       reply(id, {});
       return;
     case "session/load":
