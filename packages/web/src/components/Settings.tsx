@@ -825,11 +825,12 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
           An explicitly entered network endpoint can be shared only where that URL is really reachable.
         </p>
 
-        <label className="field-label">Display name</label>
-        <input className="picker-search" value={draft.name} placeholder="My local models" onChange={(e) => set({ name: e.target.value })} />
+        <label className="field-label" htmlFor="local-model-name">Display name</label>
+        <input id="local-model-name" className="picker-search" value={draft.name} placeholder="My local models" onChange={(e) => set({ name: e.target.value })} />
 
-        <label className="field-label">Identifier</label>
+        <label className="field-label" htmlFor="local-model-id">Identifier</label>
         <input
+          id="local-model-id"
           className="picker-search"
           value={draft.providerId}
           placeholder="ollama"
@@ -837,8 +838,9 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
           onChange={(e) => set({ providerId: e.target.value })}
         />
 
-        <label className="field-label">Base URL</label>
+        <label className="field-label" htmlFor="local-model-url">Base URL</label>
         <input
+          id="local-model-url"
           className="picker-search"
           value={draft.baseUrl}
           placeholder={isAzure ? "https://YOUR-RESOURCE.openai.azure.com" : "http://localhost:11434/v1"}
@@ -852,8 +854,9 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
           </p>
         )}
 
-        <label className="field-label">API type</label>
+        <label className="field-label" htmlFor="local-model-api">API type</label>
         <select
+          id="local-model-api"
           className="picker-search"
           value={apiIsKnown ? draft.api : "__custom__"}
           onChange={(e) => set({ api: e.target.value === "__custom__" ? "" : e.target.value })}
@@ -862,11 +865,12 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
           <option value="__custom__">Custom…</option>
         </select>
         {!apiIsKnown && (
-          <input className="picker-search" value={draft.api} placeholder="custom-api-id" onChange={(e) => set({ api: e.target.value })} />
+          <input className="picker-search" aria-label="Custom API type" value={draft.api} placeholder="custom-api-id" onChange={(e) => set({ api: e.target.value })} />
         )}
 
-        <label className="field-label">API key {draft.editing ? "(leave blank to keep)" : isAzure ? "(Azure API key)" : "(optional)"}</label>
+        <label className="field-label" htmlFor="local-model-key">API key {draft.editing ? "(leave blank to keep)" : isAzure ? "(Azure API key)" : "(optional)"}</label>
         <input
+          id="local-model-key"
           className="picker-search"
           type="password"
           value={draft.apiKey}
@@ -904,8 +908,9 @@ function LocalModelsPanel({ state, onStartWork }: { state: AppState; onStartWork
           </div>
         )}
 
-        <label className="field-label">Models — one per line (<code>id</code> or <code>id | Name</code>)</label>
+        <label className="field-label" htmlFor="local-model-models">Models — one per line (<code>id</code> or <code>id | Name</code>)</label>
         <textarea
+          id="local-model-models"
           className="picker-search"
           rows={4}
           value={draft.models}
@@ -1297,8 +1302,9 @@ function NodesPanel({ state }: { state: AppState }) {
         <>
           <section className="settings-section">
             <h4 className="settings-subhead">Identity</h4>
-            <label className="field-label">Machine name</label>
+            <label className="field-label" htmlFor="node-settings-name">Machine name</label>
             <input
+              id="node-settings-name"
               className="picker-search"
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
@@ -1308,8 +1314,9 @@ function NodesPanel({ state }: { state: AppState }) {
 
           <section className="settings-section">
             <h4 className="settings-subhead">Session defaults</h4>
-            <label className="field-label">Default agent</label>
+            <label className="field-label" htmlFor="node-settings-agent">Default agent</label>
             <select
+              id="node-settings-agent"
               className="picker-search"
               value={form.defaultAgent}
               onChange={(e) => setForm({ ...form, defaultAgent: e.target.value })}
@@ -1322,9 +1329,10 @@ function NodesPanel({ state }: { state: AppState }) {
               )}
             </select>
 
-            <label className="field-label">Default model</label>
+            <label className="field-label" htmlFor="node-settings-model">Default model</label>
             {modelSelectable ? (
               <select
+                id="node-settings-model"
                 className="picker-search"
                 value={form.defaultModel ? form.defaultModel.id : ""}
                 onChange={(e) => {
@@ -1347,8 +1355,8 @@ function NodesPanel({ state }: { state: AppState }) {
               <p className="muted">This agent selects its own model — nothing to set.</p>
             )}
 
-            <label className="field-label">Default sandbox mode</label>
-            <div className="seg-row">
+            <span className="field-label" id="node-settings-sandbox">Default sandbox mode</span>
+            <div className="seg-row" role="group" aria-labelledby="node-settings-sandbox">
               {SANDBOX_TIERS.map((t) => (
                 <button
                   key={t.id}
@@ -1368,8 +1376,9 @@ function NodesPanel({ state }: { state: AppState }) {
           <details className="settings-section settings-disclosure">
             <summary className="settings-disclosure-summary">GitHub</summary>
             <div className="settings-disclosure-body">
-            <label className="field-label">GitHub session limit</label>
+            <label className="field-label" htmlFor="node-settings-github-limit">GitHub session limit</label>
             <input
+              id="node-settings-github-limit"
               className="picker-search"
               type="number"
               min={0}
@@ -1378,8 +1387,9 @@ function NodesPanel({ state }: { state: AppState }) {
             />
             <p className="muted small">Maximum GitHub-triggered Runs this machine handles at once; the rest wait until a slot frees. 0 = unlimited.</p>
 
-            <label className="field-label">GitHub issue prompt</label>
+            <label className="field-label" htmlFor="node-settings-github-prompt">GitHub issue prompt</label>
             <textarea
+              id="node-settings-github-prompt"
               className="picker-search"
               rows={8}
               value={form.githubIssuePrompt}
@@ -1399,8 +1409,8 @@ function NodesPanel({ state }: { state: AppState }) {
           <details className="settings-section settings-disclosure">
             <summary className="settings-disclosure-summary">Session resume</summary>
             <div className="settings-disclosure-body">
-            <label className="field-label">After a restart interrupts a session</label>
-            <div className="seg-row">
+            <span className="field-label" id="node-settings-resume">After a restart interrupts a session</span>
+            <div className="seg-row" role="group" aria-labelledby="node-settings-resume">
               {([
                 { id: "auto", label: "Auto-resume", hint: "The agent automatically continues the interrupted turn when the machine restarts." },
                 { id: "manual", label: "Manual", hint: "The interrupted session waits and offers a one-tap Resume when you open it." },
@@ -1502,8 +1512,9 @@ function NodesPanel({ state }: { state: AppState }) {
             </div>
             {form.sessionSync && (
               <>
-                <label className="field-label">Standby machine</label>
+                <label className="field-label" htmlFor="node-settings-standby">Standby machine</label>
                 <select
+                  id="node-settings-standby"
                   className="picker-search"
                   value={form.syncStandbyNodeId ?? ""}
                   onChange={(e) => setForm({ ...form, syncStandbyNodeId: e.target.value || undefined })}

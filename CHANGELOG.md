@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The control plane and relay are updated to Express 5.3, ws 8.22, pg 8.23.1, @sentry/node 10.78 and current patch releases of their other dependencies.
 - A dependency patch published within the last day no longer blocks release builds. The release now resolves that transitive dependency to the version `pnpm-lock.yaml` already reviewed on the same release line (for example, encodeurl 2.0.1 → 2.0.0) instead of failing the one-day cooldown. Anything it can't hold back still fails the cooldown as before.
 - Fixed a flaky ACP test: the stub agent now writes its config dump atomically, so the test can no longer read it half-written.
+- Settings → Machines and the custom model provider form: screen readers now announce each field's label (machine name, default agent and model, GitHub limits, standby machine, base URL, API key, …), and the sticky **Save** bar no longer lets text scroll visibly underneath it.
 
 ## [0.22.0] - 2026-10-28
 
