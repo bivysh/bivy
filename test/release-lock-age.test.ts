@@ -3,7 +3,7 @@
 // holds and anything past the cooldown, and stops a version published minutes
 // before the release.
 import assert from "node:assert/strict";
-import { pnpmLockedVersions, tooYoung } from "../scripts/release-lock-age.mjs";
+import { pnpmLockedVersions, reviewedReplacements, tooYoung } from "../scripts/release-lock-age.mjs";
 
 const now = Date.parse("2026-10-28T12:00:00Z");
 const published: Record<string, string> = {
@@ -46,3 +46,20 @@ const young = await tooYoung(lock, {
 assert.deepEqual(lookups.sort(), ["@scope/old@1.0.1", "fresh@2.0.1"], "only unreviewed versions hit the registry");
 assert.deepEqual(young, [{ name: "fresh", version: "2.0.1", ageMinutes: 60 }]);
 console.log("  ok  release lock age gate");
+
+// A too-young transitive version is held back to the newest reviewed version on
+// its release line; other lines, prereleases and direct dependencies are not.
+assert.deepEqual(
+  reviewedReplacements(
+    [
+      { name: "fresh", version: "2.0.1" },
+      { name: "@scope/zero", version: "0.4.2" },
+      { name: "unreviewed", version: "1.0.1" },
+      { name: "direct", version: "1.2.1" },
+    ],
+    new Set(["fresh@1.9.9", "fresh@2.0.0", "fresh@2.0.0-rc.1", "fresh@3.0.0", "@scope/zero@0.3.9", "@scope/zero@0.4.0", "direct@1.2.0"]),
+    { direct: "^1.2.0" },
+  ),
+  { "fresh@2.0.1": "2.0.0", "@scope/zero@0.4.2": "0.4.0" },
+);
+console.log("  ok  too-young versions fall back to reviewed ones");

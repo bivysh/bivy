@@ -31,7 +31,7 @@ import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { curateManifest } from "./release-manifest.mjs";
 import { buildArchives, resolveTargets } from "./release-archives.mjs";
-import { assertReleaseLockAged } from "./release-lock-age.mjs";
+import { resolveReleaseLock } from "./release-lock-age.mjs";
 
 const argv = process.argv.slice(2);
 /** Read the value that follows a `--flag` on the command line (or undefined). */
@@ -122,8 +122,7 @@ const curatedPkg = curateManifest(pkg, releaseReadme);
 fs.writeFileSync(pkgPath, `${JSON.stringify(curatedPkg, null, 2)}\n`);
 // The --pack tarball is installed with npm on the target, so it carries a lock.
 if (packDir) {
-  run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: app });
-  await assertReleaseLockAged(path.join(app, "package-lock.json"));
+  await resolveReleaseLock(app);
 }
 
 const releasePkg = JSON.parse(fs.readFileSync(path.join(app, "package.json"), "utf8"));

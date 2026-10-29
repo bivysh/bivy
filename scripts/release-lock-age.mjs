@@ -12,10 +12,16 @@
  * must either be one pnpm-lock.yaml already holds, or be at least as old as
  * pnpm's cooldown.
  *
+ * resolveReleaseLock() resolves with that rule rather than only failing on it: a
+ * transitive version too new for the cooldown is pinned back to the version
+ * pnpm-lock.yaml reviewed on the same release line, so a patch published an
+ * hour ago doesn't block every build until it ages.
+ *
  *   node scripts/release-lock-age.mjs <package-lock.json>
  */
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -77,6 +83,71 @@ export async function tooYoung(lock, { locked = pnpmLockedVersions(), minAgeMinu
     });
   }
   return young;
+}
+
+/** `x.y.z` as numbers, or null for anything else (prereleases never stand in). */
+function plainVersion(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  return match ? match.slice(1).map(Number) : null;
+}
+
+/**
+ * npm overrides that replace each too-young version with the newest older one
+ * pnpm-lock.yaml holds on the same release line (same major, or same minor for
+ * 0.x), so every range that accepted the young version accepts it too. Keys are
+ * scoped to the young version (`name@version`), leaving other copies alone.
+ * Direct dependencies are left to the gate: npm refuses to override those.
+ */
+export function reviewedReplacements(young, locked, directDependencies = {}) {
+  const overrides = {};
+  for (const { name, version } of young) {
+    const target = plainVersion(version);
+    if (!target || name in directDependencies) continue;
+    const line = target[0] === 0 ? 2 : 1;
+    let best = null;
+    for (const entry of locked) {
+      const at = entry.lastIndexOf("@");
+      if (at <= 0 || entry.slice(0, at) !== name) continue;
+      const candidate = plainVersion(entry.slice(at + 1));
+      if (!candidate || candidate.slice(0, line).join(".") !== target.slice(0, line).join(".")) continue;
+      const older = candidate[0] - target[0] || candidate[1] - target[1] || candidate[2] - target[2];
+      if (older >= 0) continue;
+      if (!best || (candidate[0] - best[0] || candidate[1] - best[1] || candidate[2] - best[2]) > 0) best = candidate;
+    }
+    if (best) overrides[`${name}@${version}`] = best.join(".");
+  }
+  return overrides;
+}
+
+function lockOnly(dir) {
+  const res = spawnSync("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: dir, stdio: "inherit" });
+  if (res.status !== 0) throw new Error(`npm install --package-lock-only failed in ${dir} (${res.status ?? res.signal})`);
+}
+
+/**
+ * Writes `<dir>/package-lock.json` for `<dir>/package.json`, holding back
+ * too-new transitive versions to the ones pnpm-lock.yaml reviewed (recorded as
+ * overrides in package.json, so `npm ci` and later installs agree), then gates
+ * the result.
+ */
+export async function resolveReleaseLock(dir) {
+  const lockFile = path.join(dir, "package-lock.json");
+  const pkgFile = path.join(dir, "package.json");
+  lockOnly(dir);
+  const young = await tooYoung(JSON.parse(fs.readFileSync(lockFile, "utf8")));
+  if (young.length) {
+    const pkg = JSON.parse(fs.readFileSync(pkgFile, "utf8"));
+    const pins = reviewedReplacements(young, pnpmLockedVersions(), pkg.dependencies);
+    if (Object.keys(pins).length) {
+      console.log(`Holding back to reviewed versions: ${Object.entries(pins).map(([from, to]) => `${from} → ${to}`).join(", ")}`);
+      pkg.overrides = { ...pkg.overrides, ...pins };
+      fs.writeFileSync(pkgFile, `${JSON.stringify(pkg, null, 2)}\n`);
+      // From scratch: npm keeps a locked version even when an override now excludes it.
+      fs.rmSync(lockFile);
+      lockOnly(dir);
+    }
+  }
+  await assertReleaseLockAged(lockFile);
 }
 
 /** Throws, naming each package, when the release lock pulls in a too-new version. */

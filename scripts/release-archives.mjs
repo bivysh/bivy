@@ -19,7 +19,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
-import { assertReleaseLockAged } from "./release-lock-age.mjs";
+import { resolveReleaseLock } from "./release-lock-age.mjs";
 
 /** Platforms a release ships. Adding one is a row here. */
 export const ARCHIVE_TARGETS = [
@@ -139,8 +139,7 @@ export async function buildArchives({ app, outDir, targets = ARCHIVE_TARGETS, co
     const lockDir = path.join(work, "lock");
     fs.mkdirSync(lockDir);
     fs.copyFileSync(path.join(app, "package.json"), path.join(lockDir, "package.json"));
-    run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: lockDir });
-    await assertReleaseLockAged(path.join(lockDir, "package-lock.json"));
+    await resolveReleaseLock(lockDir);
 
     const sums = path.join(cache, `SHASUMS256-v${NODE_VERSION}.txt`);
     if (!fs.existsSync(sums)) await download(`https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt`, sums);
@@ -150,7 +149,8 @@ export async function buildArchives({ app, outDir, targets = ARCHIVE_TARGETS, co
       const name = `bivy-${version}-${target.id}`;
       const root = path.join(work, name);
       fs.cpSync(app, path.join(root, "app"), { recursive: true, verbatimSymlinks: true });
-      fs.copyFileSync(path.join(lockDir, "package-lock.json"), path.join(root, "app", "package-lock.json"));
+      // The manifest too: resolving may have added overrides the lock depends on.
+      for (const file of ["package.json", "package-lock.json"]) fs.copyFileSync(path.join(lockDir, file), path.join(root, "app", file));
       // No dependency needs an install script; node-pty ships prebuilt per platform.
       const install = runAsync("npm", ["ci", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error", `--os=${target.os}`, `--cpu=${target.cpu}`], { cwd: path.join(root, "app") });
       const [node] = await Promise.all([nodeRuntime(target, cache), install]);
