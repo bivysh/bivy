@@ -507,7 +507,37 @@ class ProtocolSession implements RuntimeSession {
     return this.runtimeOptions.suggestName?.(firstPrompt, { cwd: this.cwd, model: this.currentModelId });
   }
   subscribe(listener: (event: RuntimeEvent) => void): () => void { this.emitter.on("event", listener); return () => this.emitter.off("event", listener); }
-  private emit(event: RuntimeEvent) { this.emitter.emit("event", event); }
+  private emit(event: RuntimeEvent) {
+    this.emitter.emit("event", event);
+    if (event.type === "agent_end") for (const resume of this.turnEndWaiters.splice(0)) resume();
+  }
+
+  /** Prompts held until the open turn ends (see holdUntilTurnEnds). */
+  private turnEndWaiters: Array<() => void> = [];
+  /** Bumped by abort, so a held follow-up is dropped with the turn it waited on. */
+  private abortGeneration = 0;
+
+  /**
+   * An agent that can't steer (every ACP agent) runs a message sent mid-turn as a
+   * second, concurrent turn: the rest of the first reply and the answer to the
+   * new message then stream into one bubble. Hold such a message until the open
+   * turn ends, then run it as its own turn.
+   * `run` is false when Stop ended that turn: the held message is dropped.
+   */
+  holdsPromptsUntilTurnEnds(): boolean {
+    return this.streaming && !this.capabilitiesRef.streamingBehaviors?.includes("steer");
+  }
+
+  private async holdUntilTurnEnds(): Promise<{ held: boolean; run: boolean }> {
+    const generation = this.abortGeneration;
+    let held = false;
+    while (this.holdsPromptsUntilTurnEnds()) {
+      held = true;
+      await new Promise<void>((resume) => this.turnEndWaiters.push(resume));
+      if (this.abortGeneration !== generation) return { held, run: false };
+    }
+    return { held, run: true };
+  }
 
   async start(): Promise<void> {
     if (this.child) return;
@@ -1116,7 +1146,9 @@ class ProtocolSession implements RuntimeSession {
   }
 
   async prompt(text: string, options?: PromptOptions): Promise<void> {
-    const wasStarted = this.started;
+    const hold = await this.holdUntilTurnEnds();
+    if (!hold.run) return;
+    const wasStarted = this.started && !hold.held;
     await this.open();
     // Per-turn prepare + credential preflight, mirroring ProcessRuntime. Unlike a
     // fresh-process runtime, the protocol child is long-lived, so a credential
@@ -1190,6 +1222,7 @@ class ProtocolSession implements RuntimeSession {
   }
 
   async abort(): Promise<void> {
+    this.abortGeneration += 1;
     const child = this.child;
     if (!child) {
       // No live turn process. A stuck `streaming` flag (a bug, or an event we

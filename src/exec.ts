@@ -206,6 +206,9 @@ async function main() {
   // assistant message marked stopReason "error" before a normal agent_end.
   let turnError = "";
   let aborted = false;
+  // Turn ends that belong to a turn already running when this prompt was sent:
+  // an agent that can't steer runs the prompt after it (the node says `queued`).
+  let openTurnEnds = 0;
 
   const finish = (code: number, errorText?: string) => {
     if (settled) return;
@@ -222,12 +225,13 @@ async function main() {
 
   socket.on("open", async () => {
     try {
-      await api(args.url, args.token, "/api/session/prompt", {
+      const sent = await api<{ queued?: boolean }>(args.url, args.token, "/api/session/prompt", {
         method: "POST",
         // One id per exec run: the node drops a repeated id as a duplicate send
         // for a day, so an id shared by every run in a session ate follow-ups.
         body: JSON.stringify({ sessionId, text: prompt, clientMessageId: `exec-${randomUUID()}` }),
       });
+      if (sent?.queued) openTurnEnds = 1;
     } catch (error) {
       finish(1, `Prompt failed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -263,6 +267,13 @@ async function main() {
         if (input.stream === "stderr" && typeof input.output === "string" && input.output.trim()) {
           lastStderr = input.output.trim();
         }
+      } else if (ev.type === "agent_end" && openTurnEnds > 0) {
+        // Stop on the open turn drops the prompt held behind it.
+        if (aborted) { clearTimeout(timer); finish(1, "The turn was cancelled."); return; }
+        openTurnEnds -= 1;
+        answer = "";
+        turnError = "";
+        aborted = false;
       } else if (ev.type === "agent_end") {
         clearTimeout(timer);
         // A turn can end without any assistant text because the agent FAILED

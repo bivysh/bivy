@@ -45,7 +45,10 @@ type Behavior =
   // stopReason "error", then a plain agent_end — as ProtocolRuntime does.
   | "turn-error-message"
   // The turn's own user message streams first; then the user cancels it.
-  | "user-echo-then-aborted";
+  | "user-echo-then-aborted"
+  // The session is mid-turn on an agent that can't steer: the node answers
+  // `queued`, the open turn ends first, then the prompt's own turn runs.
+  | "queued-behind-open-turn";
 
 /** Records the parsed body of the last POST /api/session, so tests can assert
  *  which fields (name/model/workspace) exec sends to the daemon. */
@@ -74,7 +77,7 @@ async function withFakeDaemon(behavior: Behavior, fn: (url: string, probe: Creat
         return;
       }
       if (req.method === "POST" && req.url === "/api/session/prompt") {
-        res.end(JSON.stringify({ ok: true }));
+        res.end(JSON.stringify({ ok: true, ...(behavior === "queued-behind-open-turn" ? { queued: true } : {}) }));
         // Like the real daemon, a repeated clientMessageId is a duplicate send: accepted, never run.
         const messageId = (JSON.parse(body || "{}") as { clientMessageId?: string }).clientMessageId;
         if (messageId && seenMessageIds.has(messageId)) return;
@@ -96,6 +99,12 @@ async function withFakeDaemon(behavior: Behavior, fn: (url: string, probe: Creat
           } else if (behavior === "user-echo-then-aborted") {
             send({ type: "message_end", message: { role: "user", content: "hello" } });
             send({ type: "message_end", message: { role: "assistant", content: "", stopReason: "aborted" } });
+            send({ type: "agent_end" });
+          } else if (behavior === "queued-behind-open-turn") {
+            send({ type: "message_end", message: { role: "assistant", content: "the open turn's reply" } });
+            send({ type: "agent_end" });
+            send({ type: "agent_start" });
+            send({ type: "message_end", message: { role: "assistant", content: "the queued answer" } });
             send({ type: "agent_end" });
           } else if (behavior === "turn-error-message") {
             send({ type: "message_end", message: { role: "assistant", content: "", stopReason: "error", errorMessage: "You've hit your usage limit." } });
@@ -195,6 +204,14 @@ await check("a cancelled turn exits non-zero and never prints the prompt as the 
     assert.notEqual(code, 0);
     assert.equal(stdout.trim(), "", `the user's own message is not an answer, got ${JSON.stringify(stdout)}`);
     assert.ok(stderr.includes("cancelled"), `stderr should say the turn was cancelled, got ${JSON.stringify(stderr)}`);
+  });
+});
+
+await check("a prompt queued behind the open turn prints its own answer, not the open turn's", async () => {
+  await withFakeDaemon("queued-behind-open-turn", async (url) => {
+    const { code, stdout } = await runExec(url, ["--session", "sess-fake-1"]);
+    assert.equal(code, 0);
+    assert.equal(stdout.trim(), "the queued answer");
   });
 });
 

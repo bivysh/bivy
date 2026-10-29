@@ -22,7 +22,7 @@ import { ProtocolRuntime } from "../../runtime/protocol.js";
 import { codexSlashCommands } from "../../runtime/slash-commands.js";
 import type { AgentRuntime } from "../../runtime/types.js";
 
-export const CODEX_TESTED_VERSION = "0.165.0";
+export const CODEX_TESTED_VERSION = "0.166.0";
 
 function codexCommand(): string {
   return process.env.BIVY_CODEX_BIN?.trim() || "codex";

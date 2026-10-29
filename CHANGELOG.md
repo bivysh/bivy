@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Codex is release-tested against Codex CLI 0.166.0.
+
+### Fixed
+
+- A message sent from the CLI or API while an agent that can't steer is mid-turn (OpenCode, Grok and the other ACP agents) now runs as its own turn once the current one ends. Before, it started a second turn alongside the first, and the rest of the first reply ran into the new answer as one message. `bivy send` and `bivy exec --session` now print the answer to their own message, not the end of the turn already running.
+
 ## [0.22.2] - 2026-10-29
 
 ### Fixed

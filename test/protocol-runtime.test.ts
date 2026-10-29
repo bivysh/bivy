@@ -614,3 +614,29 @@ console.log("protocol-runtime: all tests passed");
   }
   console.log("protocol-runtime: steer mid-turn ok");
 }
+
+// --- the same mid-turn message to an agent that can't steer runs after the turn ---
+{
+  const steerFixture = path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures", "protocol-steer-agent.mjs");
+  const runtime = new ProtocolRuntime({ command: process.execPath, args: [steerFixture, "--no-steer"], displayName: "No-Steer Fixture" });
+  const { session } = await runtime.createSession({ workspace: process.cwd() });
+  const events: RuntimeEvent[] = [];
+  session.subscribe((event) => events.push(event));
+  try {
+    await session.prompt("continue the fork");
+    await waitFor(events, (event) => event.type === "message_update");
+    await session.prompt("summarize");
+    await waitFor(events, (event) => event.type === "agent_end" && events.filter((e) => e.type === "agent_end").length === 2);
+    const shape = session.getMessages().map((m) => [m.role, typeof m.content === "string" ? m.content : JSON.stringify(m.content)]);
+    assert.deepEqual(shape, [
+      ["user", "continue the fork"],
+      ["assistant", "The earlier work is done. All of it."],
+      ["user", "summarize"],
+      ["assistant", "Here is the summary."],
+    ], "the held message runs as its own turn once the first one ends");
+    assert.equal(events.filter((e) => e.type === "agent_start").length, 2, "the held turn announces its start");
+  } finally {
+    session.dispose();
+  }
+  console.log("protocol-runtime: held follow-up ok");
+}
