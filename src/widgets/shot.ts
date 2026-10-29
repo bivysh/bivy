@@ -12,6 +12,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
+import { randomBytes } from "node:crypto";
 import type { RegisteredView } from "../apps/registry.js";
 import { takeShots, type Shot } from "../apps/screenshot.js";
 import { checkWidgetScripts } from "./check.js";
@@ -48,14 +49,14 @@ function harnessHtml(tokens: string): string {
 html,body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font-sans)}
 main{max-width:720px;margin:0 auto;padding:var(--space-4)}
 iframe{display:block;width:100%;height:120px;border:1px solid var(--line);border-radius:var(--radius-sm);background:var(--surface)}
-</style></head><body><main><iframe id="frame" sandbox="allow-scripts allow-forms" src="/widget-frame.html" title="Widget"></iframe></main>
+</style></head><body><main><iframe id="frame" sandbox="allow-scripts allow-forms" src="widget-frame.html" title="Widget"></iframe></main>
 <script>
-const loaded = fetch("/__params").then((res) => res.json());
+const loaded = fetch("__params").then((res) => res.json());
 const dark = matchMedia("(prefers-color-scheme: dark)").matches;
 document.documentElement.dataset.theme = dark ? "dark" : "light";
 const frame = document.getElementById("frame");
 const post = (msg) => frame.contentWindow.postMessage(msg, "*");
-const report = (text) => fetch("/__report", { method: "POST", body: String(text) });
+const report = (text) => fetch("__report", { method: "POST", body: String(text) });
 const NAMES = ${JSON.stringify(["--bg", "--surface", "--surface-2", "--surface-3", "--ink", "--muted", "--line", "--line-strong", "--accent", "--accent-hover", "--accent-soft", "--accent-contrast", "--focus-ring", "--ok", "--danger", "--danger-soft", "--unseen", "--merged", "--info", "--warn", "--warn-soft", "--font-sans", "--font-mono", "--font-serif", "--text-xs", "--text-sm", "--text-base", "--text-md", "--text-lg", "--text-xl", "--text-2xl", "--lh-sm", "--lh-base", "--lh-md", "--weight-normal", "--weight-medium", "--weight-semibold", "--weight-bold", "--space-1", "--space-2", "--space-3", "--space-4", "--space-5", "--space-6", "--radius-sm", "--radius-md", "--radius-lg", "--radius-xl", "--radius-full", "--shadow-sm", "--shadow-md", "--shadow-lg"])};
 const computed = getComputedStyle(document.documentElement);
 const variables = Object.fromEntries(NAMES.map((n) => [n, computed.getPropertyValue(n).trim()]).filter(([, v]) => v));
@@ -66,7 +67,7 @@ addEventListener("message", async (event) => {
   if (!m || m.jsonrpc !== "2.0") return;
   const params = await loaded;
   if (m.method === "ui/notifications/sandbox-proxy-ready") return post({ jsonrpc: "2.0", method: "ui/notifications/sandbox-resource-ready", params: { html: params.html } });
-  if (m.method === "ui/notifications/size-changed") { frame.style.height = Math.min(Math.max(40, m.params.height), 720) + "px"; fetch("/__height", { method: "POST", body: String(m.params.height) }); return; }
+  if (m.method === "ui/notifications/size-changed") { frame.style.height = Math.min(Math.max(40, m.params.height), 720) + "px"; fetch("__height", { method: "POST", body: String(m.params.height) }); return; }
   if (m.method === "notifications/message" && m.params && m.params.level === "error") return report(m.params.data);
   if (m.method === "ui/notifications/initialized") {
     if (initialized) return;
@@ -80,7 +81,7 @@ addEventListener("message", async (event) => {
   const refuse = (message) => post({ jsonrpc: "2.0", id: m.id, error: { code: -32000, message } });
   if (m.method === "ui/initialize") return reply({ protocolVersion: "2026-01-26", hostInfo: { name: "Bivy", version: "1" }, hostCapabilities: { openLinks: {}, logging: {}, serverTools: {}, experimental: { bivy: { state: true } } }, hostContext: { theme: dark ? "dark" : "light", displayMode: "inline", platform: innerWidth < 600 ? "mobile" : "web", styles: { variables }, bivy: { data: params.data, state: params.state } } });
   if (m.method === "tools/call") {
-    const res = await fetch("/__tool", { method: "POST", body: JSON.stringify(m.params) });
+    const res = await fetch("__tool", { method: "POST", body: JSON.stringify(m.params) });
     const body = await res.json();
     if (!res.ok) { report("bivy.call(" + JSON.stringify(m.params.name) + ") failed: " + body.error); return refuse(body.error); }
     return reply(body.result);
@@ -102,8 +103,14 @@ export async function shootWidget(request: WidgetShotRequest, outDir: string, ta
   let height: number | undefined;
   const harness = harnessHtml(tokens);
   const params = JSON.stringify({ html: request.html, data: request.data ?? {}, state: request.state ?? {} });
+  // Everything is served under an unguessable prefix: /__tool runs plugin tools
+  // as this user, and loopback alone doesn't keep out other local users or a
+  // web page probing ports while the shot runs.
+  const base = `/${randomBytes(16).toString("hex")}/`;
   const server = http.createServer((req, res) => {
-    const url = (req.url ?? "/").split("?")[0]!;
+    const full = (req.url ?? "/").split("?")[0]!;
+    if (!full.startsWith(base)) return void res.writeHead(404).end();
+    const url = `/${full.slice(base.length)}`;
     const body: Buffer[] = [];
     req.on("data", (chunk: Buffer) => { if (body.reduce((n, b) => n + b.length, 0) < 64 * 1024) body.push(chunk); });
     req.on("end", () => {
@@ -141,7 +148,7 @@ export async function shootWidget(request: WidgetShotRequest, outDir: string, ta
     const view = { view: { id: "widget00", name: "Widget" }, target: { kind: "service", port } } as unknown as RegisteredView;
     let shots: Shot[];
     try {
-      shots = await take([view], { widths: request.widths ?? [390, 1024], themes: request.themes ?? ["light", "dark"], path: "/", settleMs: 1500 }, outDir);
+      shots = await take([view], { widths: request.widths ?? [390, 1024], themes: request.themes ?? ["light", "dark"], path: base, settleMs: 1500 }, outDir);
     } catch (error) {
       if (!/No Chrome or Chromium/.test((error as Error).message)) throw error;
       return { shots: [], errors, note: "No Chrome or Chromium on this machine, so there are no screenshots; its scripts were checked. Set BIVY_CHROME to a browser to see it." };

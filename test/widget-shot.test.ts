@@ -40,3 +40,19 @@ test("a widget is shot at each width and theme, with its data, live tool data an
   assert.ok(result.errors.some((error) => /bivy\.call\("missing"\) failed: No plugin tool called "missing"/.test(error)), result.errors.join("\n"));
   assert.ok((result.height ?? 0) > 0);
 });
+
+test("the shot server answers only under its secret path, so nothing else can call a tool", async () => {
+  const calls: string[] = [];
+  let status = 0;
+  let page = "";
+  await shootWidget({ html: "<p>hi</p>", callTool: async (name) => { calls.push(name); return {}; } }, os.tmpdir(), async (views, options) => {
+    const port = (views[0]!.target as { port: number }).port;
+    status = (await fetch(`http://127.0.0.1:${port}/__tool`, { method: "POST", body: JSON.stringify({ name: "status" }) })).status;
+    page = await (await fetch(`http://127.0.0.1:${port}${options.path}`)).text();
+    return [];
+  });
+  assert.equal(status, 404);
+  assert.deepEqual(calls, []);
+  assert.match(page, /<iframe id="frame"/, "the harness is served under the path the shooter is given");
+});
+
