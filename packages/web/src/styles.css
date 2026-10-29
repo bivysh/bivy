@@ -2555,8 +2555,10 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-back span { font-size: 22px; line-height: 1; }
 .settings-x { border: 0; background: transparent; color: var(--muted); font-size: 26px; line-height: 1; padding: 0 4px; }
 .settings-x:hover { color: var(--ink); }
-.settings-body { flex: 1; overflow-y: auto; min-height: 0; padding: 14px 18px 28px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; animation: settings-panel-in var(--dur) var(--ease-standard); }
+.settings-body { --settings-body-pb: 28px; flex: 1; overflow-y: auto; min-height: 0; padding: 14px 18px var(--settings-body-pb); -webkit-overflow-scrolling: touch; overscroll-behavior: contain; animation: settings-panel-in var(--dur) var(--ease-standard); }
 .settings-body .settings-form { padding: 0; }
+/* The sticky Save bar covers the scroller's bottom padding, so nothing scrolls visibly beneath it. */
+.settings-body .settings-save-actions { bottom: calc(-1 * var(--settings-body-pb)); margin-bottom: calc(-1 * var(--settings-body-pb)); padding-bottom: calc(10px + var(--settings-body-pb)); }
 
 /* Canonical meter — a thin allowance/usage bar (role="meter"). data-state
    near/reached tints it warn/danger. Reflects the styleguide (.meter). */
@@ -2683,7 +2685,7 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .settings-account-card { background: var(--surface-2); margin-bottom: var(--space-2); }
   .settings-content { padding-top: max(0px, env(safe-area-inset-top)); }
   .settings-back { display: inline-flex; }
-  .settings-body { padding: 14px 16px max(28px, env(safe-area-inset-bottom)); }
+  .settings-body { --settings-body-pb: max(28px, env(safe-area-inset-bottom)); padding: 14px 16px var(--settings-body-pb); }
   .vault-title-row { align-items: center; }
   .vault-title-row .btn { flex: none; min-height: 40px; }
   .credential-vault > .picker-list .picker-item { align-items: flex-start; padding: 13px 10px; }
