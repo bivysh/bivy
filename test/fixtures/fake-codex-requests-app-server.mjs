@@ -47,15 +47,14 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
     ] });
     case "thread/start": return reply({ thread: { id: thread } });
     case "thread/settings/update": return reply({});
-    case "turn/steer": return reply({ turnId: message.params.expectedTurnId });
+    case "turn/steer": reply({ turnId: message.params.expectedTurnId }); return finish();
     case "turn/start": {
       turns += 1;
       reply({ turn: { id: `turn-${turns}` } });
       send({ jsonrpc: "2.0", method: "turn/started", params: { threadId: thread, turn: { id: `turn-${turns}` } } });
-      // The first turn asks its questions; later ones stay open long enough
-      // for a steering message to join them.
+      // The first turn asks its questions; later ones stay open until a
+      // steering message joins them, so a slow runner can't end one first.
       if (turns === 1) ask();
-      else setTimeout(finish, 400);
       return;
     }
     default: return reply({});
