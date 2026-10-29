@@ -33,9 +33,9 @@ check("BIVY_SANDBOX selects the tier (with underscore normalization)", () => {
   withEnv("nonsense", () => assert.equal(sandboxTier(), "workspace-write"));
 });
 
-check("codex maps tier to --sandbox <tier>", () => {
+check("codex maps tier to --sandbox <tier>, with network for workspace-write", () => {
   assert.deepEqual(sandboxArgsFor("codex", "read-only"), ["--sandbox", "read-only"]);
-  assert.deepEqual(sandboxArgsFor("codex", "workspace-write"), ["--sandbox", "workspace-write"]);
+  assert.deepEqual(sandboxArgsFor("codex", "workspace-write"), ["--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=true"]);
   assert.deepEqual(sandboxArgsFor("codex", "danger-full-access"), ["--sandbox", "danger-full-access"]);
 });
 

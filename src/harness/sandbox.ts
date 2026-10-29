@@ -10,7 +10,9 @@
 //
 // Tiers use Codex's vocabulary because it's the clearest:
 //   read-only          — may read the workspace; no writes, no network.
-//   workspace-write    — may read/write the worktree; escapes need approval.
+//   workspace-write    — may read/write the worktree and use the network
+//                        (the agent's own `bivy` commands reach the node over
+//                        loopback); other escapes need approval.
 //   danger-full-access — no in-agent limit (explicit opt-out).
 //
 // Chosen by BIVY_SANDBOX (default workspace-write — the safe, useful middle).
@@ -49,6 +51,12 @@ export function sandboxTier(override?: unknown): SandboxTier {
   );
 }
 
+/** Codex's workspace-write jail has no network by default, loopback included,
+ *  so every `bivy` command the agent runs (app publish, attach, ask) fails to
+ *  reach its node. Turned on to match the tier above. The Codex app-server shim
+ *  (bin/codex-app-server-shim.mjs) passes the same override. */
+export const CODEX_WORKSPACE_NETWORK = "sandbox_workspace_write.network_access=true";
+
 /** Gemini expresses containment through --approval-mode rather than a tier flag. */
 function geminiApprovalArgs(tier: SandboxTier): string[] {
   switch (tier) {
@@ -70,7 +78,7 @@ function geminiApprovalArgs(tier: SandboxTier): string[] {
 export function sandboxArgsFor(agentId: string, tier: SandboxTier): string[] {
   switch (agentId) {
     case "codex":
-      return ["--sandbox", tier];
+      return tier === "workspace-write" ? ["--sandbox", tier, "-c", CODEX_WORKSPACE_NETWORK] : ["--sandbox", tier];
     // Qwen Code is a Gemini-CLI fork and shares its `--approval-mode` flag.
     case "gemini":
     case "qwen":
