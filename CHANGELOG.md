@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Codex can now run `bivy` commands (app publish, attach, ask, notify) in its default workspace-write sandbox. That sandbox blocked all network access, including the loopback connection to the node, so previews failed with "Could not reach the Bivy node". Workspace-write now allows network access, as the tier describes; read-only still has none.
+- After you connect a ChatGPT or Claude plan, the composer stays on the agent picked for that plan. Before, a node history that belonged to no session reset the new-session draft to the node's default agent (Pi), and the first Send opened a model picker that said "No models available".
+- While a cloud computer starts for the first time, the banner says "Starting Bivy Cloud", not "Reconnecting to Bivy Cloud", and no longer repeats the start-up message.
+
 ## [0.22.1] - 2026-10-29
 
 ### Changed

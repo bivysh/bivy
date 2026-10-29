@@ -50,7 +50,11 @@ function bivy(obj) {
 }
 
 // --- codex app-server (child JSON-RPC over its stdio) -----------------------
-const as = spawn(CODEX_BIN, ["app-server"], { stdio: ["pipe", "pipe", "pipe"] });
+// workspace-write has no network by default, loopback included, so the agent's
+// own `bivy` commands (app publish, attach, ask) could not reach this node.
+// Same override as CODEX_WORKSPACE_NETWORK in src/harness/sandbox.ts.
+const AS_ARGS = SANDBOX_MODE === "workspace-write" ? ["app-server", "-c", "sandbox_workspace_write.network_access=true"] : ["app-server"];
+const as = spawn(CODEX_BIN, AS_ARGS, { stdio: ["pipe", "pipe", "pipe"] });
 let asNextId = 1;
 const asPending = new Map(); // jsonrpc id -> {resolve, reject}
 // itemId -> { id, reply }: the app-server request a later tool.decision answers,

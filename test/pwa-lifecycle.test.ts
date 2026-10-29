@@ -136,6 +136,7 @@ assert.match(describeAvailability("offline", false, idle).detail, /The Machine i
 assert.doesNotMatch(describeAvailability("offline", true, idle, "Bivy Cloud", true).detail, /bivy status/);
 assert.doesNotMatch(describeAvailability("reconnecting", false, idle, "Bivy Cloud", true).detail, /bivy status/);
 assert.equal(describeAvailability("reconnecting", true, idle, "macbook").label, "Reconnecting to macbook");
+assert.equal(describeAvailability("reconnecting", false, idle, "Bivy Cloud", true).label, "Starting Bivy Cloud");
 assert.equal(describeAvailability("reconnecting", true, idle).label, "Reconnecting Machine");
 
 markPromptQueued();

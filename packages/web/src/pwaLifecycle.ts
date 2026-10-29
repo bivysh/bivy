@@ -247,11 +247,14 @@ export function describeAvailability(
   if (status === "reconnecting" || status === "connecting" || status === "linking" || status === "pairing") {
     return {
       kind: "reconnecting",
-      label: machineName ? `Reconnecting to ${machineName}` : "Reconnecting Machine",
+      // A cloud computer with nothing cached is starting, not coming back.
+      label: cloud && !hasCachedTranscript
+        ? `Starting ${machineName ?? "your cloud computer"}`
+        : machineName ? `Reconnecting to ${machineName}` : "Reconnecting Machine",
       detail: hasCachedTranscript
         ? "Showing the cached transcript. Keep drafting — sending resumes once the connection is back."
         : cloud
-          ? `Waiting for ${machineName ?? "the cloud computer"} to start. A first start takes about a minute.`
+          ? "A first start takes about a minute."
           : `Waiting for ${machineName ? `Machine ${machineName}` : "the Machine"} to answer. If this sticks, run \`bivy status\` on that machine.`,
     };
   }

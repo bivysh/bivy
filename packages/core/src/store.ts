@@ -3028,11 +3028,14 @@ export class SessionStore {
     // Keep optimistic prompts the node hasn't confirmed yet: a new session's
     // history is empty, so a bare replace would drop the message the user just
     // sent. They're cleared as the node echoes each one (session.user_message).
+    // A snapshot with no session (the node's empty default) names the node's
+    // default agent, not the draft's: taking it would pin the composer and its
+    // model list to that agent over the one the user (or Connect your AI) chose.
     this.set({
       activeSessionId: sessionId,
-      activeRuntimeId: e.runtimeId ? String(e.runtimeId) : this.state.activeSession.activeRuntimeId,
+      activeRuntimeId: sessionId && e.runtimeId ? String(e.runtimeId) : this.state.activeSession.activeRuntimeId,
       activeTitle: e.name || this.state.activeSession.activeTitle,
-      currentAgentName: e.agentName || this.state.catalogs.currentAgentName,
+      currentAgentName: (sessionId && e.agentName) || this.state.catalogs.currentAgentName,
       github: githubContext(e),
       transcript: this.withPendingUserEntries(withAttachments),
       working: sessionState ? sessionState.agent === "working" : Boolean(e.isStreaming),
