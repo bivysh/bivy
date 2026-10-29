@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.2] - 2026-10-29
+
 ### Fixed
 
 - Codex can now run `bivy` commands (app publish, attach, ask, notify) in its default workspace-write sandbox. That sandbox blocked all network access, including the loopback connection to the node, so previews failed with "Could not reach the Bivy node". Workspace-write now allows network access, as the tier describes; read-only still has none.
