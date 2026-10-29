@@ -5,6 +5,7 @@
 import type { ServerEvent } from "./protocol.js";
 import { normalizeSessionState, normalizeUsage, sessionStatusFromState } from "./store-normalize.js";
 import { humanizeError } from "./store-errors.js";
+import { noticeText } from "./notices.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -68,7 +69,7 @@ export function foldActiveSessionEvent(input: ActiveLifecycleInput, event: Serve
     case "session.notice": {
       if (!e.message || (sid && sid !== input.activeSessionId)) return { handled: true, commands: [] };
       const actions = noticeActions(e);
-      return { handled: true, commands: [{ kind: "entry", role: "system", text: String(e.message), ...(actions.length ? { actions } : {}) }] };
+      return { handled: true, commands: [{ kind: "entry", role: "system", text: noticeText(e, now), ...(actions.length ? { actions } : {}) }] };
     }
     case "session.cloning": return { handled: true, patch: !sid || sid === input.activeSessionId ? { working: true, workingLabel: `Cloning ${e.repo || "repo"}…` } : undefined, commands: [] };
     case "session.auth_required": return { handled: true, commands: !foreign(input.activeSessionId, e.sessionId) && e.provider ? [{ kind: "model-auth", provider: String(e.provider), reason: String(e.reason || "") }] : [] };
