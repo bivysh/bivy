@@ -19,12 +19,12 @@
     "test:unit": "npm run test:process && npm run test:bundle && npm run test:backpressure && npm run test:client-ip && npm run test:e2e && npm run test:solo"
   },
   "dependencies": {
-    "@sentry/node": "^10.74.0",
-    "ws": "^8.21.3"
+    "@sentry/node": "^10.78.0",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
-    "@types/node": "^26.6.3",
-    "@types/ws": "^8.18.1",
+    "@types/node": "^26.6.6",
+    "@types/ws": "^8.18.2",
     "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
