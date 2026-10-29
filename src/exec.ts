@@ -209,6 +209,9 @@ async function main() {
   // Turn ends that belong to a turn already running when this prompt was sent:
   // an agent that can't steer runs the prompt after it (the node says `queued`).
   let openTurnEnds = 0;
+  // Events that arrive before the node answers the prompt wait here, so they are
+  // read knowing whether the prompt was queued behind the open turn.
+  let early: Buffer[] | null = [];
 
   const finish = (code: number, errorText?: string) => {
     if (settled) return;
@@ -232,6 +235,9 @@ async function main() {
         body: JSON.stringify({ sessionId, text: prompt, clientMessageId: `exec-${randomUUID()}` }),
       });
       if (sent?.queued) openTurnEnds = 1;
+      const buffered = early ?? [];
+      early = null;
+      for (const raw of buffered) onMessage(raw);
     } catch (error) {
       finish(1, `Prompt failed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -249,7 +255,12 @@ async function main() {
     finish(1, answer ? "Connection closed before the turn finished (received a partial answer)." : "Connection closed before the turn finished.");
   });
 
-  socket.on("message", (raw) => {
+  socket.on("message", (raw: Buffer) => {
+    if (early) early.push(raw);
+    else onMessage(raw);
+  });
+
+  function onMessage(raw: Buffer) {
     let msg: Record<string, unknown>;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
     if (msg.sessionId && msg.sessionId !== sessionId) return;
@@ -298,7 +309,7 @@ async function main() {
       clearTimeout(timer);
       finish(1, String(msg.error || "Session error"));
     }
-  });
+  }
 }
 
 main().catch((error) => {

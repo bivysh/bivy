@@ -91,32 +91,70 @@ function plainVersion(version) {
   return match ? match.slice(1).map(Number) : null;
 }
 
+/** Compare two `plainVersion`s: negative when `a` is older. */
+function compareVersions(a, b) {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+
 /**
- * npm overrides that replace each too-young version with the newest older one
- * pnpm-lock.yaml holds on the same release line (same major, or same minor for
- * 0.x), so every range that accepted the young version accepts it too. Keys are
- * scoped to the young version (`name@version`), leaving other copies alone.
- * Direct dependencies are left to the gate: npm refuses to override those.
+ * The newest version of `name` older than `version` that pnpm-lock.yaml holds on
+ * the same release line (same major, or same minor for 0.x), so every range that
+ * accepted the young version accepts it too. Null when there is none.
+ */
+function reviewedOlder(name, version, locked) {
+  const target = plainVersion(version);
+  if (!target) return null;
+  const line = target[0] === 0 ? 2 : 1;
+  let best = null;
+  for (const entry of locked) {
+    const at = entry.lastIndexOf("@");
+    if (at <= 0 || entry.slice(0, at) !== name) continue;
+    const candidate = plainVersion(entry.slice(at + 1));
+    if (!candidate || candidate.slice(0, line).join(".") !== target.slice(0, line).join(".")) continue;
+    if (compareVersions(candidate, target) >= 0) continue;
+    if (!best || compareVersions(candidate, best) > 0) best = candidate;
+  }
+  return best;
+}
+
+/**
+ * npm overrides that replace each too-young transitive version with the newest
+ * reviewed one (see reviewedOlder). Keys are scoped to the young version
+ * (`name@version`), leaving other copies alone. npm refuses to override a direct
+ * dependency, so those are pinned by reviewedDirectPins instead.
  */
 export function reviewedReplacements(young, locked, directDependencies = {}) {
   const overrides = {};
   for (const { name, version } of young) {
-    const target = plainVersion(version);
-    if (!target || name in directDependencies) continue;
-    const line = target[0] === 0 ? 2 : 1;
-    let best = null;
-    for (const entry of locked) {
-      const at = entry.lastIndexOf("@");
-      if (at <= 0 || entry.slice(0, at) !== name) continue;
-      const candidate = plainVersion(entry.slice(at + 1));
-      if (!candidate || candidate.slice(0, line).join(".") !== target.slice(0, line).join(".")) continue;
-      const older = candidate[0] - target[0] || candidate[1] - target[1] || candidate[2] - target[2];
-      if (older >= 0) continue;
-      if (!best || (candidate[0] - best[0] || candidate[1] - best[1] || candidate[2] - best[2]) > 0) best = candidate;
-    }
+    if (name in directDependencies) continue;
+    const best = reviewedOlder(name, version, locked);
     if (best) overrides[`${name}@${version}`] = best.join(".");
   }
   return overrides;
+}
+
+/** Whether `version` satisfies a plain `^x.y.z`, `~x.y.z` or `x.y.z` spec. */
+function satisfiesSimpleRange(version, spec) {
+  const match = /^([\^~]?)(\d+\.\d+\.\d+)$/.exec(String(spec).trim());
+  const base = match && plainVersion(match[2]);
+  if (!base || compareVersions(version, base) < 0) return false;
+  if (match[1] === "") return compareVersions(version, base) === 0;
+  const line = match[1] === "~" || base[0] === 0 ? 2 : 1;
+  return version.slice(0, line).join(".") === base.slice(0, line).join(".");
+}
+
+/**
+ * Exact specs for too-young direct dependencies: the newest reviewed version
+ * (see reviewedOlder), when it still satisfies the declared range.
+ */
+export function reviewedDirectPins(young, locked, directDependencies = {}) {
+  const pins = {};
+  for (const { name, version } of young) {
+    if (!(name in directDependencies)) continue;
+    const best = reviewedOlder(name, version, locked);
+    if (best && satisfiesSimpleRange(best, directDependencies[name])) pins[name] = best.join(".");
+  }
+  return pins;
 }
 
 function lockOnly(dir) {
@@ -137,10 +175,13 @@ export async function resolveReleaseLock(dir) {
   const young = await tooYoung(JSON.parse(fs.readFileSync(lockFile, "utf8")));
   if (young.length) {
     const pkg = JSON.parse(fs.readFileSync(pkgFile, "utf8"));
-    const pins = reviewedReplacements(young, pnpmLockedVersions(), pkg.dependencies);
-    if (Object.keys(pins).length) {
-      console.log(`Holding back to reviewed versions: ${Object.entries(pins).map(([from, to]) => `${from} → ${to}`).join(", ")}`);
+    const locked = pnpmLockedVersions();
+    const pins = reviewedReplacements(young, locked, pkg.dependencies);
+    const direct = reviewedDirectPins(young, locked, pkg.dependencies);
+    if (Object.keys(pins).length || Object.keys(direct).length) {
+      console.log(`Holding back to reviewed versions: ${[...Object.entries(pins), ...Object.entries(direct)].map(([from, to]) => `${from} → ${to}`).join(", ")}`);
       pkg.overrides = { ...pkg.overrides, ...pins };
+      pkg.dependencies = { ...pkg.dependencies, ...direct };
       fs.writeFileSync(pkgFile, `${JSON.stringify(pkg, null, 2)}\n`);
       // From scratch: npm keeps a locked version even when an override now excludes it.
       fs.rmSync(lockFile);

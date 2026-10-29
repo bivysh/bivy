@@ -83,6 +83,8 @@ const modelEfforts = new Map();
 let selectedEffort = null;
 // The running turn, which a steering message must name (turn/steer).
 let activeTurnId = null;
+// The turn/start request in flight, until the app-server answers it.
+let pendingTurnStart = null;
 const itemInputs = new Map();
 const itemOutputs = new Map();
 const agentMessageItems = new Set();
@@ -688,17 +690,28 @@ async function onBivyCommand(msg) {
             type: "image", url: `data:${image.mimeType || "image/png"};base64,${image.data}`,
           })),
         ];
-        const startTurn = () => asRequest("turn/start", {
-          threadId,
-          input,
-          ...(selectedModel ? { model: selectedModel } : {}),
-          ...(selectedEffort ? { effort: selectedEffort } : {}),
-        });
-        // A message sent mid-turn joins the running turn. If that turn ended in
-        // the meantime, it starts the next one instead of being lost.
-        const turn = msg.streamingBehavior === "steer" && activeTurnId
-          ? asRequest("turn/steer", { threadId, input, expectedTurnId: activeTurnId }).catch(startTurn)
-          : startTurn();
+        const startTurn = () => {
+          const started = asRequest("turn/start", {
+            threadId,
+            input,
+            ...(selectedModel ? { model: selectedModel } : {}),
+            ...(selectedEffort ? { effort: selectedEffort } : {}),
+          });
+          pendingTurnStart = started;
+          const settle = () => { if (pendingTurnStart === started) pendingTurnStart = null; };
+          started.then(settle, settle);
+          return started;
+        };
+        // A message sent mid-turn joins the running turn. One sent right after
+        // the turn was asked for waits for its id (turn/started may not have
+        // arrived yet). If that turn ended in the meantime, it starts the next
+        // one instead of being lost.
+        const steerTurn = async () => {
+          const turnId = activeTurnId || (await pendingTurnStart.catch(() => null))?.turn?.id;
+          if (!turnId) return startTurn();
+          return asRequest("turn/steer", { threadId, input, expectedTurnId: turnId }).catch(startTurn);
+        };
+        const turn = msg.streamingBehavior === "steer" && (activeTurnId || pendingTurnStart) ? steerTurn() : startTurn();
         turn.catch((error) => bivy({ type: "session.error", error: error instanceof Error ? error.message : String(error) }));
         return;
       }
