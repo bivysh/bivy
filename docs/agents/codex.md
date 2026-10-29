@@ -7,7 +7,7 @@ change it proposes gets an in-chat Approve/Deny card, and sessions resume by the
 at the sandbox level is also runnable with `BIVY_RUNTIME=codex`.
 
 - **Runtime id:** `codex-approvals` · **Tier:** Supported · **In picker:** Yes
-- **Release-tested against:** Codex CLI 0.165.0
+- **Release-tested against:** Codex CLI 0.166.0
 
 ## Install
 

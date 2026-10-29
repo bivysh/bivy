@@ -12212,6 +12212,9 @@ app.post("/api/session/prompt", async (req, res, next) => {
     eventLog.appendAttachments(record.id, promptText, fileRefs);
     const agentPrompt = promptForAgent(record, promptText);
     const cmid = typeof req.body?.clientMessageId === "string" && req.body.clientMessageId ? req.body.clientMessageId : undefined;
+    // An agent that can't steer runs this prompt after the open turn; say so, so
+    // a client waiting for its reply (bivy exec/send) skips the open turn's end.
+    const queued = record.isWorking === true && record.session.holdsPromptsUntilTurnEnds?.() === true;
     markSessionWorking(record, { type: "agent_start" });
     // Do not await completion; events stream over WebSocket.
     void dedupePrompt(cmid, async () => {
@@ -12228,7 +12231,7 @@ app.post("/api/session/prompt", async (req, res, next) => {
       console.error(`[session ${record.id}] prompt failed:`, error);
       broadcast({ type: "session.error", sessionId: record.id, error: sessionAgentError(record, error) });
     });
-    res.json({ ok: true, sessionId: record.id, sessionFile: record.sessionFile });
+    res.json({ ok: true, sessionId: record.id, sessionFile: record.sessionFile, ...(queued ? { queued: true } : {}) });
   } catch (error) {
     next(error);
   }

@@ -3,7 +3,7 @@
 // holds and anything past the cooldown, and stops a version published minutes
 // before the release.
 import assert from "node:assert/strict";
-import { pnpmLockedVersions, reviewedReplacements, tooYoung } from "../scripts/release-lock-age.mjs";
+import { pnpmLockedVersions, reviewedDirectPins, reviewedReplacements, tooYoung } from "../scripts/release-lock-age.mjs";
 
 const now = Date.parse("2026-10-28T12:00:00Z");
 const published: Record<string, string> = {
@@ -63,3 +63,15 @@ assert.deepEqual(
   { "fresh@2.0.1": "2.0.0", "@scope/zero@0.4.2": "0.4.0" },
 );
 console.log("  ok  too-young versions fall back to reviewed ones");
+
+// A too-young direct dependency is pinned to the newest reviewed version, but
+// only when that version still satisfies the declared range.
+assert.deepEqual(
+  reviewedDirectPins(
+    [{ name: "direct", version: "1.2.2" }, { name: "narrow", version: "1.3.1" }, { name: "fresh", version: "2.0.1" }],
+    new Set(["direct@1.2.0", "direct@1.2.1", "narrow@1.3.0", "fresh@2.0.0"]),
+    { direct: "^1.2.1", narrow: "^1.3.1" },
+  ),
+  { direct: "1.2.1" },
+);
+console.log("  ok  too-young direct dependencies pin to a reviewed version in range");

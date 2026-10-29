@@ -410,6 +410,12 @@ export interface RuntimeSession {
    * Optional; absent = the runtime advertises no protocol-mode commands.
    */
   invokeCommand?(name: string, args: string): Promise<void>;
+  /**
+   * Whether a prompt sent now waits for the open turn to end and runs as its own
+   * turn (an agent that can't steer). Lets the daemon tell a client that waits
+   * for its reply to skip the open turn's end. Absent = prompts never wait.
+   */
+  holdsPromptsUntilTurnEnds?(): boolean;
 }
 
 /** One rate-limit window from a metered subscription plan (e.g. Claude Pro/Max). */
