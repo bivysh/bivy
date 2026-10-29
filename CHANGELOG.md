@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- When a session hits a usage limit and Bivy will retry at the reset, the chat now says when in your own time zone ("…when the limit resets at 3:10 PM", with the weekday for a weekly limit), instead of a UTC time. This works for every agent.
+
 ### Fixed
 
 - The model picker no longer offers ChatGPT-plan models the plan refuses, for any agent. OpenCode listed 20+ OpenAI models (GPT-5.6 Sol, GPT-6 Sol, …) that failed with "not supported when using Codex with a ChatGPT account"; every agent's list is now filtered by the models your plan includes, as Pi's already was. The built-in ChatGPT catalogs now lead with GPT-6 Luna and GPT-5.6 Terra/Luna instead of the retired GPT-5.6 Sol. OpenCode is release-tested against 1.19.5.

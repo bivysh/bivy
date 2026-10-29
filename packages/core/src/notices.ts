@@ -17,3 +17,22 @@ export function isAgentNotice(value: unknown): value is AgentNotice {
   return typeof n.id === "string" && n.id.length > 0 && typeof n.text === "string" && n.text.length > 0
     && (n.urgent === undefined || typeof n.urgent === "boolean");
 }
+
+/** An instant in the viewer's local time: just the clock when it's today, with
+ *  the weekday when it's further out (a weekly limit). Null when unparseable. */
+export function formatLocalClock(iso: string, now: number = Date.now()): string | null {
+  const at = new Date(iso);
+  if (Number.isNaN(at.getTime())) return null;
+  const today = at.toDateString() === new Date(now).toDateString();
+  return at.toLocaleString(undefined, today ? { hour: "numeric", minute: "2-digit" } : { weekday: "short", hour: "numeric", minute: "2-digit" });
+}
+
+/** A session notice's text. A notice may carry an instant (`at`) and a
+ *  `localMessage` with a `{time}` slot, so each viewer reads it in their own
+ *  time zone; `message` is the node's fallback for clients that predate this. */
+export function noticeText(notice: { message?: unknown; localMessage?: unknown; at?: unknown }, now: number = Date.now()): string {
+  const fallback = String(notice.message ?? "");
+  if (typeof notice.localMessage !== "string" || !notice.localMessage.includes("{time}") || typeof notice.at !== "string") return fallback;
+  const time = formatLocalClock(notice.at, now);
+  return time ? notice.localMessage.replace("{time}", time) : fallback;
+}

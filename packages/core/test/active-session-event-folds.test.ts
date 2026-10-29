@@ -49,6 +49,11 @@ describe("active-session pure event folds", () => {
     expect(limit.commands[0]).toMatchObject({ kind: "entry", role: "system", actions: ["fork", "retry-at-reset:2026-09-26T12:00:00Z"] });
     const legacy = foldActiveSessionEvent(input, { type: "session.notice", sessionId: "s1", message: "Restarted.", action: "/new" }, 2);
     expect(legacy.commands[0]).toMatchObject({ actions: ["/new"] });
+    const at = "2026-09-26T12:00:00Z";
+    const timed = foldActiveSessionEvent(input, { type: "session.notice", sessionId: "s1", message: "Resets (Sep 26, 12:00 UTC).", localMessage: "Resets at {time}.", at }, Date.parse(at));
+    expect(timed.commands[0]).toMatchObject({ text: `Resets at ${new Date(at).toLocaleString(undefined, { hour: "numeric", minute: "2-digit" })}.` });
+    const garbled = foldActiveSessionEvent(input, { type: "session.notice", sessionId: "s1", message: "Resets (soon).", localMessage: "Resets at {time}.", at: "soon" }, 3);
+    expect(garbled.commands[0]).toMatchObject({ text: "Resets (soon)." });
   });
 
   it("interleaves prose and tools immutably", () => {

@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { applyPlanUpdate, handoffSeedOf, looksLikeAuthFailure, inline, looksLikeModelFailure, planUpdateOf, stripAttachmentPlaceholders, toHtml, type PlanEntry, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
+import { applyPlanUpdate, formatLocalClock, handoffSeedOf, looksLikeAuthFailure, inline, looksLikeModelFailure, planUpdateOf, stripAttachmentPlaceholders, toHtml, type PlanEntry, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
 import { AppMessage } from "./AppMessage.js";
 import { ReviewCard } from "./ReviewCard.js";
@@ -39,17 +39,8 @@ function actionLabel(action: string): string {
   if (action === "retry-auth") return "Refresh and retry";
   if (action === "choose-model") return "Choose another model";
   if (action.startsWith("connect-provider:")) return "Connect a provider";
-  if (action.startsWith("retry-at-reset:")) return `Retry automatically at ${formatResetTime(action.slice("retry-at-reset:".length))}`;
+  if (action.startsWith("retry-at-reset:")) return `Retry automatically at ${formatLocalClock(action.slice("retry-at-reset:".length)) ?? "reset"}`;
   return `Run ${action}`;
-}
-
-/** A limit's reset instant in the viewer's local time — just the clock when it's
- *  today, with the weekday when it's further out (a weekly window). */
-function formatResetTime(iso: string): string {
-  const at = new Date(iso);
-  if (Number.isNaN(at.getTime())) return "reset";
-  const today = at.toDateString() === new Date().toDateString();
-  return at.toLocaleString(undefined, today ? { hour: "numeric", minute: "2-digit" } : { weekday: "short", hour: "numeric", minute: "2-digit" });
 }
 
 /** Inline buttons for the actions a notice/error suggests. The first is the

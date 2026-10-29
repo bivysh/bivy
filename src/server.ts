@@ -8139,6 +8139,7 @@ function scheduleSessionResume(record: SessionRecord, plan: ResumePlan): boolean
     sessionId: record.id,
     level: "info",
     message: `I'll retry this automatically when the limit resets (${at} UTC).`,
+    ...(Number.isFinite(when) ? { at: new Date(when).toISOString(), localMessage: "I'll retry this automatically when the limit resets at {time}." } : {}),
     actions: ["cancel-resume"],
   });
   armSessionResumeTimer(record.id, Number.isFinite(when) ? when : Date.now());
