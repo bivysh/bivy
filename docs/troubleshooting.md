@@ -246,7 +246,7 @@ never `relay connected`.
 
 ```bash
 bivy status
-bivy doctor
+bivy doctor --network   # which hop fails: control plane, relay host, or the node's link
 bivy logs -f    # look for lines tagged [relay]
 ```
 

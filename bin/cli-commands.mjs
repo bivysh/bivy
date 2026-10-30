@@ -95,7 +95,7 @@ export const COMMANDS = [
   { name: "stop", group: "node", scope: "node", usage: "stop", summary: "Stop the background service" },
   { name: "restart", group: "node", scope: "node", usage: "restart [--force]", summary: "Restart the background service after active turns finish" },
   { name: "status", group: "node", scope: "node", json: true, usage: "status [--json]", summary: "Show config and whether the node is reachable" },
-  { name: "doctor", group: "node", scope: "node", usage: "doctor", summary: "Health check: deps, node, model, remote, agents" },
+  { name: "doctor", group: "node", scope: "node", usage: "doctor [--network]", summary: "Health check: deps, node, model, remote, agents" },
   { name: "diagnostics", group: "node", scope: "node", usage: "diagnostics [--out <file>]", summary: "Print a redacted, shareable diagnostics bundle" },
   { name: "capabilities", group: "node", scope: "node", json: true, usage: "capabilities [--json]", summary: "What this machine unlocks: OS, agents, providers, Docker/GPU, plugins" },
   { name: "logs", group: "node", scope: "node", usage: "logs [-f]", summary: "Tail the node logs" },

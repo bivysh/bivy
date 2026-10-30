@@ -35,6 +35,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { randomBytes, createCipheriv, createDecipheriv, randomUUID, createHash, verify as cryptoVerify } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import vm from "node:vm";
+import { probeConnect, probeHttp } from "./network-probe.mjs";
 import { linkSessionWorktrees, selectStaleSessions, sessionActivityMs } from "./prune-sessions.mjs";
 import { nativeResumeRef, resolveSessionsLimit, truncateSavedSessions } from "./sessions-list.mjs";
 import { renderManagedBlock, upsertManagedBlock, removeManagedBlock, rcFileForShell } from "./shim-path.mjs";
@@ -5481,9 +5482,10 @@ async function cmdCapabilities(args = []) {
 
 async function cmdDoctor(args = []) {
   if (args.includes("-h") || args.includes("--help")) {
-    console.log("Usage: bivy doctor\n\nHealth check: runtime deps, node reachability, model auth, remote/relay, and agents on PATH. Exits non-zero if Node is unsupported or the node is unreachable, so it can gate CI/monitoring. See also 'bivy diagnostics' for a shareable redacted bundle.");
+    console.log("Usage: bivy doctor [--network]\n\nHealth check: runtime deps, node reachability, model auth, remote/relay, and agents on PATH. Exits non-zero if Node is unsupported or the node is unreachable, so it can gate CI/monitoring. See also 'bivy diagnostics' for a shareable redacted bundle.\n\n--network  only check connectivity: the node, the control plane, the relay host, and the node's own relay link. Exits non-zero if any of them fails.");
     return;
   }
+  if (args.includes("--network")) return doctorNetwork();
   if (!(await ensureDeps())) process.exit(1);
 
   const config = loadConfig();
@@ -5573,6 +5575,51 @@ async function cmdDoctor(args = []) {
   // unreachable node), so `bivy doctor` is usable as a CI/monitoring gate.
   // Soft checks (git, service, model, agents) only warn.
   if (!hasSupportedNode() || !reachable) process.exitCode = 1;
+}
+
+// `bivy doctor --network` — each hop between this machine and the remote app,
+// probed from here, next to what the node itself reports for its relay link.
+async function doctorNetwork() {
+  const config = loadConfig();
+  const ok = c.green("✓");
+  const bad = c.red("✗");
+  const line = (good, label, detail) => console.log(`  ${good ? ok : bad} ${label} ${detail}`);
+  const timing = (r) => c.dim(`(${r.ms} ms)`);
+  let failed = false;
+
+  console.log(c.bold("\n  Bivy doctor — network\n"));
+  const reachable = await isReachable(config);
+  line(reachable, "node", `${url(config)} ${reachable ? c.green("reachable") : c.dim("not reachable — 'bivy start'")}`);
+  if (!reachable) failed = true;
+  let status = null;
+  if (reachable) { try { status = await localApi(config, "/api/status"); } catch {} }
+
+  const relay = loadRelayConfig();
+  const appUrl = status?.relay?.controlPlaneUrl || relay?.controlPlaneUrl;
+  const relayUrl = status?.relay?.relayUrl || relay?.url;
+  if (!appUrl && !relayUrl) {
+    console.log(`  ${c.dim("○")} remote ${c.dim("this machine only — 'bivy access' to see the options")}\n`);
+    if (failed) process.exitCode = 1;
+    return;
+  }
+  if (appUrl) {
+    const r = await probeHttp(`${String(appUrl).replace(/\/$/, "")}/healthz`);
+    line(r.ok, "control plane", `${appUrl} ${r.ok ? c.green(`HTTP ${r.status}`) : c.yellow(r.status ? `HTTP ${r.status}` : r.error)} ${timing(r)}`);
+    if (!r.ok) failed = true;
+  }
+  if (relayUrl) {
+    const r = await probeConnect(relayUrl);
+    line(r.ok, "relay host", `${relayUrl} ${r.ok ? c.green("accepts connections") : c.yellow(r.error)} ${timing(r)}`);
+    if (!r.ok) failed = true;
+  }
+  if (reachable) {
+    const linked = Boolean(status?.relay?.connected);
+    const detail = linked ? c.green("connected") : c.yellow(`not connected${status?.relay?.lastError ? ` (${status.relay.lastError})` : ""}`);
+    line(linked, "node's relay link", detail);
+    if (!linked) failed = true;
+  }
+  console.log("");
+  if (failed) process.exitCode = 1;
 }
 
 // `bivy logs [-f] [-n N]` — tail the node's output, wherever it lands: the

@@ -1324,8 +1324,14 @@ default agent availability, model credential, relay, and which agent CLIs are on
 Exits non-zero when a **hard** check fails (unsupported Node.js, or the node is
 unreachable). `git`, the service, the model and the agent list only warn.
 
+`--network` checks only connectivity, from this machine: the node, the control
+plane's `/healthz`, a TCP (and TLS, for `wss://`) connection to the relay host,
+and whether the node's own relay link is up. Each line shows its round trip, and
+the command exits non-zero if any of them fails.
+
 ```bash
 bivy doctor
+bivy doctor --network
 ```
 
 ### `bivy capabilities [--json]`
