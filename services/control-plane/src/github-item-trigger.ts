@@ -21,7 +21,7 @@ export function matchGithubItemTrigger(
 ): ItemMatch {
   const item = event === "issues" ? parseGithubIssueEvent(payload) : parseGithubPullRequestEvent(payload);
   if (!item) return { matched: false, reason: "unsupported_event" };
-  const delivery = payload as { action?: unknown; label?: { name?: unknown } };
+  const delivery = payload as { action?: unknown; label?: { name?: unknown }; sender?: { login?: unknown } };
   const action = String(delivery.action ?? "");
   // GitHub includes the newly applied label separately. Adding an unrelated
   // label must not re-fire an automation just because its label was already there.
@@ -30,16 +30,27 @@ export function matchGithubItemTrigger(
   // A label delivery does not introduce a new body mention. Reusing the
   // existing body here makes unrelated/status label additions re-trigger work.
   const mentionRoute = action === "labeled" ? undefined : pickIssueRoutingLabel({ ...item, labels: [] }, triggerLogin);
-  const mentionAllowed = meetsTriggerAccess(item.authorAssociation, hook.triggerAccess);
-  const automation = matchSourceAutomation(definitions, {
+  const authorAllowed = meetsTriggerAccess(item.authorAssociation, hook.triggerAccess);
+  // A label stands for whoever applied it, which needs triage access. Any other
+  // action on a labelled item (an edit, a push) and a label the author applied
+  // themselves (an issue form's default labels) is the author's, so it needs the
+  // same access as a mention.
+  const sender = typeof delivery.sender?.login === "string" ? delivery.sender.login.toLowerCase() : "";
+  const appliedByAuthor = Boolean(sender) && sender === item.authorLogin?.toLowerCase();
+  const labelsAllowed = authorAllowed || (action === "labeled" && !appliedByAuthor);
+  const match = (withLabels: string[]) => matchSourceAutomation(definitions, {
     kind: "github", appId: hook.appId, githubEvent: event, action,
-    repo: item.repo, labels, mention: Boolean(mentionRoute) && mentionAllowed,
+    repo: item.repo, labels: withLabels, mention: Boolean(mentionRoute) && authorAllowed,
   });
-  if (!automation) return { matched: false, reason: mentionRoute && !mentionAllowed ? "access" : "no_automation" };
+  const automation = match(labelsAllowed ? labels : []);
+  if (!automation) {
+    const denied = (mentionRoute && !authorAllowed) || (!labelsAllowed && labels.length > 0 && Boolean(match(labels)));
+    return { matched: false, reason: denied ? "access" : "no_automation" };
+  }
   return {
     matched: true, item, automation,
     // Keep legacy machine routing, without treating a custom trigger label as
     // a queue or machine name. An automation's nodeLabel takes precedence upstream.
-    routingLabel: pickRoutingLabel(item.labels) ?? (mentionAllowed ? mentionRoute : undefined) ?? "bivy",
+    routingLabel: pickRoutingLabel(item.labels) ?? (authorAllowed ? mentionRoute : undefined) ?? "bivy",
   };
 }

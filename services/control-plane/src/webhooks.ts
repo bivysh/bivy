@@ -239,6 +239,8 @@ export interface ParsedIssueWork {
   // "OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "NONE"). Used by
   // `meetsTriggerAccess` to gate the body-mention trigger — see issue #259.
   authorAssociation?: string;
+  /** The issue author's GitHub login, to tell their own label changes apart. */
+  authorLogin?: string;
 }
 
 /**
@@ -269,6 +271,7 @@ export function parseGithubIssueEvent(payload: unknown): ParsedIssueWork | undef
     url: String(issue.html_url ?? ""),
     labels,
     authorAssociation: issue.author_association ? String(issue.author_association) : undefined,
+    authorLogin: issue.user?.login ? String(issue.user.login) : undefined,
   };
 }
 
@@ -585,6 +588,7 @@ export interface ParsedPullRequestWork {
   url: string;
   labels: string[];
   authorAssociation?: string;
+  authorLogin?: string;
 }
 
 /**
@@ -614,6 +618,7 @@ export function parseGithubPullRequestEvent(payload: unknown): ParsedPullRequest
     url: String(pr.html_url ?? ""),
     labels,
     authorAssociation: pr.author_association ? String(pr.author_association) : undefined,
+    authorLogin: pr.user?.login ? String(pr.user.login) : undefined,
   };
 }
 
