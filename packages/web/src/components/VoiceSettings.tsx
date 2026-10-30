@@ -33,7 +33,7 @@ export function VoiceSettings({ state, onManageKey }: { state: AppState; onManag
     <div className="settings-form">
       <section className="settings-section">
         <h3>Voice input</h3>
-        <p className="muted settings-intro">
+        <p className="muted">
           Dictate with the composer mic. Whisper converts speech to text using a Groq or OpenAI key. Add or manage
           each provider's key below. With no key, supported browsers use built-in dictation.
         </p>
@@ -64,7 +64,7 @@ export function VoiceSettings({ state, onManageKey }: { state: AppState; onManag
 
       <section className="settings-section">
         <h3>Read aloud</h3>
-        <p className="muted settings-intro">Choose the reader used by the speaker button on assistant replies. OpenAI speech is higher quality; browser speech is free and stays on this device.</p>
+        <p className="muted">Choose the reader used by the speaker button on assistant replies. OpenAI speech is higher quality; browser speech is free and stays on this device.</p>
         <label className="field-label" htmlFor="speech-reader">Reader</label>
         <select id="speech-reader" className="picker-search" value={speech.reader} onChange={(event) => updateSpeech({ reader: event.target.value as SpeechPreferences["reader"] })}>
           <option value="browser">Browser voice (free, on-device)</option>

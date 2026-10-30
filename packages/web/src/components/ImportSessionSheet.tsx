@@ -135,8 +135,8 @@ export function ImportSessionContent({ onDone }: { onDone: (sessionId: string) =
       <>
         <div className="picker-section">
           <div className="picker-section-label">Confirm seeded import</div>
-          <div className="import-session-hint">{session.title || "Untitled session"}</div>
-          <div className="import-session-hint">{text}</div>
+          <div className="picker-empty">{session.title || "Untitled session"}</div>
+          <div className="picker-empty">{text}</div>
         </div>
         <div className="picker-section">
           <button className="btn fork-submit" disabled={importingRef === session.ref} onClick={() => setPendingDisclosure(null)}>
@@ -202,10 +202,10 @@ export function ImportSessionContent({ onDone }: { onDone: (sessionId: string) =
 
       <div className="picker-section">
         <div className="picker-section-label">Sessions (newest first)</div>
-        {status === "loading" && <div className="import-session-hint">Looking for sessions this machine can see…</div>}
+        {status === "loading" && <div className="picker-empty">Looking for sessions this machine can see…</div>}
         {status === "error" && <div className="fork-error" role="alert">{loadError}</div>}
         {status === "ready" && filtered.length === 0 && (
-          <div className="import-session-hint">
+          <div className="picker-empty">
             {sessions.length === 0
               ? "No importable sessions found — Bivy already manages everything this machine can see, or no supported provider (Claude Code, Codex) has a session here."
               : "No sessions match these filters."}

@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A message sent from the CLI or API while an agent that can't steer is mid-turn (OpenCode, Grok and the other ACP agents) now runs as its own turn once the current one ends. Before, it started a second turn alongside the first, and the rest of the first reply ran into the new answer as one message. `bivy send` and `bivy exec --session` now print the answer to their own message, not the end of the turn already running.
 - A GitHub automation that triggers on a label now applies the account's trigger access to the item's author when they drive the event: editing or pushing to an item that already has the label, or applying it themselves (for example through an issue form's default labels). A label a maintainer applies still triggers for anyone's issue or pull request.
+- Settings → Voice: the section descriptions now line up with their headings and fields instead of being indented. Settings → Import session shows its loading and empty messages in the same style as other lists.
 - A message sent to Codex right after a turn starts now joins that turn. Before, if it arrived before Codex reported the turn as started, it began a second turn.
 
 ## [0.22.2] - 2026-10-29
