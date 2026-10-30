@@ -1607,7 +1607,6 @@ button.sheet-action:last-child { border-bottom: 0; }
 .fork-submit { width: calc(100% - 24px); margin: var(--space-2) var(--space-3); }
 
 /* ---- Import session sheet (issue #156: discover/adopt provider-native sessions) ---- */
-.import-session-hint { margin: 4px 12px; padding: 10px; color: var(--muted); font-size: 12px; }
 /* A live external process was detected — read-only badge, no adopt action
    (Bivy has no safe way to take over a process it doesn't own). */
 .import-session-action { white-space: nowrap; }

@@ -84,6 +84,7 @@ const RETIRED_CLASSES = [
   "followup-edit", "followup-edit-input", "followup-edit-actions", "schedule-field", "schedule-label",
   "next-step", "next-step-ok", "next-step-actions", // in-session "next step" cards (automate, notifications) removed
   "focus-view-btn", "focus-view-label", // Focus view removed: a turn's work folds into one line (TurnWork)
+  "import-session-hint", // → .picker-empty
 ];
 const retiredClassRe = new RegExp(`(?:\\.|className[^\\n]*[\\"'\\x60 {])(${RETIRED_CLASSES.join("|")})(?=[\\s.\\"'\\x60}:])`, "g");
 // Retired selector shapes that are not a single class name.
