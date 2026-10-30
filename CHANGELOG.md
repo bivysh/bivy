@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Claude Code is release-tested against Claude Agent SDK 0.3.314 (Claude Code 2.1.314).
+
+### Fixed
+
+- A Claude Code turn that fails (it can't start because of a bad proxy setting or a missing sandbox, it runs out of turns, or it crashes) now shows the reason in the chat and marks the turn failed. Before, the chat showed only a code such as `error_during_execution`, and `bivy exec` could exit 0 with no answer.
+
 ## [0.22.3] - 2026-10-30
 
 ### Added

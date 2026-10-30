@@ -364,6 +364,15 @@ function isApiErrorMessage(message: any): boolean {
   return Boolean(message?.error) || message?.isApiErrorMessage === true;
 }
 
+/** Why a `result` failed, or "" for a successful one. The error variant has no
+ *  `result` text; its messages ride `errors` (a startup failure's reason, a
+ *  crash), with the subtype as the last resort. */
+function resultErrorText(message: any): string {
+  if (!message?.subtype || message.subtype === "success") return "";
+  const errors = Array.isArray(message.errors) ? message.errors.filter((e: unknown) => typeof e === "string" && e.trim()) : [];
+  return errors.length ? errors.join("\n") : String(message.result ?? message.subtype);
+}
+
 /** True when a role:"user" turn is a model-only meta injection (see
  *  DROP_META_TEXT) rather than a real human prompt. Callers must exclude
  *  tool_result-bearing turns first — those carry real tool output, never meta. */
@@ -797,6 +806,12 @@ class ClaudeSession implements RuntimeSession {
    *  "interrupted" notice. One-shot; cleared when consumed, on the next result,
    *  and on a real abort() (a user Stop must never be silenced by a stale flag). */
   private suppressNextInterrupt = false;
+  /** The user pressed Stop since the last `result`: that turn's error result is
+   *  the interrupt, not a failure to report. */
+  private stoppedThisTurn = false;
+  /** The last result's failure text, so the SDK's throw that follows it isn't
+   *  reported a second time. */
+  private reportedFailure?: string;
 
   /** tool_use id → tool name, learned as "assistant" turns emit tool_use blocks.
    *  Used only to label a passively-surfaced tool_image (see #292); never
@@ -937,6 +952,10 @@ class ClaudeSession implements RuntimeSession {
     // the subprocess. Shared with process.ts and protocol.ts via bivySessionEnv
     // (see session-env.ts) so every CLI-spawning adapter injects it the same way.
     Object.assign(env, bivySessionEnv(this.id));
+    // A startup failure that would otherwise end with stderr alone (a missing
+    // sandbox, an unreadable cwd) comes back as an error `result` carrying its
+    // message, so the chat shows why instead of a bare exit.
+    env.CLAUDE_CODE_STARTUP_FAILURE_RESULTS ??= "1";
     this.spawnedToken = authTokenFromEnv(credEnv);
 
     const options: Record<string, unknown> = {
@@ -1081,6 +1100,7 @@ class ClaudeSession implements RuntimeSession {
   private teardownQuery(): void {
     const q = this.query;
     this.query = undefined;
+    this.stoppedThisTurn = false;
     this.input.close();
     if (q?.close) {
       try {
@@ -1121,6 +1141,11 @@ class ClaudeSession implements RuntimeSession {
     } catch (error) {
       this.streaming = false;
       const raw = error instanceof Error ? error.message : String(error);
+      // The SDK throws after an error result ("returned an error result: …"),
+      // which the result case already reported.
+      const reported = this.reportedFailure;
+      this.reportedFailure = undefined;
+      if (reported && raw.includes(reported)) return;
       if (await this.recoverFromAuthError(raw)) return;
       // Emit session.error (the toast path) — agent_end's `error` field is not
       // surfaced by the client, so without this a thrown SDK error (e.g. a 401)
@@ -1331,8 +1356,10 @@ class ClaudeSession implements RuntimeSession {
       }
 
       case "result": {
-        const resultError = message.subtype && message.subtype !== "success" ? String(message.result ?? message.subtype) : "";
+        const resultError = resultErrorText(message);
         if (resultError && await this.recoverFromAuthError(resultError)) break;
+        const stopped = this.stoppedThisTurn;
+        this.stoppedThisTurn = false;
         this.streaming = false;
         this.startedMessage = false;
         this.currentText = "";
@@ -1347,13 +1374,17 @@ class ClaudeSession implements RuntimeSession {
         // next (possibly self-woken) turn can recover, while a failed turn that
         // already reloaded surfaces its error instead of looping.
         if (!resultError) this.reloadedThisTurn = false;
-        if (message.subtype && message.subtype !== "success") {
-          this.emit({ type: "tool_result", error: message.subtype, message: message.result });
-        }
+        // A failed turn (a startup failure, max turns, a crash) carries its
+        // message on agent_end like every other runtime, so the daemon marks it
+        // failed and `bivy exec` exits non-zero. A turn the user stopped ends
+        // with an error result too; the interrupt notice already covers it.
+        const failure = resultError && !stopped ? resultError : "";
+        this.reportedFailure = failure.split("\n")[0] || undefined;
+        if (failure) this.emit({ type: "session.error", error: describeAnthropicError(failure) });
         this.emit({ type: "turn_end" });
         // Cost/token/plan-quota totals are read via getUsage() (backed by the
         // SDK's usage_EXPERIMENTAL... control request), not forwarded here.
-        this.emit({ type: "agent_end", subtype: message.subtype });
+        this.emit({ type: "agent_end", subtype: message.subtype, ...(failure ? { error: failure } : {}) });
         break;
       }
 
@@ -1446,6 +1477,7 @@ class ClaudeSession implements RuntimeSession {
     // always be shown, never silenced.
     this.userAbortPending = true;
     this.suppressNextInterrupt = false;
+    this.stoppedThisTurn = true;
     if (this.query?.interrupt) {
       try {
         await this.query.interrupt();
