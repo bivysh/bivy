@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.3] - 2026-10-30
+
 ### Added
 
 - `bivy doctor --network` checks each hop from this machine to the app: the node, the control plane's health endpoint, a TCP/TLS connection to the relay host, and the node's own relay link. Each line shows its round trip or the error, so you can see which hop fails, and the command exits non-zero if any of them does.

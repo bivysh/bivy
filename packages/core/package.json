@@ -1,6 +1,6 @@
 {
   "name": "@bivy/core",
-  "version": "0.22.3",
+  "version": "0.22.4",
   "description": "Framework-agnostic Bivy client core: protocol, transport, crypto, state. Shared by the web PWA and (later) the Expo app.",
   "type": "module",
   "license": "MIT",
