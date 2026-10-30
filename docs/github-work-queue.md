@@ -188,9 +188,11 @@ wins over the default.
 
 On a **public** repository, anyone can open an issue or leave a comment. By
 default only collaborators with write access can start a run by
-`@`-mentioning the bot; a mention from anyone else is ignored. Applying a
-routing label is unaffected (GitHub itself only lets collaborators/triage-access
-users add labels).
+`@`-mentioning the bot; a mention from anyone else is ignored. A label someone
+else applies to an issue or PR triggers whoever its author is (GitHub only lets
+triage-access users label other people's items). A label the author applied
+themselves (an issue form's default labels, say), or a later edit or push by an
+author who doesn't qualify, is held to the same rule as a mention.
 
 Set **Settings → GitHub App → Who can trigger runs** to change it, based on
 GitHub's own `author_association` for the issue/comment author:

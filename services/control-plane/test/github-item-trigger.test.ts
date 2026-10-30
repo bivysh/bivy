@@ -73,6 +73,23 @@ for (const event of ["issues", "pull_request"] as const) {
     }
   });
 
+  test(`${event}: a label applied by the author, or a later action by them, needs trigger access`, () => {
+    const definition = automation({ on: [{ event, labels: ["bivy"] }] });
+    const value = (action: string, sender: string, association: string) => {
+      const base = payload("bivy");
+      base[event === "issues" ? "issue" : "pull_request"]!.author_association = association;
+      Object.assign(base[event === "issues" ? "issue" : "pull_request"]!, { user: { login: "Outsider" } });
+      return { ...base, action, sender: { login: sender } };
+    };
+    const hook = { triggerAccess: "collaborator" as const };
+    assert.equal(matchGithubItemTrigger([definition], hook, event, value("labeled", "maintainer", "NONE"), "bivy-sh").matched, true);
+    for (const [action, sender] of [["labeled", "outsider"], ["opened", "outsider"], ["edited", "outsider"], ["reopened", "maintainer"]]) {
+      assert.deepEqual(matchGithubItemTrigger([definition], hook, event, value(action!, sender!, "NONE"), "bivy-sh"), { matched: false, reason: "access" }, action);
+      assert.equal(matchGithubItemTrigger([definition], hook, event, value(action!, sender!, "MEMBER"), "bivy-sh").matched, true, action);
+      assert.equal(matchGithubItemTrigger([definition], { triggerAccess: "everyone" }, event, value(action!, sender!, "NONE"), "bivy-sh").matched, true, action);
+    }
+  });
+
   test(`${event}: pause, repository, app, and event filters remain authoritative`, () => {
     for (const definition of [
       automation({ enabled: false }), automation({ repos: ["acme/other"] }), automation({ appId: "other-app" }),
