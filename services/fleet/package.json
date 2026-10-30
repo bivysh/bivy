@@ -1,6 +1,6 @@
 {
   "name": "bivy-fleet",
-  "version": "0.22.3",
+  "version": "0.22.4",
   "private": true,
   "type": "module",
   "description": "Self-hostable Bivy fleet: runs one sleeping cloud machine per account, plus disposable per-work runners, on a machine provider you own.",
