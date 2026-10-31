@@ -55,6 +55,7 @@ import { anthropicCredentialPreflight, describeAnthropicError, isAnthropicAuthEr
 import { toModelInfo as sharedToModelInfo } from "../../runtime/normalize.js";
 import { hasLiveProcessForCwd } from "../../runtime/native-process-scan.js";
 import { bivySessionEnv } from "../../runtime/session-env.js";
+import { ELICITATION_TOOL } from "../../elicitation.js";
 import { bridgeInstalled, enableBridgeResolution } from "../../agent-bridges.mjs";
 
 /** Binary names a live Claude Code process could be running under (see
@@ -941,6 +942,16 @@ class ClaudeSession implements RuntimeSession {
       return { behavior: "allow", updatedInput: input };
     };
 
+    // An MCP server asking the user something (a form, a page to open). Without
+    // this the SDK declines it unseen; Bivy's guardian shows it on the question
+    // card, as it does for every agent (see src/elicitation.ts).
+    const onElicitation = async (request: Record<string, unknown>, opts: { signal?: AbortSignal }) => {
+      const decision = this.toolInterceptor
+        ? await this.toolInterceptor({ sessionId: this.id, toolName: ELICITATION_TOOL, input: request, signal: opts.signal })
+        : undefined;
+      return decision && decision.elicitation ? decision.elicitation : { action: "decline" };
+    };
+
     // Start from the process env (the SDK's `env` replaces, not merges), layer in
     // any configured extras, then the shared-vault credential so one login at the
     // Bivy level serves this agent too. The vault wins over an ambient key.
@@ -968,6 +979,7 @@ class ClaudeSession implements RuntimeSession {
       // canUseTool and silently break AskUserQuestion.
       permissionMode,
       canUseTool,
+      onElicitation,
       env,
       // Keep the default Claude Code prompt, appending the session instructions:
       // the Bivy note (how to reach the user's chat — `bivy attach`, previews)

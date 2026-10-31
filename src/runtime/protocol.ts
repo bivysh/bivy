@@ -1031,10 +1031,10 @@ class ProtocolSession implements RuntimeSession {
         const decision = await this.toolInterceptor({ sessionId: this.id, toolName, input: msg.input });
         // A call Bivy serviced itself (an answered AskUserQuestion) must not run:
         // it goes back as a deny whose reason is the result, like the SDK
-        // runtimes' deny channel, plus `handled` and the structured answers for a
-        // shim that can return them natively.
+        // runtimes' deny channel, plus `handled` and the structured answers (or
+        // an MCP elicitation's result) for a shim that can return them natively.
         const reply = decision?.handled
-          ? { decision: "deny", reason: decision.result, handled: true, ...(decision.answers ? { answers: decision.answers } : {}) }
+          ? { decision: "deny", reason: decision.result, handled: true, ...(decision.answers ? { answers: decision.answers } : {}), ...(decision.elicitation ? { elicitation: decision.elicitation } : {}) }
           : { decision: decision?.block ? "deny" : "allow", reason: decision?.reason };
         try {
           this.write({ id: randomUUID(), type: "tool.decision", sessionId: this.id, toolCallId, ...reply });
