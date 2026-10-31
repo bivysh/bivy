@@ -15,6 +15,8 @@
 // Nothing imports this yet; it is the target interface for the migration
 // described in docs/pluggable-runtime.md.
 
+import type { ElicitationResult } from "../elicitation.js";
+
 /**
  * Normalized streaming event. The named types are the ones the daemon switches
  * on today (busy/idle tracking); any other string is forwarded verbatim so
@@ -170,6 +172,9 @@ export interface ToolCallDecision {
    *  answer), for agents whose protocol takes structured answers rather than a
    *  result text (Codex's request_user_input). */
   answers?: Record<string, string>;
+  /** With `handled`, for an ELICITATION_TOOL call: the result to hand back to
+   *  the MCP server (see src/elicitation.ts). */
+  elicitation?: ElicitationResult;
 }
 
 export type ToolInterceptor = (
@@ -686,6 +691,9 @@ export interface UserQuestionItem {
    *  (`--run`), typically one needing their sudo password. The card opens a
    *  terminal with it typed but not run. */
   command?: string;
+  /** The card can be sent with this question unanswered (an optional field of
+   *  an MCP elicitation form); its answer is then "". */
+  optional?: boolean;
 }
 
 export interface UserQuestionSecret {

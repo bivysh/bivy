@@ -366,6 +366,8 @@ export interface UserQuestionItem {
   code?: string;
   /** A command the user runs in a terminal on the machine (`--run`). */
   command?: string;
+  /** The card can be sent with this question unanswered. */
+  optional?: boolean;
 }
 
 /**

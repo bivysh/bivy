@@ -105,6 +105,7 @@ import { sessionLikeFields } from "./session/start-like.js";
 import { BIVY_AGENT_NOTE, mergeSyncedAgentInstructions, readAgentInstructions, sessionInstructions, writeAgentInstructions, MAX_AGENT_INSTRUCTIONS_BYTES } from "./agent-instructions.js";
 import { ApprovalManager, type ApprovalRequest } from "./approval.js";
 import { QuestionManager, validQuestions, isAskUserQuestionTool, formatQuestionResult } from "./question.js";
+import { isElicitationTool, elicitationQuestions, elicitationResult, type ElicitationRequest } from "./elicitation.js";
 import { NodeIdentity } from "./identity.js";
 import { canOpenBrowser, openBrowser } from "./browser-open.js";
 import { openOAuthLoginOnNode } from "./runtime/oauth/oauth-node-open.js";
@@ -6457,6 +6458,17 @@ const guardianInterceptorImpl: ToolInterceptor = async ({ sessionId, toolName, i
     if (!questions) return;
     const answer = await questionManager.request({ sessionId, questions, signal });
     return { handled: true, result: formatQuestionResult(questions, answer), ...(answer.behavior === "completed" ? { answers: answer.answers } : {}) };
+  }
+  // An MCP server asking the user for something (a form, a page to open),
+  // which an adapter raised as ELICITATION_TOOL. Same card, same pre-policy
+  // place: the user answers it, and the adapter hands the result to the server.
+  if (isElicitationTool(toolName)) {
+    const request = input as ElicitationRequest;
+    const questions = elicitationQuestions(request);
+    if (!questions) return { handled: true, result: "Bivy can't show this request; it was declined.", elicitation: { action: "decline" } };
+    const answer = await questionManager.request({ sessionId, questions, signal });
+    const elicitation = elicitationResult(request, answer);
+    return { handled: true, result: `The user's answer went to the MCP server (${elicitation.action}).`, elicitation };
   }
 
   const record = openSessions.get(sessionId);

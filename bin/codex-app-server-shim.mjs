@@ -26,7 +26,8 @@
 //   • item/fileChange/requestApproval         → patch approval
 //   • item/permissions/requestApproval        → sandbox-widening approval
 //   • item/tool/requestUserInput              → AskUserQuestion card
-//   • mcpServer/elicitation/request           → MCP tool approval (codex_approval_kind)
+//   • mcpServer/elicitation/request           → MCP tool approval (codex_approval_kind),
+//                                               or a server's form/page on the question card
 //   • turn/steer {expectedTurnId}             → mid-turn message
 //   • thread/settings/update {model, effort}  → model / reasoning-effort picker
 //   • turn/completed                          → turn done
@@ -454,8 +455,23 @@ function onServerRequest(m) {
       bivy({ type: "tool.call", toolCallId: itemId, name: text(meta.tool_name || params.serverName || "mcp"), input });
       return;
     }
-    // A server's own form or page. Bivy has no card for an arbitrary schema
-    // yet, so decline it explicitly instead of answering an empty "accept".
+    // A server's own form or page: Bivy's guardian shows it on the question
+    // card (src/elicitation.ts) and hands back the MCP result. OpenAI's own
+    // form variants carry a schema Bivy can't read, so those are declined.
+    if (params.mode === "form" || params.mode === "url") {
+      const itemId = `elicitation-${id}`;
+      approvalRequests.set(itemId, {
+        id,
+        reply: (msg) => {
+          const action = msg.elicitation?.action ?? "decline";
+          bivy({ type: "tool.result", toolCallId: itemId, name: "McpElicitation", result: text(msg.reason || action), isError: action !== "accept" });
+          return { action, content: msg.elicitation?.content ?? null, _meta: null };
+        },
+      });
+      const input = { serverName: params.serverName, message: params.message, mode: params.mode, ...(params.mode === "url" ? { url: params.url } : { requestedSchema: params.requestedSchema }) };
+      bivy({ type: "tool.call", toolCallId: itemId, name: "McpElicitation", input });
+      return;
+    }
     asReply(id, { action: "decline", content: null, _meta: null });
     return;
   }

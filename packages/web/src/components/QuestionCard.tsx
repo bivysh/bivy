@@ -131,6 +131,7 @@ function QuestionCard({
   };
 
   const isAnswered = (qi: number) => {
+    if (request.questions[qi]!.optional) return true;
     if ((selected[qi] || []).length > 0) return true;
     if (isStep(request.questions[qi]!) && !otherActive[qi]) return true;
     return !!otherActive[qi] && (otherText[qi] || "").trim().length > 0;
@@ -164,7 +165,7 @@ function QuestionCard({
   // One question, one pick from plain options: tapping an option is the answer,
   // so there is no separate Send. "Other" still opens a box and a Send button.
   const only = request.questions.length === 1 ? request.questions[0] : undefined;
-  const oneTap = !!only && !only.secret && !only.multiSelect && only.options.length > 0;
+  const oneTap = !!only && !only.secret && !only.multiSelect && only.options.length > 0 && !only.optional;
   const pick = (qi: number, label: string, multiSelect: boolean | undefined) => {
     if (!oneTap || !only) return toggle(qi, label, multiSelect);
     setSelected({ [qi]: [label] });

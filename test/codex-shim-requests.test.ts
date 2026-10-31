@@ -43,6 +43,7 @@ const { session } = await runtime.createSession({
     asked.push({ toolName, input });
     if (toolName === "AskUserQuestion") return { handled: true, result: "The user answered: B", answers: { "Which one?": "B" } };
     if (toolName === "request_permissions") return { block: true, reason: "User rejected request_permissions" };
+    if (toolName === "McpElicitation") return { handled: true, result: "sent", elicitation: { action: "accept", content: { name: "Ada" } } };
     return undefined;
   },
 });
@@ -52,12 +53,13 @@ session.subscribe((event) => events.push(event));
 await session.prompt("ask me things");
 await until(() => events.find((e) => e.type === "agent_end"), "the first turn");
 
-assert.deepEqual(asked.map((a) => a.toolName), ["AskUserQuestion", "request_permissions", "lookup"], "questions, sandbox widening and MCP approvals are governed; a plain MCP form is not");
+assert.deepEqual(asked.map((a) => a.toolName), ["AskUserQuestion", "request_permissions", "lookup", "McpElicitation"], "questions, sandbox widening, MCP approvals and MCP forms all reach the guardian");
 assert.deepEqual(asked[0].input.questions, [{ question: "Which one?", header: "Pick", options: [{ label: "A", description: "first" }, { label: "B", description: "second" }] }], "the card gets the question but never a secret one");
 assert.deepEqual(answerTo(1000), { answers: { "q-pick": { answers: ["B"] } } }, "answers go back keyed by Codex's question id");
 assert.deepEqual(answerTo(1001), { permissions: {}, scope: "turn" }, "a denied permission request grants nothing");
 assert.deepEqual(answerTo(1002), { action: "accept", content: null, _meta: null }, "an allowed MCP tool approval is accepted");
-assert.deepEqual(answerTo(1003), { action: "decline", content: null, _meta: null }, "a form Bivy can't show is declined, not accepted empty");
+assert.deepEqual(asked[3].input, { serverName: "docs", message: "Your name?", mode: "form", requestedSchema: { type: "object", properties: { name: { type: "string" } } } }, "the MCP form reaches the guardian as asked");
+assert.deepEqual(answerTo(1003), { action: "accept", content: { name: "Ada" }, _meta: null }, "the form's answer goes back to the server");
 assert.equal(session.getAvailableThinkingLevels?.().join(","), "low,high", "the default model's efforts reach the picker");
 assert.equal(session.getThinkingLevel?.(), "low", "starting at the model's default effort");
 
