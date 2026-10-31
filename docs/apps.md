@@ -675,6 +675,11 @@ RELAY_PREVIEW_ORIGIN='https://{app}.preview.example.net'
 
 Preserve Host and WebSocket upgrade headers at the TLS proxy. Use a dedicated
 registrable domain, separate from the Bivy UI and other authenticated services.
+Add that domain to the [Public Suffix List](https://publicsuffix.org/) (its
+private section), so browsers treat every preview host as its own site. Otherwise
+a script in one published app can set cookies with `Domain=` that reach every
+other app on the domain, which the relay can't strip because they never pass
+through it. Bivy's own preview cookie is `__Host-` prefixed and unaffected.
 Each view and its trusted shell get distinct origins beneath that wildcard.
 The relay derives a stable node-specific hostname suffix from the admitted node
 identity; nodes cannot register or claim another node's hostname family.
