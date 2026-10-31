@@ -637,6 +637,9 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
     const shell = this.shellOrigin(entry.view.id);
     const cors = { "access-control-allow-origin": shell, "access-control-allow-credentials": "true", vary: "Origin" };
     if (req.headers.origin !== shell) { res.writeHead(403); res.end(); return; }
+    // A view-only link shows the app and nothing else: no switching scenarios,
+    // which for a desktop app would restart it for everyone watching.
+    if (session.viewOnly) { res.writeHead(403, cors); res.end(); return; }
     let body = "";
     for await (const chunk of req) { body += chunk.toString(); if (body.length > 64) { res.writeHead(413, cors); res.end(); return; } }
     const id = body.trim();
