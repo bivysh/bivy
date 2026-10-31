@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A view-only share link can no longer switch an app's scenario. For a desktop app that restarted it for everyone watching.
 - A Claude Code turn that fails (it can't start because of a bad proxy setting or a missing sandbox, it runs out of turns, or it crashes) now shows the reason in the chat and marks the turn failed. Before, the chat showed only a code such as `error_during_execution`, and `bivy exec` could exit 0 with no answer.
 
 ## [0.22.3] - 2026-10-30

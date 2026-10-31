@@ -592,9 +592,10 @@ test("a share link can be view-only and time-boxed, and stopping sharing leaves 
     const viewer = (await redeem(shared.url)).headers["set-cookie"]![0].split(";")[0];
     const owner = (await grant(gateway, port, id)).cookie;
     assert.equal((await request(port, host, "/", { headers: { cookie: viewer } })).body, "<h1>Preview</h1>");
-    // View-only: no reviewer inspector, and notes are refused.
+    // View-only: no reviewer inspector, and notes and scenario switches are refused.
     assert.match((await request(port, host, "/__bivy/inspector.js", { headers: { cookie: viewer } })).body, /REVIEWER=false/);
     assert.equal((await request(port, host, "/__bivy/notes", { method: "POST", headers: { cookie: viewer, origin }, body: JSON.stringify({ note: "x" }) })).status, 403);
+    assert.equal((await request(port, host, "/__bivy/scenario", { method: "POST", headers: { cookie: viewer, origin: gateway.shellOrigin(id) }, body: "" })).status, 403);
     gateway.unshare(id);
     assert.equal(gateway.sharing(id), undefined);
     assert.equal((await redeem(shared.url)).status, 401);
