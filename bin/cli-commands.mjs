@@ -60,6 +60,7 @@ export const COMMANDS = [
       { name: "app_present", description: "Tell the user a visible change is ready: a card in the chat with the app at phone width (before and after), and the preview opens.", input: { view: { type: "string", description: "App or view name or ID (default: the one opened last)." }, note: { type: "string", description: "What changed." }, path: { type: "string", description: "Page path to show." } }, argv: ["app", "present", { arg: "view" }, { flag: "--note", from: "note" }, { flag: "--path", from: "path" }] },
     ] },
   { name: "fork", group: "session", scope: "session", json: true, usage: "fork [session-id] [--model <model>]", summary: "Copy this session (conversation and uncommitted work) into a new one on its own branch" },
+  { name: "background", aliases: ["bg"], group: "session", scope: "session", json: true, usage: "background [--match <regex>] -- <command…>", summary: "Run a long command without waiting; this session gets a message when it exits or prints a match" },
   { name: "delegate", group: "session", scope: "session", json: true, usage: 'delegate "<task>" [--agent <id>] [--machine <name>] [--wait]', summary: "Hand a task to another agent or machine and get its answer back", subcommands: ["machines", "status", "wait"] },
 
   // Agents and sessions

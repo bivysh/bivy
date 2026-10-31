@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `bivy background -- <command>` runs a long command (tests, a build, a dev server) without the agent waiting on it. When the command exits, the session gets a message with its exit code and last lines of output, so any agent picks the result up even after its turn ended. `--match <regex>` also wakes it the first time a line matches, e.g. when a server is ready.
+
 ### Changed
 
 - Claude Code is release-tested against Claude Agent SDK 0.3.314 (Claude Code 2.1.314).

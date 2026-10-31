@@ -1,6 +1,15 @@
 # Long and unattended work
 
-Summary: One-shot answers, governed Runs with checks and receipts, and following them.
+Summary: Background commands that wake you, one-shot answers, governed Runs with checks and receipts.
+
+## A long command, without waiting for it
+
+    bivy background -- pnpm test
+    bivy background --match "ready on" -- pnpm dev
+
+The command keeps running after your turn ends. When it exits you get a message
+in this session with its exit code and last lines of output; with `--match`, also
+the first time a line matches. End your turn instead of polling or sleeping.
 
 ## One question, one answer
 
