@@ -27,6 +27,7 @@ get shell completion. Agents in a session should start with `bivy context`.
 | Read the playbooks for agents | `bivy guide` |
 | Rename the session an agent runs in | `bivy title "<title>"` |
 | Bring the user back to a session (phone push) | `bivy notify` |
+| Run a long command and get a message when it ends | `bivy background -- <command>` |
 | Ask the user a question and wait for the answer | `bivy ask "<question>" --option A --option B` |
 | Ask the user for an API key without seeing it | `bivy ask "<what to paste>" --secret NAME` |
 | Stop a session | `bivy kill <id>` |
@@ -573,6 +574,23 @@ bivy notify --urgent
 `--json` prints `{"ok","push","userWatching"}`, where `push` is `sent`,
 `user_watching`, `rate_limited`, or `unavailable` (the machine isn't signed in to
 a Bivy account, so it can't push).
+
+### `bivy background [--match <regex>] [--name <label>] [--session <id>] [--json] -- <command> [args…]`
+
+Starts a command in the background and returns at once, printing its pid and
+log file. The command keeps running after the agent's turn ends. When it exits,
+the session gets a message with the exit code (or signal), how long it ran and
+the last lines of output, which starts a new turn so the agent picks it up.
+With `--match`, the first output line that matches the regular expression also
+sends a message, and the command keeps running. `--name` sets the label used in
+the message (default: the command line).
+
+```bash
+bivy background -- pnpm test
+bivy background --match "ready on" --name "dev server" -- pnpm dev
+```
+
+`--json` prints `{"ok","pid","log"}`. Logs are kept in `$TMPDIR/bivy-background/`.
 
 ### `bivy ask "<question>" [flags]`
 

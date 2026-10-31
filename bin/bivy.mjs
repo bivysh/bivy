@@ -2632,6 +2632,65 @@ async function cmdTitle(args = []) {
   console.log(c.green(`Renamed this session to "${body.title}".`));
 }
 
+// `bivy background [--match <regex>] -- <command…>` — run a long command away
+// from the turn; the session gets a message when it exits (or prints a match).
+async function cmdBackground(args = []) {
+  const usage = "Usage: bivy background [--match <regex>] [--name <label>] [--session <id>] [--json] -- <command> [args…]";
+  const dash = args.indexOf("--");
+  const flags = dash >= 0 ? args.slice(0, dash) : args;
+  const command = dash >= 0 ? args.slice(dash + 1) : [];
+  if (flags.includes("-h") || flags.includes("--help")) {
+    console.log(`${usage}
+
+Start a long command (tests, a build, a deploy, a dev server) without waiting for
+it. It keeps running after your turn ends. When it exits, this session gets a
+message with the exit code and the last lines of output, so you pick it up even
+if you were idle. With --match, you also get a message the first time a line of
+its output matches the regular expression (e.g. --match "ready on port"); a
+server you started that way still wakes you if it later exits.
+All output goes to a log file; the command prints its path and returns at once.
+--json prints {"ok","pid","log"}.`);
+    return;
+  }
+  const json = wantsJson(flags);
+  const fail = (error) => cliError(error, { json, paint: c.red });
+  const parsed = parseSessionArgs(flags, ["--session", "--match", "--name"]);
+  if (parsed.error) return fail({ code: "usage", message: parsed.error, exit: EXIT.usage });
+  if (!command.length) return fail({ code: "usage", message: usage, exit: EXIT.usage });
+  const match = parsed.one("--match");
+  if (match !== undefined) {
+    try { new RegExp(match); } catch (error) { return fail({ code: "usage", message: `--match is not a valid regular expression: ${error.message}`, exit: EXIT.usage }); }
+  }
+  const sessionId = resolveAttachSessionId({ sessionFlag: parsed.one("--session"), env: process.env });
+  if (!sessionId) return fail({ code: "no_session", message: "No session id.", hint: "Run inside an agent session ($BIVY_SESSION_ID) or pass --session <id>.", next: "bivy sessions --json", exit: EXIT.usage });
+  const config = loadConfig();
+  if (!(await ensureNodeRunning(config))) return fail({ code: "node_unreachable", message: `Could not reach the Bivy node at ${url(config)}.`, next: "bivy status", exit: EXIT.unavailable });
+  const dir = path.join(os.tmpdir(), "bivy-background");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const log = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomBytes(3).toString("hex")}.log`);
+  fs.writeFileSync(log, "", { mode: 0o600 });
+  const spec = {
+    sessionId,
+    nodeUrl: url(config),
+    auth: await sessionAuth(config, sessionId),
+    command: command[0],
+    args: command.slice(1),
+    cwd: process.cwd(),
+    log,
+    label: parsed.one("--name") || command.join(" ").slice(0, 120),
+    ...(match !== undefined ? { match } : {}),
+  };
+  const child = spawn(process.execPath, [fileURLToPath(new URL("./background-job.mjs", import.meta.url))], {
+    detached: true,
+    stdio: "ignore",
+    env: { ...process.env, BIVY_BACKGROUND_JOB: JSON.stringify(spec) },
+  });
+  child.unref();
+  if (json) { console.log(JSON.stringify({ ok: true, pid: child.pid, log })); return; }
+  console.log(c.green(`Running in the background (pid ${child.pid}). This session gets a message when it ${match !== undefined ? "prints a match or " : ""}exits.`));
+  console.log(c.dim(`Log: ${log}`));
+}
+
 // `bivy widget init <file.html>` writes a starter widget; `bivy widget state`
 // prints what this session's widgets saved (the user's choices and inputs).
 async function cmdWidget(args = []) {
@@ -6803,6 +6862,9 @@ An agent's own --help passes through, e.g. 'bivy run claude --help'.`);
       break;
     case "notify":
       await cmdNotify(args);
+      break;
+    case "background":
+      await cmdBackground(args);
       break;
     case "fork":
       await cmdFork(args);

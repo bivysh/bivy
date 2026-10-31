@@ -12172,69 +12172,82 @@ app.get("/api/machines", async (_req, res) => {
   catch (error) { res.status(400).json({ error: error instanceof Error ? error.message : String(error) }); }
 });
 
-app.post("/api/session/prompt", async (req, res, next) => {
-  try {
-    const text = String(req.body?.text ?? "").trim();
-    if (text === "/login" || text.startsWith("/login ")) {
-      return res.status(400).json({ error: "Use the Login / API tokens dialog from the phone UI. If it is not visible, refresh this page after updating Bivy." });
-    }
-    const { images, imageNotes, files } = attachmentsFrom(req.body?.attachments);
-    if (!text && !images.length && !files.length) return res.status(400).json({ error: "Missing text" });
-    // File notes (with on-disk paths) are folded in once the workdir exists; the
-    // session title can only reflect what's known before then.
-    const titleText = [text, imageNotes.join("\n")].filter(Boolean).join("\n\n") || (images.length ? "Please review the attached image(s)." : "attachment");
-
-    const requestedSessionId = typeof req.body?.sessionId === "string" && req.body.sessionId ? req.body.sessionId : undefined;
-    const requestedWorkspace = req.body?.workspace !== undefined && String(req.body.workspace).trim() ? validateWorkspace(req.body.workspace) : undefined;
-    // A prompt with no session id but an explicit workspace is a new per-client
-    // chat (the web UI sends this for a blank draft). Do not attach it to the
-    // daemon's global active session, which may belong to another web/TUI client.
-    let record = requestedSessionId ? await resolveOrResumeSession(requestedSessionId, req.body?.path) : requestedWorkspace ? undefined : resolveSession();
-    // A named session that resolved to nothing is genuinely gone — surface it
-    // rather than silently spawning a new chat under the caller's old id.
-    if (requestedSessionId && !record) return res.status(404).json({ error: "Session not found" });
-    if (!record) {
-      record = await createWorkspaceSession(requestedWorkspace ?? defaultWorkspace, { title: titleText, runtimeId: agentFrom(req.body ?? {}) });
-    }
-    await record.abortRecovery;
-    // Recover a hung turn before prompting so the message runs fresh, not as a
-    // steer into a dead turn (see recoverStalledBeforePrompt).
-    await turnWatchdog.recoverStalledBeforePrompt(record);
-    if (record.tuiTermId || record.tuiRefreshing) {
-      return res.status(409).json({ error: record.tuiRefreshing ? "This session is returning from the terminal. Try again in a moment." : "This session is open in the terminal (TUI). Close the TUI to chat here." });
-    }
-    notePresence(record.id, deviceFrom(req.body?.device), "chat");
-    const session = record.session;
-    const { note: fileNote, refs: fileRefs } = materializeAttachments(harnessDirFor(record), files, attachmentStore);
-    const promptText =
-      [text, fileNote].filter(Boolean).join("\n\n") ||
-      (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
-    eventLog.appendAttachments(record.id, promptText, fileRefs);
-    const agentPrompt = promptForAgent(record, promptText);
-    const cmid = typeof req.body?.clientMessageId === "string" && req.body.clientMessageId ? req.body.clientMessageId : undefined;
-    // An agent that can't steer runs this prompt after the open turn; say so, so
-    // a client waiting for its reply (bivy exec/send) skips the open turn's end.
-    const queued = record.isWorking === true && record.session.holdsPromptsUntilTurnEnds?.() === true;
-    markSessionWorking(record, { type: "agent_start" });
-    // Do not await completion; events stream over WebSocket.
-    void dedupePrompt(cmid, async () => {
-      broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: req.body?.clientMessageId });
-      void sessionNamer.maybeNameSession(record, promptText);
-      harnessBeginTurn(record);
-      const options = promptOptionsFor(record, req.body?.streamingBehavior, images);
-      questionManager.replyInChat(record.id);
-      await turnWatchdog.promptWithWatchdog(record, agentPrompt, options);
-    }).catch((error) => {
-      clearSessionWorking(record);
-      // The stack stays in the node log; clients get the same safe message
-      // (or sign-in card) as every other failed turn, never internal paths.
-      console.error(`[session ${record.id}] prompt failed:`, error);
-      broadcast({ type: "session.error", sessionId: record.id, error: sessionAgentError(record, error) });
-    });
-    res.json({ ok: true, sessionId: record.id, sessionFile: record.sessionFile, ...(queued ? { queued: true } : {}) });
-  } catch (error) {
-    next(error);
+/** Send a message into a session (or a new chat) and start its turn. Shared by
+ *  the chat composer and a background job waking its agent. */
+async function submitPrompt(body: Record<string, any>, res: express.Response): Promise<unknown> {
+  const text = String(body.text ?? "").trim();
+  if (text === "/login" || text.startsWith("/login ")) {
+    return res.status(400).json({ error: "Use the Login / API tokens dialog from the phone UI. If it is not visible, refresh this page after updating Bivy." });
   }
+  const { images, imageNotes, files } = attachmentsFrom(body.attachments);
+  if (!text && !images.length && !files.length) return res.status(400).json({ error: "Missing text" });
+  // File notes (with on-disk paths) are folded in once the workdir exists; the
+  // session title can only reflect what's known before then.
+  const titleText = [text, imageNotes.join("\n")].filter(Boolean).join("\n\n") || (images.length ? "Please review the attached image(s)." : "attachment");
+
+  const requestedSessionId = typeof body.sessionId === "string" && body.sessionId ? body.sessionId : undefined;
+  const requestedWorkspace = body.workspace !== undefined && String(body.workspace).trim() ? validateWorkspace(body.workspace) : undefined;
+  // A prompt with no session id but an explicit workspace is a new per-client
+  // chat (the web UI sends this for a blank draft). Do not attach it to the
+  // daemon's global active session, which may belong to another web/TUI client.
+  let record = requestedSessionId ? await resolveOrResumeSession(requestedSessionId, body.path) : requestedWorkspace ? undefined : resolveSession();
+  // A named session that resolved to nothing is genuinely gone — surface it
+  // rather than silently spawning a new chat under the caller's old id.
+  if (requestedSessionId && !record) return res.status(404).json({ error: "Session not found" });
+  if (!record) {
+    record = await createWorkspaceSession(requestedWorkspace ?? defaultWorkspace, { title: titleText, runtimeId: agentFrom(body) });
+  }
+  await record.abortRecovery;
+  // Recover a hung turn before prompting so the message runs fresh, not as a
+  // steer into a dead turn (see recoverStalledBeforePrompt).
+  await turnWatchdog.recoverStalledBeforePrompt(record);
+  if (record.tuiTermId || record.tuiRefreshing) {
+    return res.status(409).json({ error: record.tuiRefreshing ? "This session is returning from the terminal. Try again in a moment." : "This session is open in the terminal (TUI). Close the TUI to chat here." });
+  }
+  notePresence(record.id, deviceFrom(body.device), "chat");
+  const session = record.session;
+  const { note: fileNote, refs: fileRefs } = materializeAttachments(harnessDirFor(record), files, attachmentStore);
+  const promptText =
+    [text, fileNote].filter(Boolean).join("\n\n") ||
+    (images.length ? "Please review the attached image(s)." : files.length ? "Please review the attached file(s)." : "");
+  eventLog.appendAttachments(record.id, promptText, fileRefs);
+  const agentPrompt = promptForAgent(record, promptText);
+  const cmid = typeof body.clientMessageId === "string" && body.clientMessageId ? body.clientMessageId : undefined;
+  // An agent that can't steer runs this prompt after the open turn; say so, so
+  // a client waiting for its reply (bivy exec/send) skips the open turn's end.
+  const queued = record.isWorking === true && record.session.holdsPromptsUntilTurnEnds?.() === true;
+  markSessionWorking(record, { type: "agent_start" });
+  // Do not await completion; events stream over WebSocket.
+  void dedupePrompt(cmid, async () => {
+    broadcast({ type: "session.user_message", sessionId: record.id, text: promptText, clientMessageId: body.clientMessageId });
+    void sessionNamer.maybeNameSession(record, promptText);
+    harnessBeginTurn(record);
+    const options = promptOptionsFor(record, body.streamingBehavior, images);
+    questionManager.replyInChat(record.id);
+    await turnWatchdog.promptWithWatchdog(record, agentPrompt, options);
+  }).catch((error) => {
+    clearSessionWorking(record);
+    // The stack stays in the node log; clients get the same safe message
+    // (or sign-in card) as every other failed turn, never internal paths.
+    console.error(`[session ${record.id}] prompt failed:`, error);
+    broadcast({ type: "session.error", sessionId: record.id, error: sessionAgentError(record, error) });
+  });
+  return res.json({ ok: true, sessionId: record.id, sessionFile: record.sessionFile, ...(queued ? { queued: true } : {}) });
+}
+
+app.post("/api/session/prompt", (req, res, next) => {
+  submitPrompt(req.body ?? {}, res).catch(next);
+});
+
+// `bivy background` posts here when a command it runs exits (or prints the
+// line it waits for). The note arrives as a new message, so any agent picks it
+// up whether it is mid-turn or idle.
+const WAKE_TEXT_MAX = 16_000;
+app.post("/api/session/:id/wake", (req, res, next) => {
+  const text = typeof req.body?.text === "string" ? req.body.text.trim().slice(0, WAKE_TEXT_MAX) : "";
+  if (!text) return res.status(400).json({ error: "Missing text" });
+  const clientMessageId = typeof req.body?.clientMessageId === "string" ? req.body.clientMessageId : undefined;
+  submitPrompt({ sessionId: req.params.id, text, clientMessageId }, res).catch(next);
 });
 
 app.post("/api/commands/:runId/input", (req, res) => {
