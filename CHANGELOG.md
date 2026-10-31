@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The self-hosting docs now ask operators to put the preview domain on the Public Suffix List, so one published app's scripts can't set cookies for every other app on that domain.
 - Claude Code is release-tested against Claude Agent SDK 0.3.314 (Claude Code 2.1.314).
 
 ### Fixed
