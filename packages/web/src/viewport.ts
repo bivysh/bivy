@@ -12,12 +12,21 @@
 // itself scrolled. With nothing scrollable, the composer stays locked just above
 // the keyboard and the shell never drifts. Desktop: offsetTop 0, height = the
 // window, i.e. a normal full-screen app.
+//
+// Pinch-zoom also shrinks and moves the visual viewport, but that is the user
+// magnifying the page, not the keyboard taking space: following it would
+// re-lay the whole shell into the zoomed region on every frame, so the header
+// and overlays grow to fill the screen instead of the page simply magnifying
+// (most visible on an app preview, where iOS zooms Bivy's page for a pinch
+// inside the frame). While zoomed (scale is 1 at rest, keyboard or not), keep
+// the last unzoomed values.
 
 export function initViewport(): void {
   const vv = typeof window !== "undefined" ? window.visualViewport : undefined;
   const root = document.documentElement;
 
   const apply = (): void => {
+    if (vv && Math.abs(vv.scale - 1) > 0.01) return;
     const h = vv?.height ?? window.innerHeight;
     const top = vv?.offsetTop ?? 0;
     root.style.setProperty("--app-h", `${Math.round(h)}px`);
