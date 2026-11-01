@@ -15,17 +15,25 @@
 // that — a rule only applies to the mode-driven asks.
 import { bashCommand, isShellTool } from "../guard.js";
 
+/** Shell syntax that runs a second command or writes a file: separators, pipes,
+ *  background, substitution and redirection. A command with any of these is
+ *  more than its first words say, so no rule may cover it. */
+const COMPOUND_SHELL = /[;&|`<>\n\r]|\$\(/;
+
 /** The thing a rule remembers. For shell tools it's the program plus its
  *  subcommand when there is one (`git status`, `npm test`, `ls`), so allowing
  *  `git status` never pre-approves `git push`. For every other tool it's the
  *  tool name (`edit`, `write`). Returned to the client so the button can say
- *  exactly what it will remember. */
-export function approvalRememberKey(toolName: string, input: unknown): string {
+ *  exactly what it will remember. Undefined for an empty or compound shell
+ *  command (`git status; git push`): those always ask, and can't be remembered. */
+export function approvalRememberKey(toolName: string, input: unknown): string | undefined {
   const tool = toolName.toLowerCase();
   if (!isShellTool(tool)) return tool;
-  const words = bashCommand(input).trim().split(/\s+/).filter(Boolean);
+  const command = bashCommand(input).trim();
+  if (COMPOUND_SHELL.test(command)) return undefined;
+  const words = command.split(/\s+/).filter(Boolean);
   const program = words[0];
-  if (!program) return tool;
+  if (!program) return undefined;
   const sub = words[1];
   const hasSubcommand = sub !== undefined && /^[a-z][a-z0-9-]*$/i.test(sub);
   return hasSubcommand ? `${program} ${sub}` : program;

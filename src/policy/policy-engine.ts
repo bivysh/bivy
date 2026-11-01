@@ -56,6 +56,7 @@ export class PolicyEngine {
     if (backstop) return { ...base, risk };
 
     const rememberKey = approvalRememberKey(toolName, input);
+    if (!rememberKey) return { ...base, risk };
     if (this.options.isRemembered?.(rememberKey)) {
       return { decision: "allow", risk, reason: `Allowed for this session: ${rememberKey}` };
     }
