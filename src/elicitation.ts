@@ -131,14 +131,17 @@ function formFields(request: ElicitationRequest): Field[] {
     if (i === 0) question = `${request.message} — ${question}`;
     if (seen.has(question)) question = `${question} (${key})`;
     seen.add(question);
+    const options = kind.options(s).map((label) => ({ label }));
     return {
       key,
       required: !optional,
       item: {
         question,
         header: [i === 0 ? header(request) : "", about ? label : ""].filter(Boolean).join(" · ").slice(0, 40),
-        options: kind.options(s).map((label) => ({ label })),
+        options,
         ...(kind.multiSelect ? { multiSelect: true } : {}),
+        // The schema allows only these values, so "Other…" text could never be sent.
+        ...(options.length ? { closed: true } : {}),
         ...(optional ? { optional: true } : {}),
       },
       read: (answer) => kind.read(answer, s),
@@ -160,7 +163,7 @@ export function elicitationQuestions(request: ElicitationRequest): UserQuestionI
   }
   const fields = formFields(request);
   // No fields: the server only wants a go-ahead.
-  if (!fields.length) return [{ question: request.message, header: header(request), options: [{ label: ACCEPT }, { label: DECLINE }] }];
+  if (!fields.length) return [{ question: request.message, header: header(request), options: [{ label: ACCEPT }, { label: DECLINE }], closed: true }];
   return fields.map((f) => f.item);
 }
 

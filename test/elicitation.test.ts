@@ -25,13 +25,13 @@ const form: ElicitationRequest = {
 };
 
 const questions = elicitationQuestions(form)!;
-assert.deepEqual(questions.map((q) => [q.header, q.question, q.options.map((o) => o.label), q.multiSelect ?? false, q.optional ?? false]), [
-  ["deploy", "Where should it go? — Region", ["Europe", "US"], false, false],
-  ["", "Replicas", [], false, false],
-  ["", "Confirm", ["Yes", "No"], false, false],
-  ["", "Tags (optional)", ["web", "api", "jobs"], true, true],
-  ["Note (optional)", "Anything to add", [], false, true],
-], "each field kind becomes the card's choice, text or multi-select question; the server's message heads the first");
+assert.deepEqual(questions.map((q) => [q.header, q.question, q.options.map((o) => o.label), q.multiSelect ?? false, q.optional ?? false, q.closed ?? false]), [
+  ["deploy", "Where should it go? — Region", ["Europe", "US"], false, false, true],
+  ["", "Replicas", [], false, false, false],
+  ["", "Confirm", ["Yes", "No"], false, false, true],
+  ["", "Tags (optional)", ["web", "api", "jobs"], true, true, true],
+  ["Note (optional)", "Anything to add", [], false, true, false],
+], "each field kind becomes the card's choice, text or multi-select question; the server's message heads the first; choices take no free text");
 
 const answers = (values: string[]) => ({ behavior: "completed" as const, answers: Object.fromEntries(questions.map((q, i) => [q.question, values[i] ?? ""])) });
 assert.deepEqual(elicitationResult(form, answers(["Europe", "3", "Yes", "web, jobs", ""])), {
