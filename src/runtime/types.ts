@@ -694,6 +694,9 @@ export interface UserQuestionItem {
   /** The card can be sent with this question unanswered (an optional field of
    *  an MCP elicitation form); its answer is then "". */
   optional?: boolean;
+  /** Only the listed options are valid answers, so the card offers no "Other…"
+   *  (an MCP elicitation choice, whose server refuses anything else). */
+  closed?: boolean;
 }
 
 export interface UserQuestionSecret {

@@ -368,6 +368,8 @@ export interface UserQuestionItem {
   command?: string;
   /** The card can be sent with this question unanswered. */
   optional?: boolean;
+  /** Only the listed options are valid answers: the card offers no "Other…". */
+  closed?: boolean;
 }
 
 /**

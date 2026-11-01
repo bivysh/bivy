@@ -234,17 +234,19 @@ function QuestionCard({
                     {opt.description && <span className="question-option-desc">{opt.description}</span>}
                   </button>
                 ))}
-                <button
-                  type="button"
-                  role={q.multiSelect ? "checkbox" : "radio"}
-                  aria-checked={!!otherActive[qi]}
-                  className="question-option"
-                  data-multi={q.multiSelect || undefined}
-                  onClick={() => toggleOther(qi, q.multiSelect)}
-                  disabled={pending}
-                >
-                  <span className="question-option-label">Other…</span>
-                </button>
+                {!q.closed && (
+                  <button
+                    type="button"
+                    role={q.multiSelect ? "checkbox" : "radio"}
+                    aria-checked={!!otherActive[qi]}
+                    className="question-option"
+                    data-multi={q.multiSelect || undefined}
+                    onClick={() => toggleOther(qi, q.multiSelect)}
+                    disabled={pending}
+                  >
+                    <span className="question-option-label">Other…</span>
+                  </button>
+                )}
               </div>
             )}
             {isStep(q) && !otherActive[qi] && !pending && (
