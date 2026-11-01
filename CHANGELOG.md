@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Pinch-zooming an app preview on a phone now magnifies the page. Before, Bivy re-laid its whole screen into the zoomed area, so the header and preview controls grew over the app instead.
+
 ## [0.22.5] - 2026-11-01
 
 ### Added

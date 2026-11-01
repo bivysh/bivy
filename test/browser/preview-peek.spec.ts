@@ -44,3 +44,37 @@ for (const theme of themes) {
     await expect(dialog).toHaveCount(0);
   });
 }
+
+// iOS zooms Bivy's page for a pinch inside the preview frame. That magnifies
+// the page; it must not re-lay the shell into the zoomed region the way the
+// keyboard does, or the header and overlays grow over the app.
+test('pinch-zoom magnifies the preview instead of re-laying the shell', async ({ page, webApp, isMobile }) => {
+  test.skip(!isMobile, 'pinch-zoom needs a mobile viewport');
+  const html = await webApp.transformIndexHtml('/preview-pinch', `<html><head><meta name="viewport" content="width=device-width, initial-scale=1" /></head><body><div id="root"></div><script type="module">
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { PreviewPeek } from '/src/components/PreviewPeek.tsx';
+    import { initViewport } from '/src/viewport.ts';
+    import '/@fs/${path.resolve("packages/ui/tokens.css")}';
+    import '/src/styles.css';
+    initViewport();
+    createRoot(document.getElementById('root')).render(React.createElement(PreviewPeek, {
+      url: location.origin + '/preview-content', name: 'Zoomed app', sessionId: 's', onClose() {}, onOpenInTab() {},
+    }));
+  </script></body></html>`);
+  await page.route(`${webApp.origin}/preview-pinch`, route => route.fulfill({ contentType: 'text/html', body: html }));
+  await page.route(`${webApp.origin}/preview-content`, route => route.fulfill({ contentType: 'text/html', body: '<h1>App preview</h1>' }));
+  await page.goto(`${webApp.origin}/preview-pinch`);
+  const body = page.getByRole('dialog', { name: 'Preview: Zoomed app' }).locator('.sheet-body');
+  const viewport = page.viewportSize()!;
+  await expect.poll(() => body.boundingBox()).toEqual({ x: 0, y: 0, ...viewport });
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 2.5 });
+  await expect.poll(() => page.evaluate(() => window.visualViewport!.scale)).toBeGreaterThan(1.5);
+  const appHeight = () => page.evaluate(() => document.documentElement.style.getPropertyValue('--app-h'));
+  expect(await appHeight()).toBe(`${viewport.height}px`);
+  await cdp.send('Emulation.setPageScaleFactor', { pageScaleFactor: 1 });
+  await expect.poll(() => page.evaluate(() => window.visualViewport!.scale)).toBe(1);
+  await cdp.detach();
+  expect(await appHeight()).toBe(`${viewport.height}px`);
+});
