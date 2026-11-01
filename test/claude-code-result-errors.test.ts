@@ -10,6 +10,10 @@ import { ClaudeCodeRuntime } from "../src/runtime/claude-code.js";
 // agent_end, as every runtime does, so the daemon marks the turn failed and
 // `bivy exec` exits non-zero. A turn the user stopped also ends with an error
 // result; that one is the interrupt, not a failure.
+//
+// An API failure can also arrive as a synthetic assistant message (a usage
+// limit, a refused sign-in) followed by a *successful* result. That turn failed
+// too, so agent_end carries the message and, for a limit, the quota's reset.
 
 type QueueLike = { [Symbol.asyncIterator](): AsyncIterator<any> };
 
@@ -87,4 +91,36 @@ const startupFailure = {
   await waitFor(() => events.some((e) => e.type === "agent_end"));
   assert.equal(events.find((e) => e.type === "agent_end").error, undefined, "a stopped turn is not a failure");
   assert.ok(!events.some((e) => e.type === "session.error"));
+}
+
+// The SDK's shape for a rejected plan window: a synthetic message flagged as an
+// API error, carrying the quota's reset (epoch seconds), then a clean result.
+const limitMessage = {
+  type: "assistant",
+  error: "rate_limit",
+  is_api_error_message: true,
+  quotaLimits: { status: "rejected", resetsAt: 1793606400, rateLimitType: "five_hour" },
+  message: { model: "<synthetic>", content: [{ type: "text", text: "You've hit your session limit · resets 6:30pm (UTC)" }] },
+};
+const cleanResult = { type: "result", subtype: "success", result: "", terminal_reason: "api_error" };
+
+{
+  const { query, events } = await start();
+  query.emit(limitMessage);
+  query.emit(cleanResult);
+  await waitFor(() => events.some((e) => e.type === "agent_end"));
+  const end = events.find((e) => e.type === "agent_end");
+  assert.equal(end.error, "You've hit your session limit · resets 6:30pm (UTC)", "the limit is the turn's failure");
+  assert.equal(end.resetsAt, new Date(1793606400 * 1000).toISOString(), "the reset comes from the quota, not the text");
+  assert.ok(!events.some((e) => e.type === "session.error"), "the message is already in the chat; no toast");
+}
+
+{
+  // The SDK retried past a 500 and the model answered: not a failure.
+  const { query, events } = await start();
+  query.emit({ type: "assistant", error: "server_error", message: { model: "<synthetic>", content: [{ type: "text", text: "API Error: 500" }] } });
+  query.emit({ type: "assistant", message: { model: "claude-opus-5-5", content: [{ type: "text", text: "hi" }] } });
+  query.emit(cleanResult);
+  await waitFor(() => events.some((e) => e.type === "agent_end"));
+  assert.equal(events.find((e) => e.type === "agent_end").error, undefined);
 }

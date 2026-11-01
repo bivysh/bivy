@@ -10,7 +10,7 @@
  * connect to a node. Runtime discovery may augment this snapshot but does not
  * own these provider identities.
  */
-export const BIVY_PROVIDER_CATALOG_VERSION = "2026-10-28";
+export const BIVY_PROVIDER_CATALOG_VERSION = "2026-11-01";
 
 export type ProviderAuthMethod =
   | { kind: "api_key"; label: string; helpUrl?: string }
@@ -44,10 +44,11 @@ const reference: ProviderAuthMethod = { kind: "reference", label: "Password mana
 /** Authoritative common providers and the offline baseline models Bivy ships. */
 export const BIVY_PROVIDER_CATALOG: readonly BivyProviderDefinition[] = [
   { id: "anthropic", name: "Anthropic", authMethods: [oauth("Claude Pro / Max", "anthropic"), apiKey("Anthropic API key", "https://console.anthropic.com/settings/keys"), reference], env: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"], compatibility: "anthropic", helpUrl: "https://docs.anthropic.com/", models: [
+    { id: "claude-opus-5-5", name: "Claude Opus 5.5", reasoning: true },
+    { id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", reasoning: true },
+    { id: "claude-haiku-5-5", name: "Claude Haiku 5.5", reasoning: true },
+    { id: "claude-fable-5-1", name: "Claude Fable 5.1", reasoning: true },
     { id: "claude-opus-4-8", name: "Claude Opus 4.8", reasoning: true },
-    { id: "claude-opus-4-1", name: "Claude Opus 4.1", reasoning: true },
-    { id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", reasoning: true },
-    { id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5" },
   ] },
   { id: "openai", name: "OpenAI API", aliases: ["openai-api"], authMethods: [apiKey("OpenAI API key", "https://platform.openai.com/api-keys"), reference], env: ["OPENAI_API_KEY"], compatibility: "openai", helpUrl: "https://platform.openai.com/docs/", models: [
     { id: "gpt-5.4", name: "GPT-5.4", reasoning: true },
