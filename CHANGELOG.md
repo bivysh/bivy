@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - When an MCP server asks you something mid-task (a short form, or a page to open such as a sign-in), Claude Code and Codex now show it on the question card and send your answer back to the server. Before, Bivy declined these requests without showing them. Optional fields can be left empty, and a choice or yes/no field offers only the answers the server accepts.
 
+### Fixed
+
+- "Allow … this session" on an approval now covers only that single command. A command that chains another after it, pipes, redirects or substitutes always asks.
+
 ## [0.22.4] - 2026-10-31
 
 ### Added

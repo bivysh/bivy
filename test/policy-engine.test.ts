@@ -69,6 +69,10 @@ check("a remembered key turns the same ask into an allow", () => {
   assert.match(result.reason ?? "", /this session/);
   // A different subcommand of the same program is NOT covered.
   assert.equal(policy.decideToolCall("/ws", "bash", { command: "git checkout -b x" }).decision, "ask");
+  // Nor is a second command chained after it.
+  const chained = policy.decideToolCall("/ws", "bash", { command: "git status && git push" });
+  assert.equal(chained.decision, "ask");
+  assert.equal(chained.rememberKey, undefined);
 });
 
 check("backstop and risky-integration asks never carry a rememberKey and ignore remembered rules", () => {

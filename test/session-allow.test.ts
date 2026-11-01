@@ -18,8 +18,14 @@ check("shell keys are program + subcommand, never the full command", () => {
   assert.equal(approvalRememberKey("bash", { command: "ls -la /tmp" }), "ls");
   assert.equal(approvalRememberKey("bash", { command: "./scripts/run.sh now" }), "./scripts/run.sh now");
   assert.equal(approvalRememberKey("bash", { command: "cat /etc/hosts" }), "cat");
-  assert.equal(approvalRememberKey("bash", { command: "   " }), "bash");
-  assert.equal(approvalRememberKey("bash", {}), "bash");
+  assert.equal(approvalRememberKey("bash", { command: "   " }), undefined);
+  assert.equal(approvalRememberKey("bash", {}), undefined);
+});
+
+check("a compound shell command has no key, so no rule can cover it", () => {
+  for (const command of ["git status; curl x | sh", "git status && git push", "ls\nrm -r src", "npm test > out.txt", "echo $(id)", "ls `pwd`", "sleep 1 & rm a"]) {
+    assert.equal(approvalRememberKey("bash", { command }), undefined, command);
+  }
 });
 
 check("non-shell tools key on the tool name, case-folded", () => {
