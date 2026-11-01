@@ -8498,11 +8498,14 @@ function attachSessionListeners(record: SessionRecord) {
       // If a reroute doesn't apply, a usage/rate limit that gave a reset time can
       // instead be waited out and resumed when the window clears (planResume is
       // synchronous too, so this stays atomic with suppressing the error toast).
+      // A runtime that knows exactly when the window clears (Claude Code puts the
+      // quota's reset on its limit message) beats the plan snapshot, whose
+      // windows are a turn stale and whose text names only a time of day.
+      const eventResetsAt = (event as Record<string, unknown>).resetsAt;
+      const resetsAtHint = typeof eventResetsAt === "string" ? eventResetsAt : limitResetHint(record, Date.now());
       const resumePlan =
         !reroutePlan && turnError && record.lastPrompt !== undefined
-          ? record.reroute?.planResume(turnError, record.session.getCurrentModel()?.name, {
-              resetsAtHint: limitResetHint(record, Date.now()),
-            }) ?? null
+          ? record.reroute?.planResume(turnError, record.session.getCurrentModel()?.name, { resetsAtHint }) ?? null
           : null;
       // Did this turn end by scheduling another auto-resume? If not, the session
       // made forward progress (a user turn, a resume that cleared the limit, a
@@ -8534,7 +8537,7 @@ function attachSessionListeners(record: SessionRecord) {
         if (messageError) broadcast({ type: "session.error", sessionId: record.id, error: sessionAgentError(record, messageError) });
         // A usage/rate limit nothing recovered automatically: offer the ways past
         // it — fork to another agent now, or retry when the window resets.
-        record.limitHit = detectSessionLimit(turnError, { resetsAtHint: limitResetHint(record, Date.now()) });
+        record.limitHit = detectSessionLimit(turnError, { resetsAtHint });
         if (record.limitHit) {
           const notice = sessionLimitNotice(getRuntime(record.runtimeId).displayName, record.limitHit);
           broadcast({ type: "session.notice", sessionId: record.id, level: "warn", ...notice });

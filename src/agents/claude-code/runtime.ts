@@ -94,11 +94,10 @@ const SDK_PACKAGE = "@anthropic-ai/claude-agent-sdk";
 // pre-warm placeholder isn't jarringly stale, but it is only a placeholder — the
 // live list is the source of truth.
 const FALLBACK_MODELS: ModelInfo[] = [
-  { provider: "anthropic", id: "claude-opus-5", name: "Claude Opus 5", reasoning: true },
-  { provider: "anthropic", id: "claude-opus-4-8", name: "Claude Opus 4.8", reasoning: true },
-  { provider: "anthropic", id: "claude-sonnet-5", name: "Claude Sonnet 5", reasoning: true },
-  { provider: "anthropic", id: "claude-haiku-4-5-20251001", name: "Claude Haiku 4.5", reasoning: true },
-  { provider: "anthropic", id: "claude-fable-5", name: "Claude Fable 5", reasoning: true },
+  { provider: "anthropic", id: "claude-opus-5-5", name: "Claude Opus 5.5", reasoning: true },
+  { provider: "anthropic", id: "claude-sonnet-5-5", name: "Claude Sonnet 5.5", reasoning: true },
+  { provider: "anthropic", id: "claude-haiku-5-5", name: "Claude Haiku 5.5", reasoning: true },
+  { provider: "anthropic", id: "claude-fable-5-1", name: "Claude Fable 5.1", reasoning: true },
 ];
 
 // The SDK's supportedModels() labels each row with a bare family+version
@@ -117,7 +116,7 @@ function brandClaudeModel(model: ModelInfo): ModelInfo {
 }
 
 export interface ClaudeCodeRuntimeOptions {
-  /** Default model alias/id passed to the SDK (e.g. "claude-opus-4-8"). */
+  /** Default model alias/id passed to the SDK (e.g. "claude-opus-5-5"). */
   defaultModel?: string;
   /** Directory the SDK looks in to list/resume persisted sessions. */
   sessionsDir?: string;
@@ -363,6 +362,16 @@ function hasMetaFlag(entry: any): boolean {
  *  (SDK `error`, transcript `isApiErrorMessage`) rather than the model's reply. */
 function isApiErrorMessage(message: any): boolean {
   return Boolean(message?.error) || message?.isApiErrorMessage === true;
+}
+
+/** The failure an API-error assistant message stands for: the provider's own
+ *  sentence, plus the reset instant when the message carried a quota (a plan
+ *  limit's `quotaLimits.resetsAt` is a Unix epoch in SECONDS; the text alone
+ *  states only a time of day, which can't say which day a weekly window clears). */
+function apiErrorDetail(message: any, error: string): { error: string; resetsAt?: string } {
+  const quota = message?.quotaLimits ?? message?.message?.quotaLimits;
+  const seconds = Number(quota?.resetsAt);
+  return Number.isFinite(seconds) && seconds > 0 ? { error, resetsAt: new Date(seconds * 1000).toISOString() } : { error };
 }
 
 /** Why a `result` failed, or "" for a successful one. The error variant has no
@@ -813,6 +822,12 @@ class ClaudeSession implements RuntimeSession {
   /** The last result's failure text, so the SDK's throw that follows it isn't
    *  reported a second time. */
   private reportedFailure?: string;
+  /** An API failure the SDK reported as a synthetic assistant message (a usage
+   *  limit, a refused sign-in, an outage) instead of throwing. The turn then ends
+   *  with a successful `result`, so this carries the failure to agent_end, where
+   *  the daemon offers the ways past it. Cleared when a real reply follows: the
+   *  SDK retried and got through. */
+  private apiErrorThisTurn?: { error: string; resetsAt?: string };
 
   /** tool_use id → tool name, learned as "assistant" turns emit tool_use blocks.
    *  Used only to label a passively-surfaced tool_image (see #292); never
@@ -1113,6 +1128,7 @@ class ClaudeSession implements RuntimeSession {
     const q = this.query;
     this.query = undefined;
     this.stoppedThisTurn = false;
+    this.apiErrorThisTurn = undefined;
     this.input.close();
     if (q?.close) {
       try {
@@ -1263,6 +1279,8 @@ class ClaudeSession implements RuntimeSession {
         // the model "<synthetic>"; that is not a model the session runs on.
         const model = message.message?.model;
         if (model && model !== "<synthetic>") this.currentModel = toModelInfo({ id: model });
+        if (isApiErrorMessage(message) && assistantText) this.apiErrorThisTurn = apiErrorDetail(message, assistantText);
+        else if (model && model !== "<synthetic>") this.apiErrorThisTurn = undefined;
         // The SDK stamps every message it generates inside a `Task` sub-agent
         // with the spawning Task's tool_use id. Carry it onto this turn's tool
         // calls so the UI nests the sub-agent's work under its delegation card
@@ -1393,10 +1411,14 @@ class ClaudeSession implements RuntimeSession {
         const failure = resultError && !stopped ? resultError : "";
         this.reportedFailure = failure.split("\n")[0] || undefined;
         if (failure) this.emit({ type: "session.error", error: describeAnthropicError(failure) });
+        // An API error the SDK showed as a message is already in the chat, so it
+        // gets no toast; it only rides agent_end so the daemon classifies it.
+        const apiError = !failure && !stopped ? this.apiErrorThisTurn : undefined;
+        this.apiErrorThisTurn = undefined;
         this.emit({ type: "turn_end" });
         // Cost/token/plan-quota totals are read via getUsage() (backed by the
         // SDK's usage_EXPERIMENTAL... control request), not forwarded here.
-        this.emit({ type: "agent_end", subtype: message.subtype, ...(failure ? { error: failure } : {}) });
+        this.emit({ type: "agent_end", subtype: message.subtype, ...(failure ? { error: failure } : apiError ?? {}) });
         break;
       }
 

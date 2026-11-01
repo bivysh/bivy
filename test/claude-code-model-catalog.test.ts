@@ -68,7 +68,7 @@ async function waitFor(cond: () => boolean, ms = 1000): Promise<void> {
   const { session } = await runtime.createSession({ workspace: process.cwd() });
   const models = await session.getModels();
   assert.ok(models.length > 0, "a fresh session lists fallback models before the first prompt");
-  assert.ok(models.some((m) => m.id === "claude-opus-4-8" && m.name === "Claude Opus 4.8"), "fallback uses product names");
+  assert.ok(models.some((m) => m.id === "claude-opus-5-5" && m.name === "Claude Opus 5.5"), "fallback uses product names");
   session.dispose();
   console.log("fallback catalog OK");
 }
@@ -124,7 +124,7 @@ async function waitFor(cond: () => boolean, ms = 1000): Promise<void> {
 
   // Before warming (no prompt sent) the picker shows the placeholder lineup.
   const before = await session.getModels();
-  assert.ok(before.some((m) => m.id === "claude-opus-4-8"), "an un-warmed session shows the placeholder fallback");
+  assert.ok(before.some((m) => m.id === "claude-opus-5-5"), "an un-warmed session shows the placeholder fallback");
   assert.equal(queries.length, 0, "reading the placeholder does not spawn an agent");
 
   // Warming spins up the agent just far enough to read the real, branded list.
