@@ -285,8 +285,20 @@ class PiSession implements RuntimeSession {
     const unsubscribeBackground = this.backgroundShells.subscribe((count) => {
       listener({ type: "background_tasks_changed", count });
     });
+    // Pi's `agent_end` closes one low-level run, but Pi can start another on
+    // its own (auto-retry after a 429/overload, overflow recovery, queued
+    // follow-ups); `agent_settled` says it won't. Bivy's `agent_end` means the
+    // turn is over, so hold Pi's until the session settles and send the last.
+    let runEnd: any;
     const unsubscribeSession = this.session.subscribe((event: any) => {
       const type = String(event?.type ?? "");
+      if (type === "agent_end") { runEnd = event; return; }
+      if (type === "agent_settled") {
+        const end = runEnd ?? { type: "agent_end", messages: [] };
+        runEnd = undefined;
+        listener({ ...end, willRetry: false, ...(event?.aborted ? { aborted: true } : {}) });
+        return;
+      }
       const callId = String(event?.toolCallId ?? event?.toolUseId ?? event?.tool_use_id ?? event?.id ?? "");
       if (type === "tool_call" || type === "tool_execution_start") {
         const name = String(event?.toolName ?? event?.name ?? "tool");
