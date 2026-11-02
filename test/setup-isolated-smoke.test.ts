@@ -122,6 +122,17 @@ try {
   }
   assert.equal(await portIsOpen(nodePort), true, `isolated node did not start:\n${daemonLog}`);
 
+  // A DNS-rebound page reaches loopback under its own Host. Even with the open
+  // bootstrap, it must not mint a device token or read a git credential.
+  for (const [method, route] of [["POST", "/api/auth/bootstrap"], ["GET", "/api/git-credential?owner=o&repo=r"]]) {
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      const req = http.request({ host: "127.0.0.1", port: nodePort, method, path: route, headers: { host: `rebind.example:${nodePort}`, "content-type": "application/json" } }, (res) => { res.resume(); resolve(res.statusCode); });
+      req.on("error", reject);
+      req.end(method === "POST" ? "{}" : undefined);
+    });
+    assert.equal(status, 403, `${method} ${route} from a public Host`);
+  }
+
   const setup = spawn(process.execPath, ["bin/bivy.mjs", "setup"], { cwd: root, env, stdio: ["pipe", "pipe", "pipe"] });
   let output = "";
   setup.stdout.on("data", (chunk) => { output += chunk.toString(); });
