@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.6] - 2026-11-02
+
 ### Changed
 
 - Claude Code runs on Claude Agent SDK 0.3.316. Before a session starts, its model picker now lists the current Claude lineup (Opus 5.5, Sonnet 5.5, Haiku 5.5, Fable 5.1).
