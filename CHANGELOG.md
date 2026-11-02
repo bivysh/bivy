@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - A Claude Code turn that hits a usage limit or a failed sign-in now counts as failed. Claude Code reports these as an ordinary reply and then finishes the turn normally, so Bivy marked the turn done: a usage limit offered no "Fork to another agent" or "Retry automatically at …", run policies never saw it, and `bivy exec` exited 0. The retry now waits for the exact reset time the limit reports.
+- An agent's session token can no longer change an app's owner-only settings, such as whether agents may read reviewer notes. It now reaches only the `bivy app` commands.
 - Pinch-zooming an app preview on a phone now magnifies the page. Before, Bivy re-laid its whole screen into the zoomed area, so the header and preview controls grew over the app instead.
 
 ## [0.22.5] - 2026-11-01

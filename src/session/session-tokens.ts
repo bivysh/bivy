@@ -61,7 +61,10 @@ export const SESSION_TOKEN_ROUTES: readonly { method: "GET" | "POST"; path: RegE
   { method: "POST", path: /^\/api\/session\/([^/]+)\/delegated-runs\/[^/]+\/wait$/, session: "path" },
   { method: "POST", path: /^\/api\/session\/([^/]+)\/automations\/apply$/, session: "path" },
   { method: "GET", path: /^\/api\/session\/([^/]+)\/automations\/apply\/[^/]+$/, session: "path" },
-  { method: "POST", path: /^\/api\/apps\/[a-zA-Z]+$/, session: "body" },
+  // The verbs `bivy app` sends. Not the owner's own switches on an app
+  // (agentNotes: may agents read reviewer notes; reviewMode, clearNotes, annotate,
+  // unshare, revoke, open), which the token must not be able to flip.
+  { method: "POST", path: /^\/api\/apps\/(list|publish|remove|shot|present|scenarios|share|notes|requests|runRequest|data|serverLog|menu|input)$/, session: "body" },
   { method: "POST", path: /^\/api\/widgets\/(state\.get|shot)$/, session: "body" },
   { method: "POST", path: /^\/api\/session\/fork$/, session: "body" },
   { method: "GET", path: /^\/api\/machines$/, session: "none" },
