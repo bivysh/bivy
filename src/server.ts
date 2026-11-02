@@ -9815,6 +9815,8 @@ app.get("/api/integrations/oauth/callback", sensitiveRateLimiter, async (req, re
 // so other local users on a shared host can't harvest tokens). Placed before the
 // /api auth middleware because the helper is a bare process with no device token.
 app.get("/api/git-credential", sensitiveRateLimiter, async (req, res) => {
+  // Before auth, so the rebinding guard the middleware applies is applied here.
+  if (!requestOriginAllowed(req)) return res.status(403).json({ error: "Forbidden origin" });
   const ctx = resolveAuth(identity, req);
   if (!ctx.loopback) return res.status(403).json({ error: "git-credential is loopback-only" });
   if (!bootstrapSecretAccepted(req)) return res.status(403).json({ error: "bootstrap secret required" });
@@ -9863,6 +9865,7 @@ function bootstrapSecretAccepted(req: express.Request): boolean {
 }
 
 app.post("/api/auth/bootstrap", sensitiveRateLimiter, (req, res) => {
+  if (!requestOriginAllowed(req)) return res.status(403).json({ error: "Forbidden origin" });
   const ctx = resolveAuth(identity, req);
   if (!ctx.loopback) return res.status(403).json({ error: "Bootstrap is loopback-only" });
   if (!bootstrapSecretAccepted(req)) {
