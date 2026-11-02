@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Files an agent places with `::view{src=…}` (widgets, tables, PDFs, pages) now show in the chat. The node read the file, but the app only linked stored files to image syntax, so a `::view` card waited and then said the file could not be read.
+
 ## [0.22.6] - 2026-11-02
 
 ### Changed

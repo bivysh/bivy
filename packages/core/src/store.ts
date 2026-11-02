@@ -28,7 +28,7 @@ import {
 } from "./session-draft.js";
 import { type SlashCommand } from "./slash.js";
 import { toHtml } from "./markdown.js";
-import { extractImageReferences } from "./message-components.js";
+import { extractMessageReferences } from "./message-components.js";
 import { normalizeEventType } from "./tool-activity.js";
 import { SeqReassembler } from "./seq-reassembler.js";
 import { foldConnectionEvent } from "./connection-event-fold.js";
@@ -1422,7 +1422,7 @@ export class SessionStore {
     let changed = false;
     const next = transcript.map((e) => {
       if (e.role !== "assistant" || !e.text) return e;
-      const images = extractImageReferences(e.text);
+      const images = extractMessageReferences(e.text);
       if (!images.length) return e;
       let patch: Record<string, AttachmentRef> | undefined;
       for (const { ref: key } of images) {

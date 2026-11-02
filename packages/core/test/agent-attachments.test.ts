@@ -189,3 +189,21 @@ describe("markdown inline images", () => {
     expect(html).not.toContain("<img");
   });
 });
+
+describe("workspace references on reload", () => {
+  it("hydrates a ::view directive from the history's resolved refs, not only image syntax", () => {
+    const page = { hash: HASH, name: "sketch.html", mimeType: "text/html", size: 900, kind: "file" as const };
+    const s = new SessionStore();
+    s.beginOpen("s1");
+    s.apply({
+      type: "session.history", requestId: "r1", sessionId: "s1", runtimeId: "claude", mode: "full", count: 2, historyHash: "h2",
+      messages: [
+        { role: "user", content: "sketch it" },
+        { role: "assistant", content: [{ type: "text", text: "Here:\n\n::view{src=widgets/sketch.html}\n\n![shot](out/shot.png)" }] },
+      ],
+      inlineImageRefs: [["widgets/sketch.html", page], ["out/shot.png", imageRef]],
+    } as never);
+    const reply = s.getState().activeSession.transcript.find((e) => e.role === "assistant");
+    expect(reply?.imageRefs).toEqual({ "widgets/sketch.html": page, "out/shot.png": imageRef });
+  });
+});
