@@ -1,6 +1,6 @@
 {
   "name": "@bivy/web",
-  "version": "0.22.6",
+  "version": "0.22.7",
   "description": "Bivy web PWA — React + Vite view layer over @bivy/core.",
   "type": "module",
   "license": "MIT",
