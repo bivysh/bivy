@@ -81,7 +81,7 @@
     "audit:prod": "node scripts/audit-prod.mjs"
   },
   "dependencies": {
-    "@lydell/node-pty": "1.2.0-beta.15",
+    "@lydell/node-pty": "1.2.0-beta.18",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@novnc/novnc": "1.7.0",
     "brace-expansion": "5.0.12",
