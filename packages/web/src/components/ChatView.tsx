@@ -874,18 +874,25 @@ export function ChatView({
 }
 
 /**
- * A sent message taller than PROMPT_FOLD_LINES lines (as wrapped on this
- * screen) folds behind "Show full", so a pasted log or spec doesn't push the
- * reply out of view. Short messages render exactly as before.
+ * A sent message taller than ten lines (as wrapped on this screen) folds
+ * behind "Show full", so a pasted log or spec doesn't push the reply out of
+ * view. Short messages render exactly as before.
+ *
+ * Whether the toggle shows is set on the DOM in this layout effect, not in
+ * state: child layout effects run before ChatView's, so the bubble has its
+ * final height when the chat pins itself to the bottom. A state update would
+ * grow it after the pin and the chat would stop following the latest message.
  */
 function FoldedPrompt({ id, text }: { id: string; text: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  const toggleRef = useRef<HTMLButtonElement>(null);
   const [open, setOpen] = useState(false);
-  const [overflows, setOverflows] = useState(false);
   useLayoutEffect(() => {
     const el = ref.current;
-    if (!el || open) return;
-    const measure = () => setOverflows(el.scrollHeight > el.clientHeight + 1);
+    const toggle = toggleRef.current;
+    if (!el || !toggle) return;
+    if (open) { toggle.hidden = false; return; }
+    const measure = () => { toggle.hidden = el.scrollHeight <= el.clientHeight + 1; };
     measure();
     const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : undefined;
     observer?.observe(el);
@@ -895,11 +902,9 @@ function FoldedPrompt({ id, text }: { id: string; text: string }) {
   return (
     <>
       <div ref={ref} id={bodyId} className="msg-fold" data-folded={open ? undefined : ""}>{text}</div>
-      {(overflows || open) && (
-        <button type="button" className="btn ghost-link msg-fold-toggle" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((v) => !v)}>
-          {open ? "Show less" : "Show full"}
-        </button>
-      )}
+      <button ref={toggleRef} type="button" className="btn ghost-link msg-fold-toggle" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((v) => !v)}>
+        {open ? "Show less" : "Show full"}
+      </button>
     </>
   );
 }

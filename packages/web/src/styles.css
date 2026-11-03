@@ -655,6 +655,7 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 /* A long sent message folds to ten wrapped lines behind "Show full". */
 .msg-fold[data-folded] { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 10; overflow: hidden; }
 .msg-fold-toggle { display: block; margin-top: var(--space-1); }
+.msg-fold-toggle[hidden] { display: none; }
 /* Attachments sent with a user message: shown inside the same bubble, above
    the text. Images are a real thumbnail; files/omitted content are a chip
    matching the composer's own pre-send .attach-chip look. */
