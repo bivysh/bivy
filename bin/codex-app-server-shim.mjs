@@ -616,6 +616,17 @@ function onNotification(m) {
       // turn/failed above, which never leaves the turn open. A child thread's
       // error is reported on its sub-agent card, not as the parent's failure.
       if (!fromCurrentThread) return;
+      // `willRetry: true` is Codex retrying on its own ("Reconnecting... 2/5"):
+      // a status, not the turn's outcome. Stashing it failed turns that then
+      // recovered and completed.
+      if (params?.willRetry) {
+        const message = params?.error?.message || params?.message || "";
+        const count = /^Reconnecting\.*\s*(\d+)\/(\d+)\s*(?:\((.*)\))?\s*$/s.exec(message);
+        bivy(count
+          ? { type: "session.retry", attempt: Number(count[1]), maxAttempts: Number(count[2]), error: count[3] || "" }
+          : { type: "session.retry", error: message });
+        return;
+      }
       sawError = params?.error?.message || params?.message || "Codex turn failed";
       return;
     default:

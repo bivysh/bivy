@@ -40,7 +40,7 @@ function waitFor(events: RuntimeEvent[], pred: (event: RuntimeEvent) => boolean,
   });
 }
 
-function makeRuntime(mode: "ok" | "fail" | "usage-limit" | "echo-input" | "echo-developer-instructions"): ProtocolRuntime {
+function makeRuntime(mode: "ok" | "fail" | "usage-limit" | "reconnect" | "echo-input" | "echo-developer-instructions"): ProtocolRuntime {
   return new ProtocolRuntime({
     id: "codex-approvals",
     displayName: "Codex",
@@ -120,6 +120,23 @@ test("a normal Codex turn still completes cleanly (agent_end, reply, no error)",
   session.dispose();
 });
 
+test("a Codex reconnect it recovers from shows as a retry, not a failed turn", async () => {
+  const runtime = makeRuntime("reconnect");
+  const { session } = await runtime.createSession({ workspace: process.cwd(), toolInterceptor: async () => undefined });
+  const events: RuntimeEvent[] = [];
+  session.subscribe((event) => events.push(event));
+  try {
+    await session.prompt("say the word");
+    await waitFor(events, (event) => event.type === "agent_end");
+
+    const retry = events.find((event) => event.type === "agent_retry");
+    assert.deepEqual(retry, { type: "agent_retry", attempt: 1, maxAttempts: 5, error: "stream disconnected before completion" }, "the retry reaches the client as agent_retry");
+    assert.ok(!events.some((event) => event.type === "session.error"), "a recovered turn emits no session.error");
+    assert.equal((events.find((event) => event.type === "agent_end") as { error?: string }).error, undefined, "the turn ends clean");
+  } finally {
+    session.dispose();
+  }
+});
 
 test("Codex receives the original image bytes with the prompt, including an image-only turn", async () => {
   const runtime = makeRuntime("echo-input");

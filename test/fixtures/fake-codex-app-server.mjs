@@ -18,6 +18,9 @@
 //                      NO preceding standalone `error` notification — the shape a
 //                      real usage-limit turn takes (codex 0.154). The shim must
 //                      still surface it as session.error, never a silent empty turn.
+//   "reconnect"      → an `error` with willRetry: true (Codex reconnecting on its
+//                      own), then the "ok" reply: the turn recovered and must
+//                      not end failed.
 //   "echo-developer-instructions" → the turn's reply is the developerInstructions
 //                      the thread was started/resumed with (empty when none).
 import readline from "node:readline";
@@ -77,6 +80,7 @@ rl.on("line", (line) => {
           turn: { id: "turn-1", status: "failed", error: { message: "You've hit your usage limit.", codexErrorInfo: "usageLimitExceeded" } },
         });
       } else {
+        if (MODE === "reconnect") notify("error", { threadId: params?.threadId, turnId: "turn-1", willRetry: true, error: { message: "Reconnecting... 1/5 (stream disconnected before completion)" } });
         notify("item/agentMessage/delta", { itemId: "item-1", delta: MODE === "echo-input" ? JSON.stringify(params.input) : MODE === "echo-developer-instructions" ? developerInstructions || "(none)" : "BANANA" });
         notify("turn/completed", { threadId: params?.threadId });
       }

@@ -162,6 +162,18 @@ function toolLabel(event: ServerEvent, entries: readonly TranscriptFoldEntry[]):
   const detail: any = toolDetail(event as any) ?? (callId ? entries.find((entry) => entry.tool?.callId === callId)?.tool?.detail : undefined);
   return detail?.kind === "delegation" ? (detail.label ? `${detail.label} sub-agent is working…` : "Sub-agent is working…") : `Running ${name}…`;
 }
+const RETRY_PREFIX = "Retrying";
+/** "Retrying (2/5): overloaded…" for an agent's own retry (`agent_retry`, any runtime). */
+export function retryLabel(event: { attempt?: unknown; maxAttempts?: unknown; error?: unknown }): string {
+  const attempt = typeof event.attempt === "number" ? event.attempt : 0;
+  const max = typeof event.maxAttempts === "number" ? event.maxAttempts : 0;
+  const count = attempt && max ? ` (${attempt}/${max})` : attempt ? ` (attempt ${attempt})` : "";
+  const line = typeof event.error === "string" ? (event.error.split("\n")[0] ?? "").trim() : "";
+  const reason = line.length > 60 ? `${line.slice(0, 59)}…` : line;
+  return `${RETRY_PREFIX}${count}${reason ? `: ${reason.replace(/[.…]+$/, "")}` : ""}…`;
+}
+/** The working status is an agent retry: shown even when the turn's work line is up. */
+export function isRetryLabel(label: string | undefined): boolean { return Boolean(label?.startsWith(RETRY_PREFIX)); }
 function hasAttachment(entries: readonly TranscriptFoldEntry[], hash: string): boolean {
   return entries.some((entry) => entry.attachments?.some((item) => item.hash === hash));
 }
@@ -262,6 +274,7 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
     case "update": applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: toolInput(event as any), status: "running", detail: toolDetail(event as any), ...(toolParentId(event as any) ? { parentToolUseId: toolParentId(event as any) } : {}) }); setWorking(value, toolLabel(event, value.transcript)); break;
     case "result": applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: {}, status: "done", result: toolResultText((event as any).result), detail: toolDetail(event as any) }); break;
     case "turn_end": setWorking(value, "Planning next step…"); break;
+    case "agent_retry": setWorking(value, retryLabel(event as any)); break;
     case "agent_end": finishDrafts(value); closeTools(value); Object.assign(value.draft, { pendingText: "", committedText: "", committedThinking: "" }); value.working = false; value.workingLabel = ""; commands.push({ kind: "turn-settled" }); break;
     default: return { handled: false, value: input, commands: [] };
   }

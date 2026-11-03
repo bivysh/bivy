@@ -69,6 +69,12 @@ describe("active-session pure event folds", () => {
     expect(end.commands).toContainEqual({ kind: "turn-settled" });
   });
 
+  it("shows an agent's own retry as the working status, without a chat entry", () => {
+    const retry = foldTranscriptEvent(transcriptValue(), { type: "agent_retry", attempt: 2, maxAttempts: 5, error: "Reconnecting... 2/5 (stream disconnected before completion)\nmore" }, 1);
+    expect(retry.value).toMatchObject({ working: true, workingLabel: "Retrying (2/5): Reconnecting... 2/5 (stream disconnected before completion)…", transcript: [] });
+    expect(foldTranscriptEvent(transcriptValue(), { type: "agent_retry" }, 1).value.workingLabel).toBe("Retrying…");
+  });
+
   it("a mid-stream message_start keeps one bubble instead of orphaning + duplicating it", () => {
     // Regression: a message_start arriving before the open message sealed used
     // to wipe the draft — orphaning the "I've" preview bubble as a permanent

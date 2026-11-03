@@ -159,6 +159,8 @@ export {
 export {
   foldTranscriptEvent,
   freshTranscriptDraft,
+  isRetryLabel,
+  retryLabel,
   type TranscriptDraftValue,
   type TranscriptFoldCommand,
   type TranscriptFoldEntry,
