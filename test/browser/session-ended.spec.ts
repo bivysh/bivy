@@ -18,6 +18,10 @@ test("a tab whose session has ended signs out", async ({ page, webApp }) => {
   let logouts = 0;
   await page.route("**/auth/logout", route => { logouts++; return route.fulfill({ json: { ok: true } }); });
   await page.route("**/nodes", route => route.fulfill({ status: 401, json: { error: "Unauthorized" } }));
+  // Signed out, the reloaded tab looks for a node on its own origin; there is none.
+  for (const endpoint of ["auth/bootstrap", "stt/config"]) {
+    await page.route(new RegExp(`/api/${endpoint}(?:\\?|$)`), route => route.fulfill({ status: 503, json: { error: "No node in this test" } }));
+  }
   await page.goto(webApp.origin);
   await expect.poll(() => page.evaluate(() => localStorage.getItem("bivy_session")), { timeout: 20_000 }).toBeNull();
   expect(logouts).toBe(1);
