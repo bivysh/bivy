@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 import { expect, test } from "@playwright/test";
-import { themes } from "./fixtures.js";
+import { themes, viteCacheDir } from "./fixtures.js";
 import { createRequire } from "node:module";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -20,7 +20,7 @@ test.beforeAll(async () => {
       accountDeletionMessage: "Deleting this account does not stop those charges. Cancel store subscriptions separately.",
       accountMessageRules: [{ terms: ["upgrade", "purchase"], replacement: "This operation is not available for this account." }],
     })) },
-    server: { host: "127.0.0.1", port: 0 }, logLevel: "error",
+    server: { host: "127.0.0.1", port: 0 }, logLevel: "error", cacheDir: viteCacheDir,
   });
   await server.listen();
   origin = new URL(server.resolvedUrls!.local[0]).origin;
@@ -123,12 +123,13 @@ for (const platform of ["native"]) {
     const independent = await createServer({
       root: fileURLToPath(new URL("../../packages/web/", import.meta.url)),
       define: { "import.meta.env.VITE_BIVY_CLIENT_CONFIG": JSON.stringify(JSON.stringify({ platform, controlPlaneOrigin: cp, connectionMode: "account" })) },
-      server: { host: "127.0.0.1", port: 0 }, logLevel: "error",
+      server: { host: "127.0.0.1", port: 0 }, logLevel: "error", cacheDir: viteCacheDir,
     });
     try {
       await independent.listen();
       await page.goto(new URL(independent.resolvedUrls!.local[0]).origin);
-      await expect(page.getByText("Continue with GitHub", { exact: true })).toBeVisible();
+      // A second dev server transforms the whole app from cold on this first load.
+      await expect(page.getByText("Continue with GitHub", { exact: true })).toBeVisible({ timeout: 20_000 });
       await expect(page.getByRole("button", { name: "Continue with email" })).toBeVisible();
       if (platform === "native") {
         await page.route(`${cp}/auth/device/github/start`, route => route.fulfill({ json: {
