@@ -173,7 +173,7 @@ export function retryLabel(event: { attempt?: unknown; maxAttempts?: unknown; er
   return `${RETRY_PREFIX}${count}${reason ? `: ${reason.replace(/[.…]+$/, "")}` : ""}…`;
 }
 /** The working status is an agent retry: shown even when the turn's work line is up. */
-export function isRetryLabel(label: string): boolean { return label.startsWith(RETRY_PREFIX); }
+export function isRetryLabel(label: string | undefined): boolean { return Boolean(label?.startsWith(RETRY_PREFIX)); }
 function hasAttachment(entries: readonly TranscriptFoldEntry[], hash: string): boolean {
   return entries.some((entry) => entry.attachments?.some((item) => item.hash === hash));
 }
