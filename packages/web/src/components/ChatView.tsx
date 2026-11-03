@@ -405,7 +405,7 @@ const EntryView = memo(function EntryView({
     return (
       <div className="msg user" id={hasAttachments ? `msg-${entry.id}` : undefined}>
         {hasAttachments && <MessageAttachments attachments={entry.attachments!} />}
-        {text}
+        <FoldedPrompt id={entry.id} text={text} />
       </div>
     );
   }
@@ -870,5 +870,36 @@ export function ChatView({
         </button>
       )}
     </div>
+  );
+}
+
+/**
+ * A sent message taller than PROMPT_FOLD_LINES lines (as wrapped on this
+ * screen) folds behind "Show full", so a pasted log or spec doesn't push the
+ * reply out of view. Short messages render exactly as before.
+ */
+function FoldedPrompt({ id, text }: { id: string; text: string }) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || open) return;
+    const measure = () => setOverflows(el.scrollHeight > el.clientHeight + 1);
+    measure();
+    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : undefined;
+    observer?.observe(el);
+    return () => observer?.disconnect();
+  }, [text, open]);
+  const bodyId = `prompt-${id}`;
+  return (
+    <>
+      <div ref={ref} id={bodyId} className="msg-fold" data-folded={open ? undefined : ""}>{text}</div>
+      {(overflows || open) && (
+        <button type="button" className="btn ghost-link msg-fold-toggle" aria-expanded={open} aria-controls={bodyId} onClick={() => setOpen((v) => !v)}>
+          {open ? "Show less" : "Show full"}
+        </button>
+      )}
+    </>
   );
 }

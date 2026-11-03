@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A long message you send folds to ten lines in the chat, with "Show full" to expand it, so a pasted log or spec no longer pushes the agent's reply out of view.
+
 ### Changed
 
 - Pi runs on Pi 1.5.0.
