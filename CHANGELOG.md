@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.7] - 2026-11-03
+
 ### Added
 
 - A long message you send folds to ten lines in the chat, with "Show full" to expand it, so a pasted log or spec no longer pushes the agent's reply out of view.
