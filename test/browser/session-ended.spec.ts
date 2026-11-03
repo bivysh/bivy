@@ -23,6 +23,8 @@ test("a tab whose session has ended signs out", async ({ page, webApp }) => {
     await page.route(new RegExp(`/api/${endpoint}(?:\\?|$)`), route => route.fulfill({ status: 503, json: { error: "No node in this test" } }));
   }
   await page.goto(webApp.origin);
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("bivy_session")), { timeout: 20_000 }).toBeNull();
+  // Signing out reloads the page; a read that lands mid-reload just tries again.
+  const session = () => page.evaluate(() => localStorage.getItem("bivy_session")).catch(() => "reloading");
+  await expect.poll(session, { timeout: 20_000 }).toBeNull();
   expect(logouts).toBe(1);
 });

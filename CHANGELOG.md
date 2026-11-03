@@ -17,7 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Files an agent places with `::view{src=…}` (widgets, tables, PDFs, pages) now show in the chat. The node read the file, but the app only linked stored files to image syntax, so a `::view` card waited and then said the file could not be read.
 
-- Tests: the browser test for a signed-out tab no longer fails at random under load. The reloaded tab's requests to a local node were unmocked, so it failed whenever they fired before the test ended.
+- Tests: the browser test for a signed-out tab no longer fails at random under load. The reloaded tab's requests to a local node were unmocked, so it failed whenever they fired before the test ended, and a read of the tab's storage during the sign-out reload failed the test instead of retrying.
 
 ## [0.22.6] - 2026-11-02
 
