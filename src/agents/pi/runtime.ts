@@ -55,6 +55,7 @@ import type {
 } from "../../runtime/types.js";
 import { PI_CAPABILITIES } from "./capabilities.js";
 import { mapToolCall, mapToolResult } from "../../runtime/tool-call-map.js";
+import { agentRetryEvent } from "../../runtime/retry.js";
 import { BackgroundShellTracker, createBackgroundAwareBashOperations } from "./background-shell.js";
 
 /**
@@ -297,6 +298,10 @@ class PiSession implements RuntimeSession {
         const end = runEnd ?? { type: "agent_end", messages: [] };
         runEnd = undefined;
         listener({ ...end, willRetry: false, ...(event?.aborted ? { aborted: true } : {}) });
+        return;
+      }
+      if (type === "auto_retry_start") {
+        listener(agentRetryEvent({ attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs, error: event.errorMessage }));
         return;
       }
       const callId = String(event?.toolCallId ?? event?.toolUseId ?? event?.tool_use_id ?? event?.id ?? "");

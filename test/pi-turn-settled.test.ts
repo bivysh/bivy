@@ -42,12 +42,19 @@ try {
   const { session } = await runtime.createSession({ workspace });
   await session.setModel!("local", "m");
   const ends: Array<{ willRetry?: boolean; messages?: Array<{ role: string; stopReason?: string }> }> = [];
-  session.subscribe((event) => { if (event.type === "agent_end") ends.push(event); });
+  const retries: Array<{ attempt?: number; maxAttempts?: number; error?: string }> = [];
+  session.subscribe((event) => {
+    if (event.type === "agent_end") ends.push(event);
+    if (event.type === "agent_retry") retries.push(event);
+  });
   await session.prompt("hi");
   session.dispose();
 
   assert.equal(calls, 2, "Pi retried the rate-limited request");
   assert.equal(ends.length, 1, "the retried turn ends once");
+  assert.equal(retries.length, 1, "the retry shows as one agent_retry");
+  assert.equal(retries[0].attempt, 1);
+  assert.ok(retries[0].maxAttempts && retries[0].error, "it carries the budget and the reason");
   assert.equal(ends[0].willRetry, false);
   assert.equal(ends[0].messages?.at(-1)?.stopReason, "stop", "the turn ends on the reply that succeeded");
 } finally {

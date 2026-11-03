@@ -96,6 +96,7 @@ agents:
 | `tool.call` | `toolCallId`, `name`, `input` | A tool card. `name` `bash` with `input.command`, or `edit`/`write` with `input.path`, get the rich shell and file cards |
 | `tool.result` | `toolCallId`, `result` | The tool card's output |
 | `usage` | `tokens` (`input_tokens`, `output_tokens`, …), `costUsd` | The session's usage |
+| `session.retry` | `error`, optional `attempt`, `maxAttempts`, `delayMs` | A "Retrying (2/5)…" status while the agent retries a failed model call itself |
 | `session.done` | | End of turn |
 | `session.error` | `error` | An error on the turn |
 

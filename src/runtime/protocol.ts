@@ -34,6 +34,7 @@ import { withExactCapabilitySurface } from "./types.js";
 import { extractTokenUsage } from "./cli-parsers.js";
 import { mapToolCall, mapToolResult } from "./tool-call-map.js";
 import { stripAnsi } from "./ansi.js";
+import { agentRetryEvent } from "./retry.js";
 
 /** A tool message's sub-agent parent (`parentToolCallId`), spread into the
  *  runtime event and persisted block so delegated work nests under its call. */
@@ -912,6 +913,10 @@ class ProtocolSession implements RuntimeSession {
     if (type === "usage") {
       // Best-effort token/cost snapshot the shim reports; surfaced via getUsage().
       this.lastUsage = parseProtocolUsage(msg.usage ?? msg);
+      return;
+    }
+    if (type === "session.retry") {
+      this.emit(agentRetryEvent(msg));
       return;
     }
     if (type === "session.status") {

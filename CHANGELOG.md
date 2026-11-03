@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- While an agent retries a failed model call itself (overloaded, rate-limited, dropped stream), the chat says so: "Retrying (2/5): overloaded (529)…" instead of sitting on "Thinking…". Claude Code, Codex and Pi report it, and custom adapters can send `session.retry`.
+- A warning when Claude Code can't save the session because the disk is full or over quota, since resuming it may then miss recent messages.
+
+### Changed
+
+- Claude Code runs on Agent SDK 0.3.317 (Claude Code 2.1.317).
+
+### Fixed
+
+- A Codex turn that lost its connection and reconnected no longer ends as failed. The shim took Codex's "Reconnecting... 1/5" notice as the turn's error, so the chat showed it as a failure and dropped the reply Codex went on to give.
+
 ## [0.22.7] - 2026-11-03
 
 ### Added

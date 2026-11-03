@@ -43,6 +43,7 @@ import type {
 } from "../../runtime/types.js";
 import { withExactCapabilitySurface } from "../../runtime/types.js";
 import { mapToolCall, mapToolResult } from "../../runtime/tool-call-map.js";
+import { agentRetryEvent } from "../../runtime/retry.js";
 import { resolveExecutable } from "../../executable.js";
 import fs from "node:fs";
 import { depCacheEnv } from "../../harness/dep-cache.js";
@@ -1441,6 +1442,21 @@ class ClaudeSession implements RuntimeSession {
         // for the model, not the human — don't forward them as chat. (init still
         // falls through so its capabilities/commands reach the client.)
         if (message?.subtype === "task_notification" || message?.subtype === "compact_boundary") break;
+        // The API call failed and Claude Code is retrying it: say so instead of
+        // looking stuck on "Thinking…" through the backoff.
+        if (message?.subtype === "api_retry") {
+          const reason = message.no_response ? "no response" : String(message.error ?? "").replace(/_/g, " ");
+          const status = typeof message.error_status === "number" ? ` (${message.error_status})` : "";
+          this.emit(agentRetryEvent({ attempt: message.attempt, maxAttempts: message.max_retries, delayMs: message.retry_delay_ms, error: reason && reason !== "unknown" ? `${reason}${status}` : status.trim() }));
+          break;
+        }
+        // The disk filled up (or hit its quota), so Claude Code lost transcript
+        // or config writes: resuming may miss part of this conversation.
+        if (message?.subtype === "session_writes_lost") {
+          const cause = message.error_code === "EDQUOT" ? "the disk quota is used up" : "the disk is full";
+          this.emit({ type: "session.notice", level: "warning", message: `Claude Code couldn't save part of this session because ${cause}. Free some space; resuming may miss recent messages.` });
+          break;
+        }
         // Banners Claude Code shows the user: a hook's block reason, slash-command
         // output, warnings (SDK 0.3.283+). Show them as the chat's system notice
         // and keep them in the transcript; "info" is transcript-mode-only upstream.

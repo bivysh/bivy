@@ -141,4 +141,15 @@ async function newSession() {
   assert.deepEqual(reloaded.filter((e) => e.role === "system").map((e) => e.text), ["PreToolUse hook blocked Edit: config is read-only"]);
 }
 
+// ── system/api_retry: Claude Code retrying a failed API call reaches the client
+//    as the shared agent_retry event, not a bare system event ──
+{
+  const { session, queries, events } = await newSession();
+  await session.prompt("hello");
+  await waitFor(() => queries.length === 1);
+  queries[0]!.emit({ type: "system", subtype: "api_retry", attempt: 2, max_retries: 10, retry_delay_ms: 1200, error_status: 529, error: "overloaded" });
+  await waitFor(() => events.some((e) => e.type === "agent_retry"));
+  assert.deepEqual(events.find((e) => e.type === "agent_retry"), { type: "agent_retry", attempt: 2, maxAttempts: 10, delayMs: 1200, error: "overloaded (529)" });
+}
+
 console.log("ok claude-code sub-agent nesting");
