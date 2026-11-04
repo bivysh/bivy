@@ -1650,8 +1650,8 @@ export class AppController {
   }
 
   /** Browse the session's workspace on its machine (read-only): list one
-   *  folder, or read one file. Rejects with the node's reason. */
-  async fileCommand(kind: "files.list" | "files.read", sessionId: string, path: string): Promise<ServerEvent> {
+   *  folder, read one file, or download one. Rejects with the node's reason. */
+  async fileCommand(kind: "files.list" | "files.read" | "files.download", sessionId: string, path: string): Promise<ServerEvent> {
     if (this.store.getState().connection.status !== "online") throw new Error("Connect to the machine to browse its files.");
     return this.awaitAck({ kind, sessionId, path }, 30_000);
   }

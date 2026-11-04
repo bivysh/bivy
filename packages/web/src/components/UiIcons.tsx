@@ -51,6 +51,11 @@ export function ClipboardIcon({ size = 20, ...props }: IconProps) {
   return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><rect x="8" y="3" width="8" height="4" rx="1" /><path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /></svg>;
 }
 
+/** Arrow into a tray — download / save to this device. */
+export function DownloadIcon({ size = 20, ...props }: IconProps) {
+  return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><path d="M12 3v12m-5-5 5 5 5-5M4 15v5h16v-5" /></svg>;
+}
+
 /** Overlapping documents — copy. */
 export function CopyIcon({ size = 20, ...props }: IconProps) {
   return <svg {...common} {...props} viewBox="0 0 24 24" width={size} height={size}><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></svg>;

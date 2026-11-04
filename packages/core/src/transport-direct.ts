@@ -364,6 +364,7 @@ export class DirectTransport implements Transport {
         case "artifacts.list":
         case "files.list":
         case "files.read":
+        case "files.download":
         case "plugins.remove":
         case "plugins.theme":
         case "widgets.state.get":
