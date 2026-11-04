@@ -48,6 +48,8 @@ interface OAuthTokens {
    *  cross-node merge (see credential-store `preferIncomingCredential`). */
   refreshedAt: number;
   accountId?: string;
+  /** When the sign-in itself ends (see OAuthCredential.signInEndsAt). */
+  signInEndsAt?: number;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -112,7 +114,7 @@ function jwtClaim(token: string, claimPath: string, field: string): string | und
 function tokensFrom(
   provider: ModelOAuthProvider,
   payload: Record<string, unknown>,
-  prev?: { refresh?: string; accountId?: string },
+  prev?: { refresh?: string; accountId?: string; signInEndsAt?: number },
 ): OAuthTokens {
   const access = typeof payload.access_token === "string" ? payload.access_token : "";
   if (!access) throw new Error("OAuth token response is missing access_token");
@@ -127,7 +129,34 @@ function tokensFrom(
     accountId = jwtClaim(access, provider.accountIdClaim.path, provider.accountIdClaim.field) ?? accountId;
     if (!accountId) throw new Error(`Could not extract account id for "${provider.id}" from the OAuth token`);
   }
-  return { access, refresh, expires, refreshedAt: now, ...(accountId ? { accountId } : {}) };
+  const signInEndsAt = signInEnd(payload, now, prev?.signInEndsAt);
+  return { access, refresh, expires, refreshedAt: now, ...(accountId ? { accountId } : {}), ...(signInEndsAt ? { signInEndsAt } : {}) };
+}
+
+/**
+ * When the sign-in ends, from the token response's `refresh_token_expires_in`
+ * (seconds; any provider may send it). A refresh can only bring the end
+ * closer: renewing the access token never extends the sign-in.
+ */
+function signInEnd(payload: Record<string, unknown>, now: number, previous?: number): number | undefined {
+  const seconds = Number(payload.refresh_token_expires_in);
+  const reported = Number.isFinite(seconds) && seconds > 0 ? now + seconds * 1000 : undefined;
+  const known = Number.isFinite(previous) && Number(previous) > 0 ? Number(previous) : undefined;
+  if (reported && known) return Math.min(reported, known);
+  return reported ?? known;
+}
+
+/** The vault credential for a token set. */
+function credentialFrom(tokens: OAuthTokens): OAuthCredential {
+  return {
+    type: "oauth",
+    access: tokens.access,
+    refresh: tokens.refresh,
+    expires: tokens.expires,
+    refreshedAt: tokens.refreshedAt,
+    ...(tokens.accountId ? { accountId: tokens.accountId } : {}),
+    ...(tokens.signInEndsAt ? { signInEndsAt: tokens.signInEndsAt } : {}),
+  };
 }
 
 // --- Authorization-code flow (browser + callback server + manual paste) ------
@@ -439,8 +468,7 @@ export async function loginModelOAuth(credsDir: string, providerId: string, inte
     provider.flow === "device_code" ? await loginDeviceCode(provider, interaction)
     : provider.flow === "openai_codex_device_code" ? await loginOpenAICodexDeviceCode(provider, interaction)
     : await loginAuthCode(provider, interaction);
-  const credential: OAuthCredential = { type: "oauth", access: tokens.access, refresh: tokens.refresh, expires: tokens.expires, refreshedAt: tokens.refreshedAt, ...(tokens.accountId ? { accountId: tokens.accountId } : {}) };
-  await createCredentialVault(credsDir).modifyRecord(providerId, label, async () => credential, sync);
+  await createCredentialVault(credsDir).modifyRecord(providerId, label, async () => credentialFrom(tokens), sync);
 }
 
 /** Exchange the refresh token for a fresh credential (network call; throws on failure). */
@@ -456,6 +484,7 @@ async function refreshTokens(provider: ModelOAuthProvider, current: OAuthCredent
   return tokensFrom(provider, payload, {
     refresh: provider.refreshRotates ? undefined : refresh,
     accountId: typeof current.accountId === "string" ? current.accountId : undefined,
+    signInEndsAt: typeof current.signInEndsAt === "number" ? current.signInEndsAt : undefined,
   });
 }
 
@@ -489,8 +518,7 @@ export async function refreshModelOAuthState(
       // replacement instead of rotating its refresh token again.
       if (!expired && (!rejectedAccess || current.access !== rejectedAccess)) return current;
       wasExpired = expired;
-      const fresh = await refreshTokens(provider, current);
-      return { type: "oauth", access: fresh.access, refresh: fresh.refresh, expires: fresh.expires, refreshedAt: fresh.refreshedAt, ...(fresh.accountId ? { accountId: fresh.accountId } : {}) };
+      return credentialFrom(await refreshTokens(provider, current));
     });
     if (!found || !result || result.type !== "oauth") return { state: "reconnect_required", error: "No OAuth credential is stored" };
     return { state: wasExpired ? "expired" : "fresh", access: result.access };

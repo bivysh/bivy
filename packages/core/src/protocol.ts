@@ -177,6 +177,8 @@ export interface CredentialRecordSummary {
   origin: "bivy" | "agent-native";
   /** Epoch ms the OAuth access token expires, when `kind === "oauth"`. */
   expiresAt?: number;
+  /** Epoch ms the OAuth sign-in ends for good (see `signInStatus`). */
+  signInEndsAt?: number;
   /** The non-secret pointer, when `kind === "reference"`. */
   ref?: string;
   /** Whether "Test connection" supports this provider/kind. */

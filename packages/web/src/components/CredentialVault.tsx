@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppState, CredentialRecordSummary, EphemeralModelKeyInfo, LocalModelEndpointResult } from "@bivy/core";
-import { BIVY_PROVIDER_CATALOG, mergeCredentialItems, migrateBrowserModelKeys, migrateNodeCredentialSummaries } from "@bivy/core";
+import { BIVY_PROVIDER_CATALOG, mergeCredentialItems, migrateBrowserModelKeys, migrateNodeCredentialSummaries, signInLabel, signInStatus } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { OauthStep } from "./ProviderConnect.js";
 import { ConfirmDialog } from "./AppDialog.js";
@@ -33,6 +33,12 @@ const BASE_PROVIDERS: CatalogProvider[] = BIVY_PROVIDER_CATALOG.map((provider) =
 }));
 
 const keyOf = (provider: string, label: string) => `${provider}\u0000${label || "default"}`;
+/** A warning badge once a sign-in is about to end (or has), nothing before. */
+function SignInBadge({ endsAt }: { endsAt?: number }) {
+  const status = signInStatus(endsAt);
+  if (!status || status.state === "active") return null;
+  return <Badge tone={status.state === "ended" ? "danger" : "warn"}>{signInLabel(status)}</Badge>;
+}
 const titleFor = (item: VaultItem) => item.label === "default" ? item.providerName : `${item.providerName} — ${item.label}`;
 const methodLabel = (kind: VaultItem["kind"]) => kind === "oauth" ? "Subscription sign-in" : kind === "reference" ? "Password-manager reference" : kind === "environment" ? "Environment" : "API key";
 const availabilityLabel = (value: Availability) => value === "account" ? "All my machines" : value === "node" ? "Only this machine" : "Only this device";
@@ -377,6 +383,7 @@ export function CredentialVault({ state, initialProvider = null }: { state: AppS
 
   if (view === "detail" && selected) {
     const count = providerCounts.get(selected.provider) ?? 1;
+    const signIn = signInStatus(selected.record?.signInEndsAt);
     const isDefault = (credentialPresets?.presets?.default?.[selected.provider] ?? "default") === selected.label;
     const projectId = assignmentProject.trim();
     const projectPreset = projectId ? `project:${projectId}` : undefined;
@@ -406,9 +413,12 @@ export function CredentialVault({ state, initialProvider = null }: { state: AppS
         <span className="muted">Used by projects</span><strong>{assignedProjects.length ? assignedProjects.join(", ") : "None explicitly — projects use the default"}</strong>
         {assignmentProject && <><span className="muted">Selected project</span><strong>{usedByProject ? "Uses this credential" : projectLabel ? `Uses ${projectLabel}` : "Uses provider default"}</strong></>}
         {selected.record?.origin === "agent-native" && <><span className="muted">Added by</span><strong>Agent sign-in</strong></>}
+        {signIn && <><span className="muted">{signIn.state === "ended" ? "Sign-in ended" : "Sign-in ends"}</span><strong>{new Date(signIn.endsAt).toLocaleDateString(undefined, { dateStyle: "medium" })}{signIn.state === "ending" && ` · in ${signIn.daysLeft} ${signIn.daysLeft === 1 ? "day" : "days"}`}</strong></>}
         {selected.record?.ref && <><span className="muted">Reference</span><code>{selected.record.ref}</code></>}
       </div>
+      {signIn && signIn.state !== "active" && selected.record?.origin === "agent-native" && <p className="banner inline" data-tone={signIn.state === "ended" ? "danger" : "warn"}>{signInLabel(signIn)}. Sign in again in the agent's own terminal; Bivy picks up the new sign-in when that terminal closes.</p>}
       {selected.record && <div className="row-actions">
+        {signIn && signIn.state !== "active" && selected.record.origin === "bivy" && <button className="btn primary" disabled={busy} onClick={() => { resetAdd(selected.provider); setLabel(selected.label === "default" ? "" : selected.label); setMethod("oauth"); setView("add"); }}>Sign in again</button>}
         {selected.record.testable && <button className="btn" disabled={busy} onClick={async () => { setBusy(true); setError(null); const result = await controller.testCredential(selected.provider, selected.label).catch(() => ({ ok: false, at: Date.now(), reason: "network_error" })); setMessage(result.ok ? "Connection verified." : `Verification failed: ${result.reason || "unknown error"}.`); refresh(); setBusy(false); }}>Test connection</button>}
         {count > 1 && !isDefault && <button className="btn" disabled={busy} onClick={() => void assign("default", selected.provider, selected.label, "Now used by default.")}>Use by default</button>}
         {count > 1 && projectPreset && !usedByProject && <button className="btn" disabled={busy} onClick={() => void assign(projectPreset, selected.provider, selected.label, `Assigned to ${projectId}.`)}>Use for {projectId}</button>}
@@ -449,7 +459,7 @@ export function CredentialVault({ state, initialProvider = null }: { state: AppS
     </div> : <>
       <input className="picker-search" placeholder="Search credentials…" aria-label="Search credentials" value={query} onChange={(e) => setQuery(e.target.value)} />
       <div className="picker-list vault-items">{filtered.map((item) => <button className="picker-item" key={keyOf(item.provider, item.label)} onClick={() => { setSelectedKey(keyOf(item.provider, item.label)); setMessage(null); setError(null); setView("detail"); }}>
-        <span><strong>{titleFor(item)}</strong><small>{localModels.some((model) => model.id === item.provider) ? "Local or custom endpoint" : methodLabel(item.kind)} · {availabilityLabel(item.availability)}</small></span><span className="vault-row-status">{item.record?.lastVerifiedOk && <Badge tone="ok">Verified</Badge>}<span aria-hidden>›</span></span>
+        <span><strong>{titleFor(item)}</strong><small>{localModels.some((model) => model.id === item.provider) ? "Local or custom endpoint" : methodLabel(item.kind)} · {availabilityLabel(item.availability)}</small></span><span className="vault-row-status"><SignInBadge endsAt={item.record?.signInEndsAt} />{item.record?.lastVerifiedOk && <Badge tone="ok">Verified</Badge>}<span aria-hidden>›</span></span>
       </button>)}</div>
     </>}
     <div className="vault-picker-label">Advanced</div>

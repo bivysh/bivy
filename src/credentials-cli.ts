@@ -91,13 +91,19 @@ function kindLabel(r: CredentialRecordSummary): string {
   return r.kind === "oauth" ? "OAuth" : "API key";
 }
 
+/** "sign-in ends 2026-11-30" (or "ended"): when the user must sign in again. */
+function signInEndLabel(endsAt: number | undefined): string | null {
+  if (!endsAt) return null;
+  return `sign-in ${endsAt <= Date.now() ? "ended" : "ends"} ${new Date(endsAt).toISOString().slice(0, 10)}`;
+}
+
 async function cmdList(): Promise<void> {
   const records = [...(await listCredentialRecords(credsDir))].sort((a, b) =>
     `${a.provider}:${a.label}`.localeCompare(`${b.provider}:${b.label}`));
   if (records.length === 0) { console.log("No credentials. Add one with 'bivy credentials add', or 'bivy provider login'."); return; }
   const presets = getCredentialPresets(credsDir);
   for (const r of records) {
-    const badges = [kindLabel(r), r.sync === "account" ? "sync" : "node-only", r.origin === "agent-native" ? "from agent" : null]
+    const badges = [kindLabel(r), r.sync === "account" ? "sync" : "node-only", r.origin === "agent-native" ? "from agent" : null, signInEndLabel(r.signInEndsAt)]
       .filter(Boolean).join(" · ");
     console.log(`${r.provider}:${r.label}  (${badges})`);
   }

@@ -11,10 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - While an agent retries a failed model call itself (overloaded, rate-limited, dropped stream), the chat says so: "Retrying (2/5): overloaded (529)…" instead of sitting on "Thinking…". Claude Code, Codex and Pi report it, and custom adapters can send `session.retry`.
 - A warning when Claude Code can't save the session because the disk is full or over quota, since resuming it may then miss recent messages.
+- Settings → Providers & credentials shows when a subscription sign-in ends for good (refreshing the token doesn't extend it). A week before the end it shows "Sign-in ends in 3 days" with a **Sign in again** button, and "Sign-in ended" once it has. Bivy records the end from any provider that reports `refresh_token_expires_in`, and from Claude Code's own login file. `bivy credentials list` prints the date too.
 
 ### Changed
 
-- Claude Code runs on Agent SDK 0.3.317 (Claude Code 2.1.317).
+- Claude Code runs on Agent SDK 0.3.318 (Claude Code 2.1.318).
 
 ### Fixed
 

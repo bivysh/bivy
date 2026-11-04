@@ -284,6 +284,8 @@ export interface CredentialRecordSummary {
   origin: "bivy" | "agent-native";
   /** Epoch ms the OAuth access token expires, when `kind === "oauth"`. */
   expiresAt?: number;
+  /** Epoch ms the OAuth sign-in ends for good, when the provider said so. */
+  signInEndsAt?: number;
   /** The non-secret pointer, when `kind === "reference"`. */
   ref?: string;
   /** Whether "Test connection" (see `testCredential`) supports this provider/kind. */
@@ -314,7 +316,11 @@ export async function listCredentialRecords(credsDir: string): Promise<Credentia
       testable: isTestableProvider(record.provider),
       ...verified,
     };
-    if (cred.type === "oauth") summary.expiresAt = cred.expires;
+    if (cred.type === "oauth") {
+      summary.expiresAt = cred.expires;
+      const endsAt = Number(cred.signInEndsAt);
+      if (Number.isFinite(endsAt) && endsAt > 0) summary.signInEndsAt = endsAt;
+    }
     return summary;
   }));
 }

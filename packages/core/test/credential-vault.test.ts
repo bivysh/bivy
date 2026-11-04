@@ -8,6 +8,8 @@ import {
   mergeCredentialItems,
   migrateBrowserModelKeys,
   migrateNodeCredentialSummaries,
+  signInLabel,
+  signInStatus,
   type CredentialItem,
 } from "../src/index.js";
 
@@ -95,5 +97,18 @@ describe("logical credential identity and migration", () => {
     const result = mergeCredentialItems([source], [{ ...source, availability: { account: true, device: false, nodes: ["a", "z"] } }]);
     expect(result[0]?.availability).toEqual({ account: true, device: false, nodes: ["a", "z"] });
     expect(source.availability.nodes).toEqual(["z"]);
+  });
+});
+
+describe("signInStatus", () => {
+  it("is quiet until a week before the sign-in ends, then counts down, then says it ended", () => {
+    const now = Date.UTC(2026, 10, 4);
+    const day = 86_400_000;
+    expect(signInStatus(undefined, now)).toBeUndefined();
+    expect(signInStatus(now + 30 * day, now)).toMatchObject({ state: "active", daysLeft: 30 });
+    const ending = signInStatus(now + 3 * day, now)!;
+    expect(ending.state).toBe("ending");
+    expect(signInLabel(ending)).toBe("Sign-in ends in 3 days");
+    expect(signInLabel(signInStatus(now - day, now)!)).toBe("Sign-in ended");
   });
 });

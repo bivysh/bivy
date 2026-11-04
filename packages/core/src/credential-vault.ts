@@ -112,3 +112,27 @@ export const migrateBrowserModelKeys = (entries: readonly BrowserModelKeyMigrati
   mergeCredentialItems(entries.map(credentialItemFromBrowserModelKey).filter((item): item is CredentialItem => Boolean(item)));
 export const migrateNodeCredentialSummaries = (summaries: readonly CredentialRecordSummary[], nodeId: string): CredentialItem[] =>
   mergeCredentialItems(summaries.map((summary) => credentialItemFromNodeSummary(summary, nodeId)).filter((item): item is CredentialItem => Boolean(item)));
+
+/** A sign-in this close to its end is worth renewing now. */
+export const SIGN_IN_ENDING_SOON_MS = 7 * 24 * 60 * 60 * 1000;
+
+export type SignInState = "active" | "ending" | "ended";
+
+/**
+ * Where an OAuth sign-in stands, from its `signInEndsAt` (the refresh token's
+ * end; renewing the access token doesn't move it). Undefined when the provider
+ * never said when the sign-in ends. Every client words it from this one result.
+ */
+export function signInStatus(signInEndsAt: number | undefined, now = Date.now()): { state: SignInState; endsAt: number; daysLeft: number } | undefined {
+  if (typeof signInEndsAt !== "number" || !Number.isFinite(signInEndsAt) || signInEndsAt <= 0) return undefined;
+  const left = signInEndsAt - now;
+  const state: SignInState = left <= 0 ? "ended" : left <= SIGN_IN_ENDING_SOON_MS ? "ending" : "active";
+  return { state, endsAt: signInEndsAt, daysLeft: Math.max(0, Math.ceil(left / 86_400_000)) };
+}
+
+/** "Sign-in ends in 3 days" / "Sign-in ended": the words every client shows. */
+export function signInLabel(status: { state: SignInState; daysLeft: number }): string {
+  if (status.state === "ended") return "Sign-in ended";
+  if (status.daysLeft <= 1) return "Sign-in ends within a day";
+  return `Sign-in ends in ${status.daysLeft} days`;
+}

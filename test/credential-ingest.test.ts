@@ -78,10 +78,11 @@ await check("ingest is rotation-safe: a fresher agent token wins, a staler one i
 });
 
 await check("maps a Claude .credentials.json (claudeAiOauth) to an anthropic oauth credential", async () => {
-  const mapped = claudeAuthToCredential({ claudeAiOauth: { accessToken: "at", refreshToken: "rt", expiresAt: 1234 } });
+  const mapped = claudeAuthToCredential({ claudeAiOauth: { accessToken: "at", refreshToken: "rt", expiresAt: 1234, refreshTokenExpiresAt: 1792615553035 } });
   assert.equal(mapped?.providerId, "anthropic");
   assert.equal((mapped?.credential as { access?: string }).access, "at");
   assert.equal((mapped?.credential as { expires?: number }).expires, 1234, "Claude's absolute expiresAt used as-is");
+  assert.equal((mapped?.credential as { signInEndsAt?: number }).signInEndsAt, 1792615553035, "the login's own end is kept");
 });
 
 await check("ingestAgentCredentials('claude') folds ~/.claude/.credentials.json into the vault", async () => {
