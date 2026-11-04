@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - A Codex turn that lost its connection and reconnected no longer ends as failed. The shim took Codex's "Reconnecting... 1/5" notice as the turn's error, so the chat showed it as a failure and dropped the reply Codex went on to give.
+- On a phone, the "‹ Settings" back button at the top of a settings page is now a full-height tap target (it was 22px tall and easy to miss).
 
 ## [0.22.7] - 2026-11-03
 
