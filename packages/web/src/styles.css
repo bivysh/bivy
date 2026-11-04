@@ -2687,7 +2687,8 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
   .settings-nav-chevron { display: inline-flex; }
   .settings-account-card { background: var(--surface-2); margin-bottom: var(--space-2); }
   .settings-content { padding-top: max(0px, env(safe-area-inset-top)); }
-  .settings-back { display: inline-flex; }
+  /* 44px tall tap target; the negative margin keeps the header's height. */
+  .settings-back { display: inline-flex; min-height: 44px; margin-block: -11px; }
   .settings-body { --settings-body-pb: max(28px, env(safe-area-inset-bottom)); padding: 14px 16px var(--settings-body-pb); }
   .vault-title-row { align-items: center; }
   .vault-title-row .btn { flex: none; min-height: 40px; }
