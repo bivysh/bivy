@@ -1,5 +1,6 @@
 import assert from "node:assert";
 import { redactSecrets, registerSecretValue } from "../src/redact.js";
+import { createSessionTokenCodec } from "../src/session/session-tokens.js";
 
 function run() {
   // GitHub token shapes.
@@ -60,6 +61,8 @@ function run() {
     `mlt_${"D".repeat(32)}`, // magic-link sign-in token
     `lnk_${"E".repeat(32)}`, // remote-device link grant
     `tkt_${"F".repeat(32)}`, // single-use relay ticket
+    `pgr_${"G".repeat(32)}`, // single-use pairing grant
+    createSessionTokenCodec().sign("6f1c2d3e-4a5b-4c6d-8e9f-0a1b2c3d4e5f"), // agent session token ($BIVY_SESSION_TOKEN)
   ]) {
     const out = redactSecrets(`token=${tok}`);
     assert.ok(!out.includes(tok), `masks bivy token ${tok.slice(0, 5)}…`);

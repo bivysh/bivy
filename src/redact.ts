@@ -54,7 +54,11 @@ const PROVIDER_KEYS: RegExp[] = [
 //   mlt_…   magic-link sign-in token
 //   lnk_…   remote-device link grant
 //   tkt_…   single-use relay ticket
-const BIVY_TOKEN = /\b(?:mesh|enr|sess|mlt|lnk|tkt)_[A-Za-z0-9_-]{20,}\b/g;
+//   pgr_…   single-use pairing grant (control plane)
+//   bst_<id>.<hmac>  agent session token ($BIVY_SESSION_TOKEN, session-tokens.ts),
+//                    which `env` in a session prints
+const BIVY_TOKEN = /\b(?:mesh|enr|sess|mlt|lnk|tkt|pgr)_[A-Za-z0-9_-]{20,}\b/g;
+const SESSION_TOKEN = /\bbst_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{20,}/g;
 
 // JWTs (three dot-separated base64url segments, header always decodes to `{"`
 // so it always starts `eyJ`). Covers GitHub App JWTs (server.ts's
@@ -120,6 +124,7 @@ export function redactSecrets(text: string): string {
     .replace(GH_TOKEN, REDACTED)
     .replace(GH_FINE_PAT, REDACTED)
     .replace(BIVY_TOKEN, REDACTED)
+    .replace(SESSION_TOKEN, REDACTED)
     .replace(JWT, REDACTED)
     .replace(BEARER_HEADER, `$1${REDACTED}`)
     .replace(KNOWN_SECRET_FIELD_VALUE, `$1${REDACTED}$2`);
