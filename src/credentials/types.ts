@@ -33,6 +33,12 @@ export interface OAuthCredential {
    * this field existed fall back to the `expires` comparison.
    */
   refreshedAt?: number;
+  /**
+   * Epoch ms the sign-in itself ends: the refresh token stops working, so the
+   * user has to sign in again. Renewing the access token does not move it. Only
+   * set when the provider (or the agent's own login file) says so.
+   */
+  signInEndsAt?: number;
   /** Store-owned mutation time used to order cross-node updates and revocations. */
   updatedAt?: number;
   [key: string]: unknown;

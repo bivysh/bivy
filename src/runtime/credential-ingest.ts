@@ -116,7 +116,12 @@ export function claudeAuthToCredential(raw: unknown): { providerId: string; cred
   if (!access || !refresh) return undefined;
   // Claude stores `expiresAt` as an absolute epoch-ms timestamp already.
   const expires = Number(oauth?.expiresAt) || Date.now() + 60 * 60 * 1000;
-  return { providerId: "anthropic", credential: { type: "oauth", access, refresh, expires } };
+  // ...and `refreshTokenExpiresAt` when the sign-in itself ends.
+  const signInEndsAt = Number(oauth?.refreshTokenExpiresAt);
+  return {
+    providerId: "anthropic",
+    credential: { type: "oauth", access, refresh, expires, ...(Number.isFinite(signInEndsAt) && signInEndsAt > 0 ? { signInEndsAt } : {}) },
+  };
 }
 
 /** Fold a login done in the Claude CLI (`claude /login`) back into Bivy's vault. */

@@ -216,6 +216,25 @@ await check("refresh rotates the token, persists it, and returns the fresh acces
   assert.equal((cred as { refresh?: string }).refresh, "new-rt", "rotated refresh token is persisted");
 });
 
+await check("the sign-in end comes from refresh_token_expires_in and a refresh never pushes it later", async () => {
+  const dir = tmpDir();
+  const day = 86_400;
+  let response: Record<string, unknown> = { access_token: "at-1", refresh_token: "rt-1", expires_in: 3600, refresh_token_expires_in: 30 * day };
+  stubFetch(() => ({ json: response }));
+  const before = Date.now();
+  await loginModelOAuth(dir, "anthropic", pasteInteraction("acode#somestate"));
+  const endsAt = async () => Number((await createCredentialVault(dir).read("anthropic"))?.signInEndsAt);
+  const signedIn = await endsAt();
+  assert.ok(signedIn >= before + 30 * day * 1000 && signedIn <= Date.now() + 30 * day * 1000, "30 days from sign-in");
+
+  // A refresh that doesn't say keeps the end; one that says later keeps the earlier end.
+  for (const next of [{ access_token: "at-2", refresh_token: "rt-2", expires_in: 3600 }, { access_token: "at-3", refresh_token: "rt-3", expires_in: 3600, refresh_token_expires_in: 90 * day }]) {
+    response = next;
+    await refreshModelOAuth(dir, "anthropic", "default", (await createCredentialVault(dir).read("anthropic"))?.access as string);
+    assert.equal(await endsAt(), signedIn);
+  }
+});
+
 await check("a rejected unexpired access token refreshes immediately", async () => {
   const dir = tmpDir();
   const store = createCredentialVault(dir);
