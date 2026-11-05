@@ -6,6 +6,7 @@ import { VoiceRecorder } from "./VoiceRecorder.js";
 import { WebSpeechRecorder, webSpeechSupported } from "./WebSpeechRecorder.js";
 import { MicGlyph } from "./Composer.js";
 import { useModalEscape } from "../modalStack.js";
+import { isImeKey } from "../ime.js";
 
 // Mirrors the chat composer's mobile breakpoint (styles.css `.only-mobile`). On a
 // phone there's no keyboard modifier to distinguish "send" from "new line", so
@@ -143,6 +144,7 @@ export function TerminalComposer({
           autosize();
         }}
         onKeyDown={(e) => {
+          if (isImeKey(e)) return; // the key belongs to an IME candidate
           if (e.key === "Escape") {
             e.preventDefault();
             onClose();

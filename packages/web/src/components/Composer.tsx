@@ -19,6 +19,7 @@ import { Dictation, dictationEngine, NO_DICTATION, type DictationEngine } from "
 import { controller } from "../store/useStore.js";
 import { clearComposerDraft, composerDraftKey, holdComposerAttachments, restoreComposerDraft, writeComposerDraft, type PendingAttachmentMetadata } from "../composerDraft.js";
 import { setComposerLifecycle } from "../pwaLifecycle.js";
+import { isImeKey } from "../ime.js";
 
 /** "model-to-send": Send was pressed before a model was chosen. */
 type Picker = "repo" | "agent" | "model" | "model-to-send" | "sandbox" | null;
@@ -817,6 +818,7 @@ export function Composer({
               autosize();
             }}
             onKeyDown={(e) => {
+              if (isImeKey(e)) return; // the key belongs to an IME candidate, not the composer
               // While the slash menu is open, arrows move the highlight and
               // Enter/Tab accept it — so a command is one keystroke to run.
               if (slashMenu.length > 0) {

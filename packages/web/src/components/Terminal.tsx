@@ -32,6 +32,7 @@ import {
 import { writeClipboard } from "../clipboard.js";
 import { useModalEscape } from "../modalStack.js";
 import { runtimeSupportsTerminalTakeover } from "../terminalTakeover.js";
+import { isImeKey } from "../ime.js";
 
 // The `ctrl` sheet's command keys — concrete escape sequences the shell reads
 // directly, so there's no sticky-modifier state to track (the old on-screen key
@@ -1467,7 +1468,7 @@ export function TerminalOverlay({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") {
+              if (e.key === "Enter" && !isImeKey(e)) {
                 e.preventDefault();
                 if (e.shiftKey) searchRef.current?.findPrevious(searchQuery);
                 else searchRef.current?.findNext(searchQuery);
