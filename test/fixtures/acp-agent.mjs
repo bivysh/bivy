@@ -16,6 +16,14 @@ function notify(method, params) { send({ jsonrpc: "2.0", method, params }); }
 let sessionId = "acp-session-1";
 let permResolve = null; // resolves when the client answers our permission request
 const clientResponses = new Map();
+// An agent with a reasoning-effort option (Grok's shape): ACP category
+// "thought_level" beside the model option.
+let effort = "high";
+let configSets = 0;
+const configOptions = () => [
+  { id: "model", category: "model", type: "select", currentValue: "fixture/m1", options: [{ value: "fixture/m1", name: "M1" }] },
+  { id: "reasoning_effort", category: "thought_level", type: "select", currentValue: effort, options: [{ value: "high", name: "High" }, { value: "low", name: "Low" }] },
+];
 
 createInterface({ input: process.stdin }).on("line", (line) => {
   const t = line.trim();
@@ -42,22 +50,19 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       if (process.env.BIVY_TEST_MCP_DUMP) {
         try { fs.writeFileSync(process.env.BIVY_TEST_MCP_DUMP, JSON.stringify(params?.mcpServers ?? null)); } catch { /* ignore */ }
       }
-      // An agent with a reasoning-effort option (Grok's shape): ACP category
-      // "thought_level" beside the model option.
-      reply(id, process.env.ACP_THOUGHT_LEVELS === "1"
-        ? { sessionId, configOptions: [
-          { id: "model", category: "model", type: "select", currentValue: "fixture/m1", options: [{ value: "fixture/m1", name: "M1" }] },
-          { id: "reasoning_effort", category: "thought_level", type: "select", currentValue: "high", options: [{ value: "high", name: "High" }, { value: "low", name: "Low" }] },
-        ] }
-        : { sessionId });
+      reply(id, process.env.ACP_THOUGHT_LEVELS === "1" ? { sessionId, configOptions: configOptions() } : { sessionId });
       return;
     case "session/set_config_option":
+      configSets += 1;
       if (process.env.BIVY_TEST_CONFIG_DUMP) {
         // Write then rename, so a reader polling for the file never sees it empty.
-        fs.writeFileSync(`${process.env.BIVY_TEST_CONFIG_DUMP}.tmp`, JSON.stringify(params));
+        fs.writeFileSync(`${process.env.BIVY_TEST_CONFIG_DUMP}.tmp`, JSON.stringify({ ...params, calls: configSets }));
         fs.renameSync(`${process.env.BIVY_TEST_CONFIG_DUMP}.tmp`, process.env.BIVY_TEST_CONFIG_DUMP);
       }
-      reply(id, {});
+      if (params?.configId === "reasoning_effort") effort = String(params.value);
+      reply(id, { configOptions: configOptions() });
+      // Like Grok, announce the change as a config_option_update too.
+      if (process.env.ACP_THOUGHT_LEVELS === "1") notify("session/update", { sessionId, update: { sessionUpdate: "config_option_update", configOptions: configOptions() } });
       return;
     case "session/load":
       if (process.env.ACP_FAIL_LOAD === "1") { replyError(id, "fixture refused session/load"); return; }
@@ -117,6 +122,15 @@ createInterface({ input: process.stdin }).on("line", (line) => {
           reply(id, { stopReason: "end_turn" });
         });
         return;
+      }
+      // The agent changes its own effort mid-session (its own /effort command).
+      if (process.env.ACP_THOUGHT_LEVELS === "1") {
+        effort = "high";
+        notify("session/update", { sessionId, update: { sessionUpdate: "config_option_update", configOptions: configOptions() } });
+      }
+      // A model-call retry reported in a vendor extension notification (Grok's shape).
+      if (process.env.ACP_RETRY === "1") {
+        notify("_x.ai/session_notification", { sessionId, update: { sessionUpdate: "retry_state", type: "retrying", attempt: 1, max_retries: 15, reason: "API error (status 429 Too Many Requests)", error_type: "rate_limited" } });
       }
       // Stream an assistant message chunk.
       notify("session/update", { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hello from ACP" } } });

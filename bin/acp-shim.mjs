@@ -402,6 +402,29 @@ function publishModels(result) {
   });
 }
 
+/**
+ * ACP has no retry update yet. Agents report their own model-call retries as a
+ * `retry_state` session update inside an extension notification (Grok:
+ * `_x.ai/session_notification` with `{type:"retrying", attempt, max_retries,
+ * reason}`); publish it as Bivy's one `session.retry` so the client shows
+ * "Retrying (n/m)…" as it does for every other agent.
+ */
+function publishRetry(u) {
+  if (String(u.type ?? "retrying") !== "retrying") return;
+  bivy({
+    type: "session.retry",
+    attempt: u.attempt,
+    maxAttempts: u.max_retries ?? u.maxRetries ?? u.maxAttempts,
+    delayMs: u.delay_ms ?? u.delayMs,
+    error: String(u.reason ?? u.message ?? u.error_type ?? ""),
+  });
+}
+
+// The session updates an agent may send inside a vendor extension notification
+// (`_<vendor>/…` with the same `{ sessionId, update }` params). Every other kind
+// in an extension notification stays the agent's own business.
+const EXTENSION_UPDATE_KINDS = new Set(["retry_state"]);
+
 // --- ACP → bivy: streamed session/update notifications ----------------------
 function onSessionUpdate(params) {
   const u = params?.update;
@@ -490,6 +513,15 @@ function onSessionUpdate(params) {
           .map((c) => ({ name: `/${c.name.trim().replace(/^\//, "")}`, ...(typeof c.description === "string" && c.description.trim() ? { description: c.description.trim() } : {}) }));
         bivy({ type: "runtime.commands", commands });
       }
+      break;
+    // The agent changed the session's config itself — its own /model or effort
+    // command, or the echo of a set_config_option — and sends the full option
+    // list again. Republish it so the picker follows the agent.
+    case "config_option_update":
+      if (!child) publishModels(u);
+      break;
+    case "retry_state":
+      if (!child) publishRetry(u);
       break;
     // The session's running cost, when the agent knows it.
     case "usage_update":
@@ -609,7 +641,10 @@ createInterface({ input: agent.stdout }).on("line", (line) => {
   if (msg.id !== undefined && msg.method) { void onAgentRequest(msg.id, msg.method, msg.params); return; }
   // Notification (method, no id).
   if (msg.method === "session/update") onSessionUpdate(msg.params);
-  else if (msg.params?.update) linkChildSession(msg.params.update);
+  else if (msg.params?.update) {
+    linkChildSession(msg.params.update);
+    if (EXTENSION_UPDATE_KINDS.has(String(msg.params.update.sessionUpdate || ""))) onSessionUpdate(msg.params);
+  }
 });
 
 /**

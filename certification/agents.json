@@ -68,11 +68,11 @@
       "id": "grok",
       "name": "Grok",
       "status": "active",
-      "upstream": { "package": "grok", "pinnedVersion": "1.0.70", "supportedRange": ">=1.0.70 <=1.0.70", "latestUrl": "https://x.ai/cli/stable" },
+      "upstream": { "package": "grok", "pinnedVersion": "1.0.77", "supportedRange": ">=1.0.77 <=1.0.77", "latestUrl": "https://x.ai/cli/stable" },
       "platforms": ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"],
       "executionMode": "protocol",
       "probe": { "command": "grok", "args": ["--version"] },
-      "install": { "command": "bash", "args": ["-c", "curl -fsSL https://x.ai/cli/install.sh | bash -s 1.0.70"] },
+      "install": { "command": "bash", "args": ["-c", "curl -fsSL https://x.ai/cli/install.sh | bash -s 1.0.77"] },
       "auth": { "owner": "mixed", "allowedEnvironment": ["XAI_API_KEY", "GROK_API_KEY"] },
       "capabilities": ["toolInterception", "modelSelection", "resume", "attachments", "cancellation", "structuredStreaming", "tokenRefresh"]
     }

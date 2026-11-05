@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- ACP agents (Grok, OpenCode, Copilot, Gemini and any custom `BIVY_ACP_COMMAND`) also show "Retrying (n/m)…" while they retry a failed model call. Grok reports its retries this way.
+- The model and reasoning-effort pickers follow an ACP agent when it changes them itself (ACP `config_option_update`), for example after its own `/model` command.
+
+### Changed
+
+- Grok runs on Grok CLI 1.0.77, which offers its reasoning effort (low to xhigh) over ACP, so the effort picker now works on Grok's default path.
+
 ## [0.22.8] - 2026-11-05
 
 ### Added
