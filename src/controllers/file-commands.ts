@@ -53,6 +53,8 @@ export type WorkspaceFile = {
 /** Text past this is cut (and says so); a viewer, not an editor. */
 export const MAX_TEXT_BYTES = 1024 * 1024;
 export const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+/** A download carries the whole file through the link, so it has a ceiling too. */
+export const MAX_DOWNLOAD_BYTES = 8 * 1024 * 1024;
 /** A directory this big is cut so one listing can't flood the link. */
 export const MAX_DIR_ENTRIES = 2000;
 /** Never listed: git's own store says nothing about the work. */
@@ -203,6 +205,17 @@ export async function readWorkspaceFile(root: string, input: string): Promise<Wo
   }
 }
 
+/** The whole file, any kind, as base64, for the client to save. */
+export async function downloadWorkspaceFile(root: string, input: string): Promise<{ path: string; size: number; data: string }> {
+  const rel = relativeWorkspacePath(input);
+  if (!rel) throw new WorkspacePathError("Choose a file.");
+  const { real } = await confined(root, rel);
+  const stat = await fs.stat(real);
+  if (!stat.isFile()) throw new WorkspacePathError("That path is not a file.");
+  if (stat.size > MAX_DOWNLOAD_BYTES) throw new WorkspacePathError(`Files over ${MAX_DOWNLOAD_BYTES / 1024 / 1024} MB can't be downloaded here.`);
+  return { path: rel, size: stat.size, data: (await fs.readFile(real)).toString("base64") };
+}
+
 interface FileCommand { kind: string; requestId?: unknown; sessionId?: unknown; path?: unknown; [key: string]: unknown }
 
 /** `workspaceFor`: the directory a session works in, if this machine has it. */
@@ -210,6 +223,7 @@ export function createFileCommands(workspaceFor: (sessionId: string) => string |
   const operations: Record<string, (root: string, msg: FileCommand) => Promise<object>> = {
     "files.list": (root, msg) => listWorkspaceDir(root, typeof msg.path === "string" ? msg.path : undefined),
     "files.read": async (root, msg) => ({ file: await readWorkspaceFile(root, String(msg.path ?? "")) }),
+    "files.download": async (root, msg) => ({ file: await downloadWorkspaceFile(root, String(msg.path ?? "")) }),
   };
   return Object.fromEntries(Object.entries(operations).map(([kind, run]) => [kind, async (msg, ctx) => {
     try {

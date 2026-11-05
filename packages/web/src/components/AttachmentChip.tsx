@@ -11,6 +11,7 @@ import { useMemo, useState } from "react";
 import type { PromptAttachment } from "@bivy/core";
 
 import { ImageGallery } from "./ImageGallery.js";
+import { DownloadIcon } from "./UiIcons.js";
 import { fmtBytes, useAttachmentUrl } from "../attachmentUrl.js";
 
 /**
@@ -61,10 +62,6 @@ export function AttachmentChip({ attachment, onOpenImage: openInGroup }: { attac
       {viewing && <ImageGallery images={[attachment]} index={0} onClose={() => setViewing(false)} />}
     </div>
   );
-}
-
-function DownloadIcon() {
-  return <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M4 15v5h16v-5" /></svg>;
 }
 
 /**

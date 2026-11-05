@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { createFileCommands, listWorkspaceDir, readWorkspaceFile } from "../src/controllers/file-commands.js";
+import { MAX_DOWNLOAD_BYTES, createFileCommands, downloadWorkspaceFile, listWorkspaceDir, readWorkspaceFile } from "../src/controllers/file-commands.js";
 
 function repo(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-files-"));
@@ -59,4 +59,13 @@ test("reading returns text, flags binary, and refuses paths outside the workspac
   }
   assert.deepEqual(replies.map((r) => r.type), ["files.read.error", "files.read.error", "files.read.error", "files.read.error"]);
   assert.ok(replies.every((r) => !String(r.error).includes(outside)));
+});
+
+test("a download carries any file whole, within the workspace and the size ceiling", async () => {
+  const root = repo();
+  const bin = await downloadWorkspaceFile(root, "blob.bin");
+  assert.deepEqual([...Buffer.from(bin.data, "base64")], [1, 0, 2, 3]);
+  fs.writeFileSync(path.join(root, "big.txt"), Buffer.alloc(MAX_DOWNLOAD_BYTES + 1, 97));
+  await assert.rejects(downloadWorkspaceFile(root, "big.txt"), /can't be downloaded/);
+  await assert.rejects(downloadWorkspaceFile(root, "../outside"));
 });

@@ -4,11 +4,12 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Panel } from "./Panel.js";
 import { Badge } from "./Badge.js";
 import { Spinner } from "./Spinner.js";
-import { ChevronLeftIcon, CopyIcon, RefreshIcon } from "./UiIcons.js";
+import { ChevronLeftIcon, CopyIcon, DownloadIcon, RefreshIcon } from "./UiIcons.js";
 import { fmtBytes } from "./ArtifactsSheet.js";
 import { relTime } from "./ChangesCard.js";
 import { controller } from "../store/useStore.js";
 import { writeClipboard } from "../clipboard.js";
+import { base64ToBlobUrl } from "../attachmentUrl.js";
 import { highlightCode } from "../highlight.js";
 import {
   HIGHLIGHT_MAX_CHARS, STATUS_GLYPH, STATUS_LABEL, languageFor, visibleEntries,
@@ -41,6 +42,7 @@ function FileViewer({ sessionId, path, reloadKey, onBack }: { sessionId: string;
   const [file, setFile] = useState<WorkspaceFile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const codeRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
@@ -71,6 +73,25 @@ function FileViewer({ sessionId, path, reloadKey, onBack }: { sessionId: string;
     setTimeout(() => setCopied(false), 1500);
   };
   const lang = languageFor(path);
+  // The whole file, any kind (the viewer shows at most the first 1 MB of text).
+  const download = async () => {
+    setDownloading(true);
+    setError(null);
+    try {
+      const event = await controller.fileCommand("files.download", sessionId, path);
+      const url = base64ToBlobUrl((event as unknown as { file: { data: string } }).file.data, "application/octet-stream");
+      if (!url) throw new Error("Could not prepare the download.");
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = path.split("/").pop() || "file";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setDownloading(false);
+    }
+  };
 
   return (
     <div className="files-viewer">
@@ -81,6 +102,9 @@ function FileViewer({ sessionId, path, reloadKey, onBack }: { sessionId: string;
         <span className="files-viewer-path" title={path}>{path}</span>
         <button type="button" className="btn ghost icon" onClick={() => void copyPath()} aria-label={copied ? "Path copied" : "Copy path"} title={copied ? "Copied" : "Copy path"}>
           <CopyIcon size={16} />
+        </button>
+        <button type="button" className="btn ghost icon" onClick={() => void download()} disabled={downloading} aria-busy={downloading || undefined} aria-label={downloading ? "Downloading file" : "Download file"} title="Download">
+          {downloading ? <Spinner size="xs" /> : <DownloadIcon size={16} />}
         </button>
       </div>
       {file && (

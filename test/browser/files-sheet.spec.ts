@@ -34,6 +34,7 @@ test.beforeEach(async ({ page }) => {
     c.fileCommand = async (kind: string, sessionId: string, path: string) => {
       w.commands.push({ kind, sessionId, path });
       if (kind === "files.list") return listings[path];
+      if (kind === "files.download") return { file: { path, size: 5, data: btoa("whole") } };
       return { file: { path, size: 240, mtime: Date.now() - 120_000, status: "added", kind: "text", truncated: false,
         content: "export function isExpired(coupon: { expiresAt: Date | null }, now = new Date()): boolean {\n  return coupon.expiresAt !== null && coupon.expiresAt < now;\n}\n" } };
     };
@@ -72,6 +73,10 @@ test("browse the session's workspace and read a file the agent added", async ({ 
     await expect(files.getByLabel("Contents of src/coupon.ts")).toContainText("isExpired");
     await expect(files.getByText("3 lines")).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`files-viewer-${theme}.png`) });
+    // Download saves the whole file (the node sends it all, not the viewer's first 1 MB).
+    const [saved] = await Promise.all([page.waitForEvent("download"), files.getByRole("button", { name: "Download file" }).click()]);
+    expect(saved.suggestedFilename()).toBe("coupon.ts");
+    expect(await saved.createReadStream().then((s) => s.toArray()).then((c) => Buffer.concat(c).toString())).toBe("whole");
     await files.getByRole("button", { name: "Back to files" }).click();
     await expect(files.getByRole("button", { name: /coupon\.ts/ })).toBeVisible();
     await files.getByRole("button", { name: "All", exact: true }).click();
