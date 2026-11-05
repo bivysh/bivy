@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.8] - 2026-11-05
+
 ### Added
 
 - While an agent retries a failed model call itself (overloaded, rate-limited, dropped stream), the chat says so: "Retrying (2/5): overloaded (529)…" instead of sitting on "Thinking…". Claude Code, Codex and Pi report it, and custom adapters can send `session.retry`.
