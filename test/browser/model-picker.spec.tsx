@@ -57,3 +57,19 @@ for (const query of ["?scope=other-agent", "?unconfigured=1", "?empty=1"]) {
     await expect(page.locator('button[title="This agent uses its own default model"]')).toBeDisabled();
   });
 }
+
+test("Enter that confirms an IME candidate doesn't send; a plain Enter does", async ({ page }) => {
+  await page.goto(url + "?sends=1");
+  const box = page.getByPlaceholder("Message your agent…");
+  await box.fill("日本語");
+  // Chrome/Firefox flag the confirming Enter with isComposing; Safari sends keyCode 229.
+  await box.evaluate((el) => {
+    el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true }));
+    const safari = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true });
+    Object.defineProperty(safari, "keyCode", { value: 229 });
+    el.dispatchEvent(safari);
+  });
+  expect(await page.evaluate(() => (window as any).sent ?? [])).toEqual([]);
+  await box.press("Enter");
+  await expect.poll(() => page.evaluate(() => (window as any).sent ?? [])).toEqual(["日本語"]);
+});

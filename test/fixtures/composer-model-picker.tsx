@@ -19,6 +19,6 @@ controller.store.apply({ type: "runtimes.list", runtimes: [runtime], current: ru
 if (query.has("pending")) controller.store.persistPendingSession("pending-fixture", "Starting agent");
 function App() {
   const state = useAppState();
-  return <Composer state={state} disabled={false} working={false} onSend={() => { throw new Error("No inference in this fixture"); }} onAbort={() => {}} />;
+  return <Composer state={state} disabled={false} working={false} onSend={(text: string) => { if (!query.has("sends")) throw new Error("No inference in this fixture"); ((window as any).sent ??= []).push(text); }} onAbort={() => {}} />;
 }
 createRoot(document.getElementById("root")!).render(<App />);

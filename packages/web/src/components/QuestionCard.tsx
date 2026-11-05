@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { writeClipboard } from "../clipboard.js";
 import { inline, type UserQuestionRequest } from "@bivy/core";
+import { isImeKey } from "../ime.js";
 
 // A blocking, multiple-choice clarifying question the agent raised mid-turn
 // (e.g. Claude's AskUserQuestion tool) — distinct from ApprovalCard, which is
@@ -207,7 +208,7 @@ function QuestionCard({
                   spellCheck={false}
                   value={otherText[qi] || ""}
                   onChange={(e) => setOtherText((prev) => ({ ...prev, [qi]: e.target.value }))}
-                  onKeyDown={(e) => { if (e.key === "Enter" && answered && !pending) submit(); }}
+                  onKeyDown={(e) => { if (e.key === "Enter" && !isImeKey(e) && answered && !pending) submit(); }}
                   placeholder="Paste it here"
                   aria-label={q.question}
                   disabled={pending}
