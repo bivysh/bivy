@@ -834,10 +834,15 @@ class ProtocolSession implements RuntimeSession {
       const levels = Array.isArray(thinking?.levels) ? thinking.levels.filter((l): l is string => typeof l === "string" && Boolean(l)) : [];
       if (levels.length) {
         this.thinkingLevels = levels;
-        // A level picked before the agent was up is applied now; otherwise adopt
-        // the agent's own current level.
+        // A level picked that the agent doesn't report yet (chosen before it was
+        // up) is applied now. Once the agent reports it, the choice is applied
+        // and later reports (an ACP config_option_update, e.g. after the agent's
+        // own /effort command) are adopted, not overridden — and the agent's
+        // echo of our own change doesn't send it again.
+        const current = typeof thinking?.current === "string" ? thinking.current : undefined;
+        if (this.thinkingChosen && current === this.thinkingLevel) this.thinkingChosen = false;
         if (this.thinkingChosen && this.thinkingLevel && levels.includes(this.thinkingLevel)) this.sendThinkingLevel(this.thinkingLevel);
-        else if (typeof thinking?.current === "string") this.thinkingLevel = thinking.current;
+        else if (current) this.thinkingLevel = current;
       }
       // The catalog arrived after the client asked for it (it lands with the
       // agent's session): let the node push the fresh model/effort picker.

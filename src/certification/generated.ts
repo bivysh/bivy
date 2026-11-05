@@ -7,6 +7,6 @@ export const CERTIFICATION_MATRIX = {
     { id: "codex-approvals", status: "active", executionMode: "protocol", pinnedVersion: "0.166.0", capabilities: ["toolInterception","modelSelection","resume"] },
     { id: "pi", status: "active", executionMode: "protocol", pinnedVersion: "1.5.0", capabilities: ["toolInterception","modelSelection","resume"] },
     { id: "opencode", status: "active", executionMode: "protocol", pinnedVersion: "1.19.5", capabilities: ["toolInterception","modelSelection","resume"] },
-    { id: "grok", status: "active", executionMode: "protocol", pinnedVersion: "1.0.70", capabilities: ["toolInterception","modelSelection","resume"] },
+    { id: "grok", status: "active", executionMode: "protocol", pinnedVersion: "1.0.77", capabilities: ["toolInterception","modelSelection","resume"] },
   ]
 } as const;

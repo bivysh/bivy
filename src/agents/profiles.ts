@@ -558,7 +558,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // Approve/Deny + native resume + live model state), the same bar Pi, Claude
     // Code, Codex, and OpenCode clear. See `acp` below for the version fallback.
     supportTier: "supported",
-    testedVersion: "1.0.70",
+    testedVersion: "1.0.77",
     authOwner: "mixed",
     blurb: "xAI's official Grok coding agent (Grok CLI) — SuperGrok/X subscription or API key.",
     // Official CLI: `grok -p "<prompt>"` (alias `--single`) runs one headless
@@ -619,7 +619,7 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     // (protocolVersion 1: session/new, session/prompt, session/request_permission,
     // loadSession resume, live model state) — the governed ProtocolRuntime path
     // that supersedes the `--always-approve` pipe above with real per-tool
-    // Approve/Deny. Validated against grok 1.0.70, so it is ON by default
+    // Approve/Deny. Validated against grok 1.0.77, so it is ON by default
     // (`preferred`) — gated on the binary actually describing the `agent`
     // subcommand ("Run Grok without the interactive UI" in `grok --help`), so an
     // older CLI falls back to the pipe path rather than opening a dead session.

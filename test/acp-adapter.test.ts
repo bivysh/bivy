@@ -251,6 +251,17 @@ await check("acp: an agent's thought_level option drives the reasoning-effort pi
     const applied = JSON.parse(fs.readFileSync(dump, "utf8"));
     assert.deepEqual([applied.configId, applied.value], ["reasoning_effort", "low"], "applied through session/set_config_option");
     assert.equal(session.getThinkingLevel?.(), "low");
+    // The agent echoes the change as a config_option_update; that must not send it again.
+    await new Promise((r) => setTimeout(r, 200));
+    assert.equal(JSON.parse(fs.readFileSync(dump, "utf8")).calls, 1, "the agent's echo isn't applied back to it");
+    // The agent changes its own effort during the turn: the picker follows it.
+    const events: RuntimeEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    await session.prompt("hello");
+    await waitFor(events, (event) => event.type === "agent_end");
+    assert.equal(session.getThinkingLevel?.(), "high", "adopts the agent's own change");
+    assert.ok(events.some((event) => event.type === "runtime.models"), "and tells the node to re-advertise the picker");
+    assert.equal(JSON.parse(fs.readFileSync(dump, "utf8")).calls, 1, "without overriding it");
     session.dispose();
   } finally {
     delete process.env.BIVY_ACP_COMMAND;
@@ -258,6 +269,29 @@ await check("acp: an agent's thought_level option drives the reasoning-effort pi
     delete process.env.ACP_THOUGHT_LEVELS;
     delete process.env.BIVY_TEST_CONFIG_DUMP;
     fs.rmSync(dump, { force: true });
+  }
+});
+
+await check("acp: a retry the agent reports in an extension notification is agent_retry", async () => {
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_RETRY = "1";
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: __dirname, piDir: __dirname, sessionsDir: __dirname });
+    const { session } = await runtime.createSession({ workspace: __dirname, toolInterceptor: async () => undefined });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      await session.prompt("hello");
+      await waitFor(events, (event) => event.type === "agent_end");
+      assert.deepEqual(events.find((event) => event.type === "agent_retry"), { type: "agent_retry", attempt: 1, maxAttempts: 15, error: "API error (status 429 Too Many Requests)" });
+    } finally {
+      session.dispose();
+    }
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_RETRY;
   }
 });
 
