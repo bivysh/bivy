@@ -531,6 +531,8 @@ commercial configuration belong to the separate Cloud repository.
 | `WEB_PUSH_VAPID_PRIVATE_KEY` (legacy alias `VAPID_PRIVATE_KEY`) | VAPID key | `""` |
 | `WEB_PUSH_SUBJECT` | `mailto:` or https URL | `mailto:support@bivy.sh` |
 
+The control plane only accepts and delivers to subscription endpoints on the browsers' push services (FCM, Mozilla, Apple, WNS); the host list is `PUSH_SERVICE_HOSTS` in `services/control-plane/src/push-endpoint.ts`.
+
 ## Cloud machines and offline automations
 
 | Variable | Type | Default | Notes |

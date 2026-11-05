@@ -110,6 +110,13 @@ async function main() {
   const ap = after.json?.preferences ?? {};
   expect(ap.session_done === false && ap.terminal_bell === false && ap.question_asked === true, "preferences persist across requests");
 
+  // A subscription endpoint is POSTed to on every notification, so only a
+  // browser push service is accepted.
+  const internal = await req(port, "POST", "/api/push/subscribe", { endpoint: "http://127.0.0.1:9090/metrics", keys: {} }, token);
+  expect(internal.status === 400, `subscribe refuses a non-push-service endpoint (got ${internal.status})`);
+  const fcm = await req(port, "POST", "/api/push/subscribe", { endpoint: "https://fcm.googleapis.com/fcm/send/abc", keys: {} }, token);
+  expect(fcm.status === 200, `subscribe accepts a push-service endpoint (got ${fcm.status})`);
+
   console.log("\nAll notification-preferences checks passed.");
 }
 
