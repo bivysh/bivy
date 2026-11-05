@@ -352,7 +352,7 @@ jobs:
       # inputs change, use the archives on another runner.
       - name: Upload release archives for packaging lanes
         if: needs.changes.outputs.tier == 'full' || needs.changes.outputs.installer == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-package
           path: release-artifact
@@ -485,7 +485,7 @@ jobs:
           PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/timings.json
       - name: Upload PWA screenshot review artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: pwa-screenshots-${{ matrix.shard }}
           path: |
@@ -652,7 +652,7 @@ jobs:
         run: echo "${{ github.run_id }}" > ci-receipt.txt
       - name: Record receipt for the merge queue
         if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ci-receipt-${{ needs.changes.outputs.tree }}
           path: ci-receipt.txt
