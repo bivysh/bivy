@@ -32,6 +32,7 @@ import { configureProxyTrust } from "./proxy-trust.js";
 import { AutomationScheduler, nextOccurrence, normalizeSchedule } from "./schedule.js";
 import { parseShardUrls, shardForNode } from "./relay-shards.js";
 import { safeReturnPath } from "./redirect.js";
+import { isPushServiceEndpoint } from "./push-endpoint.js";
 import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult, recordRunFailureStage, classifyRunFailureStage, recordProductEvent, PRODUCT_EVENT_VALUES, PRODUCT_CLIENT_VALUES, type ProductEvent, type ProductClient } from "./metrics.js";
 import { initSentry } from "./instrument.js";
 import { sanitizeEvidencePatch } from "./run-evidence.js";
@@ -2023,6 +2024,8 @@ async function sendPushToAccount(accountId: string, payload: Record<string, unkn
     } catch { console.warn("[native-push] delivery unavailable"); }
   }));
   for (const sub of webPushEnabled ? await store.listPushSubscriptions(accountId) : []) {
+    // Subscriptions stored before endpoints were checked: never POST to them.
+    if (!isPushServiceEndpoint(sub.endpoint)) { await store.removePushSubscription(accountId, sub.endpoint); continue; }
     try {
       await webpush.sendNotification(sub.subscription as webpush.PushSubscription, JSON.stringify(payload));
       sent += 1;
@@ -2077,6 +2080,7 @@ app.post("/api/push/subscribe", asyncHandler(async (req, res) => {
   const subscription = req.body?.subscription ?? req.body;
   const endpoint = pushSubscriptionEndpoint(subscription);
   if (!endpoint) return res.status(400).json({ error: "Missing push subscription endpoint" });
+  if (!isPushServiceEndpoint(endpoint)) return res.status(400).json({ error: "Push subscription endpoint is not a known push service" });
   await store.upsertPushSubscription(client.accountId, endpoint, subscription);
   res.json({ ok: true, enabled: webPushEnabled });
 }));
