@@ -1,6 +1,6 @@
 {
   "name": "@bivy/plugin-sdk",
-  "version": "0.22.8",
+  "version": "0.22.9",
   "description": "Types, validation, JSON Schema, and diagnostics for declarative Bivy plugins.",
   "type": "module",
   "license": "MIT",
