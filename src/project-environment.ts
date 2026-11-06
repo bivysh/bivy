@@ -15,6 +15,10 @@
  * use. Loading/validating this file NEVER executes anything: parsing is pure,
  * and a script only runs when something explicitly invokes it as a policy-gated
  * action (e.g. a preflight check), not merely because the manifest was found.
+ *
+ * `worktree.setup` / `worktree.teardown` are the exception the repository opts
+ * into: a repository file (`run:`) or package script (`script:`) Bivy runs when
+ * it creates a worktree and before it removes one it owns (worktree-hooks.ts).
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -38,10 +42,18 @@ export interface ProjectEnvironmentService {
   healthCheck?: ProjectEnvironmentServiceStep;
   start?: ProjectEnvironmentServiceStep;
 }
+/** A worktree hook: exactly one of `run` (a repository-relative file run with
+ *  bash) or `script` (a package script). */
+export interface ProjectEnvironmentHookStep {
+  run?: string;
+  script?: string;
+  timeoutMinutes?: number;
+}
 export interface ProjectEnvironment {
   version: 1;
   capabilities?: { required?: string[]; preferred?: string[] };
   services?: Record<string, ProjectEnvironmentService>;
+  worktree?: { setup?: ProjectEnvironmentHookStep; teardown?: ProjectEnvironmentHookStep };
 }
 export interface ProjectEnvironmentResult { ok: boolean; environment?: ProjectEnvironment; errors: string[]; }
 
@@ -76,11 +88,36 @@ function serviceStep(value: unknown, at: string, errors: string[]): ProjectEnvir
   return { script, timeoutMinutes };
 }
 
+function hookStep(value: unknown, at: string, errors: string[]): ProjectEnvironmentHookStep | undefined {
+  if (value === undefined) return undefined;
+  const raw = object(value);
+  if (!raw) { errors.push(`${at} must be an object`); return undefined; }
+  for (const key of Object.keys(raw)) if (!["run", "script", "timeoutMinutes"].includes(key)) errors.push(`${at}.${key} is not supported`);
+  if ((raw.run === undefined) === (raw.script === undefined)) { errors.push(`${at} needs exactly one of run (a file in the repository) or script (a package script)`); return undefined; }
+  const step: ProjectEnvironmentHookStep = {};
+  if (raw.run !== undefined) {
+    const run = typeof raw.run === "string" ? raw.run.trim() : "";
+    const normalized = path.posix.normalize(run.replace(/\\/g, "/"));
+    if (!run || path.isAbsolute(run) || normalized === ".." || normalized.startsWith("../")) { errors.push(`${at}.run must be a path inside the repository`); return undefined; }
+    step.run = normalized;
+  } else {
+    const script = typeof raw.script === "string" ? raw.script : "";
+    if (!SCRIPT_RE.test(script)) { errors.push(`${at}.script must be a package-script name (letters, numbers, _, :, ., -)`); return undefined; }
+    step.script = script;
+  }
+  if (raw.timeoutMinutes !== undefined) {
+    const minutes = Number(raw.timeoutMinutes);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 60) errors.push(`${at}.timeoutMinutes must be an integer from 1 to 60`);
+    else step.timeoutMinutes = minutes;
+  }
+  return step;
+}
+
 export function validateProjectEnvironment(value: unknown): ProjectEnvironmentResult {
   const errors: string[] = [];
   const root = object(value);
   if (!root) return { ok: false, errors: ["environment must be an object"] };
-  for (const key of Object.keys(root)) if (!["version", "capabilities", "services"].includes(key)) errors.push(`environment.${key} is not supported`);
+  for (const key of Object.keys(root)) if (!["version", "capabilities", "services", "worktree"].includes(key)) errors.push(`environment.${key} is not supported`);
   if (root.version !== 1) errors.push("version must be 1");
 
   let capabilities: ProjectEnvironment["capabilities"];
@@ -118,7 +155,17 @@ export function validateProjectEnvironment(value: unknown): ProjectEnvironmentRe
     }
   }
 
-  const environment: ProjectEnvironment = { version: 1, capabilities, services };
+  let worktree: ProjectEnvironment["worktree"];
+  if (root.worktree !== undefined) {
+    const raw = object(root.worktree);
+    if (!raw) errors.push("worktree must be an object");
+    else {
+      for (const key of Object.keys(raw)) if (!["setup", "teardown"].includes(key)) errors.push(`worktree.${key} is not supported`);
+      worktree = { setup: hookStep(raw.setup, "worktree.setup", errors), teardown: hookStep(raw.teardown, "worktree.teardown", errors) };
+    }
+  }
+
+  const environment: ProjectEnvironment = { version: 1, capabilities, services, worktree };
   return { ok: errors.length === 0, environment: errors.length ? undefined : environment, errors };
 }
 

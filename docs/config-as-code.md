@@ -171,6 +171,54 @@ Policy can only tighten safety. A trigger payload cannot override it. Agent
 allowlists are checked when sessions open, and model allowlists are checked when
 a model is selected.
 
+## New worktrees: copied files, setup and teardown
+
+Each session on a repository gets its own git worktree. Two files tell Bivy
+what a fresh one needs.
+
+**`.worktreeinclude`** at the repository root lists files to copy from the
+checkout the worktree was cut from, in `.gitignore` syntax. Only files git
+ignores are copied, so `.env` and local config come along but a copy never
+shows up as a change on the branch:
+
+```gitignore
+.env
+.env.local
+config/local/*.json
+!config/local/huge.json
+```
+
+A bare name (`.env`) matches at any depth. A path with a `/` reaches into an
+ignored folder it names. Existing files are never overwritten, links are copied
+as links, and a copy stops at 1000 files or 200 MB.
+
+**`worktree.setup` and `worktree.teardown`** in `.bivy/environment.yaml` name
+what to run, either a file in the repository (`run:`, run with `bash`) or a
+package script (`script:`):
+
+```yaml
+version: 1
+worktree:
+  setup: { run: scripts/worktree-setup.sh, timeoutMinutes: 15 }
+  teardown: { script: worktree:teardown }
+```
+
+- **Setup** runs in a new worktree as soon as it is created, with stdin closed.
+  The session's first prompt waits for it, and the chat shows how it went,
+  with the last lines of output if it failed. A failed setup does not stop the
+  session, so the agent can help fix it. A declared setup replaces
+  `BIVY_WORKTREE_AUTO_INSTALL` for that repository.
+- **Teardown** runs before Bivy removes a worktree it owns. A failure is logged
+  and never stops the removal.
+- Both read the worktree's own copy of the file, so a branch runs the hooks it
+  was committed with. They get `BIVY_WORKTREE_HOOK` (`setup` or `teardown`) and
+  `BIVY_WORKTREE_PATH`. Setup also gets `BIVY_WORKTREE_SOURCE`, the checkout it
+  was cut from. The timeout defaults to 15 minutes, up to 60.
+
+Hooks run as the node's OS user, like the repository's own install scripts.
+Set `BIVY_WORKTREE_HOOKS=off` to turn them off on a machine; copying
+`.worktreeinclude` files stays on.
+
 ## Precedence
 
 For ordinary scalar defaults:

@@ -85,6 +85,10 @@ export interface WatchdogDeps {
   sessionHasPendingApproval(record: WatchdogSession): boolean;
   /** The live sessions the periodic sweep should scan. */
   listSessions(): Iterable<WatchdogSession>;
+  /** Waited on before every prompt is dispatched (e.g. a new worktree's setup
+   *  hook). Runs before the turn timer is armed, so the wait never counts as a
+   *  stalled turn. */
+  beforePrompt?(record: WatchdogSession): Promise<void>;
   now?(): number;
 }
 
@@ -360,6 +364,7 @@ export function createTurnWatchdog(deps: WatchdogDeps): TurnWatchdog {
   }
 
   async function promptWithWatchdog(record: WatchdogSession, prompt: string, options?: unknown): Promise<void> {
+    await deps.beforePrompt?.(record);
     armTurnWatchdog(record);
     const timeoutSignal = record.turnTimeoutSignal;
     const promptPromise = record.session.prompt(prompt, options);

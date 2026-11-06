@@ -126,6 +126,7 @@ import { rebuildSnapshotRuntime } from "./session/snapshot-runtime.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
 import { configuredTurnTimeoutMs, configuredTurnStallMs, configuredTurnActivityStallMs } from "./session/turn-watchdog.js";
 import { createTurnWatchdog, probeTurnPidAlive } from "./session/turn-watchdog-runtime.js";
+import { describeWorktreeHook, worktreeSetupGate } from "./worktree-hooks.js";
 import { createPrDetection } from "./session/pr-detection.js";
 import { forceAbortTurn } from "./session/abort-recovery.js";
 import { runRequiredAutomationChecks } from "./automation-checks.js";
@@ -7999,7 +8000,23 @@ const turnWatchdog = createTurnWatchdog({
   sessionBusy: (record) => sessionBusy(record as SessionRecord),
   sessionHasPendingApproval: (record) => sessionHasPendingApproval(record as SessionRecord),
   listSessions: () => openSessions.values(),
+  beforePrompt: (record) => awaitWorktreeSetup(record as SessionRecord),
 });
+
+/** Hold a session's prompt until its new worktree's setup hook has run, and
+ *  tell the person how it went (once). A failed setup is reported, not fatal:
+ *  the agent can still help fix it. */
+async function awaitWorktreeSetup(record: SessionRecord): Promise<void> {
+  const gate = worktreeSetupGate(record.worktree?.path ?? record.workspace);
+  if (!gate) return;
+  if (gate.running && gate.report) {
+    broadcast({ type: "session.notice", sessionId: record.id, level: "info", message: "Waiting for this worktree's setup (.bivy/environment.yaml) to finish…" });
+  }
+  const result = await gate.result;
+  if (gate.report && result) {
+    broadcast({ type: "session.notice", sessionId: record.id, level: result.ok ? "info" : "warn", message: describeWorktreeHook(result) });
+  }
+}
 if (turnStallMs > 0 || turnActivityStallMs > 0) {
   console.log(`[turn-watchdog] stall detection armed: idle=${turnStallMs}ms wedged=${turnActivityStallMs}ms sweep=${stallSweepMs}ms`);
   const stallSweepTimer = setInterval(() => turnWatchdog.sweepStalledTurns(), stallSweepMs);

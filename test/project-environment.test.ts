@@ -126,3 +126,13 @@ test("findProjectEnvironment walks up from a nested working directory", () => {
     assert.equal(findProjectEnvironment(nested), path.join(dir, ".bivy", "environment.yaml"));
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("worktree hooks take exactly one of run or script, and run stays inside the repository", () => {
+  const ok = validateProjectEnvironment({ version: 1, worktree: { setup: { run: "./scripts/setup.sh", timeoutMinutes: 20 }, teardown: { script: "teardown" } } });
+  assert.equal(ok.ok, true, ok.errors.join("\n"));
+  assert.deepEqual(ok.environment?.worktree, { setup: { run: "scripts/setup.sh", timeoutMinutes: 20 }, teardown: { script: "teardown" } });
+  const bad = validateProjectEnvironment({ version: 1, worktree: { setup: { run: "../escape.sh" }, teardown: { run: "a.sh", script: "b" } } });
+  assert.equal(bad.ok, false);
+  assert.match(bad.errors.join("\n"), /worktree\.setup\.run must be a path inside the repository/);
+  assert.match(bad.errors.join("\n"), /worktree\.teardown needs exactly one/);
+});
