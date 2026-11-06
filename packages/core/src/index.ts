@@ -108,6 +108,7 @@ export {
 } from "./ephemeral.js";
 export * from "./device-key-store.js";
 export * from "./device-vault.js";
+export * from "./model-auth-handout.js";
 export * from "./pairing.js";
 export * from "./transport-direct.js";
 export * from "./transport-relay.js";

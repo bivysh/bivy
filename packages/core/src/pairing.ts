@@ -117,16 +117,20 @@ async function ecdhBits(privKey: CryptoKey, theirPubB64: string): Promise<Uint8A
 
 /** Derive the AES-GCM key that (un)wraps a delivery for the given purpose.
  *  `pair`/`rotate` only ever unwrap on this side (decrypt-only); `device-vault`
- *  must both PRODUCE and CONSUME ciphertext — a device seals the vault key for
- *  its peers and opens what a peer sealed for it — so it gets encrypt+decrypt. */
+ *  and `model-auth-vault` must both PRODUCE and CONSUME ciphertext — a device
+ *  opens what a peer sealed for it and seals the key on for another — so they
+ *  get encrypt+decrypt. */
 export async function wrapKeyFor(
   privKey: CryptoKey,
   nodePubB64: string,
-  purpose: "pair" | "rotate" | "device-vault",
+  purpose: "pair" | "rotate" | "device-vault" | "model-auth-vault",
 ): Promise<CryptoKey> {
   const shared = await ecdhBits(privKey, nodePubB64);
   const base = await crypto.subtle.importKey("raw", shared as BufferSource, "HKDF", false, ["deriveBits"]);
-  const infoStr = purpose === "rotate" ? HKDF_INFO.rotate : purpose === "device-vault" ? HKDF_INFO.deviceVault : HKDF_INFO.pair;
+  const infoStr = purpose === "rotate" ? HKDF_INFO.rotate
+    : purpose === "device-vault" ? HKDF_INFO.deviceVault
+    : purpose === "model-auth-vault" ? HKDF_INFO.modelAuthVault
+    : HKDF_INFO.pair;
   const info = new TextEncoder().encode(infoStr);
   const bits = new Uint8Array(
     await crypto.subtle.deriveBits(
@@ -135,7 +139,7 @@ export async function wrapKeyFor(
       WRAP_KEY_BYTES * 8,
     ),
   );
-  const usages: KeyUsage[] = purpose === "device-vault" ? ["encrypt", "decrypt"] : ["decrypt"];
+  const usages: KeyUsage[] = purpose === "device-vault" || purpose === "model-auth-vault" ? ["encrypt", "decrypt"] : ["decrypt"];
   return crypto.subtle.importKey("raw", bits as BufferSource, "AES-GCM", false, usages);
 }
 

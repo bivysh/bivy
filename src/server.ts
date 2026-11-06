@@ -3979,6 +3979,8 @@ type ModelAuthVaultResponse = {
   vault?: { ciphertext: string; updatedAt: string; updatedByNodeId: string; needsRotation?: boolean } | null;
   wrappedKey?: { nodeId: string; wrappedKey: string; wrappedByNodeId: string; wrappedByPublicKey: string } | null;
   requests?: Array<{ nodeId: string; publicKey: string }>;
+  /** Paired devices that hold no copy of the current vault key yet. */
+  devicesMissingKey?: string[];
 };
 const modelAuthVaultKeyPath = path.join(appDir, "model-auth-vault.json");
 let lastPushedModelAuthCiphertext = "";
@@ -4296,6 +4298,7 @@ async function syncModelAuthFromControlPlane() {
     }
 
     await processModelAuthKeyRequests(data.requests ?? []);
+    await wrapVaultKeyForDevices(data.vault?.ciphertext ? data.devicesMissingKey ?? [] : []);
     // With no account vault there is nothing to hydrate; with one, ready once
     // this node holds its key. (The cold-start retry reports it too when no
     // peer answers, so a waiting launch can move on.)
@@ -4356,6 +4359,21 @@ const controlPlaneRefreshCoordinator: RefreshCoordinator = {
     }
   },
 };
+
+/** Give each paired device a copy of the vault key, wrapped to its own key,
+ *  so a device can hand it to a new machine when none of the account's
+ *  machines is online. Only a node that holds the current key does this. */
+async function wrapVaultKeyForDevices(devices: string[]) {
+  if (!sessionAdvertiseTarget || devices.length === 0) return;
+  const vaultKeyB64 = readLocalModelAuthVaultKey();
+  if (!vaultKeyB64) return;
+  for (const devicePublicKey of devices) {
+    await modelAuthFetch("/node/model-auth-key/device", {
+      method: "PUT",
+      body: JSON.stringify({ devicePublicKey, wrappedByPublicKey: pairingStore.nodePublicKeyB64(), wrappedKey: pairingStore.wrapForNodePublicKey(devicePublicKey, vaultKeyB64) }),
+    }).catch(() => null);
+  }
+}
 
 async function processModelAuthKeyRequests(requests: Array<{ nodeId: string; publicKey: string }>) {
   if (!sessionAdvertiseTarget || requests.length === 0) return;

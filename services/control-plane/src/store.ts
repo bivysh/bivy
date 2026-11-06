@@ -1350,6 +1350,12 @@ export interface VaultRepository {
   requestModelAuthWrappedKey(accountId: string, nodeId: string, publicKey: string, rejectedWrappedKey?: string): Promise<boolean>;
   listModelAuthKeyRequests(accountId: string, exceptNodeId: string): Promise<ModelAuthKeyRequest[]>;
   setModelAuthWrappedKey(accountId: string, targetNodeId: string, wrappedByNodeId: string, wrappedByPublicKey: string, wrappedKey: string): Promise<ModelAuthWrappedKey>;
+  /** The vault key wrapped for one of the account's paired devices, so a
+   * device can hand it to a new machine when no other machine is online. */
+  getModelAuthDeviceKey(accountId: string, devicePublicKey: string): Promise<{ wrappedKey: string; wrappedByPublicKey: string } | undefined>;
+  setModelAuthDeviceKey(accountId: string, devicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<void>;
+  /** Paired devices that hold no wrap of the current vault key yet. */
+  listModelAuthDevicesMissingKey(accountId: string): Promise<string[]>;
 
   // Device→device provider-token vault (P2 / Gap A) — recipients are paired devices.
   getDeviceVault(accountId: string): Promise<DeviceVault | undefined>;

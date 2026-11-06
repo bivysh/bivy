@@ -56,6 +56,17 @@ Current model:
   provider on it and that login syncs to your other nodes. The control plane
   never holds a key that can decrypt a model credential.
 
+- **Your devices hold the key too.** Every machine that holds the vault key
+  also wraps it for each of the account's paired devices (your signed-in
+  browsers and phones; `model_auth_device_keys`). While the app is open on one
+  of them, it checks every 15 seconds for machines waiting on the key and wraps
+  its copy for them (`handOutModelAuthKey` in `packages/core`). So a new runner
+  or a rebuilt cloud computer gets your sign-ins even when none of your
+  machines is online, as long as the app is open somewhere. The device passes
+  the key through without opening the vault. Removing a device drops its copy
+  and re-keys the vault; every re-key drops all device copies, and machines
+  wrap the new key for the devices that remain.
+
 If you lose every node and device that can unwrap the vault, the stored
 ciphertext can no longer be decrypted — sign in to each provider again on a new
 node.
