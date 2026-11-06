@@ -314,7 +314,7 @@ bivy agent remove company-agent
 `add` never imports agent code into the daemon; the agent runs out of process.
 `--force` replaces an existing entry. See [Add any agent](add-an-agent.md).
 
-### `bivy plugin <init|validate|doctor|test|install|dev|search|list|remove>`
+### `bivy plugin <init|validate|doctor|test|install|dev|search|list|outdated|update|rollback|remove>`
 
 Extend this machine's Bivy with plugins: agents, chat widgets, tools, themes and
 guides. Agents build and install them for the user; see [plugins.md](plugins.md).
@@ -329,6 +329,9 @@ bivy plugin install ./standup                 # a folder or a manifest
 bivy plugin install github:owner/repo/path#v1 # or any git URL
 bivy plugin search standup                    # shared plugins and kits on GitHub
 bivy plugin list --json
+bivy plugin outdated                          # which installed plugins changed at their source
+bivy plugin update [standup …]                # take those changes (all changed plugins by default)
+bivy plugin rollback standup                  # back to the copy the last update replaced
 bivy plugin remove standup
 ```
 
@@ -340,6 +343,14 @@ replace the same plugin id and rejects an incompatible `requires.bivy` range. It
 copies the plugin's folder (regular files only, without dot-directories) into the
 store, clones a git source first, and never runs an installer. Widgets, tools,
 themes and guides take effect at once; agents appear in the picker at once.
+
+`install` records where a plugin came from. `outdated` fetches each source again
+and compares it with what is installed. It reports a new version, a change
+without a new version, or a source it doesn't know (a plugin installed before
+sources were recorded). Nothing updates on its own. `update` reinstalls from the
+recorded source. A source pinned to a tag (`#v1.2.0`) stays on that tag, so to
+move, install again with the new tag. Each time a plugin is replaced, the old
+copy is kept (the last three), and `rollback` puts the newest back.
 
 `search` lists GitHub repositories with the `bivy-plugin` or `bivy-kit` topic
 (matching the words given), with the command that installs each. There is no

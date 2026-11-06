@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 /** Node-local store for declarative Bivy plugins. */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { currentBivyVersion } from "../app-version.js";
@@ -20,6 +21,22 @@ export const MAX_PLUGIN_MANIFEST_BYTES = 1024 * 1024;
 /** Bounds on a plugin's files (widget pages, tool scripts, guides). */
 export const MAX_PLUGIN_FILES = 2000;
 export const MAX_PLUGIN_BYTES = 50 * 1024 * 1024;
+/** Where an installed plugin came from, beside its files (dot-files are never copied from a plugin). */
+export const PLUGIN_SOURCE_FILE = ".bivy-source.json";
+/** Earlier copies of each plugin, kept when it is replaced, newest last. */
+const SNAPSHOTS_DIR = ".snapshots";
+const KEEP_SNAPSHOTS = 3;
+
+export interface PluginSourceRecord {
+  /** What to install from again: a `github:`/git source as written, or an absolute folder. */
+  source: string;
+  /** Content hash of what was installed (manifest and files), to tell whether the source changed. */
+  hash: string;
+  version: string;
+  installedAt: string;
+}
+
+export interface PluginSnapshot { id: string; version: string; dir: string; takenAt: string }
 
 export interface InstalledPlugin {
   id: string;
@@ -169,6 +186,90 @@ function copyPluginFiles(from: string, to: string): void {
   walk(from, "");
 }
 
+/** The files install would copy, in a stable order (same rules as copyPluginFiles). */
+function pluginFiles(root: string): string[] {
+  const out: string[] = [];
+  const walk = (dir: string, rel: string) => {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      if (entry.name.startsWith(".") || entry.isSymbolicLink()) continue;
+      const relPath = rel ? `${rel}/${entry.name}` : entry.name;
+      if (entry.isDirectory()) walk(path.join(dir, entry.name), relPath);
+      else if (entry.isFile()) out.push(relPath);
+    }
+  };
+  walk(root, "");
+  return out;
+}
+
+/** A content hash of what installing from `input` would put in the store. */
+export function pluginSourceHash(input: string): { hash: string; manifest: PluginManifest } {
+  const { file, manifest } = readPluginManifest(input);
+  const hash = createHash("sha256").update(JSON.stringify(manifest));
+  if (needsFiles(manifest)) {
+    const root = path.dirname(file);
+    for (const rel of pluginFiles(root)) hash.update(`\0${rel}\0`).update(fs.readFileSync(path.join(root, rel)));
+  }
+  return { hash: `sha256:${hash.digest("hex")}`, manifest };
+}
+
+export function readPluginSource(pluginDir: string): PluginSourceRecord | undefined {
+  try {
+    const raw = JSON.parse(fs.readFileSync(path.join(pluginDir, PLUGIN_SOURCE_FILE), "utf8")) as Partial<PluginSourceRecord>;
+    return typeof raw.source === "string" && typeof raw.hash === "string" ? raw as PluginSourceRecord : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function snapshotsOf(id: string, dataDir?: string): string {
+  return path.join(pluginStoreDir(dataDir), SNAPSHOTS_DIR, id);
+}
+
+/** Earlier copies of a plugin, oldest first. */
+export function listPluginSnapshots(id: string, dataDir = defaultDataDir()): PluginSnapshot[] {
+  const root = snapshotsOf(id, dataDir);
+  let names: string[];
+  try { names = fs.readdirSync(root).filter((name) => /^\d{13}-/.test(name)).sort(); } catch { return []; }
+  return names.map((name) => {
+    const dir = path.join(root, name);
+    let version = name.slice(14);
+    try { version = (JSON.parse(fs.readFileSync(path.join(dir, PLUGIN_MANIFEST_FILE), "utf8")) as PluginManifest).metadata.version; } catch { /* keep the name's */ }
+    return { id, version, dir, takenAt: new Date(Number(name.slice(0, 13))).toISOString() };
+  });
+}
+
+/** Move a replaced copy into the snapshots, keeping the newest few. */
+function keepSnapshot(id: string, from: string, version: string, dataDir?: string): void {
+  const root = snapshotsOf(id, dataDir);
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  fs.renameSync(from, path.join(root, `${Date.now()}-${version.replace(/[^\w.+-]/g, "_")}`));
+  const all = fs.readdirSync(root).filter((name) => /^\d{13}-/.test(name)).sort();
+  for (const old of all.slice(0, Math.max(0, all.length - KEEP_SNAPSHOTS))) fs.rmSync(path.join(root, old), { recursive: true, force: true });
+}
+
+/**
+ * Put the newest snapshot back in place of the installed copy, which is
+ * discarded (an update brings it back). Returns the versions involved.
+ */
+export function rollbackPlugin(id: string, dataDir = defaultDataDir()): { from: string; to: string } {
+  if (!/^[a-z][a-z0-9-]{1,47}$/.test(id)) throw new Error("Plugin id must be a lowercase slug (2-48 characters)");
+  const snapshot = listPluginSnapshots(id, dataDir).at(-1);
+  if (!snapshot) throw new Error(`No earlier copy of ${id} to go back to; one is kept each time it is updated or reinstalled`);
+  const target = path.join(pluginStoreDir(dataDir), id);
+  let from = "(not installed)";
+  try { from = (JSON.parse(fs.readFileSync(path.join(target, PLUGIN_MANIFEST_FILE), "utf8")) as PluginManifest).metadata.version; } catch { /* missing or broken */ }
+  const discard = `${target}.rollback-${process.pid}-${Date.now()}`;
+  if (fs.existsSync(target)) fs.renameSync(target, discard);
+  try {
+    fs.renameSync(snapshot.dir, target);
+  } catch (error) {
+    if (fs.existsSync(discard)) fs.renameSync(discard, target);
+    throw error;
+  }
+  fs.rmSync(discard, { recursive: true, force: true });
+  return { from, to: snapshot.version };
+}
+
 /** Files the manifest names, which must be in the copy. */
 function missingFiles(manifest: PluginManifest, dir: string): string[] {
   const named = [
@@ -179,7 +280,12 @@ function missingFiles(manifest: PluginManifest, dir: string): string[] {
   return named.filter((file) => !fs.statSync(path.join(dir, file), { throwIfNoEntry: false })?.isFile());
 }
 
-export function installPlugin(input: string, opts: { dataDir?: string; force?: boolean; bivyVersion?: string } = {}): { manifest: PluginManifest; path: string; replaced: boolean } {
+/**
+ * Install (or with `force`, replace) a plugin. `source` records where it came
+ * from so `bivy plugin outdated|update` can check it later; a replaced copy is
+ * kept as a snapshot for `bivy plugin rollback` unless `snapshot` is false.
+ */
+export function installPlugin(input: string, opts: { dataDir?: string; force?: boolean; bivyVersion?: string; source?: string; snapshot?: boolean } = {}): { manifest: PluginManifest; path: string; replaced: boolean; previousVersion?: string } {
   const { file, manifest } = readPluginManifest(input);
   const compatibility = checkPluginCompatibility(manifest, opts.bivyVersion ?? currentBivyVersion());
   if (!compatibility.compatible) throw new Error(compatibility.message);
@@ -202,15 +308,27 @@ export function installPlugin(input: string, opts: { dataDir?: string; force?: b
     }
     const output = path.join(temp, PLUGIN_MANIFEST_FILE);
     fs.writeFileSync(output, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
-    if (existed) fs.renameSync(target, backup);
+    if (opts.source) {
+      const record: PluginSourceRecord = { source: opts.source, hash: pluginSourceHash(file).hash, version: manifest.metadata.version, installedAt: new Date().toISOString() };
+      fs.writeFileSync(path.join(temp, PLUGIN_SOURCE_FILE), `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 });
+    }
+    let previousVersion: string | undefined;
+    if (existed) {
+      try { previousVersion = (JSON.parse(fs.readFileSync(path.join(target, PLUGIN_MANIFEST_FILE), "utf8")) as PluginManifest).metadata.version; } catch { /* broken copy */ }
+      fs.renameSync(target, backup);
+    }
     try {
       fs.renameSync(temp, target);
     } catch (error) {
       if (existed && fs.existsSync(backup)) fs.renameSync(backup, target);
       throw error;
     }
+    if (existed && opts.snapshot !== false) {
+      try { keepSnapshot(manifest.metadata.id, backup, previousVersion ?? "unknown", opts.dataDir); }
+      catch (error) { console.warn(`[plugins] could not keep a snapshot of ${manifest.metadata.id}: ${error instanceof Error ? error.message : String(error)}`); }
+    }
     if (existed) fs.rmSync(backup, { recursive: true, force: true });
-    return { manifest, path: target, replaced: existed };
+    return { manifest, path: target, replaced: existed, ...(previousVersion ? { previousVersion } : {}) };
   } finally {
     fs.rmSync(temp, { recursive: true, force: true });
     if (fs.existsSync(backup) && !fs.existsSync(target)) fs.renameSync(backup, target);
@@ -223,5 +341,6 @@ export function removePlugin(id: string, dataDir = defaultDataDir()): boolean {
   const target = path.join(pluginStoreDir(dataDir), id);
   if (!fs.existsSync(target)) return false;
   fs.rmSync(target, { recursive: true, force: true });
+  fs.rmSync(snapshotsOf(id, dataDir), { recursive: true, force: true });
   return true;
 }

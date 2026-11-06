@@ -10,7 +10,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { selectedThemeId } from "../machine-theme.js";
-import { installPlugin, listInstalledPlugins, PLUGIN_MANIFEST_FILE } from "./store.js";
+import { childSource } from "./source.js";
+import { installPlugin, listInstalledPlugins, PLUGIN_MANIFEST_FILE, PLUGIN_SOURCE_FILE } from "./store.js";
 
 export const KIT_FILE = "bivy.kit.yaml";
 const ID_RE = /^[a-z][a-z0-9-]{1,47}$/;
@@ -47,10 +48,17 @@ export function readKit(dir: string): Kit {
   return kit as Kit;
 }
 
-/** Install every plugin in the kit (replacing older copies). Returns their ids. */
-export function applyKit(dir: string, dataDir: string): { kit: Kit; installed: string[] } {
+/**
+ * Install every plugin in the kit (replacing older copies). Returns their ids.
+ * With the kit's `source`, each plugin records its own (see childSource), so
+ * `bivy plugin update` can follow the kit's repository later.
+ */
+export function applyKit(dir: string, dataDir: string, source?: string): { kit: Kit; installed: string[] } {
   const kit = readKit(dir);
-  const installed = kit.plugins.map((entry) => installPlugin(path.join(dir, entry), { dataDir, force: true }).manifest.metadata.id);
+  const installed = kit.plugins.map((entry) => {
+    const pluginSource = source ? childSource(source, entry) : undefined;
+    return installPlugin(path.join(dir, entry), { dataDir, force: true, ...(pluginSource ? { source: pluginSource } : {}) }).manifest.metadata.id;
+  });
   return { kit, installed };
 }
 
@@ -68,6 +76,7 @@ export function exportKit(dir: string, dataDir: string, metadata: Kit["metadata"
     // editable YAML form people expect to find.
     fs.writeFileSync(path.join(target, "bivy.plugin.yaml"), stringifyYaml(plugin.manifest));
     fs.rmSync(path.join(target, PLUGIN_MANIFEST_FILE), { force: true });
+    fs.rmSync(path.join(target, PLUGIN_SOURCE_FILE), { force: true });
   }
   const theme = selectedThemeId(dataDir);
   const kit: Kit = {

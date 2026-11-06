@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -12,7 +11,9 @@ import { selectedThemeId, selectTheme } from "./machine-theme.js";
 import { checkPluginCompatibility, doctorPluginManifest, recommendedBivyRange, type PluginManifest } from "./plugin-sdk/index.js";
 import { findContribution, installedContributions } from "./plugins/contributions.js";
 import { applyKit, exportKit } from "./plugins/kit.js";
-import { installPlugin, listInstalledPlugins, pluginStoreDir, readPluginManifest, removePlugin } from "./plugins/store.js";
+import { installPlugin, listInstalledPlugins, listPluginSnapshots, pluginStoreDir, readPluginManifest, readPluginSource, removePlugin, rollbackPlugin } from "./plugins/store.js";
+import { recordableSource, resolveSource } from "./plugins/source.js";
+import { checkPluginUpdates, updatePlugin, type PluginUpdateCheck } from "./plugins/updates.js";
 import { runPluginTool, toolInputSchema } from "./plugins/tools.js";
 import { findSkill, installSkill, listSkills, removeSkill, renderSkill, userSkillsDir } from "./skills.js";
 
@@ -35,6 +36,9 @@ Commands:
   dev <directory>          Install, then reinstall on every change
   search [words]           Find shared plugins and kits (GitHub topic bivy-plugin / bivy-kit)
   list [--json]            List installed plugins and diagnostics
+  outdated [id…]           Check installed plugins against where they came from
+  update [id…]             Reinstall changed plugins from their source (all changed ones by default)
+  rollback <id>            Go back to the copy an update or reinstall replaced
   remove <id>              Remove an installed plugin
 
 Also: bivy tools list|run (plugin tools), bivy theme list|set|clear,
@@ -214,37 +218,12 @@ ${scaffolded.contributes}`;
   }
 }
 
-/**
- * Where to install from. A folder or manifest as-is; a git URL or
- * `github:owner/repo[/path][#ref]` is cloned (shallow) into a temporary folder
- * first, so sharing a plugin is sharing a repository.
- */
-function resolveSource(input: string): { path: string; cleanup: () => void } {
-  const github = /^github:([\w.-]+)\/([\w.-]+)((?:\/[\w.-]+)*)(?:#([\w./-]+))?$/.exec(input);
-  const git = /^(https:\/\/|git@)[^\s]+?(?:#([\w./-]+))?$/.exec(input);
-  if (!github && !(git && (input.endsWith(".git") || input.includes(".git#") || input.startsWith("git@") || /^https:\/\/(github|gitlab)\.com\//.test(input)))) {
-    return { path: input, cleanup: () => {} };
-  }
-  const url = github ? `https://github.com/${github[1]}/${github[2]}.git` : input.replace(/#.*$/, "");
-  const ref = github ? github[4] : git?.[2];
-  const sub = github?.[3]?.replace(/^\//, "") ?? "";
-  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-plugin-src-"));
-  try {
-    execFileSync("git", ["clone", "--quiet", "--depth", "1", ...(ref ? ["--branch", ref] : []), "--", url, temp], { stdio: ["ignore", "ignore", "pipe"], timeout: 120_000 });
-  } catch (error) {
-    fs.rmSync(temp, { recursive: true, force: true });
-    const detail = (error as { stderr?: Buffer }).stderr?.toString().trim();
-    throw new Error(`Could not clone ${url}${detail ? `: ${detail}` : ""}`);
-  }
-  return { path: path.join(temp, sub), cleanup: () => fs.rmSync(temp, { recursive: true, force: true }) };
-}
-
 /** Install now, then again whenever a file in the folder changes. */
 async function dev(directory: string, dataDir: string): Promise<void> {
   const root = path.resolve(directory);
   const install = (why: string) => {
     try {
-      const result = installPlugin(root, { dataDir, force: true });
+      const result = installPlugin(root, { dataDir, force: true, source: root, snapshot: false });
       console.log(`${new Date().toLocaleTimeString()} ${why}: installed ${result.manifest.metadata.id}@${result.manifest.metadata.version}`);
     } catch (error) {
       console.error(`${new Date().toLocaleTimeString()} ${why}: ${error instanceof Error ? error.message : String(error)}`);
@@ -418,7 +397,7 @@ async function kit(args: string[], json: boolean, dataDir: string): Promise<void
     if (!target) throw new Error("Usage: bivy kit apply <directory|git URL|github:owner/repo[/path][#ref]>");
     const source = resolveSource(target);
     try {
-      const { kit: applied, installed } = applyKit(source.path, dataDir);
+      const { kit: applied, installed } = applyKit(source.path, dataDir, recordableSource(target));
       let theme: string | null = null;
       if (applied.theme) {
         const found = findContribution("themes", applied.theme, dataDir);
@@ -432,6 +411,16 @@ async function kit(args: string[], json: boolean, dataDir: string): Promise<void
     return;
   }
   throw new Error("Usage: bivy kit export <directory> | bivy kit apply <source>");
+}
+
+function describeCheck(check: PluginUpdateCheck): string {
+  switch (check.status) {
+    case "current": return `${check.installed} is current`;
+    case "update": return `${check.installed} → ${check.available} available`;
+    case "changed": return `${check.installed}: the source changed without a new version`;
+    case "no-source": return `${check.installed ?? "?"}: source unknown (reinstall once with bivy plugin install <source> --force to track it)`;
+    case "error": return `could not check ${check.source}: ${check.error}`;
+  }
 }
 
 /** One line per contribution type, for people and agents reading the output. */
@@ -576,7 +565,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       const source = resolveSource(input);
       let result: ReturnType<typeof installPlugin>;
       try {
-        result = installPlugin(source.path, { dataDir, force: args.includes("--force") });
+        result = installPlugin(source.path, { dataDir, force: args.includes("--force"), source: recordableSource(input) });
       } finally {
         source.cleanup();
       }
@@ -584,7 +573,7 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
       const body = { ok: true, installed: result.manifest.metadata.id, version: result.manifest.metadata.version, path: result.path, replaced: result.replaced, contributions };
       if (json) outputJson(body);
       else {
-        console.log(`${result.replaced ? "Updated" : "Installed"} ${result.manifest.metadata.name} (${result.manifest.metadata.id}@${result.manifest.metadata.version}).`);
+        console.log(`${result.replaced ? "Updated" : "Installed"} ${result.manifest.metadata.name} (${result.manifest.metadata.id}@${result.manifest.metadata.version}).${result.replaced ? ` The previous copy${result.previousVersion ? ` (${result.previousVersion})` : ""} is kept: bivy plugin rollback ${result.manifest.metadata.id}` : ""}`);
         console.log(`Stored at ${result.path}`);
         for (const [key, list] of Object.entries(contributions)) console.log(`${key[0]!.toUpperCase()}${key.slice(1)}: ${list.join(", ")}`);
         if (contributions.agents) console.log("Its agents are in the agent picker now.");
@@ -638,6 +627,8 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
           version: plugin.manifest?.metadata.version,
           agents: plugin.manifest?.contributes.agents.map((agent) => ({ id: agent.id, adapter: agent.adapter.kind })) ?? [],
           contributions: plugin.manifest ? contributionSummary(plugin.manifest) : {},
+          source: readPluginSource(plugin.path)?.source ?? null,
+          snapshots: listPluginSnapshots(plugin.id, dataDir).map((snapshot) => snapshot.version),
           status: plugin.errors.length ? "invalid" : "installed",
           errors: plugin.errors,
         })),
@@ -656,6 +647,46 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
         for (const error of body.errors) console.error(`  warning: ${error}`);
       }
       if (!body.ok) process.exitCode = 1;
+      return;
+    }
+
+    if (command === "outdated") {
+      const checks = checkPluginUpdates({ dataDir, ids: positional });
+      if (json) outputJson({ ok: checks.every((check) => check.status !== "error"), plugins: checks });
+      else if (!checks.length) console.log("No plugins installed.");
+      else {
+        for (const check of checks) console.log(`  ${check.id}: ${describeCheck(check)}`);
+        const changed = checks.filter((check) => check.status === "update" || check.status === "changed");
+        if (changed.length) console.log(`\nTake ${changed.length === 1 ? "it" : "them"} with: bivy plugin update${changed.length === 1 ? ` ${changed[0]!.id}` : ""}`);
+      }
+      if (checks.some((check) => check.status === "error")) process.exitCode = 1;
+      return;
+    }
+
+    if (command === "update" || command === "upgrade") {
+      const ids = positional.length ? positional : checkPluginUpdates({ dataDir }).filter((check) => check.status === "update" || check.status === "changed").map((check) => check.id);
+      const updated: Array<{ id: string; from?: string; to: string }> = [];
+      const failed: Array<{ id: string; error: string }> = [];
+      for (const id of ids) {
+        try { updated.push(updatePlugin(id, { dataDir })); }
+        catch (error) { failed.push({ id, error: error instanceof Error ? error.message : String(error) }); }
+      }
+      if (json) outputJson({ ok: failed.length === 0, updated, failed });
+      else {
+        if (!ids.length) console.log("Every plugin with a known source is current.");
+        for (const entry of updated) console.log(`Updated ${entry.id}${entry.from ? ` ${entry.from} →` : " to"} ${entry.to}. Undo with: bivy plugin rollback ${entry.id}`);
+        for (const entry of failed) console.error(`error: ${entry.id}: ${entry.error}`);
+      }
+      if (failed.length) process.exitCode = 1;
+      return;
+    }
+
+    if (command === "rollback") {
+      const id = positional[0];
+      if (!id) fail("Usage: bivy plugin rollback <id>", json);
+      const result = rollbackPlugin(id, dataDir);
+      if (json) outputJson({ ok: true, id, ...result });
+      else console.log(`${id} is back on ${result.to} (was ${result.from}). It takes effect at once.`);
       return;
     }
 
