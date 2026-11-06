@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - On a teammate's shared machine, the sign-in card says that a sign-in made there stays on that machine for its owner and team, and sessions a teammate starts show "By <email>" in the session list.
 
+### Fixed
+
+- **Fork and Retry at reset come back when you open the chat.** When an agent hits a usage limit, the offer to fork the work to another agent or retry automatically when the limit resets was shown only to an app that had the session open at that moment, so opening the chat later showed the limit with nothing to tap. It is now offered again every time the session is opened, and a retry already waiting for the reset shows again with its Cancel button.
+
 ## [0.22.9] - 2026-11-06
 
 ### Added
