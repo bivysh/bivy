@@ -2351,7 +2351,7 @@ export class SessionStore {
       if (activeFold.patch) this.set(activeFold.patch as AppStatePatch);
       for (const command of activeFold.commands) {
         if (command.kind === "row") this.updateSessionRow(command.sessionId, command.patch);
-        else if (command.kind === "entry") this.pushEntry({ id: nextId(), role: command.role, text: command.text, ...(command.actions?.length ? { actions: command.actions } : {}) });
+        else if (command.kind === "entry" && !this.repeatsLastNotice(command)) this.pushEntry({ id: nextId(), role: command.role, text: command.text, ...(command.actions?.length ? { actions: command.actions } : {}) });
         else if (command.kind === "model-auth" && this.state.connection.currentNodeId) this.setNeedsModelAuth({ nodeId: this.state.connection.currentNodeId, provider: command.provider, reason: command.reason });
         else if (command.kind === "rename") this.renameSessionLocal(command.sessionId, command.name);
         else if (command.kind === "global-error") this.set({ error: command.message });
@@ -3097,6 +3097,14 @@ export class SessionStore {
     // buffered payload when no controller hook is wired (e.g. unit tests).
     if (this.requestFreshHistory) this.requestFreshHistory();
     else this.applyHistory(pending, (pending.sessionId as string) || this.state.activeSession.activeSessionId);
+  }
+
+  /** A node re-offers a pending notice (a limit's Fork / Retry) each time the
+   *  session is opened or its history re-sent; the same row twice is noise. */
+  private repeatsLastNotice(entry: { role: string; text: string; actions?: string[] }): boolean {
+    const last = this.state.activeSession.transcript.at(-1);
+    return entry.role === "system" && last?.role === "system" && last.text === entry.text
+      && (last.actions ?? []).join("\n") === (entry.actions ?? []).join("\n");
   }
 
   private pushEntry(entry: TranscriptEntry): void {
