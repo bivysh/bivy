@@ -200,8 +200,13 @@ async function join(tx: PostgresTransactionContext, accountId: string, teamId: s
 
 const ACTIVE_INVITE = `revoked_at IS NULL AND expires_at > now() AND uses < max_uses`;
 
+/** What the roster tells the team vault when someone leaves. */
+export interface TeamDepartures {
+  memberLeft(teamId: string, accountId: string): Promise<void>;
+}
+
 export class PostgresTeams implements TeamRepository {
-  constructor(private readonly database: PostgresDatabaseContext) {}
+  constructor(private readonly database: PostgresDatabaseContext, private readonly departures?: TeamDepartures) {}
 
   private query(text: string, params?: unknown[]) { return this.database.query(text, params); }
 
@@ -312,6 +317,7 @@ export class PostgresTeams implements TeamRepository {
       return { teamDeleted: true };
     }
     if (current === "admin" && [...roles.values()].filter((r) => r === "admin").length === 1) throw teamError("last-admin");
+    await this.departures?.memberLeft(teamId, accountId);
     await this.query(`DELETE FROM team_members WHERE team_id = $1 AND account_id = $2`, [teamId, accountId]);
     return { teamDeleted: false };
   }

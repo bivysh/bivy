@@ -1357,7 +1357,9 @@ app.delete("/account", requireUser, asyncHandler(async (req, res) => {
 
 registerTeamRoutes(app, {
   teams: store.teams,
+  vault: store.teamVault,
   requireUser,
+  requireNode,
   authorize: (accountId, operation, context) => deploymentDecision(accountId, operation, undefined, context),
   recordEvent: (account, event) => {
     void deploymentExtension.recordAccount(account.id, account.email, event)

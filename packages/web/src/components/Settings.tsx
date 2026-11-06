@@ -468,7 +468,7 @@ export function Settings({
                 Automations hub — a deep link to any of them redirects there (see
                 the redirect effect above), so they render nothing here. */}
             {activeView === "nodes" && <NodesPanel state={state} />}
-            {activeView === "team" && <TeamPanel />}
+            {activeView === "team" && <TeamPanel state={state} />}
             {activeView === "account" && <AccountPanel />}
             {activeView === "link" && <LinkPanel onDone={onClose} />}
           </div>

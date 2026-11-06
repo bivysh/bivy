@@ -11,6 +11,7 @@ import {
   verifyPairingProof,
   wrapRoomKey,
   type PairingKeypair,
+  type NodeVaultPurpose,
 } from "./pairing-crypto.js";
 import { seal, open } from "./e2e.js";
 
@@ -182,7 +183,7 @@ export class PairingStore {
   wrapForNodePublicKey(
     nodePublicKeyB64: string,
     plaintextB64: string,
-    purpose: "model-auth-vault" | "github-app-vault" = "model-auth-vault",
+    purpose: NodeVaultPurpose = "model-auth-vault",
   ): string {
     const wrapKey = deriveWrapKey(this.data.nodeKeypair.privateKeyB64, nodePublicKeyB64, purpose);
     return seal(wrapKey, plaintextB64);
@@ -191,7 +192,7 @@ export class PairingStore {
   unwrapFromNodePublicKey(
     nodePublicKeyB64: string,
     wrapped: string,
-    purpose: "model-auth-vault" | "github-app-vault" = "model-auth-vault",
+    purpose: NodeVaultPurpose = "model-auth-vault",
   ): string {
     const wrapKey = deriveWrapKey(this.data.nodeKeypair.privateKeyB64, nodePublicKeyB64, purpose);
     return open(wrapKey, wrapped);

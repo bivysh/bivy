@@ -5,6 +5,7 @@ import pg from "pg";
 import { anyNodeEligible } from "@bivy/core";
 import { encryptSecret, decryptSecret, isSecretEnvelope } from "./hosted-crypto.js";
 import { PostgresTeams } from "./teams.js";
+import { PostgresTeamVault } from "./team-vault.js";
 import { PostgresDatabaseContext, type PostgresTransactionContext } from "./postgres-database.js";
 import {
   type Account,
@@ -101,6 +102,7 @@ const workLeaseExpiry = (): string => new Date(Date.now() + WORK_LEASE_MS).toISO
 export class PostgresStore implements ControlPlaneStore {
   private readonly database: PostgresDatabaseContext;
   readonly teams: PostgresTeams;
+  readonly teamVault: PostgresTeamVault;
 
   // `pool` is an optional injection seam: production passes only a
   // connectionString and we build a real pg.Pool; tests can hand in an
@@ -116,7 +118,8 @@ export class PostgresStore implements ControlPlaneStore {
     // front Postgres with PgBouncer.
     const max = Math.max(Number(process.env.DATABASE_POOL_MAX) || 10, 1);
     this.database = new PostgresDatabaseContext(pool ?? new pg.Pool({ connectionString, max }));
-    this.teams = new PostgresTeams(this.database);
+    this.teamVault = new PostgresTeamVault(this.database);
+    this.teams = new PostgresTeams(this.database, this.teamVault);
   }
 
   private query(text: string, params?: unknown[]): Promise<pg.QueryResult> {
@@ -824,6 +827,7 @@ export class PostgresStore implements ControlPlaneStore {
         WHERE collapse_key IS NOT NULL AND (status = 'pending' OR (status = 'needs_attention' AND policy_blocked = true));
     `);
     await this.teams.init();
+    await this.teamVault.init();
     await this.purgeRetiredKeyEscrow();
   }
 
@@ -1436,6 +1440,7 @@ export class PostgresStore implements ControlPlaneStore {
        )`,
         [accountId, nodeId],
       );
+      await client.query(PostgresTeamVault.FLAG_FOR_REMOVED_NODE, [nodeId]);
       const { rowCount } = await client.query(
         `DELETE FROM nodes WHERE id = $1 AND account_id = $2`,
         [nodeId, accountId],

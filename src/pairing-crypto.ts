@@ -48,6 +48,7 @@ const ROTATE_INFO = Buffer.from(HKDF_INFO.rotate);
 const MODEL_AUTH_VAULT_INFO = Buffer.from(HKDF_INFO.modelAuthVault);
 const GITHUB_APP_VAULT_INFO = Buffer.from(HKDF_INFO.githubAppVault);
 const DEVICE_VAULT_INFO = Buffer.from(HKDF_INFO.deviceVault);
+const TEAM_VAULT_INFO = Buffer.from(HKDF_INFO.teamVault);
 const EMPTY_SALT = Buffer.alloc(0);
 
 export interface PairingKeypair {
@@ -83,6 +84,10 @@ function privateKeyFromB64(privB64: string): KeyObject {
   return createPrivateKey({ key: Buffer.from(privB64, "base64url"), type: "pkcs8", format: "der" });
 }
 
+export type WrapPurpose = "pair" | "rotate" | "model-auth-vault" | "github-app-vault" | "device-vault" | "team-vault";
+/** Purposes for wrapping a vault key from one node to another. */
+export type NodeVaultPurpose = "model-auth-vault" | "github-app-vault" | "team-vault";
+
 /**
  * Derive the per-device wrap key. Identical on both ends because ECDH is
  * symmetric: ECDH(node_priv, device_pub) === ECDH(device_priv, node_pub).
@@ -90,7 +95,7 @@ function privateKeyFromB64(privB64: string): KeyObject {
 export function deriveWrapKey(
   ourPrivateKeyB64: string,
   theirPublicKeyB64: string,
-  purpose: "pair" | "rotate" | "model-auth-vault" | "github-app-vault" | "device-vault",
+  purpose: WrapPurpose,
 ): Buffer {
   const shared = diffieHellman({
     privateKey: privateKeyFromB64(ourPrivateKeyB64),
@@ -101,6 +106,7 @@ export function deriveWrapKey(
     : purpose === "rotate" ? ROTATE_INFO
     : purpose === "github-app-vault" ? GITHUB_APP_VAULT_INFO
     : purpose === "device-vault" ? DEVICE_VAULT_INFO
+    : purpose === "team-vault" ? TEAM_VAULT_INFO
     : MODEL_AUTH_VAULT_INFO;
   return Buffer.from(hkdfSync("sha256", shared, EMPTY_SALT, info, WRAP_KEY_BYTES));
 }

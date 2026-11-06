@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { createHash } from "node:crypto";
 
+import type { PostgresTeamVault } from "./team-vault.js";
 import type { TeamRepository } from "./teams.js";
 
 /**
@@ -1626,4 +1627,6 @@ export interface ControlPlaneStore
     WorkQueueRepository {
   /** Team roster (teams.ts). A component of its own rather than more methods here. */
   readonly teams: TeamRepository;
+  /** End-to-end encrypted team vault (team-vault.ts). */
+  readonly teamVault: PostgresTeamVault;
 }
