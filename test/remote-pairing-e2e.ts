@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
+import { TeamShare } from "../src/team-share.js";
 import { RelayConnector, type RelayConfig } from "../src/remote/index.js";
 import { PairingStore } from "../src/device-registry.js";
 import { generatePairingKeypair, pairingProof, deriveWrapKey, unwrapRoomKey } from "../src/pairing-crypto.js";
@@ -134,7 +135,7 @@ async function makePhone(store: PairingStore, nodeId: string, phoneSession: stri
 
 /** Send one `pair.account` over the relay and resolve with the node's answer. */
 async function accountPair(nodeId: string, ticketBearer: string, grant: string, devicePublicKeyB64: string): Promise<any> {
-  const ticket = (await http("/client/relay-ticket", {}, ticketBearer)).json.ticket;
+  const ticket = (await http("/client/relay-ticket", { nodeId }, ticketBearer)).json.ticket;
   const ws = new WebSocket(`ws://localhost:${RELAY}/client?ticket=${ticket}&nodeId=${nodeId}`);
   try {
     return await new Promise((resolve, reject) => {
@@ -170,7 +171,8 @@ async function main() {
   const store = PairingStore.load(root + "/.bivy-test-" + Date.now());
   const received: any[] = [];
   const config: RelayConfig = { url: `ws://localhost:${RELAY}`, enrollmentToken: enr, controlPlaneUrl: `http://localhost:${CP}` };
-  const connector = new RelayConnector(config, (msg) => received.push(msg), { pairing: store });
+  let teamShared = false;
+  const connector = new RelayConnector(config, (msg) => received.push(msg), { pairing: store, teamShared: () => teamShared });
   connector.start();
   await delay(800);
 
@@ -222,6 +224,47 @@ async function main() {
   const automations = (bearer: string) => fetch(`http://localhost:${CP}/account/automations`, { headers: { authorization: `Bearer ${bearer}` } });
   ok((await automations(phoneSession)).status === 401, "a node-scoped link grant cannot read account-wide routes");
   ok((await automations(login.json.token)).status === 200, "an account session can");
+
+  // 5. A machine shared with the team (team-machines.ts, src/team-share.ts).
+  const teammate = await http("/auth/dev-login", { email: "teammate@bivy.test" });
+  const outsider = await http("/auth/dev-login", { email: "outsider@bivy.test" });
+  await http("/account/team", { name: "Acme" }, login.json.token);
+  const invite = await http("/account/team/invites", {}, login.json.token);
+  await http("/account/team/join", { token: invite.json.url.split("#")[1] }, teammate.json.token);
+  const mateDevice = generatePairingKeypair();
+  const mateGrant = () => http("/client/pair-grant", { nodeId: "node_pair_1", devicePublicKeyB64: mateDevice.publicKeyB64 }, teammate.json.token);
+  ok((await mateGrant()).status === 404, "a teammate can't reach a machine that isn't shared");
+  const share = (shared: boolean) => fetch(`http://localhost:${CP}/node/team-share`, {
+    method: "PUT", headers: { "content-type": "application/json", authorization: `Bearer ${enr}` }, body: JSON.stringify({ shared }),
+  });
+  await share(true);
+  const listed = await (await fetch(`http://localhost:${CP}/nodes`, { headers: { authorization: `Bearer ${teammate.json.token}` } })).json() as any[];
+  ok(listed.some((n) => n.id === "node_pair_1" && n.sharedBy === "owner@bivy.test"), "the teammate's machine list shows it, shared by the owner");
+  ok((await http("/client/pair-grant", { nodeId: "node_pair_1", devicePublicKeyB64: mateDevice.publicKeyB64 }, outsider.json.token)).status === 404, "someone outside the team still can't");
+  const refused = await accountPair("node_pair_1", teammate.json.token, (await mateGrant()).json.grant, mateDevice.publicKeyB64);
+  ok(refused.k === "pair.error" && /isn't shared/.test(refused.error), "the machine refuses a teammate until its own switch is on");
+  teamShared = true;
+  const mateWelcome = await accountPair("node_pair_1", teammate.json.token, (await mateGrant()).json.grant, mateDevice.publicKeyB64);
+  ok(mateWelcome.k === "pair.welcome", "with sharing on, the teammate's device pairs through the owner's room");
+  const mateRecord = store.listDevices().find((d) => d.publicKeyB64 === mateDevice.publicKeyB64);
+  ok(mateRecord?.teammate?.email === "teammate@bivy.test", "the machine records whose device it is");
+
+  // Leaving the team: the control plane stops vouching, and the machine's
+  // next check removes the device and rotates the room key.
+  const teamView = await (await fetch(`http://localhost:${CP}/account/team`, { headers: { authorization: `Bearer ${teammate.json.token}` } })).json() as any;
+  const mateId = teamView.members.find((m: any) => m.email === "teammate@bivy.test").accountId;
+  await fetch(`http://localhost:${CP}/account/team/members/${mateId}`, { method: "DELETE", headers: { authorization: `Bearer ${teammate.json.token}` } });
+  ok((await mateGrant()).status === 404, "after leaving, the teammate can't get a new pair grant");
+  const roomKeyBefore = store.roomKey();
+  const teamShareCheck = new TeamShare({
+    request: (pathname, init) => fetch(`http://localhost:${CP}${pathname}`, { ...init, headers: { "content-type": "application/json", authorization: `Bearer ${enr}` } }),
+    enabled: () => teamShared,
+    devices: () => store.listDevices(),
+    revoke: (id) => { store.revokeDevice(id); },
+  });
+  await teamShareCheck.check();
+  ok(!store.listDevices().some((d) => d.teammate), "the machine removed the departed teammate's device");
+  ok(!store.roomKey().equals(roomKeyBefore), "and rotated its room key");
 
   connector.stop();
   console.log("\nAll X25519 pairing e2e checks passed.");

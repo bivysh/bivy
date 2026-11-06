@@ -252,6 +252,7 @@ import {
   mintLocalGithubAppVaultKey,
 } from "./github-app-vault.js";
 import { MAX_TEAM_INSTRUCTIONS_BYTES, TeamVaultSync } from "./team-vault.js";
+import { TeamShare } from "./team-share.js";
 import { redactSecrets, registerSecretValue } from "./redact.js";
 import {
   getSttConfig,
@@ -1820,6 +1821,8 @@ type NodeSettings = {
   /** Account-wide instructions every agent session receives (src/agent-instructions.ts),
    *  plus whether the Bivy note goes ahead of them and that note's text. */
   agentInstructions: { text: string; updatedAt: number; maxBytes: number; bivyNote: boolean; bivyNoteText: string };
+  /** Whether this machine is shared with its team, and teammates' devices on it (src/team-share.ts). */
+  teamShare: { enabled: boolean; teamName?: string; teammateDevices: Array<{ id: string; label: string; email: string }> };
   /** The team's shared instructions as this machine last opened them (src/team-vault.ts). */
   teamInstructions: { state: "none" | "ready" | "waiting-for-key"; maxBytes: number; teamName?: string; canEdit?: boolean; text?: string; updatedAt?: number; generation?: number };
   forkWorkspaceMaxBytes: number;
@@ -1903,6 +1906,11 @@ function nodeSettingsSnapshot(): NodeSettings {
     forkWorkspaceMaxBytes: Number.isInteger(readSettings().forkWorkspaceMaxBytes) ? Number(readSettings().forkWorkspaceMaxBytes) : 50 * 1024 * 1024,
     agentInstructions: { ...readAgentInstructions(appDir), maxBytes: MAX_AGENT_INSTRUCTIONS_BYTES, bivyNoteText: BIVY_AGENT_NOTE },
     teamInstructions: teamInstructionsSnapshot(),
+    teamShare: {
+      enabled: readSettings().teamShare === true,
+      teamName: teamVault.current().team?.name,
+      teammateDevices: teamShare.teammateDevices().map((d) => ({ id: d.id, label: d.label, email: d.teammate!.email })),
+    },
   };
 }
 
@@ -1988,6 +1996,26 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
     settings.sessionResumeMode = patch.sessionResumeMode === "manual" ? "manual" : "auto";
   }
   if ("appScreenshots" in patch) settings.appScreenshots = patch.appScreenshots === true;
+  // Remove one teammate's device (never one of the owner's own) from Settings → Machines.
+  if (typeof patch.teamShareRemoveDevice === "string") {
+    const device = teamShare.teammateDevices().find((d) => d.id === patch.teamShareRemoveDevice);
+    if (!device) throw new Error("That teammate's device isn't on this machine.");
+    linkedDevices.revoke(device.id);
+  }
+  if (typeof patch.teamShare === "boolean" && patch.teamShare !== (settings.teamShare === true)) {
+    const before = settings.teamShare === true;
+    settings.teamShare = patch.teamShare;
+    writeSettings(settings);
+    try {
+      await teamShare.publish();
+    } catch (error) {
+      // The control plane refused (e.g. not in a team): keep the switch as it was.
+      settings.teamShare = before;
+      writeSettings(settings);
+      void teamShare.publish().catch(() => undefined);
+      throw error;
+    }
+  }
   if ("autoAttachToolImages" in patch) {
     settings.autoAttachToolImages = patch.autoAttachToolImages === true;
     setConfiguredAutoAttachToolImages(settings.autoAttachToolImages);
@@ -3794,6 +3822,7 @@ function startRelayIfConfigured() {
   if (!config) return false;
   relay = new RelayConnector(config, (msg) => void handleRelayMessage(msg), {
     pairing: pairingStore,
+    teamShared: () => readSettings().teamShare === true,
     previews: appGateway ? undefined : remotePreview,
     onWorkAvailable: (hint) => {
       controlPlanePoller?.poke(hint.id);
@@ -3802,7 +3831,7 @@ function startRelayIfConfigured() {
       // request from a freshly-launched ephemeral runner without waiting for its
       // 30s poll. Cheap and idempotent; coalesced to at most one sync per burst.
       triggerModelAuthSyncSoon();
-      void teamVault.sync().catch(() => undefined);
+      teamTick();
     },
   });
   relay.start();
@@ -4397,11 +4426,23 @@ const teamVault = new TeamVaultSync({
   wrap: (publicKey, keyB64) => pairingStore.wrapForNodePublicKey(publicKey, keyB64, "team-vault"),
   unwrap: (publicKey, wrapped) => pairingStore.unwrapFromNodePublicKey(publicKey, wrapped, "team-vault"),
 });
+// Sharing this machine with the team (src/team-share.ts). Checked on the same
+// tick: a teammate who left loses their devices here within a minute.
+const teamShare = new TeamShare({
+  request: modelAuthFetch,
+  enabled: () => readSettings().teamShare === true,
+  devices: () => pairingStore.listDevices(),
+  revoke: (deviceId) => { linkedDevices.revoke(deviceId); },
+});
 let teamVaultTimer: ReturnType<typeof setInterval> | undefined;
+function teamTick(): void {
+  void teamVault.sync().catch(() => undefined);
+  void teamShare.check().catch(() => undefined);
+}
 function startTeamVaultWatcher(): void {
   if (teamVaultTimer) return;
-  void teamVault.sync().catch(() => undefined);
-  teamVaultTimer = setInterval(() => void teamVault.sync().catch(() => undefined), 60_000);
+  teamTick();
+  teamVaultTimer = setInterval(teamTick, 60_000);
   teamVaultTimer.unref?.();
 }
 

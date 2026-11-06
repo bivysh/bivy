@@ -618,7 +618,15 @@ sensitive.
     compromised control plane could add one it controls and receive the key.
     That is the same trust as account pairing (item 15). See
     [Teams](teams.md#team-instructions).
-19. **The web app that holds your room key is delivered by the control plane.**
+19. **A shared machine gives teammates full access, and the control plane
+    vouches for them.** Sharing a machine with your team (Settings →
+    Machines) lets teammates pair, and a paired device holds the machine's
+    room key: sessions, terminals, files and the sign-ins on the machine.
+    The machine accepts a teammate only while its own switch is on, but which
+    accounts count as teammates is the control plane's answer, as in account
+    pairing (item 15). Removal is checked every minute, not instantly. See
+    [Teams](teams.md#shared-machines).
+20. **The web app that holds your room key is delivered by the control plane.**
     Browser-side crypto is only as trustworthy as the JavaScript that runs it,
     and the PWA is served by the control plane (hosted `app.bivy.sh`, or your
     own). A compromised control plane could ship modified JS that exfiltrates

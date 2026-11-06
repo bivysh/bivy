@@ -36,6 +36,8 @@ export interface LinkedDevice {
   label: string;
   createdAt: string;
   lastSeenAt: string | null;
+  /** Set for a teammate's device on a machine shared with the team (src/team-share.ts). */
+  teammate?: { accountId: string; email: string };
 }
 
 interface PairingFile {
@@ -231,7 +233,7 @@ export class PairingStore {
     return secret;
   }
 
-  private welcomeForTrustedDevice(input: { devicePublicKeyB64: string; label?: string }): PairWelcome | null {
+  private welcomeForTrustedDevice(input: { devicePublicKeyB64: string; label?: string; teammate?: LinkedDevice["teammate"] }): PairWelcome | null {
     const { devicePublicKeyB64 } = input;
     if (!devicePublicKeyB64) return null;
     const existing = this.data.devices.find((d) => d.publicKeyB64 === devicePublicKeyB64);
@@ -241,6 +243,7 @@ export class PairingStore {
       label: (input.label ?? "Device").toString().slice(0, 60) || "Device",
       createdAt: new Date().toISOString(),
       lastSeenAt: new Date().toISOString(),
+      ...(input.teammate ? { teammate: input.teammate } : {}),
     };
     if (existing) existing.lastSeenAt = new Date().toISOString();
     else this.data.devices.push(device);
@@ -278,7 +281,7 @@ export class PairingStore {
   }
 
   /** Trust a device that was authorized by the control plane account session. */
-  trustDevice(input: { devicePublicKeyB64: string; label?: string }): PairWelcome | null {
+  trustDevice(input: { devicePublicKeyB64: string; label?: string; teammate?: LinkedDevice["teammate"] }): PairWelcome | null {
     return this.welcomeForTrustedDevice(input);
   }
 

@@ -5,11 +5,13 @@ import type { Express, Request, RequestHandler, Response } from "express";
 import type { DeploymentAccountEvent, DeploymentDecision, DeploymentOperation, DeploymentPolicyContext } from "./deployment-extension.js";
 import type { Account, NodeRecord } from "./store.js";
 import { TeamVaultError, type PostgresTeamVault } from "./team-vault.js";
+import type { PostgresTeamMachines } from "./team-machines.js";
 import { normalizeTeamInvite, teamError, TeamError, type TeamInvite, type TeamMembership, type TeamRepository, isTeamRole } from "./teams.js";
 
 export interface TeamRouteDeps {
   teams: TeamRepository;
   vault: PostgresTeamVault;
+  machines: PostgresTeamMachines;
   requireUser: RequestHandler;
   requireNode: RequestHandler;
   /** Deployment admission. A deployment may decide who can start a team and
@@ -234,5 +236,19 @@ export function registerTeamRoutes(app: Express, deps: TeamRouteDeps): void {
       keyGeneration: Number(req.body?.keyGeneration ?? 0),
     });
     res.json({ ok: true });
+  }));
+
+  // --- Machines shared with the team (team-machines.ts) ---------------------
+  // The machine reports its own switch; only it can turn sharing on.
+  app.put("/node/team-share", requireNode, handle(async (req, res) => {
+    const node = nodeOf(req);
+    const shared = req.body?.shared === true;
+    if (shared) await teamOfNode(req);
+    await deps.machines.setShared(node.id, shared);
+    res.json(await deps.machines.shareState(node.id));
+  }));
+
+  app.get("/node/team-share", requireNode, handle(async (req, res) => {
+    res.json(await deps.machines.shareState(nodeOf(req).id));
   }));
 }

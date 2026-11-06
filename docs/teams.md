@@ -60,7 +60,40 @@ On a machine, the opened instructions are kept in
 `<data dir>/team-instructions.json` and the key in `team-vault.json`
 (mode 0600).
 
-## What the control plane holds
+## Shared machines
+
+The owner of a machine can share it with their team: connect to it, open
+**Settings → Machines**, and turn on **Share with team**. The machine then
+shows up for every teammate under **Shared with you** in the machine menu,
+labeled with the owner's email, and they connect to it as to their own.
+
+A teammate on a shared machine has what the owner has there: sessions,
+terminals, files, and the agent sign-ins and keys on that machine. That is
+what holding a machine's room key means. Bivy has no read-only or per-session
+access yet. Usage on the machine counts as the owner's, including waking a
+sleeping cloud computer.
+
+- **The machine decides.** The switch is stored on the machine. While it is
+  off, the machine refuses a teammate's device even when the control plane
+  vouches for it, so the control plane alone can't open a machine to anyone.
+- **Leaving ends access.** When a teammate leaves the team, the control plane
+  stops issuing them pair grants and relay tickets for the machine at once.
+  Within a minute, the machine removes their devices and rotates its room key,
+  as when you remove a device by hand.
+- **Sign-ins stay with the machine.** If a teammate signs in to Claude,
+  ChatGPT or another provider while connected to your shared machine, that
+  sign-in is stored on your machine, and you and the rest of the team can use
+  it there. Sign in on a machine of your own for anything you want to keep
+  to yourself.
+- **Turning sharing off** removes every teammate device from the machine and
+  rotates its room key. The owner can also remove one teammate's devices from
+  the list under the switch.
+
+Under the hood, a teammate's relay ticket names the owner's account and is
+pinned to that one machine. The relay doesn't change: it still admits only
+devices with the room's account.
+
+
 
 The roster: team name, members' account ids and emails, roles and open
 invites. For team instructions, it holds only ciphertext and copies of the
@@ -105,6 +138,8 @@ All routes need a signed-in account (`Authorization: Bearer <session>`).
 | `POST /account/team/invite-preview` `{ token }` | anyone |
 | `POST /account/team/join` `{ token }` | anyone |
 
-Machines use `GET`/`PUT /node/team-vault`, `POST /node/team-vault/key-request`
+A machine reports its switch with `PUT /node/team-share` `{ shared }` and reads
+`GET /node/team-share` (whether it is shared, and the team's current member
+accounts). Machines use `GET`/`PUT /node/team-vault`, `POST /node/team-vault/key-request`
 and `PUT /node/team-vault/key` with their enrollment token. Only admins'
 machines may `PUT /node/team-vault`.

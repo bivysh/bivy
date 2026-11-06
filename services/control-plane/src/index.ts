@@ -1358,6 +1358,7 @@ app.delete("/account", requireUser, asyncHandler(async (req, res) => {
 registerTeamRoutes(app, {
   teams: store.teams,
   vault: store.teamVault,
+  machines: store.teamMachines,
   requireUser,
   requireNode,
   authorize: (accountId, operation, context) => deploymentDecision(accountId, operation, undefined, context),
@@ -1722,11 +1723,25 @@ async function resolveAccountClient(req: Request): Promise<ResolvedClient | unde
 // enrollment token (its account's nodes — so `bivy nodes` on an installed node
 // can enumerate siblings). A leaked QR therefore reveals just the node it was
 // minted for, never the whole account.
+/** Machines teammates share with this account's team, marked with who shares them. */
+async function teamSharedNodes(accountId: string): Promise<Array<NodeRecord & { sharedBy: string }>> {
+  const shared = await store.teamMachines.sharedWith(accountId);
+  const out: Array<NodeRecord & { sharedBy: string }> = [];
+  for (const owner of new Set(shared.map((m) => m.ownerAccountId))) {
+    const theirs = await store.listNodes(owner);
+    for (const machine of shared.filter((m) => m.ownerAccountId === owner)) {
+      const node = theirs.find((n) => n.id === machine.nodeId);
+      if (node) out.push({ ...node, sharedBy: machine.ownerEmail });
+    }
+  }
+  return out;
+}
+
 async function listClientNodes(req: Request, res: Response) {
   const token = bearer(req);
   const client = await store.resolveClient(token);
   if (client) {
-    const nodes = await store.listNodes(client.accountId);
+    const nodes = [...await store.listNodes(client.accountId), ...await teamSharedNodes(client.accountId)];
     const scoped = client.nodeId ? nodes.filter((node) => node.id === client.nodeId) : nodes;
     return res.json(scoped.map(({ enrollmentTokenHash: _hash, ...node }) => withEffectiveOnline(node)));
   }
@@ -4966,8 +4981,8 @@ app.post("/client/pair-grant", requireUser, asyncHandler(async (req, res) => {
   if (!nodeId) return res.status(400).json({ error: "Missing nodeId" });
   const devicePublicKeyB64 = String(req.body?.devicePublicKeyB64 ?? "").trim();
   if (!devicePublicKeyB64) return res.status(400).json({ error: "Missing devicePublicKeyB64. Update Bivy to pair this device." });
-  const ownsNode = (await store.listNodes(account.id)).some((node) => node.id === nodeId);
-  if (!ownsNode) return res.status(404).json({ error: "Unknown node" });
+  // Your own machines, or one a teammate shares with your team.
+  if (!(await store.teamMachines.access(account.id, nodeId))) return res.status(404).json({ error: "Unknown node" });
   const grant = await store.createPairGrant(account.id, nodeId, devicePublicKeyB64);
   res.json({ ok: true, grant, nodeId, relayUrl: relayUrlForNode(nodeId) });
 }));
@@ -4983,8 +4998,7 @@ app.post("/client/link-grant", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const nodeId = String(req.body?.nodeId ?? "").trim();
   if (!nodeId) return res.status(400).json({ error: "Missing nodeId" });
-  const ownsNode = (await store.listNodes(account.id)).some((node) => node.id === nodeId);
-  if (!ownsNode) return res.status(404).json({ error: "Unknown node" });
+  if (!(await store.teamMachines.access(account.id, nodeId))) return res.status(404).json({ error: "Unknown node" });
   const grant = await store.createLinkGrant(account.id, nodeId, LINK_GRANT_TTL_MS);
   res.json({ ok: true, grant, nodeId, relayUrl: relayUrlForNode(nodeId) });
 }));
@@ -4999,7 +5013,11 @@ app.post("/node/authorize-client", requireNode, asyncHandler(async (req, res) =>
   const token = String(req.body?.sessionToken ?? "").trim();
   const devicePublicKeyB64 = String(req.body?.devicePublicKeyB64 ?? "").trim();
   const client = await store.consumePairGrant(token, node.id, devicePublicKeyB64);
-  if (!client || client.accountId !== node.accountId) {
+  // A teammate's device may pair only while the machine is shared with the
+  // team. The machine itself refuses teammates unless sharing is on there too.
+  const teammate = Boolean(client && client.accountId !== node.accountId
+    && (await store.teamMachines.access(client.accountId, node.id))?.kind === "teammate");
+  if (!client || (client.accountId !== node.accountId && !teammate)) {
     const error = token && !token.startsWith("pgr_")
       ? "This device runs an older Bivy that pairs insecurely. Update it, then try again."
       : "This device isn't authorized for this node.";
@@ -5014,7 +5032,7 @@ app.post("/node/authorize-client", requireNode, asyncHandler(async (req, res) =>
   const ephemeral = req.body?.ephemeral === true;
   if (!ephemeral) {
     try {
-      await store.registerPairedDevice(node.accountId, devicePublicKeyB64, String(req.body?.label ?? "Device"));
+      await store.registerPairedDevice(client.accountId, devicePublicKeyB64, String(req.body?.label ?? "Device"));
     } catch (err) {
       // Surface the concrete reason (e.g. device limit reached) so the node can
       // relay it to the client instead of a bare "pairing rejected".
@@ -5022,7 +5040,10 @@ app.post("/node/authorize-client", requireNode, asyncHandler(async (req, res) =>
       return res.status(status).json({ ok: false, error: (err as Error).message || "Could not register device" });
     }
   }
-  res.json({ ok: true });
+  if (!teammate) return res.json({ ok: true });
+  // The machine labels and polices a teammate's device by its account.
+  const account = await store.getAccount(client.accountId);
+  res.json({ ok: true, teammate: true, accountId: client.accountId, email: account?.email ?? "" });
 }));
 
 app.post("/client/relay-ticket", asyncHandler(async (req, res) => {
@@ -5038,12 +5059,18 @@ app.post("/client/relay-ticket", asyncHandler(async (req, res) => {
     return res.status(403).json({ error: "Token not valid for this node" });
   }
   const targetNodeId = resolved.nodeId ?? requestedNodeId;
+  // A teammate reaching a machine shared with the team joins the owner's room,
+  // pinned to that one machine (team-machines.ts).
+  const access = targetNodeId ? await store.teamMachines.access(resolved.accountId, targetNodeId) : undefined;
+  const routing = access?.kind === "teammate"
+    ? { accountId: access.ownerAccountId, nodeId: targetNodeId }
+    : { accountId: resolved.accountId, nodeId: resolved.nodeId };
   try {
-    const ticket = await store.createRelayTicket({ role: "client", accountId: resolved.accountId, nodeId: resolved.nodeId });
+    const ticket = await store.createRelayTicket({ role: "client", ...routing });
     relayTicketMetrics.clientMinted += 1;
     // Connecting to a sleeping cloud computer is the signal to wake it.
-    if (isCloudComputerNode(resolved.accountId, targetNodeId)) void wakeCloudComputerIfAsleep(resolved.accountId);
-    else if (isRunnerNode(targetNodeId)) void wakeRunnerIfAsleep(resolved.accountId, targetNodeId!);
+    if (isCloudComputerNode(routing.accountId, targetNodeId)) void wakeCloudComputerIfAsleep(routing.accountId);
+    else if (isRunnerNode(targetNodeId)) void wakeRunnerIfAsleep(routing.accountId, targetNodeId!);
     res.json({ ok: true, ticket, relayUrl: relayUrlForNode(targetNodeId) });
   } catch (error) {
     relayTicketMetrics.clientFailed += 1;
