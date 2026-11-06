@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Screenshots an agent takes or reads to check its work now sit inside the turn's "Worked" line instead of filling the chat as image cards; expand the line to see them. Claude Code's screenshots no longer show up as if you had sent them. Files the agent attaches for you are unchanged.
 - On a teammate's shared machine, the sign-in card says that a sign-in made there stays on that machine for its owner and team, and sessions a teammate starts show "By <email>" in the session list.
 
 ## [0.22.9] - 2026-11-06

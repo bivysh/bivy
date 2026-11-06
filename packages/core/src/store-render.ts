@@ -273,7 +273,9 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
           }
         }
       }
-      const attachments = embeddedAttachments(content);
+      // A tool_result's images are the tool's output (shown with its call
+      // below), not something the user sent.
+      const attachments = embeddedAttachments(Array.isArray(content) ? content.filter(block => !isToolResultBlock(block)) : content);
       if ((text && !isMetaText(text)) || attachments.length) entries.push({ id: historyId(), role: "user", text, ...(attachments.length ? { attachments } : {}) });
     } else if (role === "system") {
       if (text && !isMetaText(text)) entries.push({ id: historyId(), role: "system", text });
@@ -370,7 +372,7 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
     }
     // Raw tool results and their Bivy overlays can contain the same image.
     // Show one lazy attachment per call/hash, adjacent to the tool's result.
-    if (role !== "user" && role !== "system") {
+    if (role !== "system") {
       const candidates = role === "toolresult" || role === "tool_result"
         ? [{ id: msg.toolCallId || msg.toolUseId || msg.tool_use_id || msg.id, content }]
         : (Array.isArray(content) ? content.filter(isToolResultBlock).map(block => ({ id: toolCallId(block), content: block.content })) : []);
