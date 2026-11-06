@@ -35,6 +35,8 @@ test.beforeEach(async ({ page }) => {
       w.commands.push({ kind, sessionId, path });
       if (kind === "files.list") return listings[path];
       if (kind === "files.download") return { file: { path, size: 5, data: btoa("whole") } };
+      if (path.endsWith(".md")) return { file: { path, size: 60, mtime: Date.now(), status: "modified", kind: "text", truncated: false,
+        content: "# Coupons\n\nExpired coupons are **rejected**.\n\n```ts\nisExpired(c)\n```\n" } };
       return { file: { path, size: 240, mtime: Date.now() - 120_000, status: "added", kind: "text", truncated: false,
         content: "export function isExpired(coupon: { expiresAt: Date | null }, now = new Date()): boolean {\n  return coupon.expiresAt !== null && coupon.expiresAt < now;\n}\n" } };
     };
@@ -80,6 +82,13 @@ test("browse the session's workspace and read a file the agent added", async ({ 
     await files.getByRole("button", { name: "Back to files" }).click();
     await expect(files.getByRole("button", { name: /coupon\.ts/ })).toBeVisible();
     await files.getByRole("button", { name: "All", exact: true }).click();
+    // Markdown opens rendered; Source shows the file as written.
+    await files.getByRole("button", { name: "README.md" }).click();
+    await expect(files.getByLabel("Preview of README.md").getByRole("heading", { name: "Coupons" })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`files-markdown-${theme}.png`) });
+    await files.getByRole("radio", { name: "Source" }).click();
+    await expect(files.getByLabel("Contents of README.md")).toContainText("# Coupons");
+    await files.getByRole("button", { name: "Back to files" }).click();
     await files.getByRole("button", { name: /^src\// }).click();
     if (!wide) await page.keyboard.press("Escape");
   }

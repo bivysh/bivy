@@ -440,6 +440,10 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .files-code .files-gutter { flex: none; position: sticky; left: 0; padding-inline: var(--space-2); text-align: right; color: var(--muted); background: var(--surface-2); border-right: 1px solid var(--line); user-select: none; }
 .files-code .files-source { flex: 1; padding-inline: var(--space-3); }
 .files-source code { display: block; background: none; padding: 0; color: var(--ink); }
+/* Markdown files open rendered (the chat's .msg.assistant typography). */
+.files-view-toggle { margin-left: auto; }
+.files-rendered { min-width: 0; overflow: auto; padding: var(--space-3) var(--space-4); border: 1px solid var(--line); border-radius: var(--radius-sm); }
+.files-rendered .msg { max-width: none; }
 .files-image { display: flex; justify-content: center; padding: var(--space-3); border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface-2); }
 .files-image img { max-width: 100%; height: auto; }
 .topbar-actions .side-pane-toggle[aria-pressed="true"] { color: var(--accent); background: var(--accent-soft); }

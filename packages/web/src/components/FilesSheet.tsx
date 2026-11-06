@@ -10,9 +10,11 @@ import { relTime } from "./ChangesCard.js";
 import { controller } from "../store/useStore.js";
 import { writeClipboard } from "../clipboard.js";
 import { base64ToBlobUrl } from "../attachmentUrl.js";
-import { highlightCode } from "../highlight.js";
+import { toHtml } from "@bivy/core";
+import { decorateCodeBlocks, highlightCode } from "../highlight.js";
+import { renderMermaidDiagrams } from "../mermaid.js";
 import {
-  HIGHLIGHT_MAX_CHARS, STATUS_GLYPH, STATUS_LABEL, languageFor, visibleEntries,
+  HIGHLIGHT_MAX_CHARS, STATUS_GLYPH, STATUS_LABEL, isMarkdownPath, languageFor, visibleEntries,
   type WorkspaceEntry, type WorkspaceFile, type WorkspaceListing,
 } from "../workspaceFiles.js";
 
@@ -44,6 +46,7 @@ function FileViewer({ sessionId, path, reloadKey, onBack }: { sessionId: string;
   const [copied, setCopied] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const codeRef = useRef<HTMLElement>(null);
+  const renderedRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -56,6 +59,12 @@ function FileViewer({ sessionId, path, reloadKey, onBack }: { sessionId: string;
 
   const text = file?.kind === "text" ? file.content : null;
   const highlight = text !== null && text.length <= HIGHLIGHT_MAX_CHARS;
+  // Markdown opens rendered, the way the chat renders it; Source is the plain
+  // file. Past the highlight cap it stays source only, like highlighting.
+  const canRender = highlight && !!text && isMarkdownPath(path);
+  const [rendered, setRendered] = useState(true);
+  const showRendered = canRender && rendered;
+  const html = useMemo(() => (canRender && text ? toHtml(text) : ""), [canRender, text]);
   useLayoutEffect(() => {
     const el = codeRef.current;
     if (!el || text === null) return;
@@ -63,7 +72,14 @@ function FileViewer({ sessionId, path, reloadKey, onBack }: { sessionId: string;
     el.textContent = text;
     delete el.dataset.highlighted;
     if (highlight) highlightCode(el.parentElement?.parentElement ?? null);
-  }, [text, highlight]);
+  }, [text, highlight, showRendered]);
+  useLayoutEffect(() => {
+    const el = renderedRef.current;
+    if (!el || !showRendered) return;
+    renderMermaidDiagrams(el);
+    highlightCode(el);
+    decorateCodeBlocks(el);
+  }, [html, showRendered]);
 
   const lines = useMemo(() => (text === null ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0)), [text]);
   const imageUrl = file?.kind === "image" ? `data:${file.mimeType};base64,${file.data}` : null;
@@ -113,6 +129,29 @@ function FileViewer({ sessionId, path, reloadKey, onBack }: { sessionId: string;
           <span>{fmtBytes(file.size)}</span>
           {text !== null && <span>{lines} line{lines === 1 ? "" : "s"}</span>}
           {file.mtime > 0 && <span>Saved {relTime(file.mtime)}</span>}
+          {canRender && (
+            <div className="segmented files-view-toggle" role="radiogroup" aria-label="Show file as">
+              {([[true, "Preview"], [false, "Source"]] as const).map(([value, label]) => (
+                <button
+                  key={label}
+                  type="button"
+                  role="radio"
+                  className="seg-btn"
+                  aria-checked={rendered === value}
+                  tabIndex={rendered === value ? 0 : -1}
+                  onClick={() => setRendered(value)}
+                  onKeyDown={(event) => {
+                    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                    event.preventDefault();
+                    setRendered(!rendered);
+                    (event.currentTarget.parentElement?.querySelector(`[aria-checked="false"]`) as HTMLElement | null)?.focus();
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
       )}
       {!file && !error && <div className="apps-state" role="status"><Spinner size="sm" /><span>Opening…</span></div>}
@@ -123,7 +162,11 @@ function FileViewer({ sessionId, path, reloadKey, onBack }: { sessionId: string;
       {file?.kind === "text" && (
         file.content.length === 0
           ? <div className="changes-binary">Empty file.</div>
-          : (
+          : showRendered ? (
+            <div className="files-rendered" tabIndex={0} aria-label={`Preview of ${path}`}>
+              <div ref={renderedRef} className="msg assistant" dangerouslySetInnerHTML={{ __html: html }} />
+            </div>
+          ) : (
             <div className="files-code" tabIndex={0} aria-label={`Contents of ${path}`}>
               <pre className="files-gutter" aria-hidden>{Array.from({ length: lines }, (_, i) => i + 1).join("\n")}</pre>
               <pre className="files-source"><code ref={codeRef} className={lang ? `language-${lang}` : "nohighlight"} /></pre>
