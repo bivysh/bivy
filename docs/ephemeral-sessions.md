@@ -139,14 +139,22 @@ fleet keeps the stopped machine and its volume, and deletes it only after
 `FLEET_IDLE_DELETE_DAYS` asleep with the account warned first. The init `timeout` bounds
 each awake period.
 
-## Session runners
+## Runners
 
 When the deployment offers runners, the machine picker also lists "Cloud
 Runner": a new machine for one session instead of the shared cloud computer.
-It boots like a runner for queued work, but sleeps when quiet instead of
-ending, with its sessions on its own disk. The fleet runs these when
+Queued work a runner can read gets one too. Every runner sleeps when quiet
+instead of ending, with its session on its own disk, so a finished task's
+files, terminal and previews are still there to open. The fleet runs these when
 `FLEET_RUNNERS=1`. Connecting to it or sending to its
-session wakes it. The deployment deletes one that has slept too long; the app
+session wakes it.
+
+A deployment can run runners without a cloud computer
+(`FLEET_ACCOUNT_MACHINE=0`). The picker then shows one cloud destination, under
+the profile's name, that starts a runner per session; queued work for the
+cloud goes to runners only, and work only the cloud computer could read waits
+for one of your machines. The sign-in machine during onboarding is a runner
+too, and the sign-in reaches your other machines through the vault. The deployment deletes one that has slept too long; the app
 shows that date above the composer, and deleting the runner's only session
 deletes the runner.
 

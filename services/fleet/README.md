@@ -1,8 +1,10 @@
 # Bivy fleet
 
 Runs the machines Bivy hands out: one sleeping **cloud computer** per account,
-and optional disposable **runners** beside it for work that should go in
-parallel. It is the third service in the stack, next to the control plane and
+and optional **runners**, a sleeping machine per session or piece of work, so
+work goes in parallel. Either can run without the other: set
+`FLEET_ACCOUNT_MACHINE=0` with `FLEET_RUNNERS=1` and accounts live on runners
+and their own machines alone. It is the third service in the stack, next to the control plane and
 the relay, and it is entirely optional — without it, Bivy runs sessions only on
 machines people connect themselves.
 
@@ -75,7 +77,8 @@ still accepted.
 | `FLEET_IDLE_WARN_DAYS` | `7` | Tell the account this far ahead |
 | `FLEET_CPU_GUARD_PERCENT` | `90` | Stop a machine pinning its CPUs this hard (`0` off) |
 | `FLEET_CPU_GUARD_MINUTES` | `60` | …for this long |
-| `FLEET_RUNNERS` | off | `1` also runs per-work runners |
+| `FLEET_ACCOUNT_MACHINE` | on | `0` runs no cloud computer: no computer at sign-up, none on request (needs `FLEET_RUNNERS=1`) |
+| `FLEET_RUNNERS` | off | `1` runs runners: a sleeping machine per session or piece of work |
 | `FLEET_MAX_RUNNERS_PER_ACCOUNT` | `3` | Runners one account may have awake |
 | `FLEET_MAX_MACHINES` | `0` (no cap) | Machines the whole fleet may run at once |
 | `FLEET_MONTHLY_HOURS` | `0` (unmetered) | Machine hours an account gets per month |

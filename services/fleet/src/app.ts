@@ -47,7 +47,7 @@ export function createApp(deps: AppDeps) {
   }));
 
   app.post("/v1/compute/acquire", asyncRoute(async (req, res) => {
-    if (!deps.computers) return void res.status(404).json({ error: "This fleet is not running cloud computers" });
+    if (!deps.computers || !deps.config.accountMachine) return void res.status(404).json({ error: "This fleet is not running cloud computers" });
     const result = await deps.computers.acquire({
       accountId: accountOf(req),
       purpose: requiredString(req.body?.purpose, "purpose"),
@@ -147,7 +147,7 @@ export function createApp(deps: AppDeps) {
   app.post("/v1/events", asyncRoute(async (req, res) => {
     const accountId = accountOf(req);
     const event = req.body?.event;
-    if (deps.computers && event?.type === "account.signed-in" && isNewAccount(event.accountCreatedAt, event.at)) {
+    if (deps.computers && deps.config.accountMachine && event?.type === "account.signed-in" && isNewAccount(event.accountCreatedAt, event.at)) {
       // The id goes in as an argument, not into the format string: console
       // reads `%s` in the first argument and would shift the rest.
       void deps.computers.acquireAtSignup(accountId)

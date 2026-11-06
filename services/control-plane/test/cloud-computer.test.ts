@@ -256,14 +256,15 @@ async function main() {
   expect((await req(port, "POST", "/node/lease", refreshKey, laptopToken)).json?.granted === true, "once released, the next machine gets it");
   expect((await req(port, "POST", "/node/lease", { key: "anything-else" }, laptopToken)).status === 400, "only known lease kinds can be taken");
 
-  // A runner: its own node for one piece of work, booted to work alone and
-  // forgotten once the deployment deletes it.
+  // A runner: its own node for one piece of work, booted to work alone. It
+  // sleeps when done, keeping the session, and is forgotten once the
+  // deployment deletes it.
   const runnerBoot = await req(port, "POST", "/internal/compute/runner-bootstrap", { accountId, runnerId: "work:w1", awakeCapMinutes: 180 }, EXTENSION_TOKEN);
   const runnerId = runnerBoot.json?.nodeId as string;
   expect(runnerBoot.status === 200 && /^eph-runner-[0-9a-f]{16}$/.test(runnerId), "a runner boots as its own node");
   const runnerStart = Buffer.from(runnerBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/start.sh").raw_value, "base64").toString("utf8");
-  expect(/BIVY_WORK_OWN_LABEL_ONLY=1/.test(runnerStart) && /BIVY_OAUTH_REFRESH=0/.test(runnerStart) && /BIVY_TEARDOWN_ON_FINISH=1/.test(runnerStart), "it works only its own label, never refreshes sign-ins and ends when done");
-  expect(!/BIVY_EPHEMERAL_SLEEP/.test(runnerStart), "a runner never sleeps");
+  expect(/BIVY_WORK_OWN_LABEL_ONLY=1/.test(runnerStart) && /BIVY_OAUTH_REFRESH=0/.test(runnerStart), "it works only its own label and doesn't refresh sign-ins on its own");
+  expect(/BIVY_EPHEMERAL_SLEEP=1/.test(runnerStart) && !/BIVY_TEARDOWN_ON_FINISH=1/.test(runnerStart), "it sleeps when the work is done instead of disappearing");
   expect(JSON.parse(Buffer.from(runnerBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/relay.json").raw_value, "base64").toString("utf8")).nodeId === runnerId, "a runner answers to its enrolled id");
   const runnerRelay = JSON.parse(Buffer.from(runnerBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/relay.json").raw_value, "base64").toString("utf8"));
   expect((await req(port, "POST", "/node/settled", {}, runnerRelay.enrollmentToken)).status === 200, "a finished runner reports settled");

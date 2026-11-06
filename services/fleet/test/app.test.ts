@@ -137,4 +137,22 @@ async function signUpStartsAComputer() {
   }
 }
 
-await run(tokenGate, acquireAndRefusal, usageIsReported, profileFollowsConfiguration, signUpStartsAComputer);
+async function runnersWithoutAComputer() {
+  const { call, store, close } = await serve({ env: { ...WORKING_ENV, FLEET_ACCOUNT_MACHINE: "0", FLEET_RUNNERS: "1" }, earlyStarts: true });
+  try {
+    const profile = (await call("/v1/compute/profile", { purpose: "interactive" })).body.profile as Record<string, unknown>;
+    expect(profile?.runners === true && profile.accountMachine === undefined, "a runners-only fleet offers runners and no computer");
+    const acquire = await call("/v1/compute/acquire", { subject: { accountId: ACCOUNT }, purpose: "interactive", requestId: "r1" });
+    expect(acquire.status === 404 && !(await store.get(ACCOUNT)), "and never creates a computer when asked for one");
+    const at = new Date().toISOString();
+    await call("/v1/events", { subject: { accountId: ACCOUNT }, event: { type: "account.signed-in", at, accountCreatedAt: at } });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(!(await store.get(ACCOUNT)), "not at sign-up either");
+  } finally {
+    await close();
+  }
+  const nothing = new FleetConfig({ ...WORKING_ENV, FLEET_ACCOUNT_MACHINE: "0" });
+  expect(!nothing.offered, "turning the computer off without runners offers nothing, and says so");
+}
+
+await run(tokenGate, acquireAndRefusal, usageIsReported, profileFollowsConfiguration, signUpStartsAComputer, runnersWithoutAComputer);
