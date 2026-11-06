@@ -6,12 +6,16 @@ import type { DeploymentAccountEvent, DeploymentDecision, DeploymentOperation, D
 import type { Account, NodeRecord } from "./store.js";
 import { TeamVaultError, type PostgresTeamVault } from "./team-vault.js";
 import type { PostgresTeamMachines } from "./team-machines.js";
+import type { PostgresTeamAdmin, TeamAction, TeamAuditEvent, TeamPolicies } from "./team-admin.js";
 import { normalizeTeamInvite, teamError, TeamError, type TeamInvite, type TeamMembership, type TeamRepository, isTeamRole } from "./teams.js";
 
 export interface TeamRouteDeps {
   teams: TeamRepository;
   vault: PostgresTeamVault;
   machines: PostgresTeamMachines;
+  admin: PostgresTeamAdmin;
+  /** An account's email, for activity entries made by a machine. */
+  accountEmail(accountId: string): Promise<string>;
   requireUser: RequestHandler;
   requireNode: RequestHandler;
   /** Deployment admission. A deployment may decide who can start a team and
@@ -96,7 +100,13 @@ export function registerTeamRoutes(app: Express, deps: TeamRouteDeps): void {
     if (!membership) return { team: null };
     const members = await teams.listMembers(membership.team.id);
     const invites = membership.role === "admin" ? (await teams.listInvites(membership.team.id)).map(inviteView) : [];
-    return { team: membership.team, role: membership.role, members, invites };
+    const policies = await deps.admin.policies(membership.team.id);
+    return { team: membership.team, role: membership.role, members, invites, policies };
+  };
+
+  /** Best effort: the log must never block the change it records. */
+  const log = (teamId: string, actorEmail: string, action: TeamAction, detail?: TeamAuditEvent["detail"]) => {
+    void deps.admin.record(teamId, actorEmail, action, detail).catch((error) => console.warn(`[teams] activity log failed: ${error instanceof Error ? error.message : error}`));
   };
 
   app.get("/account/team", requireUser, handle(async (req, res) => {
@@ -109,6 +119,7 @@ export function registerTeamRoutes(app: Express, deps: TeamRouteDeps): void {
     if (!(await admitted(res, account.id, "team.create", { teamMembers: 1 }))) return;
     const membership = await teams.createTeam(account.id, req.body?.name);
     await rosterChanged(account, membership.team.id);
+    log(membership.team.id, account.email, "team.created", { name: membership.team.name });
     res.status(201).json(await view(membership));
   }));
 
@@ -116,6 +127,7 @@ export function registerTeamRoutes(app: Express, deps: TeamRouteDeps): void {
     const membership = await adminOf(req, res);
     if (!membership) return;
     const team = await teams.renameTeam(membership.team.id, req.body?.name);
+    log(team.id, accountOf(req).email, "team.renamed", { name: team.name });
     res.json(await view({ ...membership, team }));
   }));
 
@@ -133,6 +145,7 @@ export function registerTeamRoutes(app: Express, deps: TeamRouteDeps): void {
     const account = accountOf(req);
     const input = normalizeTeamInvite(req.body ?? {});
     const { invite, token } = await teams.createInvite(membership.team.id, account.id, input);
+    log(membership.team.id, account.email, "invite.created", { to: invite.email ?? "link", role: invite.role });
     const url = teamInviteUrl(deps.appUrl(req), token);
     const emailed = invite.email
       ? await deps.sendEmail({ to: invite.email, ...teamInviteEmail({ teamName: membership.team.name, inviter: account.email, url, expiresAt: invite.expiresAt }) })
@@ -146,6 +159,7 @@ export function registerTeamRoutes(app: Express, deps: TeamRouteDeps): void {
     if (!membership) return;
     const revoked = await teams.revokeInvite(membership.team.id, String(req.params.id));
     if (!revoked) return res.status(404).json({ error: "Invite not found" });
+    log(membership.team.id, accountOf(req).email, "invite.revoked");
     res.json({ ok: true });
   }));
 
@@ -155,6 +169,8 @@ export function registerTeamRoutes(app: Express, deps: TeamRouteDeps): void {
     const role = req.body?.role;
     if (!isTeamRole(role)) return res.status(400).json({ error: "role must be admin or member" });
     await teams.setMemberRole(membership.team.id, String(req.params.accountId), role);
+    const target = (await teams.listMembers(membership.team.id)).find((m) => m.accountId === String(req.params.accountId));
+    log(membership.team.id, accountOf(req).email, "member.role", { email: target?.email ?? "", role });
     res.json(await view(await teams.teamOf(accountOf(req).id)));
   }));
 
@@ -164,7 +180,9 @@ export function registerTeamRoutes(app: Express, deps: TeamRouteDeps): void {
     const target = String(req.params.accountId);
     const membership = target === account.id ? await membershipOf(req) : await adminOf(req, res);
     if (!membership) return;
+    const targetEmail = (await teams.listMembers(membership.team.id)).find((m) => m.accountId === target)?.email ?? "";
     const { teamDeleted } = await teams.removeMember(membership.team.id, target);
+    if (!teamDeleted) log(membership.team.id, account.email, target === account.id ? "member.left" : "member.removed", target === account.id ? {} : { email: targetEmail });
     if (!teamDeleted) await rosterChanged(account, membership.team.id);
     else deps.recordEvent(account, { type: "team.members-changed", at: new Date().toISOString(), teamId: membership.team.id, members: 0 });
     res.json(await view(await teams.teamOf(account.id)));
@@ -191,7 +209,10 @@ export function registerTeamRoutes(app: Express, deps: TeamRouteDeps): void {
       if (!(await admitted(res, account.id, "team.member.add", { teamId: preview.teamId, teamMembers: members + 1 }))) return;
     }
     const membership = await teams.acceptInvite(token, account);
-    if (current?.team.id !== membership.team.id) await rosterChanged(account, membership.team.id);
+    if (current?.team.id !== membership.team.id) {
+      await rosterChanged(account, membership.team.id);
+      log(membership.team.id, account.email, "member.joined", { role: membership.role });
+    }
     res.json(await view(membership));
   }));
 
@@ -243,8 +264,13 @@ export function registerTeamRoutes(app: Express, deps: TeamRouteDeps): void {
   app.put("/node/team-share", requireNode, handle(async (req, res) => {
     const node = nodeOf(req);
     const shared = req.body?.shared === true;
-    if (shared) await teamOfNode(req);
+    const membership = shared ? await teamOfNode(req) : await teams.teamOf(node.accountId);
+    if (shared && membership && !(await deps.admin.policies(membership.team.id)).shareMachines) {
+      return res.status(403).json({ error: "Your team's admins have turned off sharing machines.", code: "team-policy" });
+    }
+    const was = await deps.machines.isShared(node.id);
     await deps.machines.setShared(node.id, shared);
+    if (membership && was !== shared) log(membership.team.id, await deps.accountEmail(node.accountId), shared ? "machine.shared" : "machine.unshared", { machine: node.name });
     res.json(await deps.machines.shareState(node.id));
   }));
 
@@ -260,6 +286,36 @@ export function registerTeamRoutes(app: Express, deps: TeamRouteDeps): void {
       accountId: String(i?.accountId ?? ""), sessionId: String(i?.sessionId ?? "").slice(0, 200),
       mode: i?.mode === "view" ? "view" as const : "prompt" as const, expiresAt: String(i?.expiresAt ?? ""),
     }));
-    res.json({ invites: await deps.machines.setInvites(nodeOf(req).id, invites) });
+    const node = nodeOf(req);
+    const membership = await teams.teamOf(node.accountId);
+    // With invites turned off for the team, the machine is told to drop them all.
+    const allowed = membership && (await deps.admin.policies(membership.team.id)).sessionInvites;
+    const before = await deps.machines.countInvites(node.id);
+    const kept = await deps.machines.setInvites(node.id, allowed ? invites : []);
+    if (membership && kept.length !== before) log(membership.team.id, await deps.accountEmail(node.accountId), "session-invites.changed", { machine: node.name, open: kept.length });
+    res.json({ invites: kept });
+  }));
+
+  // --- Admin: policies and activity (team-admin.ts) ---------------------------
+  app.get("/account/team/policies", requireUser, handle(async (req, res) => {
+    const membership = await membershipOf(req);
+    res.json({ policies: await deps.admin.policies(membership.team.id) });
+  }));
+
+  app.patch("/account/team/policies", requireUser, handle(async (req, res) => {
+    const membership = await adminOf(req, res);
+    if (!membership) return;
+    const patch: Partial<TeamPolicies> = {};
+    if (typeof req.body?.shareMachines === "boolean") patch.shareMachines = req.body.shareMachines;
+    if (typeof req.body?.sessionInvites === "boolean") patch.sessionInvites = req.body.sessionInvites;
+    const policies = await deps.admin.setPolicies(membership.team.id, patch);
+    log(membership.team.id, accountOf(req).email, "team.policies", { ...policies });
+    res.json({ policies });
+  }));
+
+  app.get("/account/team/activity", requireUser, handle(async (req, res) => {
+    const membership = await adminOf(req, res);
+    if (!membership) return;
+    res.json({ events: await deps.admin.audit(membership.team.id, Number(req.query.limit ?? 100) || 100) });
   }));
 }

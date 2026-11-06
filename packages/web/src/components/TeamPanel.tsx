@@ -9,6 +9,7 @@ import type { AppState } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { TeamInstructions } from "./TeamInstructions.js";
 import { TeamKeys } from "./TeamKeys.js";
+import { TeamAdmin } from "./TeamAdmin.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { Badge } from "./Badge.js";
@@ -260,6 +261,10 @@ export function TeamPanel({ state }: { state: AppState }) {
             </div>
           )}
         </section>
+      )}
+
+      {view.policies && (
+        <TeamAdmin policies={view.policies} admin={admin} onChanged={(policies) => setView({ ...view, policies })} />
       )}
 
       <section className="settings-section">

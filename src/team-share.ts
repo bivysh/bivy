@@ -22,7 +22,12 @@ export interface TeamShareDeps {
   devices(): LinkedDevice[];
   /** Remove a device and rotate the room key for the rest. */
   revoke(deviceId: string): void;
+  /** Turn the machine's own switch off (the team no longer allows sharing). */
+  disable?(): void;
 }
+
+/** The control plane refused because of a team policy. */
+export class TeamPolicyError extends Error {}
 
 /** Teammate devices that must go: all of them when sharing is off, else
  * those whose account has left the team. */
@@ -49,8 +54,9 @@ export class TeamShare {
   async publish(): Promise<void> {
     const res = await this.deps.request("/node/team-share", { method: "PUT", body: JSON.stringify({ shared: this.deps.enabled() }) });
     if (res && !res.ok) {
-      const data = (await res.json().catch(() => ({}))) as { error?: string };
-      throw new Error(data.error || `Could not change sharing (${res.status})`);
+      const data = (await res.json().catch(() => ({}))) as { error?: string; code?: string };
+      const message = data.error || `Could not change sharing (${res.status})`;
+      throw data.code === "team-policy" ? new TeamPolicyError(message) : new Error(message);
     }
     if (res?.ok) this.reconcile((await res.json()) as { shared: boolean; memberAccountIds: string[] });
     else this.reconcile({ shared: this.deps.enabled(), memberAccountIds: [] });
@@ -67,7 +73,16 @@ export class TeamShare {
     }
     const remote = (await res.json()) as { shared: boolean; memberAccountIds: string[] };
     // The control plane forgets the flag when a machine re-enrolls; restate it.
-    if (this.deps.enabled() && !remote.shared && remote.memberAccountIds.length) return this.publish();
+    if (this.deps.enabled() && !remote.shared && remote.memberAccountIds.length) {
+      try {
+        return await this.publish();
+      } catch (error) {
+        // The team turned sharing off: so does this machine, and its teammates go.
+        if (!(error instanceof TeamPolicyError)) throw error;
+        this.deps.disable?.();
+        return this.reconcile({ shared: false, memberAccountIds: remote.memberAccountIds });
+      }
+    }
     this.reconcile({ shared: this.deps.enabled() && remote.shared, memberAccountIds: remote.memberAccountIds });
   }
 

@@ -78,6 +78,11 @@ export class PostgresTeamMachines {
     return kept;
   }
 
+  async countInvites(nodeId: string): Promise<number> {
+    const { rows } = await this.query(`SELECT COUNT(*) AS n FROM team_session_invites WHERE node_id = $1 AND expires_at > now()`, [nodeId]);
+    return Number(rows[0]?.n ?? 0);
+  }
+
   /** Machines where `accountId` has an open session invite from a teammate. */
   async invitedTo(accountId: string): Promise<Array<SharedMachine & { sessions: number }>> {
     const { rows } = await this.query(

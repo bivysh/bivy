@@ -32,7 +32,23 @@ export type TeamView =
     members: TeamMemberView[];
     /** Open invites; only admins see them. */
     invites: TeamInviteView[];
+    policies?: TeamPolicies;
   };
+
+/** What admins allow for the whole team. */
+export interface TeamPolicies {
+  shareMachines: boolean;
+  sessionInvites: boolean;
+}
+
+export interface TeamActivityEvent {
+  id: string;
+  at: string;
+  actorEmail: string;
+  action: string;
+  label: string;
+  detail: Record<string, string | number | boolean>;
+}
 
 export interface TeamInvitePreview {
   teamName: string;
@@ -88,3 +104,8 @@ export const previewTeamInvite = (store: LocalStore, token: string, f?: typeof f
   teamRequest<TeamInvitePreview>(store, "/account/team/invite-preview", json("POST", { token }), f);
 export const joinTeam = (store: LocalStore, token: string, f?: typeof fetch) =>
   teamRequest<TeamView>(store, "/account/team/join", json("POST", { token }), f);
+export const setTeamPolicies = (store: LocalStore, patch: Partial<TeamPolicies>, f?: typeof fetch) =>
+  teamRequest<{ policies: TeamPolicies }>(store, "/account/team/policies", json("PATCH", patch), f);
+/** Admins only: recent changes to the team's roster and access, newest first. */
+export const fetchTeamActivity = (store: LocalStore, f?: typeof fetch) =>
+  teamRequest<{ events: TeamActivityEvent[] }>(store, "/account/team/activity", {}, f);

@@ -3,7 +3,7 @@
 // Machine-side team sharing rules (src/team-share.ts).
 import assert from "node:assert/strict";
 import type { LinkedDevice } from "../src/device-registry.js";
-import { teammateByDevice, teammateDevicesToRemove } from "../src/team-share.js";
+import { TeamPolicyError, TeamShare, teammateByDevice, teammateDevicesToRemove } from "../src/team-share.js";
 
 const device = (id: string, teammate?: string): LinkedDevice => ({
   id, publicKeyB64: `pub-${id}`, label: id, createdAt: "", lastSeenAt: null,
@@ -21,5 +21,24 @@ assert.equal(teammateByDevice(devices, "pub-bo-phone")?.email, "bo@example.com")
 assert.equal(teammateByDevice(devices, "pub-own"), undefined, "the owner's sessions aren't labelled");
 assert.equal(teammateByDevice(devices, "pub-unknown"), undefined);
 assert.equal(teammateByDevice(devices, undefined), undefined);
+
+// The team turns sharing off: the machine's own switch goes off and teammates go.
+{
+  let enabled = true;
+  const revoked: string[] = [];
+  const share = new TeamShare({
+    request: async (_path, init) => init?.method === "PUT"
+      ? new Response(JSON.stringify({ error: "Your team's admins have turned off sharing machines.", code: "team-policy" }), { status: 403 })
+      : new Response(JSON.stringify({ shared: false, memberAccountIds: ["ada", "bo", "cy"] }), { status: 200 }),
+    enabled: () => enabled,
+    devices: () => devices,
+    revoke: (id) => { revoked.push(id); },
+    disable: () => { enabled = false; },
+  });
+  await share.check();
+  assert.equal(enabled, false);
+  assert.deepEqual(revoked, ["bo-phone", "cy-laptop"]);
+  await assert.rejects(share.publish(), TeamPolicyError);
+}
 
 console.log("team-share: all tests passed");
