@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: MIT
-import { InviteTeammateSheet } from "./InviteTeammateSheet.js";
 import { accountOrigin } from "../packaged-client.js";
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useId, useRef, useState } from "react";
@@ -124,7 +123,6 @@ export function SessionMenu({
   const [deleting, setDeleting] = useState(false);
   const [forkOpen, setForkOpen] = useState(false);
   const [resumeOpen, setResumeOpen] = useState(false);
-  const [inviteOpen, setInviteOpen] = useState(false);
   const [prBusy, setPrBusy] = useState(false);
   const { presentation: { prResult, error } } = useAppState();
   const prBusyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -210,7 +208,6 @@ export function SessionMenu({
         />
       )}
       {forkOpen && <ForkSheet sessionId={sessionId} onClose={() => setForkOpen(false)} />}
-      {inviteOpen && <InviteTeammateSheet sessionId={sessionId} name={name} onClose={() => setInviteOpen(false)} />}
       {resumeOpen && <ResumeCommandDialog sessionId={sessionId} name={name} onCancel={() => setResumeOpen(false)} />}
       {deleting && (
         <ConfirmDialog
@@ -266,11 +263,6 @@ export function SessionMenu({
           <button className="menu-item session-actions-item" role="menuitem" onClick={() => { close(); setForkOpen(true); }} disabled={prBusy}>
             Fork / move…
           </button>
-          {!controller.direct && (
-            <button className="menu-item session-actions-item" role="menuitem" onClick={() => { close(); setInviteOpen(true); }} disabled={prBusy}>
-              Invite a teammate…
-            </button>
-          )}
           <button
             className="menu-item session-actions-item"
             role="menuitem"

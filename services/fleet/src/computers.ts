@@ -232,6 +232,19 @@ export class CloudComputers {
     });
   }
 
+  /** The node said it is going to sleep. A provider whose machines stop when
+   * the node exits needs nothing; on the others, stop the machine now, so an
+   * idle one isn't kept (and metered) until the awake cap. */
+  asleep(accountId: string, nodeId: string): Promise<boolean> {
+    if (this.deps.provider.capabilities.stopsOnExit) return Promise.resolve(false);
+    return this.deps.store.withAccountLock(accountId, async () => {
+      const record = await this.deps.store.get(accountId);
+      if (!record || record.nodeId !== nodeId || !record.machineId) return false;
+      await this.deps.provider.stopMachine(record.app, record.machineId);
+      return true;
+    });
+  }
+
   /** The computer was really used (Core's first agent turn or terminal of
    * this boot): an early-started awake period is metered from `at`. */
   used(accountId: string, nodeId: string, at: string): Promise<void> {

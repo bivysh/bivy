@@ -109,6 +109,9 @@ export interface TeardownActionDeps {
   shutdown?: () => void;
   /** Sleep instead of tearing down (see `EphemeralTeardownConfig.sleep`). */
   sleep?: boolean;
+  /** Best-effort POST /node/sleeping before a sleep exit: a provider whose
+   *  machine keeps running after the node exits is stopped by the deployment. */
+  signalSleeping?: () => Promise<void>;
   exit?: (code: number) => void;
   log?: (msg: string) => void;
 }
@@ -134,9 +137,15 @@ export async function performSelfTeardown(deps: TeardownActionDeps): Promise<voi
   const log = deps.log ?? ((m: string) => console.log(`[ephemeral-teardown] ${m}`));
   const exit = deps.exit ?? ((c: number) => process.exit(c));
   if (deps.sleep) {
-    // Exit only: the provider keeps the stopped machine and its disk, and a
-    // wake starts it again. Signalling settled would get it reaped.
+    // The provider keeps the stopped machine and its disk, and a wake starts
+    // it again. Signalling settled would get it reaped; signalling sleeping
+    // lets the deployment stop a machine that doesn't stop on exit.
     log(`machine idle — sleeping (provider=${deps.provider})`);
+    try {
+      await deps.signalSleeping?.();
+    } catch {
+      /* best effort — the awake cap still stops it */
+    }
     exit(0);
     return;
   }

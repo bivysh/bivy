@@ -62,6 +62,14 @@ export function createApp(deps: AppDeps) {
     res.json(await deps.computers.wake(accountOf(req), requiredString(req.body?.nodeId, "nodeId"), optionalString(req.body?.reason) ?? "connect"));
   }));
 
+  // Core: a cloud machine's node is going to sleep.
+  app.post("/v1/compute/asleep", asyncRoute(async (req, res) => {
+    const accountId = accountOf(req);
+    const nodeId = requiredString(req.body?.nodeId, "nodeId");
+    const stopped = (await deps.computers?.asleep(accountId, nodeId)) || (await deps.runners?.asleep(accountId, nodeId)) || false;
+    res.json({ stopped });
+  }));
+
   // Core: the computer did real work this boot (first agent turn or terminal).
   app.post("/v1/compute/used", asyncRoute(async (req, res) => {
     if (!deps.computers) return void res.json({});

@@ -426,9 +426,7 @@ export function App() {
   // A picked-but-unlaunched ephemeral runner also keeps the composer usable:
   // sending IS the launch — controller.sendPrompt provisions the machine, binds
   // the session, and replays the message once it's online (no launch button).
-  // A guest who can only view a teammate's session reads it but can't type.
-  const viewOnlyGuest = activeSession?.guestMode === "view";
-  const canCompose = (online || transientReconnect || controller.isCurrentNodeResumable() || Boolean(state.draft.ephemeralConfig)) && !activeTuiLocked && !viewOnlyGuest;
+  const canCompose = (online || transientReconnect || controller.isCurrentNodeResumable() || Boolean(state.draft.ephemeralConfig)) && !activeTuiLocked;
 
   // Left-edge swipe opens the sidebar drawer; swipe-left closes it (mobile).
   useEdgeSwipe({ isOpen: drawerOpen, onOpen: openDrawer, onClose: closeDrawer, maxWidth: 900 });
@@ -1343,9 +1341,7 @@ export function App() {
               state={state}
               disabled={!canCompose}
               disabledHint={
-                viewOnlyGuest
-                  ? "You were invited to view this session"
-                  : state.connection.status === "offline"
+                state.connection.status === "offline"
                   ? activeSessionNode?.name
                     ? `${activeSessionNode.name} is offline — run \`bivy status\` there`
                     : "Machine offline — run `bivy status` on it"

@@ -236,7 +236,7 @@ export class DeploymentExtension {
 
   /** Ask the deployment for a runner for one piece of work. A refusal (no
    * free runner, nothing left to run on) comes back as a policy decision. */
-  async runnerLaunch(accountId: string, input: { runnerId: string; requestId: string; sleeps?: boolean; sessionId?: string }): Promise<CloudComputerAcquire> {
+  async runnerLaunch(accountId: string, input: { runnerId: string; requestId: string; sleeps?: boolean }): Promise<CloudComputerAcquire> {
     if (!this.computeUrl) throw new Error("No deployment compute is configured");
     const result = await this.computeRequest("/v1/compute/runners/launch", { subject: { accountId }, ...input }, ACQUIRE_TIMEOUT_MS) as Partial<DeploymentDecision> & { nodeId?: unknown; state?: unknown };
     if (result.allowed === false) return { allowed: false, decision: result as DeploymentDecision };
@@ -258,6 +258,14 @@ export class DeploymentExtension {
     if (!this.computeUrl) return false;
     const result = await this.computeRequest("/v1/compute/runners/release", { subject: { accountId }, nodeId }) as { released?: unknown };
     return result.released === true;
+  }
+
+  /** A cloud machine's node is going to sleep: the deployment stops the
+   * machine if its provider doesn't when the node exits. */
+  async computeAsleep(accountId: string, nodeId: string): Promise<boolean> {
+    if (!this.computeUrl) return false;
+    const result = await this.computeRequest("/v1/compute/asleep", { subject: { accountId }, nodeId }) as { stopped?: unknown };
+    return result.stopped === true;
   }
 
   /** Destroy the account's cloud computer and its disk. */

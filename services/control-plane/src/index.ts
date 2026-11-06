@@ -25,8 +25,7 @@ import { countActiveAccountSessions } from "./session-count.js";
 import { DeploymentCompute, deploymentCompute, managedComputeEnabled, setDeploymentCompute } from "./deployment-compute.js";
 import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, cloudRouteSourceLabel, isCloudComputerNode, isCloudComputerPresence, isEphemeralMilestone, nodeMayTakeWork, restorableSnapshot, routeWorkToCloudComputer } from "./cloud-computer.js";
 import { deletionNoticeEmail, deletionNoticePush } from "./deletion-notice.js";
-import { bootRunner, isRunnerNode, runnerLabel, runnerNodeId, sessionRunnerId } from "./runners.js";
-import { placeCloudWork } from "./placement.js";
+import { bootRunner, isRunnerNode, placeWorkOnRunner, runnerLabel, runnerNodeId, sessionRunnerId } from "./runners.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
 import { configureProxyTrust } from "./proxy-trust.js";
@@ -327,18 +326,17 @@ async function notifyRelaysWorkAvailable(
     void (async () => {
       const offer = await cloudOffer(accountId);
       if (!offer.computer && !offer.runners) return;
-      // Where it runs is one table (placement.ts): a runner the session lives
-      // on, a new runner (restoring the session it continues), the cloud
-      // computer, or nowhere in the cloud.
-      const refused = (what: string) => (result: { allowed: boolean; decision?: { code?: string; reason?: string } }) => {
-        if (!result.allowed) console.warn(`[runners] ${what} refused for ${accountId}: ${result.decision?.code ?? result.decision?.reason ?? "denied"}`);
-        return result;
-      };
-      const placed = await placeCloudWork(store, accountId, item.id, offer, {
-        launchRunner: (runnerId, restoreSessionId) => deploymentExtension.runnerLaunch(accountId, { runnerId, requestId: runnerId, sleeps: true, ...(restoreSessionId ? { sessionId: restoreSessionId } : {}) }).then(refused("launch")),
-        wakeRunner: (nodeId) => deploymentExtension.runnerWake(accountId, nodeId, "work").then(refused("wake")),
-      });
-      if (placed !== undefined && placed !== "computer") return;
+      // Work a runner can do gets its own machine, which sleeps when the work
+      // is done and keeps the session. Anything else (sealed to the cloud
+      // computer, or no runner free) waits for the cloud computer, if any.
+      if (offer.runners) {
+        const launch = async (runnerId: string) => {
+          const launched = await deploymentExtension.runnerLaunch(accountId, { runnerId, requestId: runnerId, sleeps: true });
+          if (!launched.allowed) console.warn(`[runners] launch refused for ${accountId}: ${launched.decision.code ?? launched.decision.reason ?? "denied"}`);
+          return launched;
+        };
+        if (await placeWorkOnRunner(store, accountId, item.id, launch)) return;
+      }
       if (!offer.computer || !(await routeWorkToCloudComputer(store, accountId))) return;
       const acquired = await deploymentExtension.computeAcquire(accountId, { purpose: "automation", requestId: `work:${item.id}` });
       if (!acquired.allowed) console.warn(`[cloud-computer] automation launch refused for ${accountId}: ${acquired.decision.code ?? acquired.decision.reason ?? "denied"}`);
@@ -1745,19 +1743,15 @@ async function resolveAccountClient(req: Request): Promise<ResolvedClient | unde
 // enrollment token (its account's nodes — so `bivy nodes` on an installed node
 // can enumerate siblings). A leaked QR therefore reveals just the node it was
 // minted for, never the whole account.
-/** Machines teammates share with this account's team, or invited it into a
- * session on, marked with whose they are. */
-async function teamSharedNodes(accountId: string): Promise<Array<NodeRecord & { sharedBy: string; guestSessions?: number }>> {
+/** Machines teammates share with this account's team, marked with who shares them. */
+async function teamSharedNodes(accountId: string): Promise<Array<NodeRecord & { sharedBy: string }>> {
   const shared = await store.teamMachines.sharedWith(accountId);
-  const sharedIds = new Set(shared.map((m) => m.nodeId));
-  const invited = (await store.teamMachines.invitedTo(accountId)).filter((m) => !sharedIds.has(m.nodeId));
-  const machines = [...shared.map((m) => ({ ...m, sessions: undefined as number | undefined })), ...invited];
-  const out: Array<NodeRecord & { sharedBy: string; guestSessions?: number }> = [];
-  for (const owner of new Set(machines.map((m) => m.ownerAccountId))) {
+  const out: Array<NodeRecord & { sharedBy: string }> = [];
+  for (const owner of new Set(shared.map((m) => m.ownerAccountId))) {
     const theirs = await store.listNodes(owner);
-    for (const machine of machines.filter((m) => m.ownerAccountId === owner)) {
+    for (const machine of shared.filter((m) => m.ownerAccountId === owner)) {
       const node = theirs.find((n) => n.id === machine.nodeId);
-      if (node) out.push({ ...node, sharedBy: machine.ownerEmail, ...(machine.sessions ? { guestSessions: machine.sessions } : {}) });
+      if (node) out.push({ ...node, sharedBy: machine.ownerEmail });
     }
   }
   return out;
@@ -1954,6 +1948,18 @@ app.put("/session-correlation/:sessionId", requireUser, asyncHandler(async (req,
 // An ephemeral machine's daemon calls this once it has gone idle. Core launches
 // no machines itself; the deployment owns their lifecycle. A runner that
 // settled is done, so the deployment is told to delete it now.
+// A cloud machine's node is going to sleep. On providers whose machines stop
+// when the node exits this changes nothing; on the others the deployment stops
+// the machine now instead of metering an idle one until its awake cap.
+app.post("/node/sleeping", requireNode, (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  if (isRunnerNode(node.id) || isCloudComputerNode(node.accountId, node.id)) {
+    void deploymentExtension.computeAsleep(node.accountId, node.id)
+      .catch((error) => console.warn(`[cloud] sleep of ${node.id} not reported:`, error instanceof Error ? error.message : error));
+  }
+  res.json({ ok: true });
+});
+
 app.post("/node/settled", requireNode, (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   if (isRunnerNode(node.id)) {

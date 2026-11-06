@@ -46,7 +46,9 @@ export class FleetConfig {
   readonly problems: string[] = [];
 
   constructor(private readonly env: NodeJS.ProcessEnv = process.env) {
-    if (!this.providerToken()) {
+    if (this.provider() === "command") {
+      if (!this.dispatchCommand()) this.problems.push("FLEET_PROVIDER=command needs FLEET_DISPATCH_COMMAND, the dispatcher to run (see DISPATCH.md)");
+    } else if (!this.providerToken()) {
       this.problems.push(`no provider credential (FLEET_PROVIDER_TOKEN, or FLEET_PROVIDER_TOKEN_${providerKey(this.provider())} for a named provider)`);
     }
     if (!this.image()) this.problems.push("FLEET_IMAGE must name a machine image with Bivy already installed");
@@ -76,6 +78,9 @@ export class FleetConfig {
   }
 
   providerOrg(): string | undefined { return this.value("PROVIDER_ORG", "MANAGED_FLY_ORG"); }
+
+  /** For FLEET_PROVIDER=command: the dispatcher program (DISPATCH.md). */
+  dispatchCommand(): string | undefined { return this.value("DISPATCH_COMMAND", undefined); }
 
   /** Without one the fleet keeps its records in memory: fine for a trial run,
    * but a restart then forgets which machines it owns. */

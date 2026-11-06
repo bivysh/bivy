@@ -30,6 +30,7 @@ export interface FakeMachine extends Machine {
 }
 
 export class FakeProvider implements MachineProvider {
+  capabilities = { stopsOnExit: true, keepsMemory: false, cpuReading: true };
   readonly apps = new Set<string>();
   readonly volumes = new Map<string, { app: string; sizeGb: number }>();
   readonly machines = new Map<string, FakeMachine>();

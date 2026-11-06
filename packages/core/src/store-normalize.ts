@@ -262,7 +262,6 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
       forkedFrom: s?.forkedFrom || undefined,
       delegatedFrom: s?.delegatedFrom && typeof s.delegatedFrom.sessionId === "string" ? s.delegatedFrom : undefined,
       startedBy: typeof s?.startedBy === "string" && s.startedBy ? s.startedBy : undefined,
-      guestMode: s?.guestMode === "view" || s?.guestMode === "prompt" ? s.guestMode : undefined,
       nodeId: s?.nodeId || undefined,
       runtimeId: s?.runtimeId,
       agentName: s?.agentName,

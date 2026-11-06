@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Run cloud machines on any platform.** The fleet can now run every machine operation through a dispatcher program you supply (`FLEET_PROVIDER=command`, `FLEET_DISPATCH_COMMAND`): JSON in, JSON out, and the dispatcher keeps the platform's credential. Providers describe what their machines do as data (stop on exit, keep memory, CPU readings), and a node now says when it goes to sleep, so a platform whose machines keep running after the node exits gets them stopped instead of billed. See [DISPATCH.md](services/fleet/DISPATCH.md).
 - **Your phone or browser can hand your sign-ins to a new machine.** Machines now wrap the credential vault key for each of your signed-in devices too. While Bivy is open on one of them, it passes the key, still end-to-end encrypted, to a new runner or rebuilt cloud computer that's waiting, so the new machine gets your sign-ins even when none of your other machines is online. Removing a device drops its copy and re-keys the vault. See [credential-sync.md](docs/credential-sync.md).
 - **Follow-ups continue on a runner.** A comment, review or other follow-up on a session whose machine is gone now continues on a new runner that first restores the session from its account-sealed snapshot; a follow-up on a sleeping runner's session wakes that runner. Where cloud work runs is now one rules table. See [Automations](docs/ephemeral-sessions.md#automations).
 
@@ -22,17 +23,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Skills for every agent.** Install an Agent Skills folder (`SKILL.md` and its files) with `bivy skill install <folder|github:owner/repo/path>`, or ship skills in a plugin (`contributes.skills`). Every session, whatever its agent, gets a short list of names and descriptions and reads a skill when a task calls for it (`bivy skill show`, or the `bivy_skill` MCP tool). See [Plugins](docs/plugins.md#skills).
 - **New worktrees come ready to work.** `.worktreeinclude` (gitignore syntax) copies ignored files such as `.env` from your checkout into each new session worktree. `worktree.setup` in `.bivy/environment.yaml` runs a repository script or package script there before the agent's first turn, and `worktree.teardown` runs before Bivy removes it. The chat shows how setup went. See [Configuration as code](docs/config-as-code.md#new-worktrees-copied-files-setup-and-teardown).
 - **Team instructions.** Team admins write instructions in Settings → Team, and every agent session on every member's machines gets them, ahead of each person's own instructions, which win where they conflict. They're end-to-end encrypted with a team key that members' machines pass to each other, so Bivy's servers can't read them. When someone leaves, the team moves to a new key they don't have. See [Teams](docs/teams.md#team-instructions).
-- **Invite a teammate into one session.** From a session's menu, choose Invite a teammate: they can prompt and approve, or only view, for a day or a week. They see just that session on your machine, under "Shared with you", and nothing else there. Their devices get a key for that session only, never your machine's key, and removing the invite or letting it expire ends their access. See [Teams](docs/teams.md#inviting-a-teammate-into-one-session).
 - **Team keys.** Team admins add API keys in Settings → Team, and agents on every member's machine can use them by name with `bivy secrets exec --env NAME`, as with a personal key. Someone's own key with the same name wins on their machines. Keys are end-to-end encrypted in the team vault, and no one can see a value after it's saved. See [Teams](docs/teams.md#team-keys).
 - **Teams.** Settings → Team lets you start a team, invite people by email or with a link, make them admins or members, and remove them. Opening an invite link takes you to Settings → Team to join. The server keeps only the team list; a team gives no one access to another member's machines, sessions or keys. A deployment's policy service is asked before a team is created or someone joins, and hears when the member count changes. See [Teams](docs/teams.md).
 
 ### Changed
 
 - On a teammate's shared machine, the sign-in card says that a sign-in made there stays on that machine for its owner and team, and sessions a teammate starts show "By <email>" in the session list.
-
-### Fixed
-
-- **Fork and Retry at reset come back when you open the chat.** When an agent hits a usage limit, the offer to fork the work to another agent or retry automatically when the limit resets was shown only to an app that had the session open at that moment, so opening the chat later showed the limit with nothing to tap. It is now offered again every time the session is opened, and a retry already waiting for the reset shows again with its Cancel button.
 
 ## [0.22.9] - 2026-11-06
 

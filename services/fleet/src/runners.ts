@@ -160,6 +160,18 @@ export class Runners {
     });
   }
 
+  /** The runner's node said it is going to sleep: stop the machine when the
+   * provider doesn't on its own (see CloudComputers.asleep). */
+  asleep(accountId: string, nodeId: string): Promise<boolean> {
+    if (this.deps.provider.capabilities.stopsOnExit) return Promise.resolve(false);
+    return this.deps.store.withAccountLock(runnerLock(accountId), async () => {
+      const record = (await this.deps.store.listRunners(accountId)).find((r) => r.nodeId === nodeId);
+      if (!record?.machineId) return false;
+      await this.deps.provider.stopMachine(record.app, record.machineId);
+      return true;
+    });
+  }
+
   /** Core is done with a runner: delete its machine and disk now. */
   release(accountId: string, nodeId: string): Promise<boolean> {
     return this.deps.store.withAccountLock(runnerLock(accountId), async () => {
