@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.9] - 2026-11-06
+
 ### Added
 
 - ACP agents (Grok, OpenCode, Copilot, Gemini and any custom `BIVY_ACP_COMMAND`) also show "Retrying (n/m)…" while they retry a failed model call. Grok reports its retries this way.
