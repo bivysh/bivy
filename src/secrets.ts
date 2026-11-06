@@ -28,6 +28,8 @@ export type SecretRecord = {
  *  integration.<id>.api-key, …), so the two never collide and the app can list
  *  and remove agents' keys without touching the node's. */
 export const AGENT_SECRET_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+/** Team keys opened from the team vault (src/team-vault.ts) are stored as `team.NAME`. */
+export const TEAM_KEY_PREFIX = "team.";
 
 /** An agent key as the app lists it: never the value. */
 export type AgentSecretInfo = { id: string; description?: string; backend: SecretBackend; updatedAt: string };
@@ -155,7 +157,8 @@ export class SecretVault {
     // Proton Pass, pass, …). Runs on THIS node only (command refs never sync).
     if (value.startsWith("cmd://")) return runCommand(value.slice("cmd://".length));
 
-    const record = this.getRecord(value);
+    // A key agents use falls back to the team's key of that name.
+    const record = this.getRecord(value) ?? (AGENT_SECRET_NAME.test(value) ? this.getRecord(`${TEAM_KEY_PREFIX}${value}`) : undefined);
     if (!record) return undefined;
     if (record.backend === "env") return record.ref ? process.env[record.ref.replace(/^env:\/\//, "")] || undefined : undefined;
     if (record.backend === "1password") return record.ref ? readOnePassword(record.ref) : undefined;
@@ -281,6 +284,12 @@ export class SecretVault {
     return { iv: iv.toString("base64"), tag: tag.toString("base64"), ciphertext: ciphertext.toString("base64") };
   }
 
+  /** A local record's value, synchronously; undefined for references. */
+  decryptLocal(id: string): string | undefined {
+    const record = this.getRecord(id);
+    return record?.backend === "local" ? this.decryptRecord(record) : undefined;
+  }
+
   private decryptRecord(record: SecretRecord): string | undefined {
     if (!record.iv || !record.tag || !record.ciphertext) return undefined;
     const decipher = createDecipheriv("aes-256-gcm", this.key(), Buffer.from(record.iv, "base64"));
@@ -352,4 +361,17 @@ export function secretExecPlan(args: string[]): { env: Array<[string, string]>; 
 
 export async function resolveSecret(value: string, appDir?: string): Promise<string | undefined> {
   return new SecretVault(appDir).resolve(value);
+}
+
+/** The team vault's view of this machine's secret vault: only `team.NAME` records. */
+export function teamKeyStore(vault: SecretVault) {
+  const id = (name: string) => `${TEAM_KEY_PREFIX}${name}`;
+  return {
+    names: () => vault.list().map((r) => r.id).filter((key) => key.startsWith(TEAM_KEY_PREFIX)).map((key) => key.slice(TEAM_KEY_PREFIX.length)),
+    get: (name: string) => {
+      try { return vault.decryptLocal(id(name)); } catch { return undefined; }
+    },
+    set: (name: string, value: string) => vault.setLocal(id(name), value, "Team key"),
+    remove: (name: string) => { vault.delete(id(name)); },
+  };
 }

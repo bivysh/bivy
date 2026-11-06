@@ -60,6 +60,29 @@ On a machine, the opened instructions are kept in
 `<data dir>/team-instructions.json` and the key in `team-vault.json`
 (mode 0600).
 
+## Team keys
+
+Admins add API keys in **Settings → Team → Team keys**. Every agent on every
+member's machines can use them by name, the same way as a personal key:
+
+```bash
+bivy secrets exec --env STRIPE_API_KEY -- stripe products list
+```
+
+- Keys travel in the same end-to-end encrypted team vault as team
+  instructions. Bivy's servers can't read them.
+- Nobody sees a value after it is saved, admins included; the panel lists
+  names only. Replace a key by adding it again under the same name.
+- On a machine, team keys are stored encrypted in its secret vault as
+  `team.NAME` (`bivy secrets list` shows them). A personal key with the same
+  name wins on that person's machines.
+- Removing a key removes it from members' machines within a minute. When
+  someone leaves the team, their machines delete every team key, and the team
+  moves to a new vault key. Keys they already read could have been copied, so
+  rotate a key at its provider when someone who could use it leaves.
+- A name is a letter followed by letters, digits or underscores (up to 64).
+  A value is up to 8 KB, and a team has up to 100 keys.
+
 ## Shared machines
 
 The owner of a machine can share it with their team: connect to it, open

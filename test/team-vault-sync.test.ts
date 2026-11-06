@@ -12,6 +12,7 @@ import { deriveWrapKey, generatePairingKeypair } from "../src/pairing-crypto.js"
 import { seal, open } from "../src/e2e.js";
 import { TeamVaultSync, readTeamInstructions } from "../src/team-vault.js";
 import { composeAgentInstructions, sessionInstructions } from "../src/agent-instructions.js";
+import { SecretVault, teamKeyStore } from "../src/secrets.js";
 
 type Wrapped = { wrappedKey: string; wrappedByPublicKey: string; keyGeneration: number };
 const server = {
@@ -53,14 +54,15 @@ function handle(nodeId: string, pathname: string, init: RequestInit = {}): unkno
 function machine(nodeId: string) {
   const appDir = fs.mkdtempSync(path.join(os.tmpdir(), `team-vault-${nodeId}-`));
   const pair = generatePairingKeypair();
+  const vault = new SecretVault(appDir);
   const sync = new TeamVaultSync({
-    appDir, nodeId,
+    appDir, nodeId, keyStore: teamKeyStore(vault),
     request: async (pathname, init) => new Response(JSON.stringify(handle(nodeId, pathname, init)), { status: 200 }),
     publicKey: () => pair.publicKeyB64,
     wrap: (pub, keyB64) => seal(deriveWrapKey(pair.privateKeyB64, pub, "team-vault"), keyB64),
     unwrap: (pub, wrapped) => open(deriveWrapKey(pair.privateKeyB64, pub, "team-vault"), wrapped),
   });
-  return { appDir, sync };
+  return { appDir, sync, vault };
 }
 
 const ada = machine("ada-laptop");
@@ -68,8 +70,8 @@ const bo = machine("bo-laptop");
 
 // The admin writes; the ciphertext is all the server sees.
 await ada.sync.sync();
-await ada.sync.write("Use pnpm.", 0);
-assert.ok(server.vault && !server.vault.ciphertext.includes("pnpm"));
+await ada.sync.write({ text: "Use pnpm.", setKey: { name: "STRIPE_KEY", value: "sk_test_team" } }, 0);
+assert.ok(server.vault && !server.vault.ciphertext.includes("pnpm") && !server.vault.ciphertext.includes("sk_test_team"));
 
 // The member's machine has no key yet: it asks, the admin's machine answers, it opens.
 await bo.sync.sync();
@@ -79,8 +81,26 @@ await bo.sync.sync();
 assert.equal(bo.sync.current().state, "ready");
 assert.equal(readTeamInstructions(bo.appDir)?.text, "Use pnpm.");
 
+// Team keys reach the member's machine encrypted at rest, by name only in the
+// plain cache; a personal key of the same name wins.
+assert.deepEqual(readTeamInstructions(bo.appDir)?.keys.map((k) => k.name), ["STRIPE_KEY"]);
+assert.ok(!fs.readFileSync(path.join(bo.appDir, "team-instructions.json"), "utf8").includes("sk_test_team"));
+assert.equal(await bo.vault.resolve("STRIPE_KEY"), "sk_test_team");
+assert.equal(await bo.vault.resolve("secret://STRIPE_KEY"), "sk_test_team");
+bo.vault.setLocal("STRIPE_KEY", "sk_test_mine");
+assert.equal(await bo.vault.resolve("STRIPE_KEY"), "sk_test_mine");
+bo.vault.delete("STRIPE_KEY");
+
+// Removing a key removes it from every machine on their next tick.
+await ada.sync.write({ removeKey: "STRIPE_KEY" }, server.vault!.generation);
+await bo.sync.sync();
+assert.equal(await bo.vault.resolve("STRIPE_KEY"), undefined);
+await ada.sync.write({ setKey: { name: "STRIPE_KEY", value: "sk_test_team" } }, server.vault!.generation);
+await bo.sync.sync();
+await assert.rejects(ada.sync.write({ setKey: { name: "bad-name", value: "x" } }, server.vault!.generation), /key name/);
+
 // A member can't write.
-await assert.rejects(bo.sync.write("Use npm.", 1), /Only a team admin/);
+await assert.rejects(bo.sync.write({ text: "Use npm." }, server.vault!.generation), /Only a team admin/);
 
 // Sessions get the Bivy note, then the team's, then the user's own (which win).
 const composed = composeAgentInstructions("Prefer tabs.", false, "", { name: "Acme", text: "Use pnpm." });
@@ -95,10 +115,11 @@ server.keys.delete("bo-laptop");
 server.vault!.needsRotation = true;
 await ada.sync.sync();
 assert.equal(server.vault!.keyGeneration, 2);
-await ada.sync.write("Use pnpm 10.", server.vault!.generation);
+await ada.sync.write({ text: "Use pnpm 10." }, server.vault!.generation);
 await bo.sync.sync();
 assert.equal(bo.sync.current().state, "none");
 assert.equal(readTeamInstructions(bo.appDir), undefined, "a machine that left forgets the team's instructions");
 assert.doesNotMatch(sessionInstructions(bo.appDir)?.text ?? "", /pnpm/, "and its sessions stop receiving them");
+assert.equal(await bo.vault.resolve("STRIPE_KEY"), undefined, "and the team's keys");
 
 console.log("team-vault-sync: all tests passed");
