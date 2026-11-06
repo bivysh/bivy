@@ -376,6 +376,24 @@ prints the MCP-shaped result (`content`, `structuredContent`). Every plugin tool
 is also an MCP tool in `bivy mcp-serve`, and one declared with `widgets: true`
 can be called from a chat widget (`bivy.call`).
 
+### `bivy skill <list|show|install|remove>`
+
+Agent Skills every agent on this machine is offered: folders with a `SKILL.md`
+(front matter with `name` and `description`, then instructions) and the files
+it refers to.
+
+```bash
+bivy skill list [--json]
+bivy skill show pdf                           # instructions plus the skill's folder
+bivy skill install github:owner/repo/skills/pdf [--name <name>] [--force]
+bivy skill remove pdf
+```
+
+`install` copies a skill folder into `<data-dir>/skills/<name>`; dropping a
+folder there by hand works too. Plugins add skills with `contributes.skills`.
+Every session gets a short list of names and descriptions, and agents read a
+skill with `show` or the `bivy_skill` MCP tool. See [Plugins](plugins.md#skills).
+
 ### `bivy theme <list|set|clear>`
 
 Choose the app's theme from those installed plugins provide.

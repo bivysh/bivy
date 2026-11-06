@@ -2,14 +2,14 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // What installed plugins contribute besides agents — widgets, tools, themes,
-// guides — flattened across plugins. One function for every type: a name that
+// guides, skills — flattened across plugins. One function for every type: a name that
 // two plugins both claim is reported and neither copy is used, the same rule as
 // for agents (store.ts), so install order never decides behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { currentBivyVersion } from "../app-version.js";
 import { defaultDataDir } from "../data-dir.js";
-import type { PluginGuideContribution, PluginThemeContribution, PluginToolContribution, PluginWidgetContribution } from "../plugin-sdk/index.js";
+import type { PluginGuideContribution, PluginSkillContribution, PluginThemeContribution, PluginToolContribution, PluginWidgetContribution } from "../plugin-sdk/index.js";
 import { listInstalledPlugins } from "./store.js";
 
 export interface Contributions {
@@ -17,6 +17,7 @@ export interface Contributions {
   tools: PluginToolContribution;
   themes: PluginThemeContribution;
   guides: PluginGuideContribution;
+  skills: PluginSkillContribution;
 }
 export type ContributionKey = keyof Contributions;
 
@@ -34,6 +35,7 @@ const NAME_OF: { [K in ContributionKey]: (item: Contributions[K]) => string } = 
   tools: (tool) => tool.name,
   themes: (theme) => theme.id,
   guides: (guide) => guide.topic,
+  skills: (skill) => skill.name,
 };
 
 export function installedContributions<K extends ContributionKey>(

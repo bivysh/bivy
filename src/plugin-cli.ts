@@ -14,17 +14,18 @@ import { findContribution, installedContributions } from "./plugins/contribution
 import { applyKit, exportKit } from "./plugins/kit.js";
 import { installPlugin, listInstalledPlugins, pluginStoreDir, readPluginManifest, removePlugin } from "./plugins/store.js";
 import { runPluginTool, toolInputSchema } from "./plugins/tools.js";
+import { findSkill, installSkill, listSkills, removeSkill, renderSkill, userSkillsDir } from "./skills.js";
 
 function usage(exitCode = 0): never {
   console.log(`Usage: bivy plugin <command> [options]
 
 Develop, install, and inspect declarative Bivy plugins.
 
-A plugin adds agents, chat widgets, tools, themes or guides. It is a folder
+A plugin adds agents, chat widgets, tools, themes, guides or skills. It is a folder
 with a bivy.plugin.yaml; agents write and install them for the user.
 
 Commands:
-  init [directory]         Scaffold a plugin (--kind widget|tool|theme|guide|agent)
+  init [directory]         Scaffold a plugin (--kind widget|tool|theme|guide|skill|agent)
   validate <path>          Validate a bivy.plugin.yaml/json manifest
   doctor <path>            Check compatibility and adapter executables
   test <path>              Run static checks and live ACP handshakes
@@ -37,6 +38,7 @@ Commands:
   remove <id>              Remove an installed plugin
 
 Also: bivy tools list|run (plugin tools), bivy theme list|set|clear,
+bivy skill list|show|install|remove (skills every agent is offered),
 bivy kit export|apply (a whole setup as one repository).
 
 Options:
@@ -155,6 +157,14 @@ console.log(JSON.stringify({ greeting: \`Hello, \${name}!\` }));
 `,
     files: { [`guides/${id}.md`]: `# ${name}\n\nSummary: One line on when an agent should read this.\n\nThe steps, commands and conventions an agent should follow.\n` },
     next: `edit guides/${id}.md, install, then 'bivy guide ${id}'`,
+  }),
+  skill: (id, name) => ({
+    contributes: `  skills:
+    - name: ${id}
+      file: skills/${id}/SKILL.md
+`,
+    files: { [`skills/${id}/SKILL.md`]: `---\nname: ${id}\ndescription: ${name}. Replace with what the skill does and when an agent should use it; agents decide from this line.\n---\n\n# ${name}\n\nThe steps an agent follows. Put scripts and reference files beside this one and refer to them by relative path.\n` },
+    next: `edit skills/${id}/SKILL.md, install, then 'bivy skill show ${id}'`,
   }),
 };
 
@@ -317,6 +327,47 @@ function theme(args: string[], json: boolean, dataDir: string): void {
   else console.log(`Theme set to ${found.item.name}. The app follows when its theme is "Machine" (the default).`);
 }
 
+/** `bivy skill list|show|install|remove`: Agent Skills every agent on this machine is offered. */
+function skill(args: string[], json: boolean, dataDir: string): void {
+  const [sub, ...rest] = args;
+  const name = positionalArgs(rest)[0];
+  // `show` without a name lists, so the bivy_skill tool can do both.
+  if (!sub || sub === "list" || sub === "ls" || ((sub === "show" || sub === "read") && !name)) {
+    const skills = listSkills(dataDir);
+    if (json) outputJson({ ok: true, directory: userSkillsDir(dataDir), skills: skills.map(({ name: n, description, source, dir }) => ({ name: n, description, source, dir })) });
+    else if (!skills.length) console.log(`No skills yet. Install one with: bivy skill install <folder|github:owner/repo/path>, or drop a folder with a SKILL.md into ${userSkillsDir(dataDir)}`);
+    else for (const entry of skills) console.log(`  ${entry.name}  ${entry.description}${entry.source === "user" ? "" : `  (${entry.source})`}`);
+    return;
+  }
+  if (sub === "show" || sub === "read") {
+    const found = findSkill(name!, dataDir);
+    if (!found) throw new Error(`No skill called "${name}". See: bivy skill list`);
+    if (json) outputJson({ ok: true, name: found.name, dir: found.dir, source: found.source, markdown: renderSkill(found) });
+    else console.log(renderSkill(found).trimEnd());
+    return;
+  }
+  if (sub === "install" || sub === "add") {
+    if (!name) throw new Error("Usage: bivy skill install <folder|git URL|github:owner/repo[/path][#ref]> [--name <name>] [--force]");
+    const source = resolveSource(name);
+    try {
+      const installed = installSkill(source.path, { dataDir, force: rest.includes("--force"), name: option(rest, "--name") });
+      if (json) outputJson({ ok: true, installed: installed.name, dir: installed.dir, description: installed.description });
+      else console.log(`Installed skill ${installed.name}. Sessions started from now on are offered it; read it with: bivy skill show ${installed.name}`);
+    } finally {
+      source.cleanup();
+    }
+    return;
+  }
+  if (sub === "remove" || sub === "rm") {
+    if (!name) throw new Error("Usage: bivy skill remove <name>");
+    if (!removeSkill(name, dataDir)) throw new Error(`No skill called "${name}" in ${userSkillsDir(dataDir)}; a plugin's skill goes with its plugin (bivy plugin remove)`);
+    if (json) outputJson({ ok: true, removed: name });
+    else console.log(`Removed skill ${name}.`);
+    return;
+  }
+  throw new Error("Usage: bivy skill list | show <name> | install <source> [--force] | remove <name>");
+}
+
 /** Topics a shared plugin or kit carries on GitHub, so finding one needs no registry. */
 const SEARCH_TOPICS = { plugin: "bivy-plugin", kit: "bivy-kit" } as const;
 
@@ -340,7 +391,7 @@ async function search(words: string[], json: boolean): Promise<void> {
   }
   if (json) { outputJson({ ok: true, results: found }); return; }
   if (!found.length) {
-    console.log(`Nothing shared yet${words.length ? ` for "${words.join(" ")}"` : ""}. An agent can build it: bivy plugin init <dir> --kind widget|tool|theme|guide|agent`);
+    console.log(`Nothing shared yet${words.length ? ` for "${words.join(" ")}"` : ""}. An agent can build it: bivy plugin init <dir> --kind widget|tool|theme|guide|skill|agent`);
     return;
   }
   for (const item of found) console.log(`${item.kind === "kit" ? "kit   " : "plugin"}  ${item.repo}  ★${item.stars}  ${item.updated}\n        ${item.description}\n        ${item.install}`);
@@ -392,6 +443,7 @@ function contributionSummary(manifest: PluginManifest): Record<string, string[]>
     tools: (c.tools ?? []).map((tool) => tool.name),
     themes: (c.themes ?? []).map((entry) => entry.id),
     guides: (c.guides ?? []).map((guide) => guide.topic),
+    skills: (c.skills ?? []).map((entry) => entry.name),
   }).filter(([, list]) => list.length));
 }
 
@@ -565,6 +617,11 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
 
     if (command === "theme") {
       theme(args, json, dataDir);
+      return;
+    }
+
+    if (command === "skill") {
+      skill(args, json, dataDir);
       return;
     }
 

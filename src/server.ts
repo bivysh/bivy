@@ -1762,6 +1762,7 @@ const capabilitiesController = createCapabilitiesController({
           widgets: plugin.manifest.contributes.widgets?.length ?? 0,
           tools: plugin.manifest.contributes.tools?.length ?? 0,
           guides: plugin.manifest.contributes.guides?.length ?? 0,
+          skills: plugin.manifest.contributes.skills?.length ?? 0,
           themes: (plugin.manifest.contributes.themes ?? []).map((theme) => ({ id: theme.id, name: theme.name })),
         },
       } : {}),

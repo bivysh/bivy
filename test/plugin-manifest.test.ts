@@ -5,7 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { checkPluginCompatibility, parsePluginManifest, PLUGIN_MANIFEST_SCHEMA, recommendedBivyRange } from "../src/plugin-sdk/index.js";
+import { checkPluginCompatibility, parsePluginManifest, PLUGIN_MANIFEST_SCHEMA, recommendedBivyRange, validatePluginManifest } from "../src/plugin-sdk/index.js";
 import { installPlugin, installedAgentContributions, listInstalledPlugins, removePlugin } from "../src/plugins/store.js";
 
 const valid = `
@@ -164,4 +164,13 @@ test("installed plugin diagnostics report malformed manifests and duplicate agen
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("a skill contribution names a SKILL.md inside the plugin", () => {
+  const base = { apiVersion: "bivy.sh/v1alpha1", kind: "Plugin", metadata: { id: "skills", name: "Skills", version: "1.0.0" } };
+  assert.equal(validatePluginManifest({ ...base, contributes: { skills: [{ name: "pdf", file: "skills/pdf/SKILL.md" }] } }).ok, true);
+  const bad = validatePluginManifest({ ...base, contributes: { skills: [{ name: "pdf", file: "../pdf/SKILL.md" }, { name: "notes", file: "skills/notes.md" }] } });
+  assert.equal(bad.ok, false);
+  assert.match(bad.errors.join("\n"), /relative path inside the plugin directory/);
+  assert.match(bad.errors.join("\n"), /must end in \/skill\.md/);
 });

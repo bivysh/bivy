@@ -6940,6 +6940,7 @@ Unlike 'bivy run', these commands operate on governed background Runs with check
     case "plugin":
     case "tools":
     case "theme":
+    case "skill":
     case "kit": {
       if (!(await ensureDeps())) process.exit(1);
       const pluginEnv = { ...process.env };

@@ -2,7 +2,7 @@
 
 A plugin makes Bivy do more on your machine: a **chat widget** any session can
 place, a **tool** agents and widgets can call, a **theme** for the app, a
-**guide** agents read, or another **agent**. It is a folder with a
+**guide** agents read, a **skill** every agent is offered, or another **agent**. It is a folder with a
 `bivy.plugin.yaml`.
 
 You do not have to write it. Ask the agent in any session — "add a standup
@@ -21,6 +21,7 @@ tools and agents run as separate processes, and themes and guides are data.
 | `tools` | A command, JSON in and out | `bivy tools run`, MCP (every agent), `bivy.call` in widgets |
 | `themes` | A palette for the app | `bivy theme set <id>` |
 | `guides` | A markdown playbook | `bivy guide <topic>` (and MCP resources) |
+| `skills` | An Agent Skills folder (`SKILL.md` and its files) | listed for every agent; `bivy skill show <name>`, the `bivy_skill` MCP tool |
 | `agents` | An ACP or CLI agent | the agent picker; see [Add any agent](add-an-agent.md) |
 
 ## Quick start: widget, tool, theme, guide
@@ -118,6 +119,31 @@ app showing the **Machine** theme (the default) follows within seconds.
 A guide is markdown with a `# Title` line and a `Summary: …` line. `bivy guide`
 lists it with the built-in guides, and `bivy mcp-serve` serves it as a resource.
 A plugin cannot replace a built-in topic.
+
+### Skills
+
+A skill is a folder with a `SKILL.md` in the Agent Skills format: YAML front
+matter with `name` and `description`, then the instructions, plus any scripts
+or reference files it mentions by relative path. A plugin lists its skills:
+
+```yaml
+contributes:
+  skills:
+    - name: release-notes
+      file: skills/release-notes/SKILL.md
+```
+
+Bivy offers skills to **every** agent, not only the ones that read skill
+folders themselves. Each session's instructions (the same channel as
+[agent instructions](agent-instructions.md)) carry one line per skill, its name
+and description, and the agent reads a skill when a task calls for it, with
+`bivy skill show <name>` or the `bivy_skill` MCP tool. That prints the
+instructions and the skill's folder. Only the short list rides on every turn.
+
+You don't need a plugin for one skill: `bivy skill install <folder|github:owner/repo/path>`
+copies an existing skill folder into `<data-dir>/skills/<name>`, and a folder
+dropped there by hand works the same. A skill there wins over a plugin's skill
+of the same name. New skills reach sessions started after they are installed.
 
 ## See and manage them in the app
 
@@ -333,6 +359,7 @@ contributes:                # at least one entry across these
   tools: []                 # up to 50: name, description, input?, command, args?, timeoutSeconds?, widgets?
   themes: []                # up to 20: id, name, mode?, colors
   guides: []                # up to 20: topic, file (.md)
+  skills: []                # up to 50: name, file (…/SKILL.md)
 ```
 
 Paths (`entry`, `file`) are relative to the plugin folder and may not contain
@@ -385,7 +412,7 @@ A complete runnable plugin is available under
 ## CLI
 
 ```bash
-bivy plugin init [directory] [--kind agent|widget|tool|theme|guide] [--id <slug>] [--name <name>] [--adapter acp|process] [--json]
+bivy plugin init [directory] [--kind agent|widget|tool|theme|guide|skill] [--id <slug>] [--name <name>] [--adapter acp|process] [--json]
 bivy plugin validate <file-or-directory> [--json]
 bivy plugin doctor <file-or-directory> [--json]
 bivy plugin test <file-or-directory> [--json]
@@ -395,6 +422,7 @@ bivy plugin list [--json]
 bivy plugin remove <plugin-id> [--json]
 bivy tools list|run <name> [--input '<json>'] [key=value …] [--json]
 bivy theme list|set <id>|clear [--json]
+bivy skill list|show <name>|install <source>|remove <name> [--json]
 bivy widget list [--json]
 ```
 
@@ -431,8 +459,9 @@ machine. Treat one from someone else like any other program you install.
   `widgets: true`.
 - **Tools** run as your OS user, in the session's workspace, with the input
   checked against their declared fields, bounded output and a timeout.
-- **Themes and guides** are data. A guide is text agents read, never a
-  permission.
+- **Themes, guides and skills** are data. A guide or skill is text agents read,
+  never a permission. A skill's scripts run only if an agent runs them, under
+  that session's sandbox and approvals.
 
 Installing an agent authorizes Bivy to launch the declared executable with the
 session workspace as its working directory. The executable has the permissions

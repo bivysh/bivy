@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Skills for every agent.** Install an Agent Skills folder (`SKILL.md` and its files) with `bivy skill install <folder|github:owner/repo/path>`, or ship skills in a plugin (`contributes.skills`). Every session, whatever its agent, gets a short list of names and descriptions and reads a skill when a task calls for it (`bivy skill show`, or the `bivy_skill` MCP tool). See [Plugins](docs/plugins.md#skills).
 - **New worktrees come ready to work.** `.worktreeinclude` (gitignore syntax) copies ignored files such as `.env` from your checkout into each new session worktree. `worktree.setup` in `.bivy/environment.yaml` runs a repository script or package script there before the agent's first turn, and `worktree.teardown` runs before Bivy removes it. The chat shows how setup went. See [Configuration as code](docs/config-as-code.md#new-worktrees-copied-files-setup-and-teardown).
 - **Teams.** Settings → Team lets you start a team, invite people by email or with a link, make them admins or members, and remove them. Opening an invite link takes you to Settings → Team to join. The server keeps only the team list; a team gives no one access to another member's machines, sessions or keys. A deployment's policy service is asked before a team is created or someone joins, and hears when the member count changes. See [Teams](docs/teams.md).
 

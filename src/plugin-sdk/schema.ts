@@ -5,7 +5,7 @@ export const PLUGIN_MANIFEST_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: "https://bivy.sh/schemas/plugin/v1alpha1.json",
   title: "Bivy plugin manifest",
-  description: "A declarative Bivy plugin manifest: agents, chat widgets, tools, themes and guides.",
+  description: "A declarative Bivy plugin manifest: agents, chat widgets, tools, themes, guides and skills.",
   type: "object",
   additionalProperties: false,
   required: ["apiVersion", "kind", "metadata", "contributes"],
@@ -46,6 +46,7 @@ export const PLUGIN_MANIFEST_SCHEMA = {
         tools: { type: "array", maxItems: 50, items: { $ref: "#/$defs/tool" } },
         themes: { type: "array", maxItems: 20, items: { $ref: "#/$defs/theme" } },
         guides: { type: "array", maxItems: 20, items: { $ref: "#/$defs/guide" } },
+        skills: { type: "array", maxItems: 50, items: { $ref: "#/$defs/skill" } },
       },
     },
   },
@@ -117,6 +118,15 @@ export const PLUGIN_MANIFEST_SCHEMA = {
       properties: {
         topic: { type: "string", pattern: "^[a-z][a-z0-9-]{1,47}$" },
         file: { allOf: [{ $ref: "#/$defs/relativeFile" }, { pattern: "\\.md$" }] },
+      },
+    },
+    skill: {
+      type: "object",
+      additionalProperties: false,
+      required: ["name", "file"],
+      properties: {
+        name: { type: "string", pattern: "^[a-z][a-z0-9-]{1,47}$" },
+        file: { allOf: [{ $ref: "#/$defs/relativeFile" }, { pattern: "/SKILL\\.md$" }] },
       },
     },
     stringArgs: {
