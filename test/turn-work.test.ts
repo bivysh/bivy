@@ -45,12 +45,14 @@ const entries: TranscriptEntry[] = [
   { id: "note", role: "assistant", text: "I'll attach it.", attachments: [image] },
   { id: "think", role: "thinking", text: "…" },
   { id: "tool", role: "tool", text: "", tool: { callId: "attach", name: "shell", input: {}, status: "done" } },
+  // A screenshot a tool returned folds with the work instead.
+  { id: "shot", role: "assistant", text: "", attachments: [image], toolOutput: true },
   { id: "plan", role: "tool", text: "", tool: { callId: "plan", name: "plan", input: {}, status: "done" } },
   { id: "final", role: "assistant", text: "Attached." },
 ];
 const kind = (entry: TranscriptEntry) => entryTurnKind(entry, (tool) => tool.callId === "plan");
-assert.deepEqual(entries.map(kind), ["output", "output", "work", "work", "output", "prose"]);
+assert.deepEqual(entries.map(kind), ["output", "output", "work", "work", "work", "output", "prose"]);
 const split = splitTurn(entries.slice(1), kind);
-assert.deepEqual(split.work.map((entry) => entry.id), ["think", "tool"]);
+assert.deepEqual(split.work.map((entry) => entry.id), ["think", "tool", "shot"]);
 assert.deepEqual(split.outputs.map((entry) => entry.id), ["note"]);
 assert.deepEqual(split.answer.map((entry) => entry.id), ["plan", "final"]);

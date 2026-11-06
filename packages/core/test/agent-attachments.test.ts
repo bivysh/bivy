@@ -61,6 +61,17 @@ describe("agent attachment — history render (placed where it was emitted)", ()
     expect(entries[2]!.attachments?.[0]).toMatchObject({ hash: HASH, description: "cap" });
   });
 
+  it("shows a screenshot in a user-role tool_result (Claude Code) as tool output, not a user message", () => {
+    const entries = renderHistory([
+      { role: "user", content: "check the layout" },
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "shot.png" } }] },
+      { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "bivy_attachment", ref: imageRef }] }] },
+    ]);
+    expect(entries.filter((e) => e.role === "user").map((e) => e.text)).toEqual(["check the layout"]);
+    const shot = entries.find((e) => e.attachments?.length);
+    expect(shot).toMatchObject({ role: "assistant", toolOutput: true });
+  });
+
   it("carries an explicit artifact:true block field and the message's createdAt through history render", () => {
     const entries = renderHistory([
       { role: "assistant", createdAt: 1700000000000, content: [{ type: "bivy_attachment", ref: imageRef, caption: "cap", artifact: true }] },
