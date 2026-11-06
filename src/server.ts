@@ -6726,7 +6726,7 @@ function runNativeCommand(command: MeshCommand) {
   return { ok: true, runId };
 }
 
-const guardianInterceptorImpl: ToolInterceptor = async ({ sessionId, toolName, input, signal }) => {
+const guardianInterceptorImpl: ToolInterceptor = async ({ sessionId, toolName, input, signal, personRequired }) => {
   // AskUserQuestion is a Bivy-owned interaction, not a governed side effect: any
   // agent that emits it (pi's stealth toolset mirrors Claude Code; the Claude SDK
   // has it natively) is intercepted here and answered via Bivy's own question
@@ -6767,7 +6767,7 @@ const guardianInterceptorImpl: ToolInterceptor = async ({ sessionId, toolName, i
     unrestricted: record?.sandbox === "danger-full-access",
     isRemembered: (key) => sessionAllowRules.has(sessionId, key),
   });
-  const verdict = policy.decideToolCall(workspace, toolName, input);
+  const verdict = policy.decideToolCall(workspace, toolName, input, personRequired);
   let { decision, reason } = verdict;
   const { risk, rememberKey } = verdict;
 

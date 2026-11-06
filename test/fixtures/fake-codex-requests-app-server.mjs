@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Codex app-server stand-in that asks the client things mid-turn: a
 // request_user_input question, a sandbox permission request, an MCP tool
-// approval and an MCP form. Every client message it receives is appended to
+// approval, an MCP form and a managed human-only command checkpoint. Every client message it receives is appended to
 // $FAKE_CODEX_LOG as one JSON line, so a test can check what the shim answered.
 import { appendFileSync } from "node:fs";
 import readline from "node:readline";
@@ -20,6 +20,7 @@ const requests = [
   { method: "item/permissions/requestApproval", params: { threadId: thread, turnId: "turn-1", itemId: "perm-1", environmentId: null, startedAtMs: 0, cwd: "/tmp", reason: "needs the network", permissions: { network: { enabled: true }, fileSystem: null } } },
   { method: "mcpServer/elicitation/request", params: { threadId: thread, turnId: "turn-1", serverName: "docs", mode: "form", message: "Allow lookup?", requestedSchema: { type: "object", properties: {} }, _meta: { codex_approval_kind: "mcp_tool_call", tool_name: "lookup", tool_params: { q: "x" } } } },
   { method: "mcpServer/elicitation/request", params: { threadId: thread, turnId: "turn-1", serverName: "docs", mode: "form", message: "Your name?", requestedSchema: { type: "object", properties: { name: { type: "string" } } }, _meta: null } },
+  { method: "item/commandExecution/requestApproval", params: { threadId: thread, turnId: "turn-1", itemId: "call-1", approvalId: "ap-1", kind: "humanCommand", command: "git push", cwd: "/tmp", startedAtMs: 0 } },
 ];
 let next = 0;
 function ask() {

@@ -36,11 +36,12 @@ const runtime = new ProtocolRuntime({
   env: { BIVY_CODEX_BIN: fakeCodex, FAKE_CODEX_LOG: logFile },
   capabilities: { toolInterception: true },
 });
-const asked: Array<{ toolName: string; input: any }> = [];
+const asked: Array<{ toolName: string; input: any; personRequired?: { reason?: string } }> = [];
 const { session } = await runtime.createSession({
   workspace: process.cwd(),
-  toolInterceptor: async ({ toolName, input }) => {
-    asked.push({ toolName, input });
+  toolInterceptor: async ({ toolName, input, personRequired }) => {
+    asked.push({ toolName, input, ...(personRequired ? { personRequired } : {}) });
+    if (personRequired) return { block: true, reason: "User rejected shell" };
     if (toolName === "AskUserQuestion") return { handled: true, result: "The user answered: B", answers: { "Which one?": "B" } };
     if (toolName === "request_permissions") return { block: true, reason: "User rejected request_permissions" };
     if (toolName === "McpElicitation") return { handled: true, result: "sent", elicitation: { action: "accept", content: { name: "Ada" } } };
@@ -53,13 +54,18 @@ session.subscribe((event) => events.push(event));
 await session.prompt("ask me things");
 await until(() => events.find((e) => e.type === "agent_end"), "the first turn");
 
-assert.deepEqual(asked.map((a) => a.toolName), ["AskUserQuestion", "request_permissions", "lookup", "McpElicitation"], "questions, sandbox widening, MCP approvals and MCP forms all reach the guardian");
+assert.deepEqual(asked.map((a) => a.toolName), ["AskUserQuestion", "request_permissions", "lookup", "McpElicitation", "shell"], "questions, sandbox widening, MCP approvals, MCP forms and checkpoints all reach the guardian");
 assert.deepEqual(asked[0].input.questions, [{ question: "Which one?", header: "Pick", options: [{ label: "A", description: "first" }, { label: "B", description: "second" }] }], "the card gets the question but never a secret one");
 assert.deepEqual(answerTo(1000), { answers: { "q-pick": { answers: ["B"] } } }, "answers go back keyed by Codex's question id");
 assert.deepEqual(answerTo(1001), { permissions: {}, scope: "turn" }, "a denied permission request grants nothing");
 assert.deepEqual(answerTo(1002), { action: "accept", content: null, _meta: null }, "an allowed MCP tool approval is accepted");
 assert.deepEqual(asked[3].input, { serverName: "docs", message: "Your name?", mode: "form", requestedSchema: { type: "object", properties: { name: { type: "string" } } } }, "the MCP form reaches the guardian as asked");
 assert.deepEqual(answerTo(1003), { action: "accept", content: { name: "Ada" }, _meta: null }, "the form's answer goes back to the server");
+assert.ok(asked[4].personRequired && !asked.slice(0, 4).some((a) => a.personRequired), "only the managed checkpoint is person-only");
+assert.equal(asked[4].input.command, "git push");
+assert.deepEqual(answerTo(1004), { decision: "decline" }, "a declined checkpoint is declined");
+assert.ok(events.some((e) => e.type === "tool_result" && e.toolCallId === "checkpoint-ap-1" && e.result === "User rejected shell"), "the checkpoint's card closes with the decision");
+assert.ok(received().find((m) => m.method === "initialize")?.params.capabilities.requiredHumanApproval, "the shim asks Codex for checkpoints");
 assert.equal(session.getAvailableThinkingLevels?.().join(","), "low,high", "the default model's efforts reach the picker");
 assert.equal(session.getThinkingLevel?.(), "low", "starting at the model's default effort");
 

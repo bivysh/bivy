@@ -42,6 +42,14 @@ function parentOf(msg: Record<string, unknown>): { parentToolUseId?: string } {
   return typeof msg.parentToolCallId === "string" && msg.parentToolCallId ? { parentToolUseId: msg.parentToolCallId } : {};
 }
 
+/** A `tool.call`'s `personRequired` (true, or `{reason}`) → ToolCallContext's. */
+function personRequiredOf(raw: unknown): { reason?: string } | undefined {
+  if (raw === true) return {};
+  if (!raw || typeof raw !== "object") return undefined;
+  const reason = (raw as { reason?: unknown }).reason;
+  return typeof reason === "string" && reason ? { reason } : {};
+}
+
 /** A protocol `usage` message → UsageSnapshot (reuses the CLI token-key scan). */
 function parseProtocolUsage(raw: unknown): UsageSnapshot | undefined {
   if (!raw || typeof raw !== "object") return undefined;
@@ -1038,7 +1046,8 @@ class ProtocolSession implements RuntimeSession {
       // informational because the upstream runtime is already executing it.
       this.emit({ type: existing ? "tool_execution_update" : "tool_call", toolName, input: msg.input, toolCallId, ...(detail ? { detail } : {}), ...parent });
       if (type === "tool.call" && this.capabilitiesRef.toolInterception && this.toolInterceptor) {
-        const decision = await this.toolInterceptor({ sessionId: this.id, toolName, input: msg.input });
+        const personRequired = personRequiredOf(msg.personRequired);
+        const decision = await this.toolInterceptor({ sessionId: this.id, toolName, input: msg.input, ...(personRequired ? { personRequired } : {}) });
         // A call Bivy serviced itself (an answered AskUserQuestion) must not run:
         // it goes back as a deny whose reason is the result, like the SDK
         // runtimes' deny channel, plus `handled` and the structured answers (or

@@ -49,6 +49,18 @@ check("unrestricted (danger-full-access) still denies catastrophic commands", ()
   assert.equal(policy.decideToolCall("/ws", "Bash", { command: "rm -rf /usr" }).decision, "deny");
 });
 
+check("an agent's person-only ask asks past every opt-out, keeps the floor, and is never remembered", () => {
+  const person = { reason: "Your Claude ask rule Bash(git push:*) requires a person to approve this" };
+  for (const options of [{ mode: "never" as const, unrestricted: true }, { mode: "always" as const, isRemembered: () => true }]) {
+    const policy = new PolicyEngine({ ...options, isRiskyIntegration: noRisky });
+    const ask = policy.decideToolCall("/ws", "Bash", { command: "git push" }, person);
+    assert.equal(ask.decision, "ask");
+    assert.equal(ask.reason, person.reason);
+    assert.equal(ask.rememberKey, undefined);
+    assert.equal(policy.decideToolCall("/ws", "Bash", { command: "rm -rf /" }, person).decision, "deny");
+  }
+});
+
 // Session-scoped "allow … for this session" (src/policy/session-allow.ts).
 
 check("mode-driven asks carry a rememberKey the card can offer to remember", () => {

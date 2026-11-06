@@ -81,6 +81,31 @@ const SDK_PACKAGE = "@anthropic-ai/claude-agent-sdk";
 // runtime with capabilities.toolInterception rather than being reimplemented per
 // SDK. The interceptor is invoked from canUseTool below like any other tool.
 
+/** What the SDK tells canUseTool about an ask, as far as Bivy reads it. */
+export interface ClaudePermissionAsk {
+  signal?: AbortSignal;
+  toolUseID?: string;
+  decisionReason?: string;
+  /** "rule" when a user's permissions.ask rule made this prompt. */
+  decisionReasonType?: string;
+  /** Set when an ask rule forced the prompt but the ask kept the tool's reason. */
+  matchedAskRule?: { source?: string; toolName?: string; ruleContent?: string };
+}
+
+/** The user's own ask rule made this prompt, so a person must answer it
+ *  (ToolCallContext.personRequired); undefined for any other ask. */
+export function claudeAskRule(ask: ClaudePermissionAsk): { reason: string } | undefined {
+  const rule = ask.matchedAskRule;
+  if (rule) {
+    const spelled = rule.ruleContent ? `${rule.toolName ?? ""}(${rule.ruleContent})` : rule.toolName;
+    return { reason: `Your Claude ask rule${spelled ? ` ${spelled}` : ""} requires a person to approve this` };
+  }
+  if (ask.decisionReasonType === "rule") {
+    return { reason: ask.decisionReason || "Your Claude ask rule requires a person to approve this" };
+  }
+  return undefined;
+}
+
 // Fallback model list for the picker before the agent subprocess is up.
 // getModels() is called to render the model picker (e.g. right after an
 // OAuth sign-in, before the user sends anything), but the SDK's
@@ -938,10 +963,11 @@ class ClaudeSession implements RuntimeSession {
     const canUseTool = async (
       toolName: string,
       input: Record<string, unknown>,
-      opts: { signal?: AbortSignal; toolUseID?: string },
+      opts: ClaudePermissionAsk,
     ) => {
       if (this.toolInterceptor) {
-        const decision = await this.toolInterceptor({ sessionId: this.id, toolName, input, signal: opts.signal });
+        const personRequired = claudeAskRule(opts);
+        const decision = await this.toolInterceptor({ sessionId: this.id, toolName, input, signal: opts.signal, ...(personRequired ? { personRequired } : {}) });
         // Bivy answered/serviced the call itself — feed the result back without
         // running the tool. canUseTool has no success-result channel, so this
         // rides the deny message (the SDK returns it as the tool result); the
