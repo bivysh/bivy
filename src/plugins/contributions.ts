@@ -2,14 +2,14 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // What installed plugins contribute besides agents — widgets, tools, themes,
-// guides, skills — flattened across plugins. One function for every type: a name that
+// guides, skills, composer actions, panels — flattened across plugins. One function for every type: a name that
 // two plugins both claim is reported and neither copy is used, the same rule as
 // for agents (store.ts), so install order never decides behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { currentBivyVersion } from "../app-version.js";
 import { defaultDataDir } from "../data-dir.js";
-import type { PluginGuideContribution, PluginSkillContribution, PluginThemeContribution, PluginToolContribution, PluginWidgetContribution } from "../plugin-sdk/index.js";
+import type { PluginActionContribution, PluginGuideContribution, PluginPanelContribution, PluginSkillContribution, PluginThemeContribution, PluginToolContribution, PluginWidgetContribution } from "../plugin-sdk/index.js";
 import { listInstalledPlugins } from "./store.js";
 
 export interface Contributions {
@@ -18,6 +18,8 @@ export interface Contributions {
   themes: PluginThemeContribution;
   guides: PluginGuideContribution;
   skills: PluginSkillContribution;
+  actions: PluginActionContribution;
+  panels: PluginPanelContribution;
 }
 export type ContributionKey = keyof Contributions;
 
@@ -36,6 +38,8 @@ const NAME_OF: { [K in ContributionKey]: (item: Contributions[K]) => string } = 
   themes: (theme) => theme.id,
   guides: (guide) => guide.topic,
   skills: (skill) => skill.name,
+  actions: (action) => action.id,
+  panels: (panel) => panel.id,
 };
 
 export function installedContributions<K extends ContributionKey>(
@@ -66,6 +70,21 @@ export function installedContributions<K extends ContributionKey>(
 
 export function findContribution<K extends ContributionKey>(key: K, name: string, dataDir = defaultDataDir()): Installed<Contributions[K]> | undefined {
   return installedContributions(key, dataDir).items.find((entry) => NAME_OF[key](entry.item) === name);
+}
+
+/**
+ * What plugins add to the app itself, for the app to render: composer actions
+ * (what a button writes) and session panels (which widget a tab shows). Keyed
+ * `<plugin id>/<id>`; a panel whose widget is not usable is left out.
+ */
+export function pluginUi(dataDir = defaultDataDir()): { actions: Array<PluginActionContribution & { key: string; plugin: string }>; panels: Array<PluginPanelContribution & { key: string; plugin: string }> } {
+  const widgets = new Set(installedContributions("widgets", dataDir).items.map((entry) => `${entry.pluginId}/${entry.item.id}`));
+  return {
+    actions: installedContributions("actions", dataDir).items.map(({ pluginId, pluginName, item }) => ({ ...item, key: `${pluginId}/${item.id}`, plugin: pluginName })),
+    panels: installedContributions("panels", dataDir).items
+      .filter(({ pluginId, item }) => widgets.has(`${pluginId}/${item.widget}`))
+      .map(({ pluginId, pluginName, item }) => ({ ...item, key: `${pluginId}/${item.id}`, plugin: pluginName })),
+  };
 }
 
 /** A widget page a plugin provides, bounded like a workspace widget. */

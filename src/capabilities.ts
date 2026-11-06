@@ -52,7 +52,7 @@ export interface CapabilityPluginSummary {
   valid: boolean;
   agentCount: number;
   /** What it adds besides agents, so the app can say what each plugin is for. */
-  contributions?: { widgets: number; tools: number; guides: number; skills?: number; themes: Array<{ id: string; name: string }> };
+  contributions?: { widgets: number; tools: number; guides: number; skills?: number; actions?: number; panels?: number; themes: Array<{ id: string; name: string }> };
 }
 
 export interface CapabilityLocalEndpointSummary {
@@ -176,6 +176,8 @@ export function normalizeCapabilities(raw: RawCapabilityInputs): MachineCapabili
           tools: Math.max(0, Math.trunc(plugin.contributions.tools) || 0),
           guides: Math.max(0, Math.trunc(plugin.contributions.guides) || 0),
           skills: Math.max(0, Math.trunc(plugin.contributions.skills ?? 0) || 0),
+          actions: Math.max(0, Math.trunc(plugin.contributions.actions ?? 0) || 0),
+          panels: Math.max(0, Math.trunc(plugin.contributions.panels ?? 0) || 0),
           themes: plugin.contributions.themes.slice(0, 20).map((theme) => ({ id: String(theme.id).slice(0, 48), name: String(theme.name).slice(0, 120) })),
         },
       } : {}),

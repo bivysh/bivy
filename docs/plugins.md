@@ -2,7 +2,8 @@
 
 A plugin makes Bivy do more on your machine: a **chat widget** any session can
 place, a **tool** agents and widgets can call, a **theme** for the app, a
-**guide** agents read, a **skill** every agent is offered, or another **agent**. It is a folder with a
+**guide** agents read, a **skill** every agent is offered, a **composer action**,
+a **session panel**, or another **agent**. It is a folder with a
 `bivy.plugin.yaml`.
 
 You do not have to write it. Ask the agent in any session — "add a standup
@@ -21,6 +22,8 @@ tools and agents run as separate processes, and themes and guides are data.
 | `tools` | A command, JSON in and out | `bivy tools run`, MCP (every agent), `bivy.call` in widgets |
 | `themes` | A palette for the app | `bivy theme set <id>` |
 | `guides` | A markdown playbook | `bivy guide <topic>` (and MCP resources) |
+| `actions` | A composer button that writes a prompt | the composer's bolt button |
+| `panels` | A session tab that shows one of the plugin's widgets | the side pane, or the session menu on a phone |
 | `skills` | An Agent Skills folder (`SKILL.md` and its files) | listed for every agent; `bivy skill show <name>`, the `bivy_skill` MCP tool |
 | `agents` | An ACP or CLI agent | the agent picker; see [Add any agent](add-an-agent.md) |
 
@@ -144,6 +147,43 @@ You don't need a plugin for one skill: `bivy skill install <folder|github:owner/
 copies an existing skill folder into `<data-dir>/skills/<name>`, and a folder
 dropped there by hand works the same. A skill there wins over a plugin's skill
 of the same name. New skills reach sessions started after they are installed.
+
+### Composer actions and session panels
+
+Both are data. An action is a prompt behind a button; a panel is one of the
+plugin's widgets beside the chat. Neither runs code in the app.
+
+```yaml
+contributes:
+  actions:
+    - id: standup
+      label: Standup
+      description: Summarize yesterday's commits as my standup.
+      prompt: "Write my standup: what I did since yesterday, what's next, any blockers."
+      send: true           # send at once; leave it out to fill the composer to edit
+  widgets:
+    - { id: ci-status, name: CI status, entry: widgets/ci.html }
+  panels:
+    - id: ci
+      title: CI
+      widget: ci-status    # one of this plugin's widgets
+      data: { branch: main }
+```
+
+- **Actions** appear behind the bolt button in the composer when the machine
+  has any. One with `send: true` is sent right away if the composer is empty
+  and the session can take a message; otherwise, and always for actions
+  without `send`, the prompt is put in the composer to edit and send.
+- **Panels** are extra tabs in the session's side pane on a wide screen, and
+  items in the session menu that open as a sheet on a phone. The widget runs in
+  the same sandbox as a chat widget, gets `data` as `bivy.data`, and can call
+  the plugin's tools marked `widgets: true`. Those tools run in that session's
+  workspace, so a panel shows live state for the session. A panel whose widget
+  is unusable (two plugins claim its id) is left out.
+
+`bivy plugin init <dir> --kind action` or `--kind panel` writes a working one.
+Installing or updating a plugin reaches the app the next time it opens or
+comes back to the foreground.
 
 ## See and manage them in the app
 
@@ -375,6 +415,8 @@ contributes:                # at least one entry across these
   themes: []                # up to 20: id, name, mode?, colors
   guides: []                # up to 20: topic, file (.md)
   skills: []                # up to 50: name, file (…/SKILL.md)
+  actions: []               # up to 20: id, label, description?, prompt, send?
+  panels: []                # up to 5: id, title, widget (this plugin's), data?
 ```
 
 Paths (`entry`, `file`) are relative to the plugin folder and may not contain
@@ -427,7 +469,7 @@ A complete runnable plugin is available under
 ## CLI
 
 ```bash
-bivy plugin init [directory] [--kind agent|widget|tool|theme|guide|skill] [--id <slug>] [--name <name>] [--adapter acp|process] [--json]
+bivy plugin init [directory] [--kind agent|widget|tool|theme|guide|skill|action|panel] [--id <slug>] [--name <name>] [--adapter acp|process] [--json]
 bivy plugin validate <file-or-directory> [--json]
 bivy plugin doctor <file-or-directory> [--json]
 bivy plugin test <file-or-directory> [--json]
@@ -507,5 +549,5 @@ plugin before installing it, install from sources you trust, and pin a tag
 - MCP server contributions or OAuth connection forms (a tool can wrap a CLI);
 - trigger connectors, checks, artifacts or compute providers;
 - install scripts or dependency downloads;
-- daemon hooks, or UI outside chat widgets and themes;
+- daemon hooks, or UI beyond chat widgets, composer actions, panels and themes;
 - signatures or trust tiers.

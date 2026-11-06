@@ -39,7 +39,7 @@ export interface CapabilityPluginSummary {
   valid: boolean;
   agentCount: number;
   /** What it adds besides agents, so the app can say what each plugin is for. */
-  contributions?: { widgets: number; tools: number; guides: number; skills?: number; themes: Array<{ id: string; name: string }> };
+  contributions?: { widgets: number; tools: number; guides: number; skills?: number; actions?: number; panels?: number; themes: Array<{ id: string; name: string }> };
 }
 
 export interface CapabilityLocalEndpointSummary {

@@ -18,6 +18,7 @@ import { agentPickerLabel, filterAndSortAgentRuntimes, isTopAgent } from "../age
 import { isCloudComputerNodeId, nodePresence, PRESENCE } from "../cloudDestinations.js";
 import { AI_ACCOUNTS } from "../onboarding.js";
 import { orderConnectedModels } from "../modelPickerCatalog.js";
+import type { PluginAction } from "../pluginUi.js";
 
 const agentLabel = agentPickerLabel;
 
@@ -538,6 +539,27 @@ export function SandboxPicker({ state, onClose }: { state: AppState; onClose: ()
             />
           );
         })}
+      </div>
+    </Sheet>
+  );
+}
+
+// ---- Plugin actions (composer) ----
+
+/** The composer's plugin actions: each writes its prompt, sent at once or
+ *  filled in to edit, as the plugin declared. */
+export function ActionsPicker({ actions, onChoose, onClose }: { actions: PluginAction[]; onChoose: (action: PluginAction) => void; onClose: () => void }) {
+  return (
+    <Sheet title="Actions" onClose={onClose} autoFocusSearch={false}>
+      <div className="picker-list">
+        {actions.map((action) => (
+          <PickerItem
+            key={action.key}
+            title={action.label}
+            meta={[action.description, action.send ? "Sends right away" : "Fills in your message", action.plugin].filter(Boolean).join(" · ")}
+            onClick={() => onChoose(action)}
+          />
+        ))}
       </div>
     </Sheet>
   );

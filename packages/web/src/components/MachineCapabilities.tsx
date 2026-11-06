@@ -32,6 +32,8 @@ function pluginAdds(plugin: CapabilityPluginSummary): string {
     count(c?.tools ?? 0, "tool"),
     count(c?.guides ?? 0, "guide"),
     count(c?.skills ?? 0, "skill"),
+    count(c?.actions ?? 0, "action"),
+    count(c?.panels ?? 0, "panel"),
     ...(c?.themes ?? []).map((theme) => `theme ${theme.name}`),
   ].filter(Boolean).join(" · ");
 }

@@ -19,6 +19,7 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
   "files.read": Type.Object({ ...request, ...session, path: Type.String({ minLength: 1, maxLength: 4096 }) }),
   "files.download": Type.Object({ ...request, ...session, path: Type.String({ minLength: 1, maxLength: 4096 }) }),
   "plugins.remove": Type.Object({ ...request, id: Type.String({ minLength: 2, maxLength: 48 }) }),
+  "plugins.ui": Type.Object(request),
   "plugins.theme": Type.Object({ ...request, id: Type.Optional(Type.Union([Type.String({ maxLength: 48 }), Type.Null()])) }),
   "widgets.state.get": Type.Object({ ...request, ...session }),
   "widgets.state.set": Type.Object({ ...request, ...session, key: Type.String({ minLength: 1, maxLength: 128 }), state: Type.Unknown() }),

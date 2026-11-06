@@ -2,7 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // What the app may change about this machine's plugins: remove one, and choose
-// or clear the plugin theme. Installing stays with agents and the CLI, which
+// or clear the plugin theme. It also reads what plugins add to the app itself:
+// composer actions and session panels. Installing stays with agents and the CLI, which
 // can read what they install; the app only manages what is already there.
 import type { CommandEntries } from "../protocol/command-registry.js";
 
@@ -12,6 +13,8 @@ export interface PluginCommandDeps {
   remove(id: string): boolean;
   /** Choose a theme by id, or clear the choice with null. Throws for an unknown id. */
   setTheme(id: string | null): void;
+  /** Composer actions and session panels installed plugins add. */
+  ui(): { actions: object[]; panels: object[] };
 }
 
 export function createPluginCommands(deps: PluginCommandDeps): CommandEntries<PluginCommand> {
@@ -21,6 +24,7 @@ export function createPluginCommands(deps: PluginCommandDeps): CommandEntries<Pl
       if (!deps.remove(id)) throw new Error(`No plugin called ${id} is installed.`);
       return { removed: id };
     },
+    "plugins.ui": () => deps.ui(),
     "plugins.theme": (msg) => {
       const id = typeof msg.id === "string" && msg.id ? msg.id : null;
       deps.setTheme(id);

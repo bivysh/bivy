@@ -11,7 +11,7 @@ import path from "node:path";
 import test from "node:test";
 import { readMachineTheme, selectTheme } from "../src/machine-theme.js";
 import { parsePluginManifest } from "../src/plugin-sdk/index.js";
-import { installedContributions, readPluginWidget } from "../src/plugins/contributions.js";
+import { installedContributions, pluginUi, readPluginWidget } from "../src/plugins/contributions.js";
 import { installPlugin } from "../src/plugins/store.js";
 import { runPluginTool, widgetTool } from "../src/plugins/tools.js";
 
@@ -86,7 +86,7 @@ test("a plugin may contribute only widgets, tools, themes and guides; unsafe one
   assert.match(errors, /timeoutSeconds must be an integer from 1 to 300/);
   assert.match(errors, /colors\.background must be a #rgb or #rrggbb color/);
   assert.match(errors, /guides\[0\]\.file must be a relative path/);
-  assert.match(parsePluginManifest(manifest("empty", "  agents: []")).errors.join(), /at least one agent, widget, tool, theme, guide or skill/);
+  assert.match(parsePluginManifest(manifest("empty", "  agents: []")).errors.join(), /at least one agent, widget, tool, theme, guide, skill, action or panel/);
 });
 
 test("install copies the plugin's own files only, and refuses a manifest naming a missing one", () => {
@@ -160,4 +160,28 @@ test("a chosen theme replaces the desktop's, and clearing it brings the desktop'
   assert.equal(theme.colors.accent, "#88aaff");
   selectTheme(data, null);
   assert.equal(readMachineTheme(home, selected)?.colors.background, "#ffffff");
+});
+
+test("composer actions and panels reach the app keyed by plugin; a panel needs its own, usable widget", () => {
+  const UI = `
+  widgets:
+    - { id: ci-status, name: CI status, entry: widgets/standup.html }
+  actions:
+    - { id: standup, label: Standup, prompt: "Write my standup.", send: true }
+  panels:
+    - { id: ci, title: CI, widget: ci-status, data: { branch: main } }
+`;
+  assert.match(parsePluginManifest(manifest("bad", `${UI}    - { id: other, title: Other, widget: standup }\n`)).errors.join(), /widget standup is not one of this plugin's widgets/);
+
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-plugin-ui-"));
+  installPlugin(pluginDir("flow", UI), { dataDir: data });
+  assert.deepEqual(pluginUi(data), {
+    actions: [{ id: "standup", label: "Standup", prompt: "Write my standup.", send: true, key: "flow/standup", plugin: "flow" }],
+    panels: [{ id: "ci", title: "CI", widget: "ci-status", data: { branch: "main" }, key: "flow/ci", plugin: "flow" }],
+  });
+
+  // Another plugin claiming the same widget id makes the widget unusable, so the panel is left out.
+  installPlugin(pluginDir("clash", "  widgets:\n    - { id: ci-status, name: Other, entry: widgets/standup.html }\n"), { dataDir: data });
+  assert.deepEqual(pluginUi(data).panels, []);
+  fs.rmSync(data, { recursive: true, force: true });
 });

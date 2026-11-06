@@ -12,6 +12,8 @@
  *   - themes: a palette for the app;
  *   - guides: markdown playbooks agents read with `bivy guide`.
  *   - skills: Agent Skills folders (a SKILL.md and its files) every agent is offered.
+ *   - actions: composer buttons that send (or fill in) a prompt.
+ *   - panels: session side-pane tabs that show one of the plugin's widgets.
  * Adding a contribution type is a parser below and a row in CONTRIBUTION_TYPES.
  */
 import { parse as parseSemver, satisfies, valid, validRange } from "semver";
@@ -114,6 +116,27 @@ export interface PluginSkillContribution {
   file: string;
 }
 
+export interface PluginActionContribution {
+  id: string;
+  /** The button's text, short. */
+  label: string;
+  description?: string;
+  /** The message the action writes. */
+  prompt: string;
+  /** Send it at once; otherwise it fills the composer to edit first. */
+  send?: boolean;
+}
+
+export interface PluginPanelContribution {
+  id: string;
+  /** The tab's title, short. */
+  title: string;
+  /** One of this plugin's widgets, shown in the panel. */
+  widget: string;
+  /** Handed to the widget as its data. */
+  data?: Record<string, unknown>;
+}
+
 export interface PluginManifest {
   apiVersion: typeof PLUGIN_API_VERSION;
   kind: typeof PLUGIN_KIND;
@@ -134,6 +157,8 @@ export interface PluginManifest {
     themes?: PluginThemeContribution[];
     guides?: PluginGuideContribution[];
     skills?: PluginSkillContribution[];
+    actions?: PluginActionContribution[];
+    panels?: PluginPanelContribution[];
   };
 }
 
@@ -469,6 +494,34 @@ function parseSkill(raw: Record<string, unknown>, at: string, errors: string[]):
   return { name, file };
 }
 
+function parseAction(raw: Record<string, unknown>, at: string, errors: string[]): PluginActionContribution | undefined {
+  rejectUnknown(raw, ["id", "label", "description", "prompt", "send"], at, errors);
+  const id = slug(raw.id, `${at}.id`, errors);
+  const label = requiredString(raw.label, `${at}.label`, errors, 40);
+  const description = optionalString(raw.description, `${at}.description`, errors, 200);
+  const prompt = requiredString(raw.prompt, `${at}.prompt`, errors, 4000);
+  if (raw.send !== undefined && typeof raw.send !== "boolean") errors.push(`${at}.send must be true or false`);
+  if (!id || !label || !prompt) return undefined;
+  return { id, label, ...(description ? { description } : {}), prompt, ...(raw.send === true ? { send: true } : {}) };
+}
+
+const MAX_PANEL_DATA_BYTES = 8 * 1024;
+
+function parsePanel(raw: Record<string, unknown>, at: string, errors: string[]): PluginPanelContribution | undefined {
+  rejectUnknown(raw, ["id", "title", "widget", "data"], at, errors);
+  const id = slug(raw.id, `${at}.id`, errors);
+  const title = requiredString(raw.title, `${at}.title`, errors, 40);
+  const widget = slug(raw.widget, `${at}.widget`, errors);
+  let data: Record<string, unknown> | undefined;
+  if (raw.data !== undefined) {
+    data = object(raw.data);
+    if (!data) errors.push(`${at}.data must be an object`);
+    else if (JSON.stringify(data).length > MAX_PANEL_DATA_BYTES) errors.push(`${at}.data must be at most ${MAX_PANEL_DATA_BYTES / 1024} KB`);
+  }
+  if (!id || !title || !widget) return undefined;
+  return { id, title, widget, ...(data ? { data } : {}) };
+}
+
 /**
  * Every contribution type other than agents: its key, how many a plugin may
  * declare, how to parse one, and which field must be unique. Data, so a new
@@ -480,6 +533,8 @@ const CONTRIBUTION_TYPES = [
   { key: "themes", max: 20, parse: parseTheme, id: (v: PluginThemeContribution) => v.id },
   { key: "guides", max: 20, parse: parseGuide, id: (v: PluginGuideContribution) => v.topic },
   { key: "skills", max: 50, parse: parseSkill, id: (v: PluginSkillContribution) => v.name },
+  { key: "actions", max: 20, parse: parseAction, id: (v: PluginActionContribution) => v.id },
+  { key: "panels", max: 5, parse: parsePanel, id: (v: PluginPanelContribution) => v.id },
 ] as const;
 
 export const CONTRIBUTION_KEYS = ["agents", ...CONTRIBUTION_TYPES.map((type) => type.key)] as const;
@@ -557,11 +612,16 @@ export function validatePluginManifest(value: unknown): PluginManifestResult {
       const list = parseList(contributesRaw[type.key], type.key, type.max, type.parse as (raw: Record<string, unknown>, at: string, errors: string[]) => unknown, type.id as (v: unknown) => string, errors);
       if (list?.length) extra[type.key] = list;
     }
+    // A panel shows one of this plugin's own widgets.
+    const widgetIds = new Set(((extra.widgets ?? []) as PluginWidgetContribution[]).map((widget) => widget.id));
+    for (const panel of (extra.panels ?? []) as PluginPanelContribution[]) {
+      if (!widgetIds.has(panel.widget)) errors.push(`contributes.panels ${panel.id}: widget ${panel.widget} is not one of this plugin's widgets`);
+    }
     const hasOther = Object.keys(extra).length > 0;
     if (contributesRaw.agents === undefined && hasOther) {
-      // A plugin may contribute only widgets, tools, themes, guides or skills.
+      // A plugin may contribute only widgets, tools, themes, guides, skills, actions or panels.
     } else if (!Array.isArray(contributesRaw.agents) || (contributesRaw.agents.length === 0 && !hasOther) || contributesRaw.agents.length > 20) {
-      errors.push(hasOther ? "contributes.agents must be a list of at most 20 agents" : "contributes must declare at least one agent, widget, tool, theme, guide or skill");
+      errors.push(hasOther ? "contributes.agents must be a list of at most 20 agents" : "contributes must declare at least one agent, widget, tool, theme, guide, skill, action or panel");
     } else {
       agents = contributesRaw.agents.map((agent, index) => parseAgent(agent, index, errors)).filter((agent): agent is PluginAgentContribution => Boolean(agent));
       const ids = new Set<string>();
