@@ -42,7 +42,7 @@ function checkTimeoutMs(cwd: string, env: NodeJS.ProcessEnv): number {
   return Math.min(MAX_CHECK_TIMEOUT_MS, Math.max(1_000, Math.floor(parsed)));
 }
 
-function packageManager(cwd: string): { command: string; args: (script: string) => string[] } {
+export function packageManager(cwd: string): { command: string; args: (script: string) => string[] } {
   if (fs.existsSync(path.join(cwd, "pnpm-lock.yaml"))) return { command: "pnpm", args: (script) => ["run", script] };
   if (fs.existsSync(path.join(cwd, "yarn.lock"))) return { command: "yarn", args: (script) => ["run", script] };
   return { command: "npm", args: (script) => ["run", script] };

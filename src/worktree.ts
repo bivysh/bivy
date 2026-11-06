@@ -7,6 +7,7 @@ import path from "node:path";
 
 import { gitNonInteractiveEnv } from "./git-auth.js";
 import { cowProvisionDeps, provisionDepsByInstall } from "./worktree-provision.js";
+import { WORKTREE_INCLUDE_FILE, copyWorktreeIncludes, describeWorktreeHook, forgetWorktreeSetup, runWorktreeHook, startWorktreeSetup, worktreeHook } from "./worktree-hooks.js";
 
 const exec = promisify(execFile);
 
@@ -172,6 +173,12 @@ export async function createWorktree(opts: {
     }
   }
 
+  // Ignored files the repository asks for (.worktreeinclude: .env, local config),
+  // copied from the checkout this worktree was cut from.
+  const included = await copyWorktreeIncludes({ sourceRoot, worktreePath: wtPath });
+  if (included.copied.length) console.log(`[worktree] copied ${included.copied.length} file(s) named in ${WORKTREE_INCLUDE_FILE}`);
+  for (const skipped of included.skipped) console.log(`[worktree] ${WORKTREE_INCLUDE_FILE}: skipped ${skipped}`);
+
   // Opportunistically reuse a sibling worktree's installed deps (node_modules,
   // target, .venv) via copy-on-write when the filesystem supports it, so a
   // second worktree of this repo costs ~its diff instead of a full re-install.
@@ -183,7 +190,12 @@ export async function createWorktree(opts: {
   // the detected managers' installs so the agent doesn't hit a cold tree. Opt-in
   // (BIVY_WORKTREE_AUTO_INSTALL), background (never blocks worktree creation),
   // best-effort. `planInstallProvision` skips any dir a CoW clone already filled.
-  if (cow.cloned.length === 0) {
+  // The repository's own setup hook (.bivy/environment.yaml worktree.setup)
+  // replaces the generic install: it knows what this repository needs.
+  const setup = worktreeHook(wtPath, "setup");
+  if (setup.step || setup.error) {
+    startWorktreeSetup({ worktreePath: wtPath, sourcePath: sourceRoot });
+  } else if (cow.cloned.length === 0) {
     void provisionDepsByInstall({ worktreePath: wtPath, log: (m) => console.log(m) })
       .catch((error) => console.log(`[worktree] auto-provision error: ${error instanceof Error ? error.message : String(error)}`));
   }
@@ -237,8 +249,13 @@ async function refExists(repoRoot: string, ref: string): Promise<boolean> {
   }
 }
 
-/** Remove a worktree (and its branch is left intact for the PR). */
+/** Remove a worktree (and its branch is left intact for the PR), after the
+ *  repository's teardown hook. A failing teardown is logged and never blocks
+ *  the removal. */
 export async function removeWorktree(repoRoot: string, wtPath: string): Promise<void> {
+  forgetWorktreeSetup(wtPath);
+  const teardown = await runWorktreeHook("teardown", { worktreePath: wtPath });
+  if (teardown) console.log(`[worktree] ${describeWorktreeHook(teardown)}`);
   try {
     await exec("git", ["-C", repoRoot, "worktree", "remove", "--force", wtPath]);
   } catch {
