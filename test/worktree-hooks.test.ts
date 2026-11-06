@@ -86,3 +86,41 @@ test("a failing setup is reported with its exit code and output", async () => {
     await removeWorktree(wt.repoRoot, wt.path);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test("machine setup runs once per recipe version on machines Bivy runs, before the worktree's setup", async () => {
+  const counter = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-machine-setup-"));
+  const dataDir = path.join(counter, "data");
+  const recipe = (version: string) => ({
+    ".bivy/environment.yaml": "version: 1\nmachine:\n  setup:\n    run: scripts/machine.sh\nworktree:\n  setup:\n    run: scripts/setup.sh\n",
+    "scripts/machine.sh": `echo ${version} >> ${counter}/machine.log\n`,
+    "scripts/setup.sh": `test -s ${counter}/machine.log && echo worktree >> ${counter}/order.log\n`,
+  });
+  const { runMachineSetupOnce } = await import("../src/worktree-hooks.js");
+  const dir = repo(recipe("v1"));
+  const before = { ...process.env };
+  try {
+    process.env.BIVY_DATA_DIR = dataDir;
+    delete process.env.BIVY_MACHINE_SETUP;
+    delete process.env.BIVY_EPHEMERAL;
+    const own = await createWorktree({ repoDir: dir, id: "own" });
+    await worktreeSetupGate(own.path)?.result;
+    assert.ok(!fs.existsSync(path.join(counter, "machine.log")), "not on someone's own computer unless turned on");
+
+    process.env.BIVY_EPHEMERAL = "1";
+    const first = await createWorktree({ repoDir: dir, id: "first" });
+    assert.equal((await worktreeSetupGate(first.path)?.result)?.ok, true);
+    assert.equal(fs.readFileSync(path.join(counter, "order.log"), "utf8"), "worktree\n", "the worktree's setup runs after the machine is ready");
+    const second = await createWorktree({ repoDir: dir, id: "second" });
+    await worktreeSetupGate(second.path)?.result;
+    assert.equal(fs.readFileSync(path.join(counter, "machine.log"), "utf8"), "v1\n", "the same recipe doesn't run again on this machine");
+
+    fs.writeFileSync(path.join(second.path, "scripts/machine.sh"), `echo v2 >> ${counter}/machine.log\n`);
+    await runMachineSetupOnce({ worktreePath: second.path });
+    assert.equal(fs.readFileSync(path.join(counter, "machine.log"), "utf8"), "v1\nv2\n", "a changed recipe runs again");
+    for (const wt of [own, first, second]) await removeWorktree(wt.repoRoot, wt.path);
+  } finally {
+    process.env = before;
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(counter, { recursive: true, force: true });
+  }
+});

@@ -19,6 +19,9 @@
  * `worktree.setup` / `worktree.teardown` are the exception the repository opts
  * into: a repository file (`run:`) or package script (`script:`) Bivy runs when
  * it creates a worktree and before it removes one it owns (worktree-hooks.ts).
+ * `machine.setup` is the same kind of step, run once per machine and recipe
+ * version on machines Bivy runs (cloud computers and runners), to install what
+ * the repository needs beyond its own dependencies.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -54,6 +57,7 @@ export interface ProjectEnvironment {
   capabilities?: { required?: string[]; preferred?: string[] };
   services?: Record<string, ProjectEnvironmentService>;
   worktree?: { setup?: ProjectEnvironmentHookStep; teardown?: ProjectEnvironmentHookStep };
+  machine?: { setup?: ProjectEnvironmentHookStep };
 }
 export interface ProjectEnvironmentResult { ok: boolean; environment?: ProjectEnvironment; errors: string[]; }
 
@@ -117,7 +121,7 @@ export function validateProjectEnvironment(value: unknown): ProjectEnvironmentRe
   const errors: string[] = [];
   const root = object(value);
   if (!root) return { ok: false, errors: ["environment must be an object"] };
-  for (const key of Object.keys(root)) if (!["version", "capabilities", "services", "worktree"].includes(key)) errors.push(`environment.${key} is not supported`);
+  for (const key of Object.keys(root)) if (!["version", "capabilities", "services", "worktree", "machine"].includes(key)) errors.push(`environment.${key} is not supported`);
   if (root.version !== 1) errors.push("version must be 1");
 
   let capabilities: ProjectEnvironment["capabilities"];
@@ -165,7 +169,17 @@ export function validateProjectEnvironment(value: unknown): ProjectEnvironmentRe
     }
   }
 
-  const environment: ProjectEnvironment = { version: 1, capabilities, services, worktree };
+  let machine: ProjectEnvironment["machine"];
+  if (root.machine !== undefined) {
+    const raw = object(root.machine);
+    if (!raw) errors.push("machine must be an object");
+    else {
+      for (const key of Object.keys(raw)) if (key !== "setup") errors.push(`machine.${key} is not supported`);
+      machine = { setup: hookStep(raw.setup, "machine.setup", errors) };
+    }
+  }
+
+  const environment: ProjectEnvironment = { version: 1, capabilities, services, worktree, ...(machine ? { machine } : {}) };
   return { ok: errors.length === 0, environment: errors.length ? undefined : environment, errors };
 }
 
