@@ -102,6 +102,8 @@ export class RelayTransport implements Transport {
   private connectFailures = 0;
   private hasReachedNode = false;
   private curKey: RoomKey | null = null;
+  /** Fingerprint of curKey; a frame tagged with another key's is someone else's. */
+  private curKeyId: string | null = null;
   private devicePromise: Promise<DeviceKeypair> | null = null;
   private readonly sendQueue: string[] = [];
   private window = { ws: null as WebSocket | null, start: 0, frames: 0 };
@@ -176,8 +178,10 @@ export class RelayTransport implements Transport {
 
   private async keyFor(nodeId: string): Promise<RoomKey | null> {
     const encoded = this.store.keys()[nodeId];
-    if (!encoded) return null;
-    return importRoomKey(unb64url(encoded));
+    if (!encoded) { this.curKeyId = null; return null; }
+    const raw = unb64url(encoded);
+    this.curKeyId = await keyFingerprint(raw);
+    return importRoomKey(raw);
   }
 
   /** Do we have enough material to (re)connect to the current node? */
@@ -285,6 +289,10 @@ export class RelayTransport implements Transport {
         });
       } else if (env.t === "frame" && typeof env.p === "string") {
         if (!this.curKey) return;
+        // Sealed under another key (a session guest's copy, or the room's
+        // frames on a guest's device): not ours to open, and not a stale key.
+        const g = (env as { g?: unknown }).g;
+        if (typeof g === "string" && this.curKeyId && g !== this.curKeyId) return;
         const full = this.reassemble(env);
         if (full === null) return;
         if (this.decryptBytes + full.length > MAX_REASSEMBLY_BYTES) {
@@ -622,4 +630,10 @@ export class RelayTransport implements Transport {
 function deviceLabel(): string {
   const nav = (globalThis as unknown as { navigator?: { platform?: string } }).navigator;
   return nav?.platform || "Device";
+}
+
+/** Same as the node's keyFingerprint (src/relay-chunk.ts): SHA-256 of the key, first 8 bytes, hex. */
+async function keyFingerprint(key: Uint8Array): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", key as BufferSource));
+  return Array.from(digest.slice(0, 8), (b) => b.toString(16).padStart(2, "0")).join("");
 }
