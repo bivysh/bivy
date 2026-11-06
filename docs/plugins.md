@@ -170,6 +170,21 @@ repository the `bivy-plugin` topic. There is no registry to publish to:
 `bivy plugin search [words]` finds tagged repositories on GitHub and prints the
 install command for each.
 
+### Keep plugins up to date
+
+Install records each plugin's source, so Bivy can check it again later:
+
+```bash
+bivy plugin outdated            # new version, changed, or current, per plugin
+bivy plugin update              # reinstall every changed plugin from its source
+bivy plugin rollback standup    # undo: the copy the update replaced comes back
+```
+
+Nothing updates by itself. A source pinned to a tag (`#v1.2.0`) stays on that
+tag; install again with a new tag to move. The last three replaced copies of
+each plugin are kept under the store's `.snapshots` folder. Plugins applied from
+a `github:` kit or a local kit folder record their own source inside the kit.
+
 ### Kits: a whole setup
 
 A kit is several plugins and a theme in one folder, listed in `bivy.kit.yaml`:
@@ -419,6 +434,9 @@ bivy plugin test <file-or-directory> [--json]
 bivy plugin install <file-or-directory|git URL|github:owner/repo[/path][#ref]> [--force] [--json]
 bivy plugin dev <directory>
 bivy plugin list [--json]
+bivy plugin outdated [plugin-id …] [--json]
+bivy plugin update [plugin-id …] [--json]
+bivy plugin rollback <plugin-id> [--json]
 bivy plugin remove <plugin-id> [--json]
 bivy tools list|run <name> [--input '<json>'] [key=value …] [--json]
 bivy theme list|set <id>|clear [--json]
@@ -490,4 +508,4 @@ plugin before installing it, install from sources you trust, and pin a tag
 - trigger connectors, checks, artifacts or compute providers;
 - install scripts or dependency downloads;
 - daemon hooks, or UI outside chat widgets and themes;
-- lockfiles, signatures or trust tiers.
+- signatures or trust tiers.
