@@ -2234,7 +2234,54 @@ app.get("/node/model-auth-vault", requireNode, asyncHandler(async (req, res) => 
     vault: await store.getModelAuthVault(node.accountId) ?? null,
     wrappedKey: await store.getModelAuthWrappedKey(node.accountId, node.id) ?? null,
     requests: await store.listModelAuthKeyRequests(node.accountId, node.id),
+    // Paired devices without a copy of the current vault key: the node wraps
+    // one for each, so a device can hand the key to a new machine.
+    devicesMissingKey: await store.listModelAuthDevicesMissingKey(node.accountId),
   });
+}));
+
+const isPairedDevice = async (accountId: string, devicePublicKey: string) =>
+  Boolean(devicePublicKey) && (await store.listPairedDevices(accountId)).some((device) => device.id === devicePublicKey);
+
+// A node wraps the vault key for one of the account's paired devices.
+app.put("/node/model-auth-key/device", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const devicePublicKey = String(req.body?.devicePublicKey ?? "").trim();
+  const wrappedKey = String(req.body?.wrappedKey ?? "").trim();
+  const wrappedByPublicKey = String(req.body?.wrappedByPublicKey ?? "").trim();
+  if (!wrappedKey || !wrappedByPublicKey) return res.status(400).json({ error: "Missing wrappedByPublicKey or wrappedKey" });
+  if (!(await isPairedDevice(node.accountId, devicePublicKey))) return res.status(404).json({ error: "That device isn't paired with this account" });
+  await store.setModelAuthDeviceKey(node.accountId, devicePublicKey, wrappedByPublicKey, wrappedKey);
+  res.json({ ok: true });
+}));
+
+// A signed-in device reads its copy of the vault key and the machines waiting
+// for one, so it can answer them when none of the account's machines is
+// online. Everything here is wrapped end to end; the control plane can't open it.
+app.get("/account/model-auth-key", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  res.setHeader("cache-control", "no-store");
+  const devicePublicKey = String(req.query.devicePublicKey ?? "").trim();
+  if (!(await isPairedDevice(account.id, devicePublicKey))) return res.json({ wrappedKey: null, requests: [] });
+  res.json({
+    wrappedKey: await store.getModelAuthDeviceKey(account.id, devicePublicKey) ?? null,
+    requests: await store.listModelAuthKeyRequests(account.id, ""),
+  });
+}));
+
+app.put("/account/model-auth-key/wrapped", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const devicePublicKey = String(req.body?.devicePublicKey ?? "").trim();
+  const targetNodeId = String(req.body?.targetNodeId ?? "").trim();
+  const wrappedKey = String(req.body?.wrappedKey ?? "").trim();
+  if (!targetNodeId || !wrappedKey) return res.status(400).json({ error: "Missing targetNodeId or wrappedKey" });
+  if (!(await isPairedDevice(account.id, devicePublicKey))) return res.status(403).json({ error: "Only a paired device can hand out the vault key" });
+  if (!(await store.listNodes(account.id)).some((candidate) => candidate.id === targetNodeId)) {
+    return res.status(404).json({ error: "That machine no longer exists" });
+  }
+  const wrappedBy = `device:${createHash("sha256").update(devicePublicKey).digest("hex").slice(0, 16)}`;
+  await store.setModelAuthWrappedKey(account.id, targetNodeId, wrappedBy, devicePublicKey, wrappedKey);
+  res.json({ ok: true });
 }));
 
 app.put("/node/model-auth-vault", requireNode, asyncHandler(async (req, res) => {

@@ -255,6 +255,26 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.deepEqual(requests.map((request) => request.nodeId), [a.id], "only another currently-enrolled survivor is queued for the new key");
   });
 
+  await test("model auth vault: a paired device holds a copy until it is removed or the vault re-keys", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-model-auth-device@example.com");
+    const { node: a } = await store.enrollNode(acct.id, "node-mad-a", "A");
+    await store.setModelAuthVault(acct.id, a.id, "ciphertext");
+    await store.registerPairedDevice(acct.id, "phone-pub", "Phone");
+    await store.registerPairedDevice(acct.id, "laptop-pub", "Laptop");
+    assert.deepEqual((await store.listModelAuthDevicesMissingKey(acct.id)).sort(), ["laptop-pub", "phone-pub"]);
+    await store.setModelAuthDeviceKey(acct.id, "phone-pub", "a-pub", "wrapped-for-phone");
+    await store.setModelAuthDeviceKey(acct.id, "laptop-pub", "a-pub", "wrapped-for-laptop");
+    assert.deepEqual(await store.listModelAuthDevicesMissingKey(acct.id), []);
+    assert.equal((await store.getModelAuthDeviceKey(acct.id, "phone-pub"))?.wrappedKey, "wrapped-for-phone");
+
+    assert.equal(await store.removePairedDevice(acct.id, "phone-pub"), true);
+    assert.equal(await store.getModelAuthDeviceKey(acct.id, "phone-pub"), undefined, "a removed device's copy is dropped");
+    assert.equal((await store.getModelAuthVault(acct.id))?.needsRotation, true, "and the vault re-keys, so it can't open what's synced next");
+    await store.setModelAuthVault(acct.id, a.id, "ciphertext-new", true);
+    assert.equal(await store.getModelAuthDeviceKey(acct.id, "laptop-pub"), undefined, "a re-key drops every device copy");
+    assert.deepEqual(await store.listModelAuthDevicesMissingKey(acct.id), ["laptop-pub"], "and the remaining devices are wrapped for again");
+  });
+
   await test("model auth key requests: repeated requests are idempotent", async (store) => {
     const acct = await store.findOrCreateAccount("contract-model-auth-request@example.com");
     const { node } = await store.enrollNode(acct.id, "node-mar-request", "Requester");

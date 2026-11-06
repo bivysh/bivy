@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Your phone or browser can hand your sign-ins to a new machine.** Machines now wrap the credential vault key for each of your signed-in devices too. While Bivy is open on one of them, it passes the key, still end-to-end encrypted, to a new runner or rebuilt cloud computer that's waiting, so the new machine gets your sign-ins even when none of your other machines is online. Removing a device drops its copy and re-keys the vault. See [credential-sync.md](docs/credential-sync.md).
 - **Follow-ups continue on a runner.** A comment, review or other follow-up on a session whose machine is gone now continues on a new runner that first restores the session from its account-sealed snapshot; a follow-up on a sleeping runner's session wakes that runner. Where cloud work runs is now one rules table. See [Automations](docs/ephemeral-sessions.md#automations).
 
 - **Runners without a cloud computer, and runners that keep their work.** A deployment can now offer runners on their own (`FLEET_ACCOUNT_MACHINE=0` with `FLEET_RUNNERS=1`): no computer is created at sign-up or on request, the picker shows one cloud destination that starts a machine per session, and queued work goes to runners. Every runner, including one started for queued work, now sleeps when the work is done instead of being deleted, so the session, its files and previews stay there to open or continue. See [Runners](docs/ephemeral-sessions.md#runners).

@@ -95,6 +95,7 @@ import {
   createDeviceVaultKeyStore,
   DeviceVaultConflictError,
   deviceKeypair,
+  handOutModelAuthKey,
   clearIndexedDbDeviceKey,
   type TranscriptCache,
   type DeviceVaultKeyStore,
@@ -1054,6 +1055,46 @@ export class AppController {
   connect(): void {
     this.nodeCoordinator.connect();
     this.syncNativeSubscriptions();
+    this.startVaultKeyHandout();
+  }
+
+  private vaultKeyHandoutTimer: ReturnType<typeof setInterval> | null = null;
+  private vaultKeyHandoutBusy = false;
+
+  /**
+   * While the app is open and signed in, this device answers machines waiting
+   * for the account's model-auth vault key (a new runner, a rebuilt cloud
+   * computer) when none of the account's machines is online to. The key is
+   * wrapped end to end, device to machine (@bivy/core handOutModelAuthKey).
+   */
+  private startVaultKeyHandout(): void {
+    if (this.vaultKeyHandoutTimer || typeof document === "undefined" || this.solo || this.direct) return;
+    const base = () => (this.local.cp || location.origin).replace(/\/$/, "");
+    const tick = async (): Promise<void> => {
+      if (this.vaultKeyHandoutBusy || document.visibilityState !== "visible" || !this.local.s) return;
+      this.vaultKeyHandoutBusy = true;
+      try {
+        const auth = { authorization: `Bearer ${this.local.s}` };
+        await handOutModelAuthKey({
+          get: async (devicePublicKey) => {
+            const res = await fetch(`${base()}/account/model-auth-key?devicePublicKey=${encodeURIComponent(devicePublicKey)}`, { headers: auth });
+            if (!res.ok) return { wrappedKey: null, requests: [] };
+            const data = (await res.json()) as { wrappedKey?: { wrappedKey: string; wrappedByPublicKey: string } | null; requests?: Array<{ nodeId: string; publicKey: string }> };
+            return { wrappedKey: data.wrappedKey ?? null, requests: Array.isArray(data.requests) ? data.requests : [] };
+          },
+          put: async (body) => {
+            await fetch(`${base()}/account/model-auth-key/wrapped`, { method: "PUT", headers: { ...auth, "content-type": "application/json" }, body: JSON.stringify(body) });
+          },
+        }, await deviceKeypair(this.local));
+      } catch {
+        // A stale copy (the vault was re-keyed) or a network blip: the next
+        // machine sync gives this device a fresh copy, and the next tick retries.
+      } finally {
+        this.vaultKeyHandoutBusy = false;
+      }
+    };
+    this.vaultKeyHandoutTimer = setInterval(() => void tick(), 15_000);
+    void tick();
   }
 
   private foregroundTimer: ReturnType<typeof setTimeout> | null = null;

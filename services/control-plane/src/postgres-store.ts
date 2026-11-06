@@ -453,6 +453,18 @@ export class PostgresStore implements ControlPlaneStore {
       ALTER TABLE hosted_model_auth_keys ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 0;
       ALTER TABLE hosted_model_auth_keys ADD COLUMN IF NOT EXISTS revision BIGINT NOT NULL DEFAULT 0;
 
+      -- The model-auth vault key wrapped for each paired device (by a node),
+      -- so a device can hand it to a new machine. Dropped on every re-key and
+      -- when the device is removed.
+      CREATE TABLE IF NOT EXISTS model_auth_device_keys (
+        account_id             TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        device_pub             TEXT NOT NULL,
+        wrapped_key            TEXT NOT NULL,
+        wrapped_by_public_key  TEXT NOT NULL,
+        updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY (account_id, device_pub)
+      );
+
       CREATE TABLE IF NOT EXISTS model_auth_key_requests (
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         node_id     TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -1220,6 +1232,10 @@ export class PostgresStore implements ControlPlaneStore {
         await client.query(`DELETE FROM device_vault_wrapped_keys WHERE account_id = $1 AND device_pub = $2`, [accountId, publicKeyB64]);
         await client.query(`DELETE FROM device_vault_key_requests WHERE account_id = $1 AND device_pub = $2`, [accountId, publicKeyB64]);
         await client.query(`UPDATE device_vaults SET key_generation = key_generation + 1, updated_at = now() WHERE account_id = $1`, [accountId]);
+        // It held the model-auth vault key too: drop its copy and have a node
+        // re-key, so it can't open anything synced from now on.
+        const held = await client.query(`DELETE FROM model_auth_device_keys WHERE account_id = $1 AND device_pub = $2`, [accountId, publicKeyB64]);
+        if ((held.rowCount ?? 0) > 0) await client.query(`UPDATE model_auth_vaults SET needs_rotation = true WHERE account_id = $1`, [accountId]);
       }
       await client.commit();
       return (result.rowCount ?? 0) > 0;
@@ -2052,6 +2068,7 @@ export class PostgresStore implements ControlPlaneStore {
         // the same transaction as the generation flip: no stale-key writer can
         // slip in after needs_rotation clears but before old wraps disappear.
         await client.query(`DELETE FROM model_auth_wrapped_keys WHERE account_id = $1`, [accountId]);
+        await client.query(`DELETE FROM model_auth_device_keys WHERE account_id = $1`, [accountId]);
         await client.query(
         `INSERT INTO model_auth_key_requests (account_id, node_id, public_key, created_at)
          SELECT k.account_id, k.node_id, k.public_key, now()
@@ -2070,6 +2087,30 @@ export class PostgresStore implements ControlPlaneStore {
     } finally {
       client.release();
     }
+  }
+
+  async getModelAuthDeviceKey(accountId: string, devicePublicKey: string): Promise<{ wrappedKey: string; wrappedByPublicKey: string } | undefined> {
+    const { rows } = await this.query(`SELECT wrapped_key, wrapped_by_public_key FROM model_auth_device_keys WHERE account_id = $1 AND device_pub = $2`, [accountId, devicePublicKey]);
+    return rows[0] ? { wrappedKey: rows[0].wrapped_key, wrappedByPublicKey: rows[0].wrapped_by_public_key } : undefined;
+  }
+
+  async setModelAuthDeviceKey(accountId: string, devicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<void> {
+    await this.query(
+      `INSERT INTO model_auth_device_keys (account_id, device_pub, wrapped_key, wrapped_by_public_key, updated_at)
+       VALUES ($1, $2, $3, $4, now())
+       ON CONFLICT (account_id, device_pub) DO UPDATE SET wrapped_key = EXCLUDED.wrapped_key, wrapped_by_public_key = EXCLUDED.wrapped_by_public_key, updated_at = now()`,
+      [accountId, devicePublicKey, wrappedKey, wrappedByPublicKey],
+    );
+  }
+
+  async listModelAuthDevicesMissingKey(accountId: string): Promise<string[]> {
+    const { rows } = await this.query(
+      `SELECT d.public_key_b64 FROM paired_devices d
+       LEFT JOIN model_auth_device_keys k ON k.account_id = d.account_id AND k.device_pub = d.public_key_b64
+       WHERE d.account_id = $1 AND k.device_pub IS NULL`,
+      [accountId],
+    );
+    return rows.map((row) => String(row.public_key_b64));
   }
 
   async setModelAuthNodePublicKey(accountId: string, nodeId: string, publicKey: string): Promise<void> {
