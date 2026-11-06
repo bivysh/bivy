@@ -215,6 +215,24 @@ worktree:
   `BIVY_WORKTREE_PATH`. Setup also gets `BIVY_WORKTREE_SOURCE`, the checkout it
   was cut from. The timeout defaults to 15 minutes, up to 60.
 
+**`machine.setup`** prepares the machine itself, for what a repository needs
+beyond its own dependencies (system packages, a database, a CLI):
+
+```yaml
+version: 1
+machine:
+  setup: { run: scripts/machine-setup.sh, timeoutMinutes: 30 }
+```
+
+- It runs before the first worktree setup on a machine, once per version of
+  the recipe (the step and the script's contents); change the script and it
+  runs again. A failed run is retried by the next worktree, and the worktree's
+  own setup doesn't run on top of it.
+- It runs only on machines Bivy runs: cloud computers and runners. Those keep
+  their disk across sleeps, so what it installs stays. On your own computers it
+  is skipped unless you set `BIVY_MACHINE_SETUP=on`; `off` turns it off
+  anywhere.
+
 Hooks run as the node's OS user, like the repository's own install scripts.
 Set `BIVY_WORKTREE_HOOKS=off` to turn them off on a machine; copying
 `.worktreeinclude` files stays on.

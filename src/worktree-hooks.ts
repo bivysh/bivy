@@ -12,15 +12,23 @@
  *   worktree is created (before the agent's first turn) and before Bivy removes
  *   one it owns.
  *
+ * - `machine.setup` names a step that prepares the machine itself (system
+ *   packages, tools): it runs before the first worktree setup on a machine,
+ *   once per version of the recipe, and only on machines Bivy runs (cloud
+ *   computers and runners, `BIVY_EPHEMERAL=1`), or where `BIVY_MACHINE_SETUP=on`.
+ *   What it installs on the machine's disk stays across sleeps.
+ *
  * Hooks run as the node's OS user, like the repository's own install scripts.
  * `BIVY_WORKTREE_HOOKS=off` turns them off on a machine; include copying stays.
  */
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { spawn, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { PROJECT_ENVIRONMENT_PATH, parseProjectEnvironment, type ProjectEnvironmentHookStep } from "./project-environment.js";
 import { packageManager } from "./automation-checks.js";
+import { defaultDataDir } from "./data-dir.js";
 
 const exec = promisify(execFile);
 
@@ -181,7 +189,7 @@ function isSymlinkAt(p: string): boolean {
 
 // ── setup / teardown hooks ──────────────────────────────────────────────────
 
-export type WorktreeHookKind = "setup" | "teardown";
+export type WorktreeHookKind = "setup" | "teardown" | "machine-setup";
 export interface WorktreeHookResult {
   kind: WorktreeHookKind;
   /** What ran, e.g. `scripts/setup.sh` or `pnpm run setup`. */
@@ -207,7 +215,53 @@ export function worktreeHook(worktreePath: string, kind: WorktreeHookKind): { st
   catch { return {}; }
   const parsed = parseProjectEnvironment(text);
   if (!parsed.ok) return { error: `${PROJECT_ENVIRONMENT_PATH} is invalid: ${parsed.errors.join("; ")}` };
-  return { step: parsed.environment?.worktree?.[kind] };
+  return { step: kind === "machine-setup" ? parsed.environment?.machine?.setup : parsed.environment?.worktree?.[kind] };
+}
+
+/** Machine setup runs on machines Bivy runs, or where someone turned it on;
+ *  a repository doesn't install things on someone's own computer by itself. */
+export function machineSetupEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  const setting = env.BIVY_MACHINE_SETUP?.trim() ?? "";
+  if (/^(0|off|false|no)$/i.test(setting)) return false;
+  return /^(1|on|true|yes)$/i.test(setting) || env.BIVY_EPHEMERAL === "1";
+}
+
+// One run per recipe version per machine: the marker is the recipe's hash.
+const machineSetups = new Map<string, Promise<WorktreeHookResult | undefined>>();
+
+function recipeHash(worktreePath: string, step: ProjectEnvironmentHookStep): string {
+  const hash = createHash("sha256").update(JSON.stringify(step));
+  if (step.run) {
+    try { hash.update(fs.readFileSync(path.resolve(worktreePath, step.run))); } catch { /* a missing file fails the run itself */ }
+  }
+  return hash.digest("hex").slice(0, 32);
+}
+
+/**
+ * Prepare the machine for this repository, unless this version of its recipe
+ * already ran here. A failed run is retried by the next worktree. Resolves to
+ * undefined when there is nothing to do.
+ */
+export async function runMachineSetupOnce(
+  opts: { worktreePath: string; env?: NodeJS.ProcessEnv; dataDir?: string },
+): Promise<WorktreeHookResult | undefined> {
+  const env = opts.env ?? process.env;
+  if (!worktreeHooksEnabled(env) || !machineSetupEnabled(env)) return undefined;
+  const { step } = worktreeHook(opts.worktreePath, "machine-setup");
+  if (!step) return undefined;
+  const marker = path.join(opts.dataDir ?? defaultDataDir(), "machine-setup", recipeHash(opts.worktreePath, step));
+  if (fs.existsSync(marker)) return undefined;
+  const running = machineSetups.get(marker);
+  if (running) return running;
+  const run = runWorktreeHook("machine-setup", { worktreePath: opts.worktreePath, env }).then((result) => {
+    if (result?.ok) {
+      fs.mkdirSync(path.dirname(marker), { recursive: true });
+      fs.writeFileSync(marker, `${new Date().toISOString()}\n`);
+    }
+    return result;
+  }).finally(() => machineSetups.delete(marker));
+  machineSetups.set(marker, run);
+  return run;
 }
 
 function hookCommand(worktreePath: string, step: ProjectEnvironmentHookStep): { command: string; args: string[]; label: string } | { error: string } {
@@ -277,7 +331,7 @@ export async function runWorktreeHook(
 
 /** One line a person can read in the session, e.g. "Worktree setup (scripts/setup.sh) finished in 12s." */
 export function describeWorktreeHook(result: WorktreeHookResult): string {
-  const name = result.kind === "setup" ? "Worktree setup" : "Worktree teardown";
+  const name = result.kind === "machine-setup" ? "Machine setup" : result.kind === "setup" ? "Worktree setup" : "Worktree teardown";
   const secs = Math.max(1, Math.round(result.durationMs / 1000));
   if (result.ok) return `${name} (${result.command}) finished in ${secs}s.`;
   const why = result.error ?? `exited with code ${result.exitCode}`;
@@ -293,9 +347,16 @@ const pendingSetups = new Map<string, PendingSetup>();
 export function startWorktreeSetup(opts: { worktreePath: string; sourcePath?: string; env?: NodeJS.ProcessEnv }): void {
   if (!worktreeHooksEnabled(opts.env ?? process.env)) return;
   const declared = worktreeHook(opts.worktreePath, "setup");
-  if (!declared.step && !declared.error) return;
+  const machine = machineSetupEnabled(opts.env ?? process.env) ? worktreeHook(opts.worktreePath, "machine-setup") : {};
+  if (!declared.step && !declared.error && !machine.step) return;
   const entry: PendingSetup = { settled: false, reported: false, promise: Promise.resolve(undefined) };
-  entry.promise = runWorktreeHook("setup", opts).finally(() => { entry.settled = true; });
+  // The machine first, then the worktree; a failed machine setup is what the
+  // person hears about, and the worktree's setup doesn't run on top of it.
+  entry.promise = (async () => {
+    const prepared = await runMachineSetupOnce(opts);
+    if (prepared && !prepared.ok) return prepared;
+    return (await runWorktreeHook("setup", opts)) ?? prepared;
+  })().finally(() => { entry.settled = true; });
   pendingSetups.set(path.resolve(opts.worktreePath), entry);
 }
 
