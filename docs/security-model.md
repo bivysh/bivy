@@ -402,6 +402,12 @@ Above the floor, `approvalMode` decides how often it asks:
 Integration tools flagged risky (send email, upload, …) always prompt,
 regardless of mode.
 
+So does a call the agent's own rules reserve for a person: a Claude
+`permissions.ask` rule, or a managed Codex `prompt-user` rule (a `humanCommand`
+checkpoint). Those prompt in every mode and at every sandbox tier, including
+`danger-full-access`, and never offer "Allow … this session"
+(`personRequired` on the tool call; `PolicyEngine.decideToolCall`).
+
 Pending approvals expire after 5 minutes and expire **denied**
 (`src/approval.ts`).
 

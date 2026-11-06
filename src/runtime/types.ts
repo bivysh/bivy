@@ -151,6 +151,12 @@ export interface ToolCallContext {
    *  question card) settle immediately when the user aborts, instead of parking
    *  the turn until its own timeout. Optional; absent = no abort plumbing. */
   signal?: AbortSignal;
+  /** The agent's own rules say a person must decide this call: a user's ask
+   *  rule (Claude `permissions.ask`) or a managed checkpoint (Codex
+   *  `humanCommand`). Bivy then asks in every approval mode, full access
+   *  included, and offers no "allow for this session". `reason` names the rule.
+   *  Absent = Bivy's policy alone decides. */
+  personRequired?: { reason?: string };
 }
 
 /**

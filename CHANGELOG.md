@@ -36,8 +36,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Screenshots an agent takes or reads to check its work now sit inside the turn's "Worked" line instead of filling the chat as image cards; expand the line to see them. Claude Code's screenshots no longer show up as if you had sent them. Files the agent attaches for you are unchanged.
 - On a teammate's shared machine, the sign-in card says that a sign-in made there stays on that machine for its owner and team, and sessions a teammate starts show "By <email>" in the session list.
+- Updated Claude Code (Agent SDK 0.3.319) and Codex CLI (0.167.0).
 
 ### Fixed
+
+- **Your agent's own "ask me first" rules hold in Bivy.** A Claude `permissions.ask` rule, or a managed Codex `prompt-user` rule, now always gets an approval card: in every approval mode, at full access too, and without "Allow … this session". Before, Bivy's approval mode could approve those calls for you, and Codex turned down `prompt-user` commands without asking.
 
 - **Fork and Retry at reset come back when you open the chat.** When an agent hits a usage limit, the offer to fork the work to another agent or retry automatically when the limit resets was shown only to an app that had the session open at that moment, so opening the chat later showed the limit with nothing to tap. It is now offered again every time the session is opened, and a retry already waiting for the reset shows again with its Cancel button.
 

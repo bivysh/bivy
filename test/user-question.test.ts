@@ -229,6 +229,26 @@ await scenario("claude-code canUseTool routes tools through the interceptor and 
   session.dispose();
 });
 
+await scenario("claude-code canUseTool marks an ask that the user's ask rule made as person-only", async () => {
+  const queries: FakeQuery[] = [];
+  const sdk = { query({ options }: { options: any }) { const q = new FakeQuery(options); queries.push(q); return q; } };
+  const seen: Array<{ reason?: string } | undefined> = [];
+  const runtime = new ClaudeCodeRuntime({ credentials: new StaticStore(), sdkLoader: async () => sdk });
+  const { session } = await runtime.createSession({ workspace: process.cwd(), toolInterceptor: ({ personRequired }) => { seen.push(personRequired); } });
+  await session.prompt("go");
+  await waitFor(() => queries.length === 1);
+  const { canUseTool } = queries[0].options;
+  await canUseTool("Bash", { command: "git push" }, { decisionReasonType: "rule", decisionReason: "Permission rule 'Bash(git push:*)' requires approval" });
+  await canUseTool("Bash", { command: "rm x" }, { decisionReasonType: "safetyCheck", matchedAskRule: { source: "userSettings", toolName: "Bash", ruleContent: "rm:*" } });
+  await canUseTool("Bash", { command: "ls" }, { decisionReasonType: "mode" });
+  assert.deepEqual(seen, [
+    { reason: "Permission rule 'Bash(git push:*)' requires approval" },
+    { reason: "Your Claude ask rule Bash(rm:*) requires a person to approve this" },
+    undefined,
+  ]);
+  session.dispose();
+});
+
 if (failures > 0) {
   console.error(`\n${failures} test(s) failed`);
   process.exit(1);

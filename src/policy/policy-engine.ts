@@ -35,7 +35,7 @@ export interface PolicyEngineOptions {
 export class PolicyEngine {
   constructor(private readonly options: PolicyEngineOptions) {}
 
-  decideToolCall(workspace: string, toolName: string, input: unknown): PolicyDecision {
+  decideToolCall(workspace: string, toolName: string, input: unknown, personRequired?: { reason?: string }): PolicyDecision {
     const risk = riskCategoryForTool(toolName);
 
     // The catastrophic floor is evaluated first, before any opt-out, so
@@ -43,6 +43,12 @@ export class PolicyEngine {
     // danger-full-access. Nothing configurable sits above this line.
     const catastrophic = catastrophicFloor(toolName, input);
     if (catastrophic) return { ...catastrophic, risk };
+
+    // The agent's own rules want a person here (see ToolCallContext). Bivy's
+    // opt-outs and remembered allows are Bivy's, so they can't answer it.
+    if (personRequired) {
+      return { decision: "ask", risk, reason: personRequired.reason || `Your agent's rules require a person to approve ${toolName}` };
+    }
 
     if (this.options.unrestricted) return { decision: "allow", risk };
 

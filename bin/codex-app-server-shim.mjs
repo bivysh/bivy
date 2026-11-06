@@ -22,7 +22,8 @@
 //   • thread/resume {threadId, cwd, approvalPolicy, sandbox} → threadId
 //   • turn/start {threadId, input:[{type:"text",text}]}
 //   • item/agentMessage/delta {delta}         → assistant text
-//   • item/commandExecution/requestApproval   → shell approval  ({decision:accept|decline})
+//   • item/commandExecution/requestApproval   → shell approval  ({decision:accept|decline});
+//                                               kind "humanCommand" = a person-only checkpoint
 //   • item/fileChange/requestApproval         → patch approval
 //   • item/permissions/requestApproval        → sandbox-widening approval
 //   • item/tool/requestUserInput              → AskUserQuestion card
@@ -387,6 +388,24 @@ function cardQuestions(questions) {
 
 function onServerRequest(m) {
   const { method, id, params } = m;
+  // A managed `prompt-user` rule's checkpoint (`kind: "humanCommand"`): only a
+  // person may answer it, and the prompt starts no command item of its own (the
+  // command runs as a normal item after approval). So it gets its own card,
+  // marked personRequired, which closes with the decision.
+  if (method === "item/commandExecution/requestApproval" && params?.kind === "humanCommand") {
+    const cardId = `checkpoint-${params.approvalId || id}`;
+    const input = { command: commandText(params.command), cwd: params.cwd, reason: params.reason };
+    approvalRequests.set(cardId, {
+      id,
+      reply: (msg) => {
+        const accepted = msg.decision !== "deny";
+        bivy({ type: "tool.result", toolCallId: cardId, name: "shell", result: accepted ? "Approved" : text(msg.reason || "Declined"), isError: !accepted });
+        return acceptOrDecline(msg);
+      },
+    });
+    bivy({ type: "tool.call", toolCallId: cardId, name: "shell", input, personRequired: { reason: "A managed Codex rule requires a person to approve this command" } });
+    return;
+  }
   if (method === "item/commandExecution/requestApproval" || method === "execCommandApproval") {
     const itemId = paramsItemId(params, id);
     approvalRequests.set(itemId, { id, reply: acceptOrDecline });
@@ -637,7 +656,12 @@ function onNotification(m) {
 // --- bivy-agent-protocol input (our stdin) ----------------------------------
 async function ensureInitialized() {
   if (initialized) return;
-  await asRequest("initialize", { clientInfo: { name: "bivy", title: "Bivy", version: "0.1.0" }, capabilities: { experimentalApi: true } });
+  // requiredHumanApproval: Codex sends managed `prompt-user` checkpoints (kind
+  // "humanCommand") here instead of rejecting the command (Codex 0.167+).
+  await asRequest("initialize", {
+    clientInfo: { name: "bivy", title: "Bivy", version: "0.1.0" },
+    capabilities: { experimentalApi: true, requiredHumanApproval: true },
+  });
   initialized = true;
 }
 
