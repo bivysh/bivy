@@ -1,6 +1,6 @@
 # Extend Bivy for the user
 
-Summary: Plugins: give the user a new widget, tool, theme, guide or agent on their machine, built and installed by you in minutes.
+Summary: Plugins: give the user a new widget, tool, theme, guide, skill or agent on their machine, built and installed by you in minutes.
 
 When the user wants Bivy itself to do more — "show my standup as a checklist
 every morning", "a dark theme like my editor", "let widgets check CI", "add the
@@ -10,7 +10,7 @@ release; the user never writes code.
 
 ## Start from a working one
 
-    bivy plugin init ~/bivy-plugins/standup --kind widget   # or tool, theme, guide, agent
+    bivy plugin init ~/bivy-plugins/standup --kind widget   # or tool, theme, guide, skill, agent
     bivy plugin dev ~/bivy-plugins/standup                  # install, then reinstall on every change
 
 Keep plugins in their own folder outside the project (`~/bivy-plugins/<id>`),
@@ -70,6 +70,19 @@ likes things done, a team's conventions, how to use the plugin's tools.
 
 The file needs a `# Title` line and a `Summary: …` line.
 
+**Skills** — an Agent Skills folder (`SKILL.md` with `name` and `description`
+front matter, plus scripts or references beside it) that every agent on this
+machine is offered: each session lists its name and description, and an agent
+reads it with `bivy skill show <name>`. Prefer a skill over a guide for a
+repeatable task with its own steps or scripts.
+
+    contributes:
+      skills:
+        - { name: release-notes, file: skills/release-notes/SKILL.md }
+
+For a single skill, no plugin is needed: `bivy skill install <folder|github:owner/repo/path>`.
+Write the description as what it does and when to use it; agents decide from it.
+
 **Agents** — any CLI or ACP agent: `bivy guide add-an-agent`.
 
 ## Check, then tell the user
@@ -78,6 +91,7 @@ The file needs a `# Title` line and a `Summary: …` line.
     bivy plugin list                   # installed, and any conflicts
     bivy tools run <name> key=value    # try a tool
     bivy guide <topic>                 # read a guide back
+    bivy skill show <name>             # read a skill back
 
 Then show the result: place the widget in your reply, or say which theme is
 set.

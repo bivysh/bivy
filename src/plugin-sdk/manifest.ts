@@ -11,6 +11,7 @@
  *   - tools: commands run as child processes with JSON in and out;
  *   - themes: a palette for the app;
  *   - guides: markdown playbooks agents read with `bivy guide`.
+ *   - skills: Agent Skills folders (a SKILL.md and its files) every agent is offered.
  * Adding a contribution type is a parser below and a row in CONTRIBUTION_TYPES.
  */
 import { parse as parseSemver, satisfies, valid, validRange } from "semver";
@@ -107,6 +108,12 @@ export interface PluginGuideContribution {
   file: string;
 }
 
+export interface PluginSkillContribution {
+  name: string;
+  /** The skill's SKILL.md, relative to the plugin directory; its folder holds the files it refers to. */
+  file: string;
+}
+
 export interface PluginManifest {
   apiVersion: typeof PLUGIN_API_VERSION;
   kind: typeof PLUGIN_KIND;
@@ -126,6 +133,7 @@ export interface PluginManifest {
     tools?: PluginToolContribution[];
     themes?: PluginThemeContribution[];
     guides?: PluginGuideContribution[];
+    skills?: PluginSkillContribution[];
   };
 }
 
@@ -453,6 +461,14 @@ function parseGuide(raw: Record<string, unknown>, at: string, errors: string[]):
   return { topic, file };
 }
 
+function parseSkill(raw: Record<string, unknown>, at: string, errors: string[]): PluginSkillContribution | undefined {
+  rejectUnknown(raw, ["name", "file"], at, errors);
+  const name = slug(raw.name, `${at}.name`, errors);
+  const file = relativeFile(raw.file, `${at}.file`, errors, ["/skill.md"]);
+  if (!name || !file) return undefined;
+  return { name, file };
+}
+
 /**
  * Every contribution type other than agents: its key, how many a plugin may
  * declare, how to parse one, and which field must be unique. Data, so a new
@@ -463,6 +479,7 @@ const CONTRIBUTION_TYPES = [
   { key: "tools", max: 50, parse: parseTool, id: (v: PluginToolContribution) => v.name },
   { key: "themes", max: 20, parse: parseTheme, id: (v: PluginThemeContribution) => v.id },
   { key: "guides", max: 20, parse: parseGuide, id: (v: PluginGuideContribution) => v.topic },
+  { key: "skills", max: 50, parse: parseSkill, id: (v: PluginSkillContribution) => v.name },
 ] as const;
 
 export const CONTRIBUTION_KEYS = ["agents", ...CONTRIBUTION_TYPES.map((type) => type.key)] as const;
@@ -542,9 +559,9 @@ export function validatePluginManifest(value: unknown): PluginManifestResult {
     }
     const hasOther = Object.keys(extra).length > 0;
     if (contributesRaw.agents === undefined && hasOther) {
-      // A plugin may contribute only widgets, tools, themes or guides.
+      // A plugin may contribute only widgets, tools, themes, guides or skills.
     } else if (!Array.isArray(contributesRaw.agents) || (contributesRaw.agents.length === 0 && !hasOther) || contributesRaw.agents.length > 20) {
-      errors.push(hasOther ? "contributes.agents must be a list of at most 20 agents" : "contributes must declare at least one agent, widget, tool, theme or guide");
+      errors.push(hasOther ? "contributes.agents must be a list of at most 20 agents" : "contributes must declare at least one agent, widget, tool, theme, guide or skill");
     } else {
       agents = contributesRaw.agents.map((agent, index) => parseAgent(agent, index, errors)).filter((agent): agent is PluginAgentContribution => Boolean(agent));
       const ids = new Set<string>();

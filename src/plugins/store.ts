@@ -139,7 +139,7 @@ export function installedAgentContributions(dataDir = defaultDataDir(), bivyVers
 
 /** Whether a manifest refers to files that must be installed with it. */
 function needsFiles(manifest: PluginManifest): boolean {
-  return Boolean(manifest.contributes.widgets?.length || manifest.contributes.tools?.length || manifest.contributes.guides?.length);
+  return Boolean(manifest.contributes.widgets?.length || manifest.contributes.tools?.length || manifest.contributes.guides?.length || manifest.contributes.skills?.length);
 }
 
 /**
@@ -174,6 +174,7 @@ function missingFiles(manifest: PluginManifest, dir: string): string[] {
   const named = [
     ...(manifest.contributes.widgets ?? []).map((widget) => widget.entry),
     ...(manifest.contributes.guides ?? []).map((guide) => guide.file),
+    ...(manifest.contributes.skills ?? []).map((skill) => skill.file),
   ];
   return named.filter((file) => !fs.statSync(path.join(dir, file), { throwIfNoEntry: false })?.isFile());
 }

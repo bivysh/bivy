@@ -86,7 +86,7 @@ test("a plugin may contribute only widgets, tools, themes and guides; unsafe one
   assert.match(errors, /timeoutSeconds must be an integer from 1 to 300/);
   assert.match(errors, /colors\.background must be a #rgb or #rrggbb color/);
   assert.match(errors, /guides\[0\]\.file must be a relative path/);
-  assert.match(parsePluginManifest(manifest("empty", "  agents: []")).errors.join(), /at least one agent, widget, tool, theme or guide/);
+  assert.match(parsePluginManifest(manifest("empty", "  agents: []")).errors.join(), /at least one agent, widget, tool, theme, guide or skill/);
 });
 
 test("install copies the plugin's own files only, and refuses a manifest naming a missing one", () => {

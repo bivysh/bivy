@@ -25,6 +25,10 @@ commands find the session through
 `$BIVY_SESSION_ID`, so any agent with a shell can use them. The note is
 `BIVY_AGENT_NOTE` in `src/agent-instructions.ts` and uses the channels below.
 
+If skills are installed on the machine ([plugins.md](plugins.md#skills)), a
+short list of their names and descriptions follows the note, so any agent
+knows to read one with `bivy skill show <name>` when a task matches it.
+
 To turn the note off, switch off **Send Bivy's system instructions** in
 **Settings → Agent instructions**. **View system instructions** there shows the
 exact text. The switch syncs to your other machines along with your
