@@ -116,13 +116,24 @@ export function isTeamRole(value: unknown): value is TeamRole {
   return typeof value === "string" && (TEAM_ROLES as readonly string[]).includes(value);
 }
 
+/** One `@`, no whitespace, a dotted domain. String checks, not a regex, so a
+ * hostile address can't make matching slow. */
+function plausibleEmail(email: string): boolean {
+  if (email.length > 254 || /\s/.test(email)) return false;
+  const at = email.indexOf("@");
+  if (at < 1 || at !== email.lastIndexOf("@")) return false;
+  const domain = email.slice(at + 1);
+  const dot = domain.lastIndexOf(".");
+  return dot > 0 && dot < domain.length - 1;
+}
+
 /** Clamp an invite request to the roster limits. An email invite is for one
  * person, so it is always single-use. */
 export function normalizeTeamInvite(input: { email?: unknown; role?: unknown; ttlMs?: unknown; maxUses?: unknown }): TeamInviteInput {
   const role = input.role === undefined ? "member" : input.role;
   if (!isTeamRole(role)) throw teamError("invalid-invite");
   const email = typeof input.email === "string" && input.email.trim() ? input.email.trim().toLowerCase() : undefined;
-  if (email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw teamError("invalid-invite");
+  if (email !== undefined && !plausibleEmail(email)) throw teamError("invalid-invite");
   const ttl = Number(input.ttlMs ?? TEAM_LIMITS.inviteTtlDefaultMs);
   if (!Number.isFinite(ttl) || ttl <= 0) throw teamError("invalid-invite");
   const ttlMs = Math.min(ttl, TEAM_LIMITS.inviteTtlMaxMs);
