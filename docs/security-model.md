@@ -627,15 +627,7 @@ sensitive.
     accounts count as teammates is the control plane's answer, as in account
     pairing (item 15). Removal is checked every minute, not instantly. See
     [Teams](teams.md#shared-machines).
-20. **Session invites trust the control plane to say who a teammate is.** A
-    guest's device gets an invite key for one session, never the room key,
-    and the machine accepts only that session's commands from it
-    (`src/session-invites.ts`). But the control plane vouches for which
-    device belongs to the invited account, as in account pairing (item 15).
-    A guest who can prompt drives the owner's agent with the owner's
-    sign-ins on that machine, and the agent itself can reach whatever the
-    session's sandbox allows. See [Teams](teams.md#inviting-a-teammate-into-one-session).
-21. **The web app that holds your room key is delivered by the control plane.**
+20. **The web app that holds your room key is delivered by the control plane.**
     Browser-side crypto is only as trustworthy as the JavaScript that runs it,
     and the PWA is served by the control plane (hosted `app.bivy.sh`, or your
     own). A compromised control plane could ship modified JS that exfiltrates

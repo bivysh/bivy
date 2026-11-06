@@ -184,26 +184,10 @@ deletes the runner.
 ## Automations
 
 Automation routing can send queued work to the deployment's cloud, either as
-the primary target or as the fallback when a chosen machine is offline. Where
-in the cloud it runs is one table, read top to bottom
-(`PLACEMENT_RULES` in `services/control-plane/src/placement.ts`):
-
-| Work | Goes to |
-| --- | --- |
-| Instructions sealed to one machine's key | the cloud computer (or waits) |
-| A follow-up on a session on the cloud computer | the cloud computer |
-| A follow-up on a session whose runner still exists | that runner, woken |
-| A follow-up whose machine is gone, with an account-sealed snapshot | a new runner that restores the session first |
-| Any other follow-up | the cloud computer (or waits) |
-| New work, runners offered | a new runner |
-| New work, no runners | the cloud computer (or waits) |
-
-"Waits" means the deployment has no cloud computer: the work stays queued for
-your own machines, which may take it. A runner placement labels the work for
-that runner; if the deployment refuses, the work goes back where it was. Work
-for the cloud computer moves to its label (`routeWorkToCloudComputer`) and the
-machine is acquired with purpose `"automation"`; the machine picks the work up
-through the hosted work queue.
+the primary target or as the fallback when a chosen machine is offline. The
+control plane moves the waiting work to the cloud computer's label
+(`routeWorkToCloudComputer`) and acquires the machine with purpose
+`"automation"`; the machine picks the work up through the hosted work queue.
 Automation instructions are sealed to the machine's own room key, so saving an
 automation that runs on the cloud computer first wakes it and pairs the device
 with it. Runs use the model credentials the machine already holds from

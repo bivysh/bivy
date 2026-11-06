@@ -49,7 +49,10 @@ let timer: ReturnType<typeof setInterval> | undefined;
 
 if (config.offered) {
   const settings = config.computeSettings();
-  const provider = machineProvider(config.provider(), config.providerToken()!, { ...(config.providerOrg() ? { org: config.providerOrg() } : {}) });
+  const provider = machineProvider(config.provider(), config.providerToken() ?? "", {
+    ...(config.providerOrg() ? { org: config.providerOrg() } : {}),
+    ...(config.dispatchCommand() ? { command: config.dispatchCommand() } : {}),
+  });
   computers = new CloudComputers({
     store, provider, core, settings, admission, runs,
     warnIdle: async (accountId, deleteAt) => void await core.notice(accountId, "computer", deleteAt),

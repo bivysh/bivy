@@ -27,6 +27,9 @@ export class FlyError extends Error {
 export type FetchLike = (url: string, init: { method: string; headers: Record<string, string>; body?: string; signal?: AbortSignal }) => Promise<{ status: number; text(): Promise<string> }>;
 
 export class FlyClient implements MachineProvider {
+  /** A Fly Machine stops when its init process exits; the Prometheus API
+   * reports CPU per app. */
+  readonly capabilities = { stopsOnExit: true, keepsMemory: false, cpuReading: true };
   private org?: string;
   private metricsOrg?: string;
 

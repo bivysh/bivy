@@ -321,42 +321,19 @@ async function routing() {
   expect(!take("n-laptop", "bivy", true) && take(computer, "bivy", true), "shared work routed to the cloud is left to the cloud computer");
   expect(take("n-laptop", "bivy") && take("n-laptop", "bivy/laptop"), "otherwise machines take shared and their own work as before");
 
-  // Placement: work the cloud gets goes to its own runner when one is free.
-  const { placeCloudWork, placeFor } = await import("../src/placement.js");
-  const { runnerNodeId } = await import("../src/runners.js");
-  const both = { computer: true, runners: true };
+  // Runners: work the cloud gets goes to its own runner when one is free.
+  const { placeWorkOnRunner, runnerNodeId } = await import("../src/runners.js");
   await store.setQueueRouting(account.id, { primary: { kind: "config", configId: cloud.id } });
   const issue = await store.enqueueWorkItem(account.id, { source: "github:issue", title: "fix it", repo: "o/r", issueNumber: 7 });
-  const launched: Array<[string, string | undefined]> = [];
-  const actions = {
-    launchRunner: async (runnerId: string, restore?: string) => { launched.push([runnerId, restore]); return { allowed: true }; },
-    wakeRunner: async () => ({ allowed: true }),
-  };
-  expect(await placeCloudWork(store, account.id, issue.id, both, actions) === "new-runner", "cloud-routed work is placed on a runner");
+  const launched: string[] = [];
+  expect(await placeWorkOnRunner(store, account.id, issue.id, async (runnerId) => { launched.push(runnerId); return { allowed: true }; }), "cloud-routed work is placed on a runner");
   const runnerLabelFor = (id: string) => `bivy/${runnerNodeId(account.id, `work:${id}`).replace(/^eph-/, "")}`;
-  expect(launched[0]?.[0] === `work:${issue.id}` && (await store.listWorkItems(account.id, 20)).find((i) => i.id === issue.id)?.label === runnerLabelFor(issue.id), "the item waits on that runner's own label");
+  expect(launched[0] === `work:${issue.id}` && (await store.listWorkItems(account.id, 20)).find((i) => i.id === issue.id)?.label === runnerLabelFor(issue.id), "the item waits on that runner's own label");
   const busy = await store.enqueueWorkItem(account.id, { source: "github:issue", title: "another", repo: "o/r", issueNumber: 8 });
-  expect(await placeCloudWork(store, account.id, busy.id, both, { ...actions, launchRunner: async () => ({ allowed: false }) }) === "computer", "no free runner: it falls back to the cloud computer");
+  expect(!(await placeWorkOnRunner(store, account.id, busy.id, async () => ({ allowed: false }))), "no free runner: the caller falls back");
   expect((await store.listWorkItems(account.id, 20)).find((i) => i.id === busy.id)?.label === "bivy", "a refused item goes back where it was");
-  const busyAlone = await store.enqueueWorkItem(account.id, { source: "github:issue", title: "a third", repo: "o/r", issueNumber: 9 });
-  expect(await placeCloudWork(store, account.id, busyAlone.id, { computer: false, runners: true }, { ...actions, launchRunner: async () => ({ allowed: false }) }) === "wait", "without a cloud computer it waits for the account's own machines");
   const sealed = await store.enqueueWorkItem(account.id, { source: "manual", title: "nightly", body: `bivy-room-v1:${cloudComputerNodeId(account.id)}:abc` });
-  expect(await placeCloudWork(store, account.id, sealed.id, both, { launchRunner: async () => { throw new Error("must not launch"); }, wakeRunner: async () => { throw new Error("must not wake"); } }) === "computer", "work sealed to the cloud computer stays with it");
-
-  // A follow-up on a session whose runner is gone restores it on a new runner,
-  // given a snapshot sealed to the account.
-  await store.setSessionSnapshot(account.id, "s-follow", "bivy-acct-v1:0123456789abcdef:opaque");
-  const followUp = await store.enqueueWorkItem(account.id, { source: "github:comment", title: "follow-up", repo: "o/r", issueNumber: 7, target: { kind: "existing_session", sessionId: "s-follow" } });
-  launched.length = 0;
-  expect(await placeCloudWork(store, account.id, followUp.id, both, actions) === "new-runner" && launched[0]?.[1] === "s-follow", "a follow-up whose machine is gone restores its session on a new runner");
-
-  // The rest of the table, one row each, on the facts alone.
-  const runner = "eph-runner-0123456789abcdef";
-  const continues = (more: object) => ({ offer: both, sealedToMachine: false, continues: { sessionId: "s", onComputer: false, restorable: false, ...more } });
-  expect(placeFor(continues({ onComputer: true })).to === "computer", "a follow-up on the cloud computer's session goes to it");
-  expect(JSON.stringify(placeFor(continues({ runnerNodeId: runner, restorable: true }))) === JSON.stringify({ to: "own-runner", nodeId: runner }), "a follow-up on a sleeping runner's session wakes that runner");
-  expect(placeFor({ ...continues({}), offer: { computer: false, runners: true } }).to === "wait", "a follow-up nothing in the cloud can restore waits for the account's own machines");
-  expect(placeFor({ offer: { computer: false, runners: false }, sealedToMachine: true }).to === "wait", "sealed work with no cloud computer waits too");
+  expect(!(await placeWorkOnRunner(store, account.id, sealed.id, async () => { throw new Error("must not launch"); })), "work sealed to the cloud computer stays with it");
 }
 
 try {

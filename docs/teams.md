@@ -121,36 +121,6 @@ session list. The machine takes the email from its own record of the device
 that sent the request, so it is attribution, not a security boundary: anyone
 on the machine has the same access.
 
-## Inviting a teammate into one session
-
-To bring a teammate into a single session without sharing the whole machine,
-open the session menu (**⋯**) and choose **Invite a teammate**. Pick the
-teammate, **Can prompt and approve** or **Can only view**, and how long: one
-day or seven days. They find the machine under **Shared with you**, labeled
-with the number of sessions they're invited to, and see only that session.
-
-- **A key of their own.** The machine never gives a guest its room key. Each
-  invite has its own key, which the machine seals for the guest's devices
-  when they pair. Frames that open under that key are the guest's, so the
-  machine knows who sent them.
-- **What a guest can do** is a fixed list per mode (`src/session-invites.ts`).
-  A viewer can open the session and read its history. A prompter can also
-  send messages, stop the agent, answer approvals and questions, and pick the
-  model. Every command must name the invited session. Guests can't start
-  sessions, open terminals, browse files or change settings.
-- **What a guest sees.** The machine sends a guest only that session's events
-  and replies to the guest's own requests, sealed under the invite key. Session
-  lists are cut to that one session.
-- **Ending it.** Removing an invite, or letting it expire, deletes its key, so
-  the guest's devices can no longer read or send anything. A teammate who
-  leaves the team loses their invites within a minute.
-- Usage counts as the machine owner's, and the agent runs with the owner's
-  sign-ins on that machine.
-
-Each frame carries a short fingerprint of the key it's sealed under (`g`), so
-devices skip frames meant for someone else instead of mistaking them for a
-changed key.
-
 ## What the control plane holds
 
 The roster: team name, members' account ids and emails, roles and open
@@ -196,9 +166,7 @@ All routes need a signed-in account (`Authorization: Bearer <session>`).
 | `POST /account/team/invite-preview` `{ token }` | anyone |
 | `POST /account/team/join` `{ token }` | anyone |
 
-A machine reports its open session invites with `PUT /node/session-invites`
-(account, session id, mode and expiry only, never keys). A machine reports its
-switch with `PUT /node/team-share` `{ shared }` and reads
+A machine reports its switch with `PUT /node/team-share` `{ shared }` and reads
 `GET /node/team-share` (whether it is shared, and the team's current member
 accounts). Machines use `GET`/`PUT /node/team-vault`, `POST /node/team-vault/key-request`
 and `PUT /node/team-vault/key` with their enrollment token. Only admins'

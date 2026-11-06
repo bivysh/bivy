@@ -20,7 +20,7 @@ import { listRuntimes, catalogRuntimes, accountProviderAliases, agentInstallSpec
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
-import { detectSessionLimit, limitResumePlan, sessionLimitNotice, type SessionLimit } from "./policy/session-limit.js";
+import { detectSessionLimit, limitResumePlan, sessionLimitNotice } from "./policy/session-limit.js";
 import { activeRulesetFor } from "./runtime/ruleset-store.js";
 import { createRulesetController } from "./controllers/rulesets.js";
 import { createAuditLog, readAuditEvents } from "./audit/index.js";
@@ -256,7 +256,6 @@ import {
 import { MAX_TEAM_INSTRUCTIONS_BYTES, TeamVaultSync } from "./team-vault.js";
 import { teamKeyStore } from "./secrets.js";
 import { TeamShare, teammateByDevice } from "./team-share.js";
-import { INVITE_DURATIONS_MS, SessionInvites, guestEvent, guestMayRun } from "./session-invites.js";
 import { redactSecrets, registerSecretValue } from "./redact.js";
 import {
   getSttConfig,
@@ -716,12 +715,6 @@ function replayPendingInteractions(sessionId: string) {
       : `The agent has been quiet for ${mins} min. Stop it or keep waiting?`;
     broadcast({ type: "session.turn_attention", sessionId, trigger, idleMs, at, message });
   }
-  // The way past a usage limit is a one-shot notice too, and a limit usually
-  // lands while nobody is watching. Offer it again after the history: a retry
-  // already waiting for the reset (with Cancel), else Fork / Retry at reset.
-  const resumeAt = metadata.getSession(sessionId)?.resumeAt;
-  if (resumeAt) broadcast(resumeScheduledNotice(sessionId, resumeAt));
-  else if (record?.limitHit && !record.isWorking) broadcast(limitHitNotice(record, record.limitHit));
 }
 
 function persistApprovalRequest(request: ApprovalRequest, resolvedAt?: number) {
@@ -2664,11 +2657,6 @@ function widgetWorkspace(sessionId: string): string {
   return (record ? harnessDirFor(record) : meta?.worktree || meta?.workspace) || os.homedir();
 }
 
-/** A session's invites as the owner's app shows them: never the keys. */
-function inviteViews(sessionId: string) {
-  return sessionInvites.list().filter((i) => i.sessionId === sessionId).map(({ id, email, mode, expiresAt, createdAt }) => ({ id, email, mode, expiresAt, createdAt }));
-}
-
 const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   ...createAppCommands(appService, (id) => { const record = resolveSession(id); return record ? harnessDirFor(record) : runTerms.liveRun(id)?.workspace; }, (app) => {
     const record = resolveSession(app.sessionId);
@@ -2688,32 +2676,6 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   // The machines on this machine's tailnet that run Bivy, this one first.
   async "tailnet.machines"(msg, ctx) {
     ctx.reply({ type: "tailnet.machines.ok", requestId: msg.requestId, machines: await tailnetMachines() });
-  },
-  // Session menu → Invite a teammate (src/session-invites.ts). Guests can't
-  // reach these: they aren't in any guest command list.
-  "session.invites.list"(msg, ctx) {
-    ctx.reply({ type: "session.invites", requestId: msg.requestId, invites: inviteViews(String(msg.sessionId ?? "")) });
-  },
-  async "session.invite.create"(msg, ctx) {
-    try {
-      const sessionId = String(msg.sessionId ?? "");
-      if (!openSessions.has(sessionId) && !metadata.getSession?.(sessionId)) throw new Error("Session not found");
-      sessionInvites.create({
-        sessionId, accountId: String(msg.accountId ?? ""), email: String(msg.email ?? ""),
-        mode: msg.mode === "view" ? "view" : "prompt",
-        durationMs: msg.duration === "day" ? INVITE_DURATIONS_MS.day : INVITE_DURATIONS_MS.week,
-      });
-      await publishSessionInvites();
-      ctx.reply({ type: "session.invites", requestId: msg.requestId, invites: inviteViews(sessionId) });
-    } catch (error) {
-      ctx.reply({ type: "session.invites.error", requestId: msg.requestId, httpStatus: 400, error: (error as Error).message });
-    }
-  },
-  async "session.invite.revoke"(msg, ctx) {
-    const invite = sessionInvites.get(String(msg.id ?? ""));
-    sessionInvites.revoke(String(msg.id ?? ""));
-    await publishSessionInvites();
-    ctx.reply({ type: "session.invites", requestId: msg.requestId, invites: inviteViews(invite?.sessionId ?? String(msg.sessionId ?? "")) });
   },
   // Settings → Keys for agents: the keys agents asked for, never their values.
   "secrets.list"(msg, ctx) {
@@ -3828,48 +3790,7 @@ const relayCtx: CommandCtx = { reply: (event) => relay?.sendEvent(event), broadc
 // Shared per-client size slot for all relay-tunneled clients (see below).
 const RELAY_CLIENT_ID = "relay";
 
-// Teammates invited into one session (src/session-invites.ts). A guest's
-// request ids are remembered so their replies reach only them.
-const sessionInvites = new SessionInvites(appDir);
-const guestRequests = new Map<string, string>();
-function rememberGuestRequest(requestId: string, inviteId: string) {
-  guestRequests.set(requestId, inviteId);
-  if (guestRequests.size > 500) guestRequests.delete(guestRequests.keys().next().value!);
-}
-function guestCommandSession(command: Record<string, unknown>): string | undefined {
-  if (typeof command.sessionId === "string") return command.sessionId;
-  if (command.kind === "approval") return approvals.list().find((a) => a.id === String(command.id ?? ""))?.sessionId;
-  return undefined;
-}
-const relayGuests = {
-  invites: () => sessionInvites.list(),
-  forAccount: (accountId: string) => sessionInvites.forAccount(accountId),
-  eventFor: (inviteId: string, event: unknown) => {
-    const invite = sessionInvites.get(inviteId);
-    return invite ? guestEvent(invite, event, (requestId) => guestRequests.get(requestId) === inviteId) : null;
-  },
-};
-
-/** Tell the control plane who may reach this machine for which session, and
- * drop invites it refused (the teammate has left the team). */
-async function publishSessionInvites(): Promise<void> {
-  const res = await modelAuthFetch("/node/session-invites", { method: "PUT", body: JSON.stringify({ invites: sessionInvites.routing() }) }).catch(() => null);
-  if (!res?.ok) return;
-  const { invites } = (await res.json()) as { invites?: Array<{ accountId: string; sessionId: string }> };
-  if (Array.isArray(invites)) sessionInvites.keepRouted(invites);
-}
-
-async function handleRelayMessage(msg: ClientMessage, guest?: { inviteId: string }) {
-  if (guest) {
-    const invite = sessionInvites.get(guest.inviteId);
-    if (!invite) return;
-    if (typeof msg.requestId === "string") rememberGuestRequest(msg.requestId, invite.id);
-    const allowed = guestMayRun(invite, msg, guestCommandSession);
-    if (!allowed.ok) {
-      relay?.sendEvent({ type: "session.error", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined, sessionId: invite.sessionId, error: allowed.reason });
-      return;
-    }
-  }
+async function handleRelayMessage(msg: ClientMessage) {
   try {
     const requestId = typeof msg.requestId === "string" && msg.requestId.trim() ? msg.requestId : randomUUID();
     const dispatched = await remoteSessionAdmission.run(
@@ -3914,9 +3835,8 @@ function startRelayIfConfigured() {
   stopRelayConnection();
   const config = loadRelayConfig(appDir);
   if (!config) return false;
-  relay = new RelayConnector(config, (msg, guest) => void handleRelayMessage(msg, guest), {
+  relay = new RelayConnector(config, (msg) => void handleRelayMessage(msg), {
     pairing: pairingStore,
-    guests: relayGuests,
     teamShared: () => readSettings().teamShare === true,
     previews: appGateway ? undefined : remotePreview,
     onWorkAvailable: (hint) => {
@@ -4624,7 +4544,6 @@ let teamVaultTimer: ReturnType<typeof setInterval> | undefined;
 function teamTick(): void {
   void teamVault.sync().catch(() => undefined);
   void teamShare.check().catch(() => undefined);
-  void publishSessionInvites().catch(() => undefined);
 }
 function startTeamVaultWatcher(): void {
   if (teamVaultTimer) return;
@@ -8059,6 +7978,19 @@ let ephemeralLastBusyAt = Date.now();
 /** Best-effort "I've settled — reap me" signal to the control plane. Non-secret
  *  (node id via the enrollment bearer); lets a hosted machine whose provider
  *  can't self-reap on exit (Hetzner) be destroyed server-side. */
+/** Best-effort "I'm going to sleep" signal, so the deployment can stop a
+ *  machine its provider keeps running after the node exits. Bounded: sleeping
+ *  must not wait on an unreachable control plane. */
+async function signalSleepingToControlPlane(): Promise<void> {
+  if (!sessionAdvertiseTarget) return;
+  await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/sleeping`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${sessionAdvertiseTarget.enrollmentToken}`, "content-type": "application/json" },
+    body: "{}",
+    signal: AbortSignal.timeout(5_000),
+  }).catch(() => {});
+}
+
 async function signalSettledToControlPlane(): Promise<void> {
   if (!sessionAdvertiseTarget) return;
   await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/settled`, {
@@ -8224,6 +8156,7 @@ function evaluateEphemeralTeardown(): void {
       provider: ephemeralTeardownCfg.provider,
       sleep: ephemeralTeardownCfg.sleep,
       signalSettled: signalSettledToControlPlane,
+      signalSleeping: signalSleepingToControlPlane,
       shutdown: () => { try { spawnSync("shutdown", ["-h", "now"], { stdio: "ignore" }); } catch { /* TTL backstops */ } },
     });
   })();
@@ -8450,31 +8383,20 @@ function scheduleSessionResume(record: SessionRecord, plan: ResumePlan): boolean
   }
   metadata.setResumeAt(record.id, plan.resumeAt);
   metadata.setResumeAttempts(record.id, attempts + 1);
-  broadcast(resumeScheduledNotice(record.id, plan.resumeAt));
   const when = Date.parse(plan.resumeAt);
-  armSessionResumeTimer(record.id, Number.isFinite(when) ? when : Date.now());
-  return true;
-}
-
-/** The notice saying a retry is waiting for the limit to reset, with Cancel. */
-function resumeScheduledNotice(sessionId: string, resumeAt: string) {
-  const when = Date.parse(resumeAt);
   const at = Number.isFinite(when)
     ? new Date(when).toLocaleString("en-US", { timeZone: "UTC", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })
-    : resumeAt;
-  return {
+    : plan.resumeAt;
+  broadcast({
     type: "session.notice",
-    sessionId,
+    sessionId: record.id,
     level: "info",
     message: `I'll retry this automatically when the limit resets (${at} UTC).`,
     ...(Number.isFinite(when) ? { at: new Date(when).toISOString(), localMessage: "I'll retry this automatically when the limit resets at {time}." } : {}),
     actions: ["cancel-resume"],
-  };
-}
-
-/** The offer past a limit the last turn hit: Fork now, or retry at reset. */
-function limitHitNotice(record: SessionRecord, limit: SessionLimit) {
-  return { type: "session.notice", sessionId: record.id, level: "warn", ...sessionLimitNotice(getRuntime(record.runtimeId).displayName, limit) };
+  });
+  armSessionResumeTimer(record.id, Number.isFinite(when) ? when : Date.now());
+  return true;
 }
 
 /** Fire a due auto-resume: re-open the session if needed and re-send the turn's
@@ -8830,9 +8752,6 @@ function attachSessionListeners(record: SessionRecord) {
       // made forward progress (a user turn, a resume that cleared the limit, a
       // reroute, or a surfaced error), so its durable resume streak resets below.
       let scheduledResume = false;
-      // Only a limit this turn surfaced stays on offer (set below); a turn that
-      // got through, or that the policy is already rerouting or waiting out, clears it.
-      record.limitHit = undefined;
       if (reroutePlan) {
         void record.reroute!.applyReroute(reroutePlan, {
           getCurrentModelName: () => record.session.getCurrentModel()?.name,
@@ -8860,7 +8779,10 @@ function attachSessionListeners(record: SessionRecord) {
         // A usage/rate limit nothing recovered automatically: offer the ways past
         // it — fork to another agent now, or retry when the window resets.
         record.limitHit = detectSessionLimit(turnError, { resetsAtHint });
-        if (record.limitHit) broadcast(limitHitNotice(record, record.limitHit));
+        if (record.limitHit) {
+          const notice = sessionLimitNotice(getRuntime(record.runtimeId).displayName, record.limitHit);
+          broadcast({ type: "session.notice", sessionId: record.id, level: "warn", ...notice });
+        }
         // If the terminal error is an auth failure (expired key/token → 4xx),
         // also raise the sign-in sheet for the failing provider.
         maybeSignalAuthRequired(record, turnError);

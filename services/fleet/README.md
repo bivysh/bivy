@@ -62,7 +62,8 @@ still accepted.
 
 | Name | Default | What it does |
 | --- | --- | --- |
-| `FLEET_PROVIDER` | `fly` | Which adapter in `src/provider.ts` |
+| `FLEET_PROVIDER` | `fly` | Which adapter in `src/provider.ts`: `fly`, or `command` to run machines through your own dispatcher ([DISPATCH.md](DISPATCH.md)) |
+| `FLEET_DISPATCH_COMMAND` | — | With `command`: the dispatcher to run per operation |
 | `FLEET_PROVIDER_TOKEN_FLY` | — | The provider credential |
 | `FLEET_PROVIDER_ORG` | discovered | The provider organization to create apps in |
 | `FLEET_IMAGE` | — | Machine image with Bivy installed |

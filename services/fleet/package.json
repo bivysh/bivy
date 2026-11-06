@@ -14,7 +14,8 @@
     "test:runners": "tsx test/runners.test.ts",
     "test:limits": "tsx test/limits.test.ts",
     "test:app": "tsx test/app.test.ts",
-    "test:unit": "npm run test:computers && npm run test:runners && npm run test:limits && npm run test:app"
+    "test:dispatch": "tsx test/dispatch.test.ts",
+    "test:unit": "npm run test:computers && npm run test:runners && npm run test:limits && npm run test:app && npm run test:dispatch"
   },
   "dependencies": {
     "express": "^5.2.1",

@@ -84,13 +84,16 @@ assert.equal(readEphemeralTeardownConfig({} as NodeJS.ProcessEnv).enabled, false
   assert.equal(shouldSelfTeardown(runner, { ...quiet, everBusy: false, idleForMs: 9 * 60_000 }), false);
   assert.equal(shouldSelfTeardown(runner, { ...quiet, everBusy: false, idleForMs: 11 * 60_000 }), true);
 }
-// Sleep exits WITHOUT signalling settled: the control plane must not reap it.
+// Sleep exits WITHOUT signalling settled (the control plane must not reap it),
+// but says it's going to sleep first, so a machine that keeps running after
+// the node exits is stopped; a failing signal never blocks the exit.
 {
   __resetTeardownLatch();
-  let exited = -1, signalled = 0, shut = 0;
-  await performSelfTeardown({ provider: "fly", sleep: true, exit: (c) => { exited = c; }, shutdown: () => { shut++; }, signalSettled: async () => { signalled++; }, log: () => {} });
+  let exited = -1, signalled = 0, shut = 0, sleeping = 0;
+  await performSelfTeardown({ provider: "fly", sleep: true, exit: (c) => { exited = c; }, shutdown: () => { shut++; }, signalSettled: async () => { signalled++; }, signalSleeping: async () => { sleeping++; throw new Error("offline"); }, log: () => {} });
   assert.equal(exited, 0);
   assert.equal(signalled, 0);
+  assert.equal(sleeping, 1);
   assert.equal(shut, 0);
 }
 

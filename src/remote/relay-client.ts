@@ -5,7 +5,7 @@ import { EventTransferStore } from "./event-transfer.js";
 import path from "node:path";
 import { WebSocket } from "ws";
 import { seal, sealFrame, openFrame, ReplayGuard } from "../e2e.js";
-import { frameMessages, FrameReassembler, keyFingerprint } from "../relay-chunk.js";
+import { frameMessages, FrameReassembler } from "../relay-chunk.js";
 import { soloCredentials, buildDialUrl } from "./solo.js";
 import type { PairingStore, RotateDelivery } from "../device-registry.js";
 
@@ -110,14 +110,6 @@ export interface RelayConnectorOptions {
   // Whether this machine is shared with its team. Without it, teammates'
   // devices are refused even when the control plane vouches for them.
   teamShared?: () => boolean;
-  // Teammates invited into one session (src/session-invites.ts). Their
-  // devices get the invite's key, never the room key; frames that open
-  // under it are theirs, and they see only what `eventFor` lets through.
-  guests?: {
-    invites(): Array<{ id: string; keyB64: string }>;
-    forAccount(accountId: string): { id: string; keyB64: string } | undefined;
-    eventFor(inviteId: string, event: unknown): unknown | null;
-  };
   // Preview bytes use separate outbound streams, never session frame payloads.
   previews?: {
     ready(origin: string | undefined, relayUrl: string): void;
@@ -187,7 +179,7 @@ export class RelayConnector {
 
   constructor(
     private readonly config: RelayConfig,
-    private readonly onClientMessage: (msg: ClientMessage, guest?: { inviteId: string }) => void,
+    private readonly onClientMessage: (msg: ClientMessage) => void,
     private readonly options: RelayConnectorOptions,
   ) {
     this.pairing = options.pairing;
@@ -305,38 +297,13 @@ export class RelayConnector {
   sendEvent(event: unknown) {
     if (this.ws?.readyState !== WebSocket.OPEN) return;
     const offered = (event as { type?: string })?.type === "transfer.part" ? null : this.transfers.offer(event);
-    this.sendSealed(sealFrame(this.roomKey(), offered ?? event), this.roomKey());
-    // Guests get their own copy, under their invite's key, of what they may see.
-    for (const invite of this.options.guests?.invites() ?? []) {
-      // The original event, not a transfer offer: guests can't fetch transfers,
-      // and the sealed copy is still split into relay-sized chunks.
-      const copy = this.options.guests!.eventFor(invite.id, event);
-      if (copy) {
-        const key = Buffer.from(invite.keyB64, "base64");
-        this.sendSealed(sealFrame(key, copy), key);
-      }
-    }
-  }
-
-  private sendSealed(payload: string, key: Buffer) {
+    const payload = sealFrame(this.roomKey(), offered ?? event);
     // Large events (big file reads, long diffs, image attachments) are split
     // into multiple relay frames so none exceeds the relay's max-frame limit;
     // the client reassembles them before decrypting.
-    for (const msg of frameMessages(payload, keyFingerprint(key))) {
+    for (const msg of frameMessages(payload)) {
       if (this.ws?.readyState !== WebSocket.OPEN) return;
       this.ws.send(msg);
-    }
-  }
-
-  /** Open a client frame: the room key, or else one guest's invite key. */
-  private openClientFrame(payload: string): { frame: ReturnType<typeof openFrame>; guest?: { inviteId: string } } {
-    try {
-      return { frame: openFrame(this.roomKey(), payload) };
-    } catch (roomKeyError) {
-      for (const invite of this.options.guests?.invites() ?? []) {
-        try { return { frame: openFrame(Buffer.from(invite.keyB64, "base64"), payload), guest: { inviteId: invite.id } }; } catch { /* not this one */ }
-      }
-      throw roomKeyError;
     }
   }
 
@@ -366,12 +333,7 @@ export class RelayConnector {
       if (!auth.ok) reason = auth.reason;
       // The control plane vouches for a teammate only while this machine is
       // shared; the machine's own switch has the last word.
-      else if (auth.teammate && !this.options.teamShared?.()) {
-        // Not shared: a teammate gets in only through a session invite, with its key.
-        const invite = this.options.guests?.forAccount(auth.teammate.accountId);
-        if (invite) welcome = this.pairing.welcomeGuest(msg.devicePublicKeyB64, Buffer.from(invite.keyB64, "base64"), invite.id);
-        else reason = "This machine isn't shared with your team.";
-      }
+      else if (auth.teammate && !this.options.teamShared?.()) reason = "This machine isn't shared with your team.";
       else welcome = this.pairing.trustDevice({ devicePublicKeyB64: msg.devicePublicKeyB64, label: msg.label, ...(auth.teammate ? { teammate: auth.teammate } : {}) });
     } else {
       return;
@@ -525,15 +487,14 @@ export class RelayConnector {
         const payload = this.reassembler.accept(env as { p?: unknown; fc?: unknown; fi?: unknown; fn?: unknown });
         if (payload === null) return;
         try {
-          const { frame, guest } = this.openClientFrame(payload);
+          const frame = openFrame(this.roomKey(), payload);
           if (!this.replay.accept(frame)) {
             console.warn("[relay] dropped stale or replayed client frame");
             return;
           }
           const command = frame.data as ClientMessage;
-          // Chunked transfers are room-key only: a guest's large replies stay in one frame.
-          if (command.kind === "transfer.read" && !guest) this.sendEvent(this.transfers.read(command));
-          else this.onClientMessage(command, guest);
+          if (command.kind === "transfer.read") this.sendEvent(this.transfers.read(command));
+          else this.onClientMessage(command);
         } catch {
           console.warn("[relay] failed to decrypt client frame");
         }
