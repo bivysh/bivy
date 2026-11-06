@@ -254,6 +254,7 @@ import {
   mintLocalGithubAppVaultKey,
 } from "./github-app-vault.js";
 import { MAX_TEAM_INSTRUCTIONS_BYTES, TeamVaultSync } from "./team-vault.js";
+import { teamKeyStore } from "./secrets.js";
 import { TeamShare, teammateByDevice } from "./team-share.js";
 import { redactSecrets, registerSecretValue } from "./redact.js";
 import {
@@ -1826,7 +1827,7 @@ type NodeSettings = {
   /** Whether this machine is shared with its team, and teammates' devices on it (src/team-share.ts). */
   teamShare: { enabled: boolean; teamName?: string; teammateDevices: Array<{ id: string; label: string; email: string }> };
   /** The team's shared instructions as this machine last opened them (src/team-vault.ts). */
-  teamInstructions: { state: "none" | "ready" | "waiting-for-key"; maxBytes: number; teamName?: string; canEdit?: boolean; text?: string; updatedAt?: number; generation?: number };
+  teamInstructions: { state: "none" | "ready" | "waiting-for-key"; maxBytes: number; teamName?: string; canEdit?: boolean; text?: string; updatedAt?: number; generation?: number; keys?: Array<{ name: string; updatedAt: number }> };
   forkWorkspaceMaxBytes: number;
 };
 
@@ -1923,6 +1924,7 @@ function teamInstructionsSnapshot(): NodeSettings["teamInstructions"] {
   return {
     state, maxBytes: MAX_TEAM_INSTRUCTIONS_BYTES, teamName: team.name, canEdit: team.role === "admin",
     text: instructions?.text ?? "", updatedAt: instructions?.updatedAt ?? 0, generation: instructions?.generation ?? 0,
+    keys: instructions?.keys ?? [],
   };
 }
 
@@ -1945,9 +1947,14 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
   }
   // Team instructions are encrypted and stored for the whole team; a refused
   // save (not admin, edited elsewhere) throws before anything else changes.
-  if (typeof patch.teamInstructions === "string") {
-    await teamVault.write(patch.teamInstructions, Number(patch.teamInstructionsBaseGeneration ?? 0));
-  }
+  const teamPatch = {
+    ...(typeof patch.teamInstructions === "string" ? { text: patch.teamInstructions } : {}),
+    ...(patch.teamKeySet && typeof patch.teamKeySet === "object"
+      ? { setKey: { name: String((patch.teamKeySet as { name?: unknown }).name ?? ""), value: String((patch.teamKeySet as { value?: unknown }).value ?? "") } }
+      : {}),
+    ...(typeof patch.teamKeyRemove === "string" ? { removeKey: patch.teamKeyRemove } : {}),
+  };
+  if (Object.keys(teamPatch).length) await teamVault.write(teamPatch, Number(patch.teamInstructionsBaseGeneration ?? 0));
   const settings = readSettings();
   if (typeof patch.name === "string" && patch.name.trim()) {
     const prev = identity.name;
@@ -4503,6 +4510,9 @@ const teamVault = new TeamVaultSync({
   publicKey: () => pairingStore.nodePublicKeyB64(),
   wrap: (publicKey, keyB64) => pairingStore.wrapForNodePublicKey(publicKey, keyB64, "team-vault"),
   unwrap: (publicKey, wrapped) => pairingStore.unwrapFromNodePublicKey(publicKey, wrapped, "team-vault"),
+  // Opened team keys live in the machine's encrypted secret vault as
+  // `team.NAME`; a personal key of the same name wins (src/secrets.ts).
+  keyStore: teamKeyStore(new SecretVault(appDir)),
 });
 // Sharing this machine with the team (src/team-share.ts). Checked on the same
 // tick: a teammate who left loses their devices here within a minute.

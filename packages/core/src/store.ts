@@ -755,7 +755,7 @@ export interface NodeSettings {
    *  `teamInstructions` + `teamInstructionsBaseGeneration` (admins only).
    *  `waiting-for-key`: the team has instructions this machine can't open until
    *  another member's machine seals the team key for it. Absent on older nodes. */
-  teamInstructions?: { state: "none" | "ready" | "waiting-for-key"; maxBytes: number; teamName?: string; canEdit?: boolean; text?: string; updatedAt?: number; generation?: number };
+  teamInstructions?: { state: "none" | "ready" | "waiting-for-key"; maxBytes: number; teamName?: string; canEdit?: boolean; text?: string; updatedAt?: number; generation?: number; keys?: Array<{ name: string; updatedAt: number }> };
   /** Whether this machine is shared with its team (`teamName`, if in one), and
    *  the teammates' devices paired with it. Set with `teamShare: boolean`.
    *  Absent on nodes that predate the feature. */

@@ -8,6 +8,7 @@ import {
 import type { AppState } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { TeamInstructions } from "./TeamInstructions.js";
+import { TeamKeys } from "./TeamKeys.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { Badge } from "./Badge.js";
@@ -202,6 +203,7 @@ export function TeamPanel({ state }: { state: AppState }) {
       </section>
 
       <TeamInstructions state={state} />
+      <TeamKeys state={state} />
 
       {admin && (
         <section className="settings-section">
