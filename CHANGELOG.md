@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Teams.** Settings → Team lets you start a team, invite people by email or with a link, make them admins or members, and remove them. Opening an invite link takes you to Settings → Team to join. The server keeps only the team list; a team gives no one access to another member's machines, sessions or keys. A deployment's policy service is asked before a team is created or someone joins, and hears when the member count changes. See [Teams](docs/teams.md).
+
 ## [0.22.9] - 2026-11-06
 
 ### Added

@@ -18,7 +18,9 @@ export type DeploymentOperation =
   | "relay.connect"
   | "push.deliver"
   | "automation.run"
-  | "session.create";
+  | "session.create"
+  | "team.create"
+  | "team.member.add";
 
 export interface DeploymentDecisionAction {
   /** Opaque deployment-owned action handled by /account/extension/actions/:id. */
@@ -52,12 +54,17 @@ export function policyContext(context: DeploymentPolicyContext): DeploymentPolic
 
 export interface DeploymentPolicyContext {
   source?: string;
+  /** Team operations: the team, and its member count once this one is admitted. */
+  teamId?: string;
+  teamMembers?: number;
 }
 
 /** Account-level facts, sent with the account's email so the operator can act
  * on them (e.g. greet a new account) without its own copy of the account table. */
 export type DeploymentAccountEvent =
-  | { type: "account.signed-in"; at: string; accountCreatedAt: string };
+  | { type: "account.signed-in"; at: string; accountCreatedAt: string }
+  /** A team's roster changed; `members` is its size now (0 once it is gone). */
+  | { type: "team.members-changed"; at: string; teamId: string; members: number };
 
 export type CloudComputerAcquire =
   | { allowed: true; nodeId: string; state: string }

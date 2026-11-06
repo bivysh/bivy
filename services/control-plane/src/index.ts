@@ -36,6 +36,7 @@ import { isPushServiceEndpoint } from "./push-endpoint.js";
 import { register, httpMetricsMiddleware, bindRelayTicketMetrics, startUsageCollector, recordFunnelEvent, recordDurableRunLifecycleResult, recordRunFailureStage, classifyRunFailureStage, recordProductEvent, PRODUCT_EVENT_VALUES, PRODUCT_CLIENT_VALUES, type ProductEvent, type ProductClient } from "./metrics.js";
 import { initSentry } from "./instrument.js";
 import { sanitizeEvidencePatch } from "./run-evidence.js";
+import { registerTeamRoutes } from "./team-routes.js";
 import { DeploymentExtension, type CloudComputerAcquire, type DeploymentOperation, type DeploymentPolicyContext } from "./deployment-extension.js";
 import {
   verifyGithubSignature,
@@ -629,6 +630,12 @@ if (hasReactApp) {
     noStorePwaShell(res);
     res.type("html").send(reactIndexHtml);
   });
+  // Team invite links (`/team/join#<token>`, team-routes.ts): the token is in
+  // the fragment, so the server sees only the path.
+  app.get("/team/join", (_req, res) => {
+    noStorePwaShell(res);
+    res.type("html").send(reactIndexHtml);
+  });
 }
 
 function bearer(req: Request): string | null {
@@ -811,6 +818,24 @@ function sendSignInFailed(res: Response, status: number, detail: string, source:
     ].join("; "),
   );
   res.status(status).type("html").send(signInFailedHtml(detail));
+}
+
+/** Send one account email. Without a sender configured (dev), log it instead. */
+async function sendAccountEmail(message: { to: string; subject: string; text: string; html: string }): Promise<boolean> {
+  const resendApiKey = process.env.RESEND_API_KEY;
+  const from = process.env.AUTH_EMAIL_FROM;
+  if (!resendApiKey || !from) {
+    console.log(`[email] (not sent, no sender configured) to ${message.to}: ${message.subject}\n${message.text}`);
+    return false;
+  }
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { authorization: `Bearer ${resendApiKey}`, "content-type": "application/json" },
+    body: JSON.stringify({ from, ...message }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`Email send failed: ${response.status}`);
+  return true;
 }
 
 async function sendMagicLinkEmail(email: string, loginUrl: string) {
@@ -1329,6 +1354,18 @@ app.delete("/account", requireUser, asyncHandler(async (req, res) => {
   const deleted = await store.deleteAccount(account.id);
   res.json({ ok: deleted });
 }));
+
+registerTeamRoutes(app, {
+  teams: store.teams,
+  requireUser,
+  authorize: (accountId, operation, context) => deploymentDecision(accountId, operation, undefined, context),
+  recordEvent: (account, event) => {
+    void deploymentExtension.recordAccount(account.id, account.email, event)
+      .catch((error) => console.warn(`[teams] ${event.type} event for account ${account.id} failed: ${error instanceof Error ? error.message : error}`));
+  },
+  sendEmail: sendAccountEmail,
+  appUrl: baseUrl,
+});
 
 app.post("/account/extension/actions/:action", requireUser, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;

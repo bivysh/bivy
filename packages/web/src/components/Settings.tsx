@@ -26,6 +26,7 @@ import { writeClipboard } from "../clipboard.js";
 import { CredentialVault } from "./CredentialVault.js";
 import { AgentInstructionsPanel } from "./AgentInstructionsPanel.js";
 import { AgentKeysPanel } from "./AgentKeysPanel.js";
+import { TeamPanel } from "./TeamPanel.js";
 import { Toggle } from "./Toggle.js";
 import { useMediaQuery } from "../useMediaQuery.js";
 import { nodePresence, PRESENCE } from "../cloudDestinations.js";
@@ -69,6 +70,9 @@ const IconMic = () => (
 );
 const IconUser = () => (
   <Glyph><circle cx="12" cy="8" r="4" /><path d="M4 21a8 8 0 0 1 16 0" /></Glyph>
+);
+const IconTeam = () => (
+  <Glyph><circle cx="9" cy="8" r="3.5" /><path d="M2.5 20a6.5 6.5 0 0 1 13 0" /><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8" /><path d="M18.5 14.5a6.5 6.5 0 0 1 3 5.5" /></Glyph>
 );
 const IconLink = () => (
   <Glyph><path d="M9 17H7A5 5 0 0 1 7 7h2" /><path d="M15 7h2a5 5 0 0 1 0 10h-2" /><line x1="8" y1="12" x2="16" y2="12" /></Glyph>
@@ -190,6 +194,7 @@ const TITLES: Record<View, string> = {
   webhooks: "Webhooks",
   rulesets: "Rulesets",
   nodes: "Machines",
+  team: "Team",
   account: "Account",
   link: "Link a device",
 };
@@ -213,6 +218,7 @@ const SEARCH_TERMS: Record<View, string> = {
   webhooks: "webhook trigger secret event",
   rulesets: "rules policy routing agent runtime model sandbox",
   nodes: "node daemon online offline diagnostics version update storage disk",
+  team: "team members invite admin role workspace organization colleagues people",
   account: "account email devices machines usage",
   link: "device qr code phone mobile pair",
 };
@@ -296,6 +302,8 @@ export function Settings({
         { id: "instructions", label: "Agent instructions", icon: <IconDoc /> },
       ],
     },
+    // Teams are an account feature, so only signed-in (hosted) clients have one.
+    ...(hosted ? [{ label: "Team", items: [{ id: "team" as View, label: "Team", icon: <IconTeam /> }] }] : []),
     {
       label: "Machines",
       items: [
@@ -460,6 +468,7 @@ export function Settings({
                 Automations hub — a deep link to any of them redirects there (see
                 the redirect effect above), so they render nothing here. */}
             {activeView === "nodes" && <NodesPanel state={state} />}
+            {activeView === "team" && <TeamPanel />}
             {activeView === "account" && <AccountPanel />}
             {activeView === "link" && <LinkPanel onDone={onClose} />}
           </div>

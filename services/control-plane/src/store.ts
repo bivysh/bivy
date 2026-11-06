@@ -2,6 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { createHash } from "node:crypto";
 
+import type { TeamRepository } from "./teams.js";
+
 /**
  * Control plane data store.
  *
@@ -1621,4 +1623,7 @@ export interface ControlPlaneStore
     NodeClaimRepository,
     CentralGithubAppRepository,
     AutomationRepository,
-    WorkQueueRepository {}
+    WorkQueueRepository {
+  /** Team roster (teams.ts). A component of its own rather than more methods here. */
+  readonly teams: TeamRepository;
+}

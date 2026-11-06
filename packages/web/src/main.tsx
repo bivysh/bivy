@@ -3,6 +3,7 @@ import { initializePackagedClient } from "./packaged-client.js";
 import { applyTheme } from "./theme.js";
 import { consumeShareTarget } from "./shareTarget.js";
 import { consumePreviewLanding } from "./previewLanding.js";
+import { consumeTeamInvite } from "./teamInvite.js";
 import "@bivy/ui/tokens.css";
 import "./styles.css";
 
@@ -25,6 +26,9 @@ void initializePackagedClient()
     // A signed-out visit to an app preview's stable address returns here;
     // stash it before the router strips the session deep link.
     consumePreviewLanding();
+    // A team invite link carries its token in the hash, which the controller
+    // would read as a device-link code; stash it and open Settings → Team.
+    consumeTeamInvite();
     return import("./mount.js");
   })
   .catch(() => {
