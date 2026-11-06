@@ -25,7 +25,8 @@ import { countActiveAccountSessions } from "./session-count.js";
 import { DeploymentCompute, deploymentCompute, managedComputeEnabled, setDeploymentCompute } from "./deployment-compute.js";
 import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, cloudRouteSourceLabel, isCloudComputerNode, isCloudComputerPresence, isEphemeralMilestone, nodeMayTakeWork, restorableSnapshot, routeWorkToCloudComputer } from "./cloud-computer.js";
 import { deletionNoticeEmail, deletionNoticePush } from "./deletion-notice.js";
-import { bootRunner, isRunnerNode, placeWorkOnRunner, runnerLabel, runnerNodeId, sessionRunnerId } from "./runners.js";
+import { bootRunner, isRunnerNode, runnerLabel, runnerNodeId, sessionRunnerId } from "./runners.js";
+import { placeCloudWork } from "./placement.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
 import { configureProxyTrust } from "./proxy-trust.js";
@@ -326,17 +327,18 @@ async function notifyRelaysWorkAvailable(
     void (async () => {
       const offer = await cloudOffer(accountId);
       if (!offer.computer && !offer.runners) return;
-      // Work a runner can do gets its own machine, which sleeps when the work
-      // is done and keeps the session. Anything else (sealed to the cloud
-      // computer, or no runner free) waits for the cloud computer, if any.
-      if (offer.runners) {
-        const launch = async (runnerId: string) => {
-          const launched = await deploymentExtension.runnerLaunch(accountId, { runnerId, requestId: runnerId, sleeps: true });
-          if (!launched.allowed) console.warn(`[runners] launch refused for ${accountId}: ${launched.decision.code ?? launched.decision.reason ?? "denied"}`);
-          return launched;
-        };
-        if (await placeWorkOnRunner(store, accountId, item.id, launch)) return;
-      }
+      // Where it runs is one table (placement.ts): a runner the session lives
+      // on, a new runner (restoring the session it continues), the cloud
+      // computer, or nowhere in the cloud.
+      const refused = (what: string) => (result: { allowed: boolean; decision?: { code?: string; reason?: string } }) => {
+        if (!result.allowed) console.warn(`[runners] ${what} refused for ${accountId}: ${result.decision?.code ?? result.decision?.reason ?? "denied"}`);
+        return result;
+      };
+      const placed = await placeCloudWork(store, accountId, item.id, offer, {
+        launchRunner: (runnerId, restoreSessionId) => deploymentExtension.runnerLaunch(accountId, { runnerId, requestId: runnerId, sleeps: true, ...(restoreSessionId ? { sessionId: restoreSessionId } : {}) }).then(refused("launch")),
+        wakeRunner: (nodeId) => deploymentExtension.runnerWake(accountId, nodeId, "work").then(refused("wake")),
+      });
+      if (placed !== undefined && placed !== "computer") return;
       if (!offer.computer || !(await routeWorkToCloudComputer(store, accountId))) return;
       const acquired = await deploymentExtension.computeAcquire(accountId, { purpose: "automation", requestId: `work:${item.id}` });
       if (!acquired.allowed) console.warn(`[cloud-computer] automation launch refused for ${accountId}: ${acquired.decision.code ?? acquired.decision.reason ?? "denied"}`);
