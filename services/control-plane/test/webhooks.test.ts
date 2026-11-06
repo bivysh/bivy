@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
-import { verifyGithubSignature, verifyLinearSignature, parseLinearIssueEvent, parseGithubIssueEvent, pickRoutingLabel, pickIssueRoutingLabel, verifySlackSignature, parseSlackCommand, extractMentions, parseGithubCommentEvent, pickCommentRoutingLabel, parseInstallationId, applyDefaultNode, verifyAutomationSignature, parseAutomationEvent, normalizeAutomationRepo, parseGithubWorkflowRunFailure, meetsTriggerAccess, parseGithubReviewCommentEvent } from "../src/webhooks.js";
+import { verifyGithubSignature, verifyLinearSignature, parseLinearIssueEvent, parseGithubIssueEvent, pickRoutingLabel, pickIssueRoutingLabel, verifySlackSignature, parseSlackCommand, extractMentions, parseGithubCommentEvent, pickCommentRoutingLabel, parseInstallationId, applyDefaultNode, verifyAutomationSignature, parseAutomationEvent, normalizeAutomationRepo, parseGithubWorkflowRunFailure, meetsTriggerAccess, parseGithubReviewCommentEvent, workflowRunTriggerAllowed } from "../src/webhooks.js";
 import test from "node:test";
 
 /**
@@ -291,6 +291,19 @@ await test("workflow_run failure parse: only completed failures become work", ()
   assert.equal(fail.repo, "acme/api");
   assert.equal(fail.workflowName, "CI");
   assert.match(fail.eventContext, /Workflow: CI/);
+  assert.equal(workflowRunTriggerAllowed(fail, undefined), true);
+});
+
+await test("workflow_run from a fork's pull request triggers only when triggers are open to everyone", () => {
+  const fork = parseGithubWorkflowRunFailure({
+    action: "completed",
+    repository: { full_name: "acme/api" },
+    workflow_run: { id: 7, name: "CI", conclusion: "failure", head_repository: { full_name: "stranger/api" } },
+  });
+  assert.ok(fork?.fromFork);
+  assert.equal(workflowRunTriggerAllowed(fork, undefined), false);
+  assert.equal(workflowRunTriggerAllowed(fork, "contributor"), false);
+  assert.equal(workflowRunTriggerAllowed(fork, "everyone"), true);
 });
 
 console.log(`\nAll ${passed} webhook helper tests passed.`);
