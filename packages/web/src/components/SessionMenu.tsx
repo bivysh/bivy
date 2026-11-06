@@ -90,6 +90,8 @@ export function SessionMenu({
   auditHealth,
   eventLogHealth,
   onBrowseFiles,
+  panels,
+  onOpenPanel,
 }: {
   sessionId: string;
   name: string;
@@ -112,6 +114,9 @@ export function SessionMenu({
   eventLogHealth?: { state: "healthy" | "degraded"; operation?: "read" | "parse" | "append" | "rewrite"; at?: number };
   /** Open the read-only browser over the session's workspace. */
   onBrowseFiles?: () => void;
+  /** Panels the machine's plugins add, opened beside the chat or as a sheet. */
+  panels?: ReadonlyArray<{ key: string; title: string }>;
+  onOpenPanel?: (key: string) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [renaming, setRenaming] = useState(false);
@@ -233,6 +238,11 @@ export function SessionMenu({
               Browse files
             </button>
           )}
+          {onOpenPanel && panels?.map((panel) => (
+            <button key={panel.key} className="menu-item session-actions-item" role="menuitem" onClick={() => { close(); onOpenPanel(panel.key); }} disabled={prBusy}>
+              {panel.title}
+            </button>
+          ))}
           <button className="menu-item session-actions-item" role="menuitem" onClick={copyReference} disabled={prBusy}>
             Copy session reference
           </button>

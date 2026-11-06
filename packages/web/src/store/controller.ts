@@ -1663,8 +1663,9 @@ export class AppController {
     return this.awaitAck({ kind, sessionId, ...fields }, 30_000);
   }
 
-  /** Settings → this machine: remove a plugin, or choose (null: clear) its theme. */
-  async pluginCommand(kind: "plugins.remove" | "plugins.theme", fields: { id: string | null }): Promise<ServerEvent> {
+  /** Settings → this machine: remove a plugin, or choose (null: clear) its
+   *  theme; or read the composer actions and panels its plugins add. */
+  async pluginCommand(kind: "plugins.remove" | "plugins.theme" | "plugins.ui", fields: { id?: string | null } = {}): Promise<ServerEvent> {
     if (this.store.getState().connection.status !== "online") throw new Error("Connect to the machine to change its plugins.");
     return this.awaitAck({ kind, ...fields }, 30_000);
   }

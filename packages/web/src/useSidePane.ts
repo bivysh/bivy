@@ -3,7 +3,8 @@
 import { useCallback, useState } from "react";
 import { useMediaQuery } from "./useMediaQuery.js";
 
-export type SidePaneTabId = "changes" | "files" | "apps" | "artifacts" | "terminal";
+/** A built-in tab, or a plugin's panel (`panel:<plugin id>/<panel id>`). */
+export type SidePaneTabId = "changes" | "files" | "apps" | "artifacts" | "terminal" | `panel:${string}`;
 
 /** Wide enough for the sidebar, a readable chat column and the pane together. */
 export const SIDE_PANE_QUERY = "(min-width: 1200px)";
@@ -13,7 +14,7 @@ const TABS: ReadonlySet<string> = new Set<SidePaneTabId>(["changes", "files", "a
 function readTab(): SidePaneTabId | null {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
-    return stored && TABS.has(stored) ? stored as SidePaneTabId : null;
+    return stored && (TABS.has(stored) || stored.startsWith("panel:")) ? stored as SidePaneTabId : null;
   } catch { return null; }
 }
 

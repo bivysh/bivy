@@ -6,7 +6,8 @@ import type { AppState, PromptAttachment, SlashCommand } from "@bivy/core";
 import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
 import { modelSelectionAvailable } from "../modelSelection.js";
-import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker } from "./Pickers.js";
+import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker, ActionsPicker } from "./Pickers.js";
+import { usePluginUi, type PluginAction } from "../pluginUi.js";
 import { HandoffBanner } from "./HandoffBanner.js";
 import { StandbyNotice } from "./StandbyNotice.js";
 import { standbyCopyOf } from "../standby.js";
@@ -22,7 +23,7 @@ import { setComposerLifecycle } from "../pwaLifecycle.js";
 import { isImeKey } from "../ime.js";
 
 /** "model-to-send": Send was pressed before a model was chosen. */
-type Picker = "repo" | "agent" | "model" | "model-to-send" | "sandbox" | null;
+type Picker = "repo" | "agent" | "model" | "model-to-send" | "sandbox" | "actions" | null;
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS = 12;
@@ -122,6 +123,15 @@ export function AttachGlyph() {
   );
 }
 
+/** A bolt: a plugin's one-tap actions. Same stroked style as the other pills. */
+function ActionsGlyph() {
+  return (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M13 3 5 13.5h6L10 21l8-10.5h-6L13 3Z" />
+    </svg>
+  );
+}
+
 function AgentGlyph() {
   return (
     <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -169,6 +179,7 @@ export function Composer({
   if (!initialDraft.current) initialDraft.current = restoreComposerDraft(localStorage, state.activeSession.activeSessionId);
   const [text, setText] = useState(() => initialDraft.current?.text ?? "");
   const [picker, setPicker] = useState<Picker>(null);
+  const pluginActions = usePluginUi().actions;
   const [attachments, setAttachments] = useState<PromptAttachment[]>(() => initialDraft.current?.attachments ?? []);
   const [recoveredAttachments, setRecoveredAttachments] = useState<PendingAttachmentMetadata[]>(() => initialDraft.current?.recovered ?? []);
   const [menuIndex, setMenuIndex] = useState(0);
@@ -543,6 +554,21 @@ export function Composer({
     else onSend(args ? `${cmd.name} ${args}` : cmd.name);
   }
 
+  // A plugin action writes its prompt: sent at once when it says so and the
+  // composer could send right now, otherwise put in the box to edit first.
+  function runAction(action: PluginAction) {
+    setPicker(null);
+    if (action.send && !disabled && !blockedByTurn && !text.trim() && !attachments.length && !isDraft) {
+      onSend(action.prompt);
+      return;
+    }
+    setText((previous) => (previous.trim() ? `${previous.trimEnd()}\n\n${action.prompt}` : action.prompt));
+    requestAnimationFrame(() => {
+      autosize();
+      taRef.current?.focus();
+    });
+  }
+
   function chooseFromMenu(cmd: SlashCommand) {
     // Every menu entry is an agent-native command; it may take arguments (e.g.
     // "/model sonnet"), so we drop "/name " into the composer and keep focus
@@ -857,6 +883,18 @@ export function Composer({
               >
                 <span className="pill-glyph"><AttachGlyph /></span>
               </button>
+              {pluginActions.length > 0 && (
+                <button
+                  type="button"
+                  className="btn sm ghost attach-pill actions-pill"
+                  onClick={() => setPicker("actions")}
+                  disabled={disabled}
+                  title="Actions from plugins"
+                  aria-label="Actions from plugins"
+                >
+                  <span className="pill-glyph"><ActionsGlyph /></span>
+                </button>
+              )}
               <button type="button" className="btn sm ghost agent-pill" onClick={() => setPicker("agent")} title={`Agent: ${agentLabel}`}>
                 <span className="pill-glyph"><AgentGlyph /></span>
                 <span className="pill-label">{agentLabel}</span>
@@ -920,6 +958,7 @@ export function Composer({
       {picker === "repo" && <RepoPicker state={state} onClose={() => setPicker(null)} />}
       {picker === "sandbox" && <SandboxPicker state={state} onClose={() => setPicker(null)} />}
       {picker === "agent" && <AgentPicker state={state} onClose={() => setPicker(null)} />}
+      {picker === "actions" && <ActionsPicker actions={pluginActions} onChoose={runAction} onClose={() => setPicker(null)} />}
       {(picker === "model" || picker === "model-to-send") && modelSelectable && (
         <ModelPicker
           state={state}

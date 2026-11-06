@@ -5,7 +5,7 @@ export const PLUGIN_MANIFEST_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   $id: "https://bivy.sh/schemas/plugin/v1alpha1.json",
   title: "Bivy plugin manifest",
-  description: "A declarative Bivy plugin manifest: agents, chat widgets, tools, themes, guides and skills.",
+  description: "A declarative Bivy plugin manifest: agents, chat widgets, tools, themes, guides, skills, composer actions and panels.",
   type: "object",
   additionalProperties: false,
   required: ["apiVersion", "kind", "metadata", "contributes"],
@@ -47,6 +47,8 @@ export const PLUGIN_MANIFEST_SCHEMA = {
         themes: { type: "array", maxItems: 20, items: { $ref: "#/$defs/theme" } },
         guides: { type: "array", maxItems: 20, items: { $ref: "#/$defs/guide" } },
         skills: { type: "array", maxItems: 50, items: { $ref: "#/$defs/skill" } },
+        actions: { type: "array", maxItems: 20, items: { $ref: "#/$defs/action" } },
+        panels: { type: "array", maxItems: 5, items: { $ref: "#/$defs/panel" } },
       },
     },
   },
@@ -127,6 +129,29 @@ export const PLUGIN_MANIFEST_SCHEMA = {
       properties: {
         name: { type: "string", pattern: "^[a-z][a-z0-9-]{1,47}$" },
         file: { allOf: [{ $ref: "#/$defs/relativeFile" }, { pattern: "/SKILL\\.md$" }] },
+      },
+    },
+    action: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "label", "prompt"],
+      properties: {
+        id: { type: "string", pattern: "^[a-z][a-z0-9-]{1,47}$" },
+        label: { type: "string", minLength: 1, maxLength: 40 },
+        description: { type: "string", minLength: 1, maxLength: 200 },
+        prompt: { type: "string", minLength: 1, maxLength: 4000 },
+        send: { type: "boolean" },
+      },
+    },
+    panel: {
+      type: "object",
+      additionalProperties: false,
+      required: ["id", "title", "widget"],
+      properties: {
+        id: { type: "string", pattern: "^[a-z][a-z0-9-]{1,47}$" },
+        title: { type: "string", minLength: 1, maxLength: 40 },
+        widget: { type: "string", pattern: "^[a-z][a-z0-9-]{1,47}$" },
+        data: { type: "object" },
       },
     },
     stringArgs: {

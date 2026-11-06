@@ -1,6 +1,6 @@
 # Extend Bivy for the user
 
-Summary: Plugins: give the user a new widget, tool, theme, guide, skill or agent on their machine, built and installed by you in minutes.
+Summary: Plugins: give the user a new widget, tool, theme, guide, skill, composer button, session panel or agent on their machine, built and installed by you in minutes.
 
 When the user wants Bivy itself to do more — "show my standup as a checklist
 every morning", "a dark theme like my editor", "let widgets check CI", "add the
@@ -10,7 +10,7 @@ release; the user never writes code.
 
 ## Start from a working one
 
-    bivy plugin init ~/bivy-plugins/standup --kind widget   # or tool, theme, guide, skill, agent
+    bivy plugin init ~/bivy-plugins/standup --kind widget   # or tool, theme, guide, skill, action, panel, agent
     bivy plugin dev ~/bivy-plugins/standup                  # install, then reinstall on every change
 
 Keep plugins in their own folder outside the project (`~/bivy-plugins/<id>`),
@@ -82,6 +82,23 @@ repeatable task with its own steps or scripts.
 
 For a single skill, no plugin is needed: `bivy skill install <folder|github:owner/repo/path>`.
 Write the description as what it does and when to use it; agents decide from it.
+
+**Actions** — a composer button (behind the bolt) that writes a prompt; with
+`send: true` it sends at once, otherwise it fills the composer to edit:
+
+    contributes:
+      actions:
+        - { id: standup, label: Standup, prompt: "Write my standup from git log.", send: true }
+
+**Panels** — a tab beside the chat (a sheet from the session menu on a phone)
+that shows one of the plugin's widgets for the open session. Pair it with a
+`widgets: true` tool for live data (CI, an issue, a deploy):
+
+    contributes:
+      widgets:
+        - { id: ci-status, name: CI status, entry: widgets/ci.html }
+      panels:
+        - { id: ci, title: CI, widget: ci-status, data: { branch: main } }
 
 **Agents** — any CLI or ACP agent: `bivy guide add-an-agent`.
 

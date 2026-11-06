@@ -320,7 +320,7 @@ Extend this machine's Bivy with plugins: agents, chat widgets, tools, themes and
 guides. Agents build and install them for the user; see [plugins.md](plugins.md).
 
 ```bash
-bivy plugin init ./standup --kind widget      # or tool, theme, guide, agent
+bivy plugin init ./standup --kind widget      # or tool, theme, guide, skill, action, panel, agent
 bivy plugin dev ./standup                     # install, then reinstall on every change
 bivy plugin validate ./standup
 bivy plugin doctor ./standup

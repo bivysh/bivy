@@ -79,6 +79,8 @@ import { SessionViewToggle, type SessionPaneView } from "./components/SessionVie
 import { readSessionView, writeSessionView, type SessionView } from "./sessionView.js";
 import { CloseIcon, PanelRightIcon, SearchIcon } from "./components/UiIcons.js";
 import { SidePane } from "./components/SidePane.js";
+import { PluginPanelView } from "./components/PluginPanel.js";
+import { usePluginUi } from "./pluginUi.js";
 import { useSidePane, type SidePaneTabId } from "./useSidePane.js";
 import { ResizeHandle } from "./components/ResizeHandle.js";
 import { SIDEBAR_SIZE, SIDE_PANE_SIZE, usePanelWidth } from "./usePanelWidth.js";
@@ -144,6 +146,9 @@ export function App() {
   // extra round trip to the node.
   const [artifactsSheetOpen, setArtifactsSheetOpen] = useState(false);
   const [filesSheetOpen, setFilesSheetOpen] = useState(false);
+  // A plugin panel open as a sheet (narrow screens), by key.
+  const [panelSheet, setPanelSheet] = useState<string | null>(null);
+  const pluginPanels = usePluginUi().panels;
   // Session apps sheet — opened from the run pill ("N apps"), so a published
   // app stays reachable after its inline launcher card scrolls out of the
   // transcript. Same pure-fold approach as artifacts (see deriveApps). Also
@@ -853,7 +858,11 @@ export function App() {
     : activeSessionNodeId;
   const isRepoSession = Boolean(activeSession?.source && String(activeSession.source).startsWith("repo:"));
   const activeSessionRepo = repoFromSource(activeSession?.source) || githubIssueRefFromSource(activeSession?.source)?.repo || undefined;
-  const paneTab: SidePaneTabId | null = sidePane.wide && activeSession && !needsNode ? sidePane.tab : null;
+  // A remembered plugin panel that is no longer installed opens nothing.
+  const storedTab = sidePane.tab?.startsWith("panel:") && !pluginPanels.some((panel) => `panel:${panel.key}` === sidePane.tab) ? null : sidePane.tab;
+  const paneTab: SidePaneTabId | null = sidePane.wide && activeSession && !needsNode ? storedTab : null;
+  const paneOpenPanel = paneTab?.startsWith("panel:") ? pluginPanels.find((panel) => `panel:${panel.key}` === paneTab) : undefined;
+  const sheetPanel = panelSheet ? pluginPanels.find((panel) => panel.key === panelSheet) : undefined;
   const changedFiles = countUniqueEditedFiles(state.activeSession.changesHistory);
   // Offered once there is something to show. It covers whatever the column
   // shows (chat, the agent's TUI, the lock notice), which stays mounted.
@@ -870,6 +879,7 @@ export function App() {
   };
   const openArtifacts = () => { if (!sidePane.show("artifacts")) setArtifactsSheetOpen(true); };
   const openFiles = () => { if (!sidePane.show("files")) setFilesSheetOpen(true); };
+  const openPanel = (key: string) => { if (!sidePane.show(`panel:${key}`)) setPanelSheet(key); };
 
   return (
     <div
@@ -1061,6 +1071,8 @@ export function App() {
                 auditHealth={activeSession?.auditHealth}
                 eventLogHealth={activeSession?.eventLogHealth}
                 onBrowseFiles={activeSession && !needsNode ? openFiles : undefined}
+                panels={activeSession && !needsNode ? pluginPanels : undefined}
+                onOpenPanel={openPanel}
               />
             )}
           </div>
@@ -1244,6 +1256,10 @@ export function App() {
 
 
 
+            {sheetPanel && !sidePane.wide && activeSession && (
+              <PluginPanelView panel={sheetPanel} sessionId={activeSession.sessionId} onClose={() => setPanelSheet(null)} />
+            )}
+
             {filesSheetOpen && !sidePane.wide && activeSession && (
               <FilesSheet sessionId={activeSession.sessionId} refreshKey={state.activeSession.changesHistory.length} onClose={() => setFilesSheetOpen(false)} />
             )}
@@ -1369,6 +1385,7 @@ export function App() {
             { id: "apps", label: "Apps", count: liveApps.published ?? apps.length },
             { id: "artifacts", label: "Artifacts", count: artifacts.length },
             { id: "terminal", label: "Terminal" },
+            ...pluginPanels.map((panel) => ({ id: `panel:${panel.key}` as const, label: panel.title })),
           ]}
           active={paneTab}
           // A request scoped the Apps tab to one app or view; picking a tab
@@ -1376,6 +1393,9 @@ export function App() {
           onSelect={(tab) => { setAppsSheet(null); sidePane.setTab(tab); }}
           onClose={() => sidePane.setTab(null)}
         >
+          {paneOpenPanel && (
+            <PluginPanelView docked panel={paneOpenPanel} sessionId={activeSession.sessionId} onClose={() => sidePane.setTab(null)} />
+          )}
           {paneTab === "changes" && (
             <SessionChangesSheet
               docked

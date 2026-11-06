@@ -22,11 +22,12 @@ function usage(exitCode = 0): never {
 
 Develop, install, and inspect declarative Bivy plugins.
 
-A plugin adds agents, chat widgets, tools, themes, guides or skills. It is a folder
+A plugin adds agents, chat widgets, tools, themes, guides, skills, composer
+actions or session panels. It is a folder
 with a bivy.plugin.yaml; agents write and install them for the user.
 
 Commands:
-  init [directory]         Scaffold a plugin (--kind widget|tool|theme|guide|skill|agent)
+  init [directory]         Scaffold a plugin (--kind widget|tool|theme|guide|skill|action|panel|agent)
   validate <path>          Validate a bivy.plugin.yaml/json manifest
   doctor <path>            Check compatibility and adapter executables
   test <path>              Run static checks and live ACP handshakes
@@ -169,6 +170,53 @@ console.log(JSON.stringify({ greeting: \`Hello, \${name}!\` }));
 `,
     files: { [`skills/${id}/SKILL.md`]: `---\nname: ${id}\ndescription: ${name}. Replace with what the skill does and when an agent should use it; agents decide from this line.\n---\n\n# ${name}\n\nThe steps an agent follows. Put scripts and reference files beside this one and refer to them by relative path.\n` },
     next: `edit skills/${id}/SKILL.md, install, then 'bivy skill show ${id}'`,
+  }),
+  action: (id, name) => ({
+    contributes: `  actions:
+    - id: ${id}
+      label: ${JSON.stringify(name)}
+      description: What the button does, in a line.
+      prompt: |
+        Replace with the message this button writes for the agent.
+      send: false
+`,
+    files: {},
+    next: "edit the prompt, install, then open the composer's actions button in the app",
+  }),
+  panel: (id, name) => ({
+    contributes: `  widgets:
+    - id: ${id}
+      name: ${JSON.stringify(name)}
+      entry: widgets/${id}.html
+  panels:
+    - id: ${id}
+      title: ${JSON.stringify(name)}
+      widget: ${id}
+`,
+    files: { [`widgets/${id}.html`]: `<!doctype html>
+<!--
+  A Bivy session panel: a widget shown as a tab beside the chat (a sheet on a
+  phone). The same window.bivy runtime as a chat widget: bivy.data is the
+  panel's data from bivy.plugin.yaml, bivy.call(tool, input) runs one of your
+  plugin's tools (set widgets: true on it) in the session's workspace, and
+  bivy.send(text) writes to the agent after a click. \`bivy guide widgets\` has more.
+-->
+<html>
+<body>
+  <div class="stack">
+    <strong>${name}</strong>
+    <small id="note">Replace with what this panel shows for the session.</small>
+    <div class="row"><button id="ask">Ask the agent</button></div>
+  </div>
+  <script>
+    bivy.ready(function () {
+      document.getElementById("ask").onclick = function () { bivy.send("Give me a one-line status of this session."); };
+    });
+  </script>
+</body>
+</html>
+` },
+    next: `edit widgets/${id}.html, install, then open "${name}" from the session menu in the app`,
   }),
 };
 
@@ -370,7 +418,7 @@ async function search(words: string[], json: boolean): Promise<void> {
   }
   if (json) { outputJson({ ok: true, results: found }); return; }
   if (!found.length) {
-    console.log(`Nothing shared yet${words.length ? ` for "${words.join(" ")}"` : ""}. An agent can build it: bivy plugin init <dir> --kind widget|tool|theme|guide|skill|agent`);
+    console.log(`Nothing shared yet${words.length ? ` for "${words.join(" ")}"` : ""}. An agent can build it: bivy plugin init <dir> --kind widget|tool|theme|guide|skill|action|panel|agent`);
     return;
   }
   for (const item of found) console.log(`${item.kind === "kit" ? "kit   " : "plugin"}  ${item.repo}  ★${item.stars}  ${item.updated}\n        ${item.description}\n        ${item.install}`);
@@ -433,6 +481,8 @@ function contributionSummary(manifest: PluginManifest): Record<string, string[]>
     themes: (c.themes ?? []).map((entry) => entry.id),
     guides: (c.guides ?? []).map((guide) => guide.topic),
     skills: (c.skills ?? []).map((entry) => entry.name),
+    actions: (c.actions ?? []).map((entry) => entry.id),
+    panels: (c.panels ?? []).map((entry) => entry.id),
   }).filter(([, list]) => list.length));
 }
 

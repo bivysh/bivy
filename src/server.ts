@@ -50,7 +50,7 @@ import { createWidgetCommands } from "./controllers/widget-commands.js";
 import { createPluginCommands } from "./controllers/plugin-commands.js";
 import { WidgetStateStore } from "./widgets/state.js";
 import { shootWidget, widgetShotDir } from "./widgets/shot.js";
-import { installedContributions, readPluginWidget } from "./plugins/contributions.js";
+import { installedContributions, pluginUi, readPluginWidget } from "./plugins/contributions.js";
 import { runPluginTool, widgetTool } from "./plugins/tools.js";
 import { bindClientCommandRoutes } from "./http/client-command-routes.js";
 import { collectDiscoveredSessions, planNativeAdoption, type NativeAdoptionPlan } from "./runtime/native-session-discovery.js";
@@ -1764,6 +1764,8 @@ const capabilitiesController = createCapabilitiesController({
           tools: plugin.manifest.contributes.tools?.length ?? 0,
           guides: plugin.manifest.contributes.guides?.length ?? 0,
           skills: plugin.manifest.contributes.skills?.length ?? 0,
+          actions: plugin.manifest.contributes.actions?.length ?? 0,
+          panels: plugin.manifest.contributes.panels?.length ?? 0,
           themes: (plugin.manifest.contributes.themes ?? []).map((theme) => ({ id: theme.id, name: theme.name })),
         },
       } : {}),
@@ -2709,6 +2711,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       if (removed && theme && !installedContributions("themes", appDir).items.some((entry) => entry.item.id === theme)) selectTheme(appDir, null);
       return removed;
     },
+    ui: () => pluginUi(appDir),
     setTheme: (id) => {
       if (!id) return selectTheme(appDir, null);
       const found = installedContributions("themes", appDir).items.find((entry) => entry.item.id === id);
