@@ -17,9 +17,11 @@ to move.
 | --- | --- | --- | --- |
 | [Daytona](https://www.daytona.io) | `daytona.mjs` | stop (disk kept) | `DAYTONA_API_KEY`; optional `DAYTONA_SNAPSHOT` |
 | [E2B](https://e2b.dev) | `e2b.mjs` | pause (disk kept, no compute billed) | `E2B_API_KEY`, `E2B_TEMPLATE` |
+| [Fly Sprites](https://fly.io/sprites) | `sprites.mjs` | the sprite pauses itself once the node stops | `SPRITES_TOKEN` |
 
-Every machine is labelled `bivy-app=<app>`, so one account's machines are
-found and deleted together. Neither platform has separate volumes: the
+Every machine is labelled `bivy-app=<app>` (on Sprites, which has no labels,
+it's named `<app>--<suffix>`), so one account's machines are found and deleted
+together. Neither platform has separate volumes: the
 sandbox's own disk holds `/data` across stops. Neither reports CPU from
 outside the sandbox, so the fleet's awake cap is the bound on a busy machine.
 
@@ -45,3 +47,24 @@ outside the sandbox, so the fleet's awake cap is the bound on a busy machine.
   than dies.
 - **Stop** pauses without memory (the node has already exited); paused
   sandboxes are kept until deleted.
+
+## Fly Sprites
+
+- **Image:** sprites run their own Ubuntu base; the fleet's image is not used.
+  The boot script installs Bivy on first boot if it's missing, which needs the
+  sprite's default user to be able to install packages. Not verified.
+- **Sleep:** sprites have no stop or wake call. The node runs as a sprite
+  service (started at every boot), and its open relay connection keeps the
+  sprite awake. Stopping stops the service, so the sprite goes idle and pauses
+  within about 30 seconds; starting the service wakes it.
+- **Size:** set by the platform (up to 8 vCPUs, memory scales); the fleet's
+  size is not used.
+
+## Not included: Render Sandboxes
+
+Render Sandboxes (public beta) have no stop or suspend call: a sandbox
+suspends only on its idle timeout, which counts commands and file transfers,
+not a running node. With the idle timeout on, the node would be suspended
+mid-task; with it off, the only way to stop paying is to terminate. A
+dispatcher would have to snapshot and recreate on every sleep, and the
+snapshot endpoints aren't in Render's published API reference yet.

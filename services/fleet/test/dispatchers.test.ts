@@ -129,10 +129,42 @@ async function e2b() {
   }
 }
 
+async function sprites() {
+  let status = "running";
+  const platform = await standIn((call) => {
+    if (call.method === "POST" && call.path === "/v1/sprites") return { name: JSON.parse(call.body.toString()).name, status: "running" };
+    if (call.method === "GET" && call.path.startsWith("/v1/sprites?")) return { sprites: [{ name: "app-1--abc123" }, { name: "other--zzz" }], has_more: false };
+    if (call.method === "GET" && call.path.startsWith("/v1/sprites/")) return { status };
+    if (call.path.endsWith("/services/bivy/stop")) { status = "warm"; return {}; }
+    if (call.path.endsWith("/services/bivy/start")) { status = "running"; return {}; }
+    return {};
+  });
+  try {
+    await withEnv({ SPRITES_TOKEN: "org/id/secret", SPRITES_API_URL: platform.url }, async () => {
+      const provider = new CommandProvider(dispatcher("sprites"));
+      const machine = await provider.createMachine("app-1", spec);
+      expect(/^app-1--[a-z0-9]+$/.test(machine.id), "Sprites: a sprite named for its app");
+      const writes = platform.seen.filter((c) => c.method === "PUT" && c.path.includes("/fs/write?"));
+      expect(writes.some((c) => c.path.includes(encodeURIComponent("/etc/bivy/boot.sh"))) && writes.length === 2, "Sprites: the boot payload and boot script are written");
+      const defined = platform.seen.find((c) => c.method === "PUT" && c.path.endsWith("/services/bivy"));
+      expect(JSON.parse(defined!.body.toString()).args[0] === "/etc/bivy/boot.sh" && platform.seen.some((c) => c.path.endsWith("/services/bivy/start")), "Sprites: the node is a service, started now and at every boot");
+      await provider.stopMachine("app-1", machine.id);
+      expect((await provider.getMachine("app-1", machine.id))?.state === "stopped", "Sprites: stopping the service lets the sprite pause");
+      await provider.startMachine("app-1", machine.id);
+      expect((await provider.getMachine("app-1", machine.id))?.state === "started", "Sprites: starting it wakes the sprite");
+      expect(JSON.stringify(await provider.listApps("app-")) === JSON.stringify(["app-1"]), "Sprites: apps are found by name prefix");
+      await provider.destroyAll("app-1");
+      expect(platform.seen.some((c) => c.method === "DELETE" && c.path === "/v1/sprites/app-1--abc123"), "Sprites: deleting an app deletes its sprites");
+    });
+  } finally {
+    await platform.close();
+  }
+}
+
 async function bootScriptRunsTheCommand() {
   const { bootScript } = await import("../dispatchers/common.mjs" as string) as { bootScript: (s: MachineSpec) => string };
   const out = execFileSync("bash", ["-c", bootScript(spec)], { encoding: "utf8" });
   expect(out.trim() === "it's up", "the boot script runs the fleet's command exactly, quotes and all");
 }
 
-await run(daytona, e2b, bootScriptRunsTheCommand);
+await run(daytona, e2b, sprites, bootScriptRunsTheCommand);
