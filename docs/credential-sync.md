@@ -39,6 +39,11 @@ Current model:
 - Provider sign-out is represented by a timestamped tombstone in the encrypted
   envelope. Tombstones remove older credentials on every node and prevent a stale
   snapshot from resurrecting them; signing in again later supersedes the tombstone.
+- If none of the account's other machines is online when a machine asks, the
+  control plane also **wakes the account's sleeping cloud computer**, which
+  holds the vault key like any of your machines (reason `key`; the fleet
+  counts it as an unused start and stops it again after five minutes if
+  nothing else uses it). The computer is then the account's home for keys.
 - That request now **wakes the account's peer nodes over the relay** (the same `work.available` signal used for queued work), so a peer answers the wrapped-key request within seconds rather than on its 30s poll. The requesting node fast-retries (bounded) until the key lands, then falls back to the steady poll. This makes the vault — including supported subscription-OAuth logins — usable almost immediately on a short-lived ephemeral runner, while staying **peer-only**: the key is always wrapped node→node and never transits the device or control plane in the clear.
 - The same envelope also carries your account-wide
   [agent instructions](agent-instructions.md) (last writer wins), so they reach

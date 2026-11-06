@@ -123,7 +123,9 @@ export const AWAKE = new Set(["started", "starting", "replacing"]);
  * account's computer starts at sign-up and while its owner signs in to their
  * AI; Core wakes it when someone is in the app or a client connects. These are
  * metered only from the first real use in that awake period (`used`: an agent
- * turn or a terminal), and stopped once their grace runs out unused. Any other
+ * turn or a terminal), and stopped once their grace runs out unused. Core also
+ * wakes it to hand the vault key to a new machine when no other machine is
+ * online ("key"): the computer is the account's home. Any other
  * start (a session sent to it, an automation, a preview link) is use from the
  * start.
  */
@@ -134,6 +136,7 @@ export const SPECULATIVE_STARTS: Readonly<Record<string, number>> = {
   "app-visible": 15,
   "composer": 15,
   "connect": 15,
+  "key": 5,
 };
 
 export function fleetPrefix(fleet?: string): string {

@@ -185,6 +185,21 @@ async function parkAutomationRunForDeploymentDenial(accountId: string, item: { i
   }
 }
 
+/** Nothing in the cloud can run this work, and none of the account's own
+ * machines is online to take it: say so once, rather than leave it sitting.
+ * At most a few a day, so a busy queue doesn't become a stream of pushes. */
+async function tellWorkIsWaiting(accountId: string, runId: string): Promise<void> {
+  const ownOnline = (await store.listNodes(accountId)).some((node) => node.online && !isRunnerNode(node.id) && !isCloudComputerNode(accountId, node.id));
+  if (ownOnline || await store.rateLimitExceeded("work-waiting-push", accountId, 3, 24 * 60 * 60_000)) return;
+  await sendPushToAccount(accountId, {
+    title: "Work is waiting for one of your machines",
+    body: "Open Bivy on one of your computers, or keep the app open, and it will start.",
+    kind: "work_waiting",
+    runId,
+    url: `/runs/${encodeURIComponent(runId)}`,
+  }).catch(() => undefined);
+}
+
 async function notifyAutomationBlocked(accountId: string, run: AutomationRun, reason: string): Promise<void> {
   const result = await sendPushToAccount(accountId, {
     title: "Automation run blocked",
@@ -338,6 +353,7 @@ async function notifyRelaysWorkAvailable(
         launchRunner: (runnerId, restoreSessionId) => deploymentExtension.runnerLaunch(accountId, { runnerId, requestId: runnerId, sleeps: true, ...(restoreSessionId ? { sessionId: restoreSessionId } : {}) }).then(refused("launch")),
         wakeRunner: (nodeId) => deploymentExtension.runnerWake(accountId, nodeId, "work").then(refused("wake")),
       });
+      if (placed === "wait") await tellWorkIsWaiting(accountId, item.id);
       if (placed !== undefined && placed !== "computer") return;
       if (!offer.computer || !(await routeWorkToCloudComputer(store, accountId))) return;
       const acquired = await deploymentExtension.computeAcquire(accountId, { purpose: "automation", requestId: `work:${item.id}` });
@@ -2356,6 +2372,13 @@ app.post("/node/model-auth-key/request", requireNode, modelAuthKeyRequestRateLim
       { id: "model-auth", label: "model-auth" },
       { excludeNodeId: node.id, autoProvision: false },
     ).catch(() => {});
+    // No other machine is online to answer: wake the account's sleeping cloud
+    // computer, which holds the key like any of its machines (its home). An
+    // open app on a paired device can answer too; this covers nobody being there.
+    void (async () => {
+      const others = (await store.listNodes(node.accountId)).filter((candidate) => candidate.id !== node.id && candidate.online);
+      if (others.length === 0 && !isCloudComputerNode(node.accountId, node.id)) await wakeCloudComputerIfAsleep(node.accountId, "key");
+    })().catch(() => {});
   }
   res.json({ ok: true, queued });
 }));

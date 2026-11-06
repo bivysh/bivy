@@ -267,6 +267,11 @@ async function main() {
   expect(/BIVY_EPHEMERAL_SLEEP=1/.test(runnerStart) && !/BIVY_TEARDOWN_ON_FINISH=1/.test(runnerStart), "it sleeps when the work is done instead of disappearing");
   expect(JSON.parse(Buffer.from(runnerBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/relay.json").raw_value, "base64").toString("utf8")).nodeId === runnerId, "a runner answers to its enrolled id");
   const runnerRelay = JSON.parse(Buffer.from(runnerBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/relay.json").raw_value, "base64").toString("utf8"));
+  // A new machine asks for the vault key with none of the account's other
+  // machines online: the sleeping cloud computer is woken to hand it over.
+  await req(port, "POST", "/node/model-auth-key/request", { publicKey: "runner-pub" }, runnerRelay.enrollmentToken);
+  await waitFor(() => calls.some((c) => c.path === "/v1/compute/wake" && c.body.reason === "key"), "home wake for the vault key");
+  expect(true, "a machine waiting for the vault key wakes the account's cloud computer");
   expect((await req(port, "POST", "/node/settled", {}, runnerRelay.enrollmentToken)).status === 200, "a finished runner reports settled");
   await waitFor(() => calls.some((c) => c.path === "/v1/compute/runners/release" && c.body.nodeId === runnerId), "runner release");
   console.log("✓ a settled runner is released at once");
