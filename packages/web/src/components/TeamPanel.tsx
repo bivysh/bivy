@@ -5,7 +5,9 @@ import {
   createTeam, createTeamInvite, deleteTeam, fetchMe, fetchTeam, joinTeam, previewTeamInvite, removeTeamMember, renameTeam,
   revokeTeamInvite, setTeamMemberRole, TeamRequestError, type TeamInvitePreview, type TeamInviteView, type TeamRole, type TeamView,
 } from "@bivy/core";
+import type { AppState } from "@bivy/core";
 import { controller } from "../store/useStore.js";
+import { TeamInstructions } from "./TeamInstructions.js";
 import { PickerItem } from "./Sheet.js";
 import { ConfirmDialog } from "./AppDialog.js";
 import { Badge } from "./Badge.js";
@@ -26,7 +28,7 @@ function inviteMeta(invite: TeamInviteView): string {
  * Settings → Team: who is in your team, their roles, and invites. The control
  * plane holds only this roster; members' sessions and machines stay their own.
  */
-export function TeamPanel() {
+export function TeamPanel({ state }: { state: AppState }) {
   const local = controller.local;
   const [view, setView] = useState<TeamView | null>(null);
   const [myId, setMyId] = useState<string | null>(null);
@@ -198,6 +200,8 @@ export function TeamPanel() {
           })}
         </div>
       </section>
+
+      <TeamInstructions state={state} />
 
       {admin && (
         <section className="settings-section">

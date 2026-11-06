@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { SessionInstructions } from "./runtime/types.js";
 import { listSkills, skillsIndex } from "./skills.js";
+import { readTeamInstructions } from "./team-vault.js";
 
 /**
  * Account-wide agent instructions: one Markdown file of the user's global
@@ -153,10 +154,24 @@ export function mergeSyncedAgentInstructions(appDir: string, incoming: unknown):
   return "local-newer";
 }
 
-/** The Bivy note (unless switched off), the machine's skills index (if any), then the user's text (if any) under the precedence preamble. */
-export function composeAgentInstructions(text: string, bivyNote = true, skills = ""): string {
+function teamPreamble(teamName: string): string {
+  const team = teamName ? `the user's team (${teamName})` : "the user's team";
+  return `Instructions shared by ${team} follow. They apply to every workspace; where they conflict with the user's ` +
+    "own instructions or the current repository's, those win.";
+}
+
+/** The Bivy note (unless switched off), the machine's skills index (if any),
+ * the team's text, then the user's own, each under its precedence preamble.
+ * The user's own come last and win. */
+export function composeAgentInstructions(text: string, bivyNote = true, skills = "", team?: { name: string; text: string }): string {
   const body = text.trim();
-  return [bivyNote ? BIVY_AGENT_NOTE : "", skills.trim(), body ? `${PREAMBLE}\n\n${body}` : ""].filter(Boolean).map((part) => `${part}\n`).join("\n");
+  const teamBody = team?.text.trim() ?? "";
+  return [
+    bivyNote ? BIVY_AGENT_NOTE : "",
+    skills.trim(),
+    teamBody ? `${teamPreamble(team!.name)}\n\n${teamBody}` : "",
+    body ? `${PREAMBLE}\n\n${body}` : "",
+  ].filter(Boolean).map((part) => `${part}\n`).join("\n");
 }
 
 /** The skills index for sessions on this machine; a broken skill store never blocks a session. */
@@ -177,7 +192,8 @@ function skillsIndexFor(appDir: string): string {
  */
 export function sessionInstructions(appDir: string): SessionInstructions | undefined {
   const { text: userText, bivyNote } = readAgentInstructions(appDir);
-  const text = composeAgentInstructions(userText, bivyNote, skillsIndexFor(appDir));
+  const team = readTeamInstructions(appDir);
+  const text = composeAgentInstructions(userText, bivyNote, skillsIndexFor(appDir), team && { name: team.teamName, text: team.text });
   const file = composedPath(appDir);
   try {
     if (!text) {

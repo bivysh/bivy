@@ -749,6 +749,11 @@ export interface NodeSettings {
    *  note (`bivyNoteText`) goes ahead of them; set it with `agentInstructionsBivyNote`.
    *  Both are absent on nodes that predate the switch. */
   agentInstructions?: { text: string; updatedAt: number; maxBytes: number; bivyNote?: boolean; bivyNoteText?: string };
+  /** The team's shared instructions as this machine last opened them. Save with
+   *  `teamInstructions` + `teamInstructionsBaseGeneration` (admins only).
+   *  `waiting-for-key`: the team has instructions this machine can't open until
+   *  another member's machine seals the team key for it. Absent on older nodes. */
+  teamInstructions?: { state: "none" | "ready" | "waiting-for-key"; maxBytes: number; teamName?: string; canEdit?: boolean; text?: string; updatedAt?: number; generation?: number };
 }
 
 export interface ConnectionAccountState {

@@ -34,6 +34,8 @@ export const HKDF_INFO = {
    *  node vaults above, the recipients are the account's paired DEVICES, so a
    *  second device can wake/reach a machine the first launched. */
   deviceVault: "bivy-device-vault-v1",
+  /** Team vault delivery: node to node across the accounts of one team. */
+  teamVault: "bivy-team-vault-v1",
 } as const;
 
 /** Version byte stamped into every sealed frame's authenticated plaintext. */

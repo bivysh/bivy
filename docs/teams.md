@@ -29,11 +29,49 @@ Admins can revoke an open invite at any time. The token is in the link's
 fragment (`/team/join#tin_…`), which browsers never send to a server, so it
 does not appear in access logs. The control plane stores only its hash.
 
+## Team instructions
+
+Admins write instructions in **Settings → Team → Team instructions**. Every
+agent session on every member's machines gets them, after Bivy's own note
+and ahead of each person's account-wide instructions. Where they conflict,
+the person's own instructions and the repository's AGENTS.md or CLAUDE.md
+win. Members see them read-only. The limit is 16 KB.
+
+They are end-to-end encrypted with a team key that only members' machines
+hold:
+
+1. The admin's machine encrypts the instructions under the team key and
+   uploads the ciphertext.
+2. A member's machine that doesn't have the key asks for it. Any team
+   machine that holds it seals it for the asker under an X25519 key the two
+   machines share (`team-vault` wrap purpose), so the control plane passes it
+   on without being able to open it. Machines check every minute, and
+   sooner on a relay wake.
+3. When someone leaves the team, or a machine that held the key is removed,
+   the vault is flagged. An admin's machine then re-encrypts under a fresh
+   key, which only the remaining machines get. A machine whose account
+   leaves deletes its copy of the instructions and the key.
+
+Edits go through whichever machine the editor is connected to. A save names
+the version it started from, so two admins can't silently overwrite each
+other.
+
+On a machine, the opened instructions are kept in
+`<data dir>/team-instructions.json` and the key in `team-vault.json`
+(mode 0600).
+
 ## What the control plane holds
 
-Only the roster: team name, members' account ids and emails, roles and open
-invites. A team doesn't give anyone access to another member's machines,
-sessions or keys. Admins can't read members' sessions either.
+The roster: team name, members' account ids and emails, roles and open
+invites. For team instructions, it holds only ciphertext and copies of the
+team key sealed for each machine. It can't read either. A team doesn't give
+anyone access to another member's machines, sessions or keys, and admins
+can't read members' sessions.
+
+The control plane decides which machines count as team machines. A
+compromised control plane could claim that a machine it controls belongs to
+the team and receive the key, just as account pairing trusts it to vouch for
+devices (see [the security model](security-model.md#account-pairing-the-control-plane-vouches-for-the-device)).
 
 ## Deployment hooks
 
@@ -66,3 +104,7 @@ All routes need a signed-in account (`Authorization: Bearer <session>`).
 | `DELETE /account/team/members/:accountId` | admin, or yourself to leave |
 | `POST /account/team/invite-preview` `{ token }` | anyone |
 | `POST /account/team/join` `{ token }` | anyone |
+
+Machines use `GET`/`PUT /node/team-vault`, `POST /node/team-vault/key-request`
+and `PUT /node/team-vault/key` with their enrollment token. Only admins'
+machines may `PUT /node/team-vault`.

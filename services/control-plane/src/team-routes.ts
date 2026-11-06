@@ -3,12 +3,15 @@
 import type { Express, Request, RequestHandler, Response } from "express";
 
 import type { DeploymentAccountEvent, DeploymentDecision, DeploymentOperation, DeploymentPolicyContext } from "./deployment-extension.js";
-import type { Account } from "./store.js";
+import type { Account, NodeRecord } from "./store.js";
+import { TeamVaultError, type PostgresTeamVault } from "./team-vault.js";
 import { normalizeTeamInvite, teamError, TeamError, type TeamInvite, type TeamMembership, type TeamRepository, isTeamRole } from "./teams.js";
 
 export interface TeamRouteDeps {
   teams: TeamRepository;
+  vault: PostgresTeamVault;
   requireUser: RequestHandler;
+  requireNode: RequestHandler;
   /** Deployment admission. A deployment may decide who can start a team and
    * how many members one may have; with nothing configured both are open. */
   authorize(accountId: string, operation: DeploymentOperation, context: DeploymentPolicyContext): Promise<DeploymentDecision>;
@@ -20,6 +23,7 @@ export interface TeamRouteDeps {
 }
 
 const accountOf = (req: Request) => (req as Request & { account: Account }).account;
+const nodeOf = (req: Request) => (req as Request & { node: NodeRecord }).node;
 
 /** The token rides in the fragment, which browsers never send to a server, so
  * it can't end up in access logs or a proxy's history. */
@@ -46,11 +50,11 @@ function inviteView(invite: TeamInvite) {
 }
 
 export function registerTeamRoutes(app: Express, deps: TeamRouteDeps): void {
-  const { teams, requireUser } = deps;
+  const { teams, requireUser, requireNode } = deps;
 
   const handle = (fn: (req: Request, res: Response) => Promise<unknown>): RequestHandler => (req, res, next) => {
     fn(req, res).catch((error) => {
-      if (error instanceof TeamError) return res.status(error.status).json({ error: error.message, code: error.code });
+      if (error instanceof TeamError || error instanceof TeamVaultError) return res.status(error.status).json({ error: error.message, code: error.code });
       next(error);
     });
   };
@@ -187,5 +191,48 @@ export function registerTeamRoutes(app: Express, deps: TeamRouteDeps): void {
     const membership = await teams.acceptInvite(token, account);
     if (current?.team.id !== membership.team.id) await rosterChanged(account, membership.team.id);
     res.json(await view(membership));
+  }));
+
+  // --- Team vault, for members' machines (team-vault.ts) --------------------
+  // The machine's own account decides which team it serves; only ciphertext
+  // and sealed keys pass through here.
+  const teamOfNode = async (req: Request) => {
+    const membership = await teams.teamOf(nodeOf(req).accountId);
+    if (!membership) throw teamError("not-in-team");
+    return membership;
+  };
+
+  app.get("/node/team-vault", requireNode, handle(async (req, res) => {
+    const membership = await teams.teamOf(nodeOf(req).accountId);
+    if (!membership) return res.json({ team: null });
+    res.json({ team: { id: membership.team.id, name: membership.team.name }, role: membership.role, ...(await deps.vault.snapshot(membership.team.id, nodeOf(req).id)) });
+  }));
+
+  // Only admins' machines write, so only admins change what every member's agents read.
+  app.put("/node/team-vault", requireNode, handle(async (req, res) => {
+    const membership = await teamOfNode(req);
+    if (membership.role !== "admin") return res.status(403).json({ error: "Only a team admin can change team instructions", code: "not-admin" });
+    const vault = await deps.vault.write(membership.team.id, nodeOf(req).id, {
+      ciphertext: String(req.body?.ciphertext ?? ""),
+      expectedGeneration: Number(req.body?.expectedGeneration ?? 0),
+      freshKey: req.body?.freshKey === true,
+    });
+    res.json({ vault });
+  }));
+
+  app.post("/node/team-vault/key-request", requireNode, handle(async (req, res) => {
+    const membership = await teamOfNode(req);
+    await deps.vault.requestKey(membership.team.id, nodeOf(req).id, String(req.body?.publicKey ?? ""));
+    res.json({ ok: true });
+  }));
+
+  app.put("/node/team-vault/key", requireNode, handle(async (req, res) => {
+    const membership = await teamOfNode(req);
+    await deps.vault.putWrappedKey(membership.team.id, String(req.body?.targetNodeId ?? ""), {
+      wrappedKey: String(req.body?.wrappedKey ?? ""),
+      wrappedByPublicKey: String(req.body?.wrappedByPublicKey ?? ""),
+      keyGeneration: Number(req.body?.keyGeneration ?? 0),
+    });
+    res.json({ ok: true });
   }));
 }

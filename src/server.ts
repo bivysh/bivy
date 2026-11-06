@@ -251,6 +251,7 @@ import {
   forgetLocalGithubAppVaultKey,
   mintLocalGithubAppVaultKey,
 } from "./github-app-vault.js";
+import { MAX_TEAM_INSTRUCTIONS_BYTES, TeamVaultSync } from "./team-vault.js";
 import { redactSecrets, registerSecretValue } from "./redact.js";
 import {
   getSttConfig,
@@ -1817,6 +1818,8 @@ type NodeSettings = {
   /** Account-wide instructions every agent session receives (src/agent-instructions.ts),
    *  plus whether the Bivy note goes ahead of them and that note's text. */
   agentInstructions: { text: string; updatedAt: number; maxBytes: number; bivyNote: boolean; bivyNoteText: string };
+  /** The team's shared instructions as this machine last opened them (src/team-vault.ts). */
+  teamInstructions: { state: "none" | "ready" | "waiting-for-key"; maxBytes: number; teamName?: string; canEdit?: boolean; text?: string; updatedAt?: number; generation?: number };
   forkWorkspaceMaxBytes: number;
 };
 
@@ -1897,6 +1900,17 @@ function nodeSettingsSnapshot(): NodeSettings {
     appScreenshots: appScreenshotsEnabled(),
     forkWorkspaceMaxBytes: Number.isInteger(readSettings().forkWorkspaceMaxBytes) ? Number(readSettings().forkWorkspaceMaxBytes) : 50 * 1024 * 1024,
     agentInstructions: { ...readAgentInstructions(appDir), maxBytes: MAX_AGENT_INSTRUCTIONS_BYTES, bivyNoteText: BIVY_AGENT_NOTE },
+    teamInstructions: teamInstructionsSnapshot(),
+  };
+}
+
+/** What Settings → Team shows for the team's instructions on this machine. */
+function teamInstructionsSnapshot(): NodeSettings["teamInstructions"] {
+  const { state, team, instructions } = teamVault.current();
+  if (!team) return { state: "none", maxBytes: MAX_TEAM_INSTRUCTIONS_BYTES };
+  return {
+    state, maxBytes: MAX_TEAM_INSTRUCTIONS_BYTES, teamName: team.name, canEdit: team.role === "admin",
+    text: instructions?.text ?? "", updatedAt: instructions?.updatedAt ?? 0, generation: instructions?.generation ?? 0,
   };
 }
 
@@ -1916,6 +1930,11 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
   if (typeof patch.agentInstructionsBivyNote === "boolean") {
     writeAgentInstructions(appDir, readAgentInstructions(appDir).text, Date.now(), patch.agentInstructionsBivyNote);
     void pushModelAuthToControlPlane();
+  }
+  // Team instructions are encrypted and stored for the whole team; a refused
+  // save (not admin, edited elsewhere) throws before anything else changes.
+  if (typeof patch.teamInstructions === "string") {
+    await teamVault.write(patch.teamInstructions, Number(patch.teamInstructionsBaseGeneration ?? 0));
   }
   const settings = readSettings();
   if (typeof patch.name === "string" && patch.name.trim()) {
@@ -3780,6 +3799,7 @@ function startRelayIfConfigured() {
       // request from a freshly-launched ephemeral runner without waiting for its
       // 30s poll. Cheap and idempotent; coalesced to at most one sync per burst.
       triggerModelAuthSyncSoon();
+      void teamVault.sync().catch(() => undefined);
     },
   });
   relay.start();
@@ -4361,6 +4381,25 @@ async function syncGithubAppVaultFromControlPlane(): Promise<void> {
   } catch (error) {
     console.warn("[github-app-sync] sync failed:", (error as Error).message);
   }
+}
+
+// --- Team vault (src/team-vault.ts) ----------------------------------------
+// Team instructions an admin wrote, end-to-end encrypted across the machines
+// of every team member. Polled like the vaults above; a relay wake pokes it.
+const teamVault = new TeamVaultSync({
+  appDir,
+  nodeId: identity.nodeId,
+  request: modelAuthFetch,
+  publicKey: () => pairingStore.nodePublicKeyB64(),
+  wrap: (publicKey, keyB64) => pairingStore.wrapForNodePublicKey(publicKey, keyB64, "team-vault"),
+  unwrap: (publicKey, wrapped) => pairingStore.unwrapFromNodePublicKey(publicKey, wrapped, "team-vault"),
+});
+let teamVaultTimer: ReturnType<typeof setInterval> | undefined;
+function startTeamVaultWatcher(): void {
+  if (teamVaultTimer) return;
+  void teamVault.sync().catch(() => undefined);
+  teamVaultTimer = setInterval(() => void teamVault.sync().catch(() => undefined), 60_000);
+  teamVaultTimer.unref?.();
 }
 
 let githubAppSyncTimer: ReturnType<typeof setInterval> | undefined;
@@ -12528,6 +12567,7 @@ const server = app.listen(port, host, async () => {
   startModelAuthWatcher();
   startOAuthLoginSweeper();
   startGithubAppSyncWatcher();
+  startTeamVaultWatcher();
   await startGitHubTasksIfConfigured();
   startControlPlaneTasksIfConfigured();
   // Best-effort, non-blocking: finish any issue automation an earlier crash/

@@ -611,7 +611,14 @@ sensitive.
 17. **App previews are readable by the relay operator.** See
     [What the relay sees](#what-the-relay-sees). Don't put secrets in an app
     you preview through Bivy; open it on the machine itself for that.
-18. **The web app that holds your room key is delivered by the control plane.**
+18. **Team instructions trust the control plane to say who is in the team.**
+    They are encrypted under a team key that members' machines seal for each
+    other (`src/team-vault.ts`). The control plane never holds the key in the
+    clear, but it decides which machines count as team machines, so a
+    compromised control plane could add one it controls and receive the key.
+    That is the same trust as account pairing (item 15). See
+    [Teams](teams.md#team-instructions).
+19. **The web app that holds your room key is delivered by the control plane.**
     Browser-side crypto is only as trustworthy as the JavaScript that runs it,
     and the PWA is served by the control plane (hosted `app.bivy.sh`, or your
     own). A compromised control plane could ship modified JS that exfiltrates
