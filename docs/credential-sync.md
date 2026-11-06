@@ -43,6 +43,14 @@ Current model:
 - The same envelope also carries your account-wide
   [agent instructions](agent-instructions.md) (last writer wins), so they reach
   every machine without a separate store.
+- It also carries the account's **session seal keys**, which seal session
+  snapshots to the account so any of your machines can restore a session
+  (see [ephemeral-sessions.md](ephemeral-sessions.md#snapshots-and-a-lost-disk)).
+  Keys are only ever added: every machine merges what it receives and
+  re-publishes keys an older peer dropped. A revoke-triggered re-key also adds
+  a new seal key, so a removed machine can't open snapshots written after it
+  left. A machine creates the account vault on first sync even with no
+  credentials, so the seal key exists before the first snapshot.
 - The account's cloud computer (Bivy Cloud) is an ordinary node here: it gets
   the vault key wrapped by one of your online nodes, or you sign in to a
   provider on it and that login syncs to your other nodes. The control plane

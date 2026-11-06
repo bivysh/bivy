@@ -23,7 +23,7 @@ import { publicManagedLaunchError } from "./managed-launch-error.js";
 import { listAppInstallations, listInstallationRepositories, listInstallationBranches, getAppInstallation, mintInstallationToken } from "./hosted-github-auth.js";
 import { countActiveAccountSessions } from "./session-count.js";
 import { DeploymentCompute, deploymentCompute, managedComputeEnabled, setDeploymentCompute } from "./deployment-compute.js";
-import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, cloudRouteSourceLabel, isCloudComputerNode, isCloudComputerPresence, isEphemeralMilestone, nodeMayTakeWork, routeWorkToCloudComputer } from "./cloud-computer.js";
+import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, cloudRouteSourceLabel, isCloudComputerNode, isCloudComputerPresence, isEphemeralMilestone, nodeMayTakeWork, restorableSnapshot, routeWorkToCloudComputer } from "./cloud-computer.js";
 import { deletionNoticeEmail, deletionNoticePush } from "./deletion-notice.js";
 import { bootRunner, isRunnerNode, placeWorkOnRunner, runnerLabel, runnerNodeId, sessionRunnerId } from "./runners.js";
 import { createStore } from "./store-factory.js";
@@ -5121,8 +5121,9 @@ function requireDeploymentExtension(req: Request, res: Response, next: NextFunct
 
 // Boot payload for the account's cloud computer: re-enrolls its node and
 // returns the Fly files + init that start it. It carries no room key (the node
-// generates and keeps its own); a `restoreSessionId` from older extensions is
-// ignored, since a new disk cannot open snapshots sealed under the old key.
+// generates and keeps its own). A `restoreSessionId` (sent for a new disk) is
+// passed on only when that session's snapshot is sealed to the account, the
+// kind a new disk can open.
 app.post("/internal/compute/bootstrap", requireDeploymentExtension, asyncHandler(async (req, res) => {
   const accountId = typeof req.body?.accountId === "string" ? req.body.accountId : "";
   if (!accountId || !(await store.getAccount(accountId))) return res.status(404).json({ error: "Account not found" });
@@ -5133,6 +5134,7 @@ app.post("/internal/compute/bootstrap", requireDeploymentExtension, asyncHandler
     accountId, awakeCapMinutes,
     relayUrl: provisionEnv().relayUrl, controlPlaneUrl: provisionEnv().cpBaseUrl,
     handOffToRunners: await runnersMode(accountId),
+    restoreSessionId: await restorableSnapshot(store, accountId, req.body?.restoreSessionId),
   }));
 }));
 
@@ -5149,6 +5151,7 @@ app.post("/internal/compute/runner-bootstrap", requireDeploymentExtension, async
   res.json(await bootRunner(store, {
     accountId, runnerId, awakeCapMinutes,
     relayUrl: provisionEnv().relayUrl, controlPlaneUrl: provisionEnv().cpBaseUrl,
+    restoreSessionId: await restorableSnapshot(store, accountId, req.body?.restoreSessionId),
   }));
 }));
 

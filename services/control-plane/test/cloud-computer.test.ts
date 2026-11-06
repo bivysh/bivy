@@ -104,11 +104,10 @@ async function main() {
 
   // Boot payload: only the extension may ask; it re-enrolls the stable node.
   expect((await req(port, "POST", "/internal/compute/bootstrap", { accountId })).status === 401, "the boot payload requires the extension's token");
-  // An older extension may still ask for a rebuild; a new disk can't open the
-  // old key's snapshots, so the request is ignored.
+  // A rebuild request for a session with no snapshot is ignored.
   const boot = await req(port, "POST", "/internal/compute/bootstrap", { accountId, awakeCapMinutes: 360, restoreSessionId: "s-old" }, EXTENSION_TOKEN);
   expect(boot.status === 200 && boot.json?.nodeId === nodeId, "the cloud computer boots as the account's stable node");
-  const relay = JSON.parse(Buffer.from(boot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/relay.json").raw_value, "base64").toString("utf8"));
+  let relay = JSON.parse(Buffer.from(boot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/relay.json").raw_value, "base64").toString("utf8"));
   const start = Buffer.from(boot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/start.sh").raw_value, "base64").toString("utf8");
   expect(typeof relay.enrollmentToken === "string" && relay.enrollmentToken.startsWith("enr_"), "the payload carries a fresh enrollment token");
   expect(!("e2eKey" in relay), "the payload carries no room key: the machine generates its own");
@@ -116,6 +115,20 @@ async function main() {
   expect(!/BIVY_HOSTED_CREDENTIAL|BIVY_RESTORE/.test(start), "the machine is no credential-custody guest and rebuilds nothing from snapshots");
   expect(/BIVY_EPHEMERAL_SLEEP=1/.test(start) && /BIVY_DATA_DIR=\/data\/bivy/.test(start), "the node sleeps instead of being destroyed, with its state on the volume");
   expect(boot.json.init.exec.includes("21600"), "each awake period is bounded by the awake cap");
+  // A new disk restores a session whose snapshot is sealed to the account (any
+  // of the account's machines can open it), but not one sealed to the old
+  // machine's own key.
+  const nodeToken = relay.enrollmentToken;
+  await req(port, "PUT", "/node/session-snapshot/s-account", { ciphertext: "bivy-acct-v1:0123456789abcdef:opaque" }, nodeToken);
+  await req(port, "PUT", "/node/session-snapshot/s-machine", { ciphertext: "opaque-room-key-seal" }, nodeToken);
+  const startOf = (payload: { json: { files: Array<{ guest_path: string; raw_value: string }> } }) =>
+    Buffer.from(payload.json.files.find((f) => f.guest_path === "/etc/bivy/start.sh")!.raw_value, "base64").toString("utf8");
+  const restoring = await req(port, "POST", "/internal/compute/bootstrap", { accountId, restoreSessionId: "s-account" }, EXTENSION_TOKEN);
+  expect(/BIVY_RESTORE='?s-account/.test(startOf(restoring)), "a new disk restores an account-sealed session");
+  const machineSealed = await req(port, "POST", "/internal/compute/bootstrap", { accountId, restoreSessionId: "s-machine" }, EXTENSION_TOKEN);
+  expect(!/BIVY_RESTORE/.test(startOf(machineSealed)), "a snapshot only the old disk could open is not restored");
+  // Each boot re-enrolls the node; carry on with the newest token.
+  relay = JSON.parse(Buffer.from(machineSealed.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/relay.json").raw_value, "base64").toString("utf8"));
   const enrolled = await req(port, "GET", "/nodes", undefined, token);
   expect((enrolled.json ?? []).some((n: { id: string; online: boolean }) => n.id === nodeId && !n.online), "the enrolled node is listed, asleep");
 

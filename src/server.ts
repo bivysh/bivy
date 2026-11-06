@@ -121,6 +121,7 @@ import { webAppDirs, webAppRouter } from "./web-app.js";
 import { RelayConnector, loadRelayConfig, loadDirectListenerConfig, discoverTailnetMachines, soloCredentials, type ClientMessage, type TailnetMachine } from "./remote/index.js";
 import { readEphemeralTeardownConfig, shouldSelfTeardown, snapshotsDurableForTeardown, performSelfTeardown, type SnapshotFlushResult } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
+import { accountSealer, currentSealKey, holdsAll, keyringStore, mergeKeyrings, mintSealKey, parseKeyring, roomKeySealer, sealedKid, snapshotOpener, type SealKeyring } from "./session/seal-keys.js";
 import { clearTurnActivity } from "./session/turn-activity.js";
 import { rebuildSnapshotRuntime } from "./session/snapshot-runtime.js";
 import { createCheckpointBundle, applyCheckpointBundle, materializeCheckpoint } from "./session/checkpoint-pack.js";
@@ -3886,6 +3887,7 @@ type ModelAuthVaultResponse = {
 };
 const modelAuthVaultKeyPath = path.join(appDir, "model-auth-vault.json");
 let lastPushedModelAuthCiphertext = "";
+const sealKeyring = keyringStore(appDir);
 // Every node, the account's cloud computer included, owns its vault key and
 // gets it wrapped node-to-node. Remove state left by the retired hosted
 // custody mode, whose key the control plane could also decrypt.
@@ -3947,6 +3949,9 @@ type ModelAuthEnvelope = {
   // last writer wins — see src/agent-instructions.ts). Additive and optional: an
   // older peer drops it on re-push, and a newer peer holding a newer copy re-publishes.
   agentInstructions?: { text: string; updatedAt: number; bivyNote?: boolean };
+  // Account seal keys for session snapshots (src/session/seal-keys.ts). Only
+  // ever grows; every peer merges it and re-publishes keys an older peer dropped.
+  sealKeys?: SealKeyring;
 };
 
 function encryptModelAuthProviders(
@@ -3957,16 +3962,17 @@ function encryptModelAuthProviders(
   records: Record<string, unknown> = {},
   recordsDeletedAt: Record<string, number> = {},
   agentInstructions?: { text: string; updatedAt: number; bivyNote: boolean },
+  sealKeys: SealKeyring = {},
 ): string {
-  const envelope: ModelAuthEnvelope = { v: MODEL_AUTH_ENVELOPE_VERSION, providers, deletedAt, localModels, records, recordsDeletedAt, ...(agentInstructions ? { agentInstructions } : {}) };
+  const envelope: ModelAuthEnvelope = { v: MODEL_AUTH_ENVELOPE_VERSION, providers, deletedAt, localModels, records, recordsDeletedAt, ...(agentInstructions ? { agentInstructions } : {}), sealKeys };
   return seal(Buffer.from(vaultKeyB64, "base64"), JSON.stringify(envelope));
 }
 
 function decryptModelAuthEnvelope(
   ciphertext: string,
   vaultKeyB64: string,
-): { v: number; providers: Record<string, unknown>; deletedAt: Record<string, unknown>; localModels: Record<string, unknown>; records: Record<string, unknown>; recordsDeletedAt: Record<string, unknown>; agentInstructions?: unknown } {
-  const empty = { v: 0, providers: {}, deletedAt: {}, localModels: {}, records: {}, recordsDeletedAt: {} };
+): { v: number; providers: Record<string, unknown>; deletedAt: Record<string, unknown>; localModels: Record<string, unknown>; records: Record<string, unknown>; recordsDeletedAt: Record<string, unknown>; agentInstructions?: unknown; sealKeys: SealKeyring } {
+  const empty = { v: 0, providers: {}, deletedAt: {}, localModels: {}, records: {}, recordsDeletedAt: {}, sealKeys: {} };
   const parsed = JSON.parse(open(Buffer.from(vaultKeyB64, "base64"), ciphertext)) as unknown;
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return empty;
   // Versioned Bivy envelope.
@@ -3981,6 +3987,7 @@ function decryptModelAuthEnvelope(
       records: obj(envelope.records),
       recordsDeletedAt: obj(envelope.recordsDeletedAt),
       agentInstructions: envelope.agentInstructions,
+      sealKeys: parseKeyring(envelope.sealKeys),
     };
   }
   // Back-compat: a bare `{ [id]: Credential }` map (pre-envelope / other sender).
@@ -4163,6 +4170,12 @@ async function syncModelAuthFromControlPlane() {
       importLocalModels(localModelsDir, localModels);
       // Account-wide agent instructions reconcile last-writer-wins.
       const instructionsSync = mergeSyncedAgentInstructions(appDir, decrypted.agentInstructions);
+      // Account seal keys only grow: take any we lack, and re-publish any the
+      // envelope lacks (an older peer re-pushed without them).
+      const localSealKeys = sealKeyring.read();
+      const mergedSealKeys = mergeKeyrings(localSealKeys, decrypted.sealKeys);
+      if (!holdsAll(localSealKeys, mergedSealKeys)) sealKeyring.write(mergedSealKeys);
+      const sealKeysBehind = !holdsAll(decrypted.sealKeys, mergedSealKeys) || Object.keys(mergedSealKeys).length === 0;
       if (instructionsSync === "imported") broadcast({ type: "node.settings", settings: nodeSettingsSnapshot() });
       // A synced key or config change can both alter the projection, so always
       // regenerate it (and refresh the panel) after importing the vault.
@@ -4174,18 +4187,16 @@ async function syncModelAuthFromControlPlane() {
       stopModelAuthColdStart();
       broadcast({ type: "providers.list", providers: await listProvidersUnified() });
       if (data.vault?.needsRotation) await pushModelAuthToControlPlane(true);
-      else if (instructionsSync === "local-newer") await pushModelAuthToControlPlane();
+      else if (instructionsSync === "local-newer" || sealKeysBehind) await pushModelAuthToControlPlane();
     } else if (targetVault?.ciphertext && !vaultKeyB64) {
       await modelAuthFetch("/node/model-auth-key/request", { method: "POST", body: JSON.stringify({ publicKey: pairingStore.nodePublicKeyB64() }) });
       // No peer has wrapped our key yet. Fast-retry (bounded) so a short-lived
       // ephemeral runner picks up the key within seconds of a peer answering,
       // rather than waiting for its next 30s poll.
       ensureModelAuthColdStart();
-    } else if (
-      Object.keys(await exportProviderAuth(credsDir)).length > 0 ||
-      Object.keys(exportLocalModels(localModelsDir)).length > 0 ||
-      readAgentInstructions(appDir).updatedAt > 0
-    ) {
+    } else if (!targetVault?.ciphertext) {
+      // No account vault yet: create it. Even with no credentials it carries the
+      // account seal key, which session snapshots need to restore elsewhere.
       await pushModelAuthToControlPlane();
     }
 
@@ -4234,7 +4245,14 @@ async function pushModelAuthToControlPlane(rotateKey = false, throwOnFailure = f
     const vaultKeyB64 = rotateKey ? randomBytes(32).toString("base64") : ensureLocalModelAuthVaultKey();
     if (rotateKey) writeLocalModelAuthVaultKey(vaultKeyB64);
     const instructions = readAgentInstructions(appDir);
-    const ciphertext = encryptModelAuthProviders(providers, deletedAt, localModels, vaultKeyB64, records, recordsDeletedAt, instructions.updatedAt > 0 ? instructions : undefined);
+    // A rotation (a machine left the account) also starts a new seal key, so the
+    // removed machine can't read snapshots written from now on.
+    let sealKeys = sealKeyring.read();
+    if (rotateKey || Object.keys(sealKeys).length === 0) {
+      sealKeys = mintSealKey(sealKeys);
+      sealKeyring.write(sealKeys);
+    }
+    const ciphertext = encryptModelAuthProviders(providers, deletedAt, localModels, vaultKeyB64, records, recordsDeletedAt, instructions.updatedAt > 0 ? instructions : undefined, sealKeys);
     if (!rotateKey && ciphertext === lastPushedModelAuthCiphertext) return;
     const push = await modelAuthFetch("/node/model-auth-vault", { method: "PUT", body: JSON.stringify({ ciphertext, rotated: rotateKey }) });
     if (!push?.ok) {
@@ -7880,10 +7898,26 @@ async function signalSettledToControlPlane(): Promise<void> {
   }).catch(() => {});
 }
 
+/** How long a restore waits for the account seal key to arrive through the
+ *  vault. A new machine gets it once a peer wraps the vault key for it. */
+const SEAL_KEY_WAIT_MS = 90_000;
+
+/** Resolve once this machine holds the account key `kid`, or give up. */
+async function waitForSealKey(kid: string): Promise<boolean> {
+  const deadline = Date.now() + SEAL_KEY_WAIT_MS;
+  while (!(kid in sealKeyring.read())) {
+    if (Date.now() >= deadline) return false;
+    await syncModelAuthFromControlPlane();
+    if (kid in sealKeyring.read()) break;
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+  }
+  return true;
+}
+
 /** Rebuild-resume (Gap B): on a freshly re-provisioned machine booted with
  *  `BIVY_RESTORE=<sessionId>`, fetch the session's control-plane snapshot,
- *  decrypt it with this machine's room key (reused from the torn-down session so
- *  the seal matches), and apply it — restoring the transcript (EventLog) and the
+ *  decrypt it with the account seal key (any of the account's machines holds
+ *  it, see src/session/seal-keys.ts), and apply it — restoring the transcript (EventLog) and the
  *  git checkpoint into a repo the session can open. The runtime process starts
  *  fresh/seeded from the restored transcript ("reconstructed", not byte-identical
  *  — see docs/ephemeral-sessions.md). Best-effort: a missing/undecryptable
@@ -7901,7 +7935,9 @@ async function restoreSessionFromSnapshot(sessionId: string): Promise<boolean> {
     }
     const data = (await res.json()) as { ciphertext?: string };
     if (!data.ciphertext) return false;
-    const applied = await applySessionSnapshot(data.ciphertext, pairingStore.roomKey(), {
+    const kid = sealedKid(data.ciphertext);
+    if (kid && !(await waitForSealKey(kid))) throw new Error("the account seal key didn't arrive; is another of your machines online?");
+    const applied = await applySessionSnapshot(data.ciphertext, snapshotOpener(sealKeyring.read(), pairingStore.roomKey()), {
       expectedSessionId: sessionId,
       persistRecords: (id, records) => eventLog.rewrite(id, records),
       applyBundle: async (id, buf) => applyCheckpointBundle(await ensureReplicaRepo(id), id, buf),
@@ -7929,10 +7965,10 @@ async function restoreSessionFromSnapshot(sessionId: string): Promise<boolean> {
 
 /** Flush a durable, E2E-encrypted snapshot of each open session to the control
  *  plane before this disposable machine is torn down, so a destroy-lane session
- *  can be rebuilt on a fresh machine later (Gap B). Sealed under the node room
- *  key — the same key that seals the session title — so a restore machine that
- *  reuses this session's room key can decrypt it; the control plane sees only
- *  ciphertext. Returns an explicit durability result: teardown must not proceed
+ *  can be rebuilt on a fresh machine later (Gap B). Sealed to the account (the
+ *  seal key travels in the vault), so any of the account's machines can restore
+ *  it; without that key yet, to this node's room key as before. The control
+ *  plane sees only ciphertext. Returns an explicit durability result: teardown must not proceed
  *  when any non-empty open session failed to reach the control plane. */
 async function flushSessionSnapshots(): Promise<SnapshotFlushResult> {
   const result: SnapshotFlushResult = { required: 0, persisted: 0, failed: 0 };
@@ -7941,12 +7977,13 @@ async function flushSessionSnapshots(): Promise<SnapshotFlushResult> {
     result.required = result.failed;
     return result;
   }
-  const roomKey = pairingStore.roomKey();
+  const accountKey = currentSealKey(sealKeyring.read());
+  const sealer = accountKey ? accountSealer(accountKey.kid, accountKey.key) : roomKeySealer(pairingStore.roomKey());
   const cpBaseUrl = sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "");
   for (const record of new Set(openSessions.values())) {
     result.required++;
     try {
-      const sealed = await buildSessionSnapshot(record.id, roomKey, {
+      const sealed = await buildSessionSnapshot(record.id, sealer, {
         sessionInfo: () => {
           const model = record.session.getCurrentModel();
           return { runtimeId: record.runtimeId, name: record.session.getName(),
