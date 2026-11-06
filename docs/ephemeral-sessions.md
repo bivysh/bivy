@@ -199,7 +199,8 @@ in the cloud it runs is one table, read top to bottom
 | New work, no runners | the cloud computer (or waits) |
 
 "Waits" means the deployment has no cloud computer: the work stays queued for
-your own machines, which may take it. A runner placement labels the work for
+your own machines, which may take it. If none of them is online, you get a
+push ("Work is waiting for one of your machines"), at most three a day. A runner placement labels the work for
 that runner; if the deployment refuses, the work goes back where it was. Work
 for the cloud computer moves to its label (`routeWorkToCloudComputer`) and the
 machine is acquired with purpose `"automation"`; the machine picks the work up
