@@ -54,6 +54,7 @@ import {
   parseAutomationEvent,
   normalizeAutomationRepo,
   parseGithubWorkflowRunFailure,
+  workflowRunTriggerAllowed,
 } from "./webhooks.js";
 import {
   isSourceTrigger,
@@ -4223,6 +4224,7 @@ async function processGithubEvent(hook: InboundHook, event: string, deliveryId: 
   if (event === "workflow_run") {
     const failure = parseGithubWorkflowRunFailure(payload);
     if (!failure) return res.json({ ok: true, enqueued: false });
+    if (!workflowRunTriggerAllowed(failure, hook.triggerAccess)) return res.json({ ok: true, enqueued: false, reason: "access" });
     const matched = matchSourceAutomation(automations, {
       kind: "github",
       appId: hook.appId,

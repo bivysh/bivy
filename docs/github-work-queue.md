@@ -203,6 +203,11 @@ GitHub's own `author_association` for the issue/comment author:
 | Contributors | Anyone with a prior relationship to the repo | `CONTRIBUTOR`, `COLLABORATOR`, `MEMBER`, `OWNER` |
 | Collaborators only (default) | Push access only | `COLLABORATOR`, `MEMBER`, `OWNER` |
 
+A failed CI run on one of the repository's own branches can start **Fix failed
+CI** (pushing a branch already needs write access). A failed run from a fork's
+pull request can come from any GitHub user, and fixing it means running that
+fork's code, so it only starts a run when the setting is **Everyone**.
+
 This is one account-wide preference applied to every connected app. A blocked
 mention is acknowledged to GitHub (so it doesn't retry the delivery) but
 enqueues nothing — no comment is left, so it's silent from the blocked user's

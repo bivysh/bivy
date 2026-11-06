@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Grok runs on Grok CLI 1.0.77, which offers its reasoning effort (low to xhigh) over ACP, so the effort picker now works on Grok's default path.
 
+### Fixed
+
+- A failed CI run from a fork's pull request no longer starts **Fix failed CI** unless **Who can trigger runs** is set to Everyone. Fixing it means running code from a fork, which anyone can open.
+
 ## [0.22.8] - 2026-11-05
 
 ### Added

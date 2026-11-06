@@ -530,6 +530,19 @@ export interface ParsedWorkflowRunFailure {
   /** Short event context for the node (untrusted). */
   eventContext: string;
   title: string;
+  /** The run's code came from another repository (a fork's pull request). */
+  fromFork: boolean;
+}
+
+/**
+ * Whether a failed run may start a Fix-CI run. A run on the repository's own
+ * branches needs push access to start, the same bar as the default
+ * "collaborator" trigger access. A fork's pull request can come from any GitHub
+ * user, and fixing it means running that fork's code, so it only triggers when
+ * the account opened triggers to everyone.
+ */
+export function workflowRunTriggerAllowed(failure: Pick<ParsedWorkflowRunFailure, "fromFork">, access: TriggerAccess | undefined): boolean {
+  return !failure.fromFork || access === "everyone";
 }
 
 /**
@@ -557,6 +570,7 @@ export function parseGithubWorkflowRunFailure(payload: unknown): ParsedWorkflowR
   const branch = run.head_branch ? String(run.head_branch) : undefined;
   const sha = run.head_sha ? String(run.head_sha) : undefined;
   const htmlUrl = String(run.html_url || "");
+  const headRepo = run.head_repository?.full_name ? String(run.head_repository.full_name) : repo;
   const title = `CI failed: ${workflowName}${Number.isFinite(runNumber) ? ` #${runNumber}` : ""}`;
   const lines = [
     `Workflow: ${workflowName}`,
@@ -577,6 +591,7 @@ export function parseGithubWorkflowRunFailure(payload: unknown): ParsedWorkflowR
     htmlUrl,
     title,
     eventContext: lines.join("\n"),
+    fromFork: headRepo.toLowerCase() !== repo.toLowerCase(),
   };
 }
 
