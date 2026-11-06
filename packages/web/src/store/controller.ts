@@ -221,6 +221,7 @@ export function isDirectMode(store = createLocalStore(clientStorage())): boolean
 
 /** One key in Settings → Keys for agents (node: SecretVault.agentSecrets). */
 export interface AgentSecretInfo { id: string; description?: string; backend: string; updatedAt: string }
+export interface SessionInviteView { id: string; email: string; mode: "view" | "prompt"; expiresAt: string; createdAt: string }
 
 export class AppController {
   readonly store = new SessionStore();
@@ -3520,6 +3521,20 @@ export class AppController {
     return Array.isArray(reply.machines) ? reply.machines : [];
   }
   /** Keys agents asked for on the connected machine (`bivy ask --secret`), never their values. */
+  /** Session menu → Invite a teammate (src/session-invites.ts on the node). */
+  async listSessionInvites(sessionId: string): Promise<SessionInviteView[]> {
+    const reply = await this.awaitAck({ kind: "session.invites.list", sessionId }, 15_000) as unknown as { invites?: SessionInviteView[] };
+    return reply.invites ?? [];
+  }
+  async createSessionInvite(input: { sessionId: string; accountId: string; email: string; mode: "view" | "prompt"; duration: "day" | "week" }): Promise<SessionInviteView[]> {
+    const reply = await this.awaitAck({ kind: "session.invite.create", ...input }, 15_000) as unknown as { invites?: SessionInviteView[] };
+    return reply.invites ?? [];
+  }
+  async revokeSessionInvite(sessionId: string, id: string): Promise<SessionInviteView[]> {
+    const reply = await this.awaitAck({ kind: "session.invite.revoke", sessionId, id }, 15_000) as unknown as { invites?: SessionInviteView[] };
+    return reply.invites ?? [];
+  }
+
   async listAgentSecrets(): Promise<AgentSecretInfo[]> {
     const reply = await this.awaitAck({ kind: "secrets.list" }, 15_000) as unknown as { secrets?: AgentSecretInfo[] };
     return Array.isArray(reply.secrets) ? reply.secrets : [];

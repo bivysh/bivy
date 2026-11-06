@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   FRAME_CHUNK_BYTES,
   MAX_REASSEMBLY_BYTES,
@@ -48,17 +48,25 @@ export interface FrameEnvelope {
  * Returns a single `{ t: "frame", p }` for small payloads, or an ordered list of
  * chunk messages for large ones.
  */
-export function frameMessages(payload: string): string[] {
+/** A short public fingerprint of a frame key, sent beside each frame so a
+ * client skips frames sealed for someone else (a session guest's copies, or
+ * the room's frames on a guest's device) instead of failing to open them. */
+export function keyFingerprint(key: Buffer): string {
+  return createHash("sha256").update(key).digest("hex").slice(0, 16);
+}
+
+export function frameMessages(payload: string, keyId?: string): string[] {
   if (payload.length > MAX_REASSEMBLY_BYTES) throw new Error("Relay payload exceeds the receiver limit; use a bounded transfer.");
+  const g = keyId ? { g: keyId } : {};
   if (payload.length <= FRAME_CHUNK_BYTES) {
-    return [JSON.stringify({ t: "frame", p: payload })];
+    return [JSON.stringify({ t: "frame", p: payload, ...g })];
   }
   const id = randomBytes(8).toString("hex");
   const total = Math.ceil(payload.length / FRAME_CHUNK_BYTES);
   const out: string[] = [];
   for (let i = 0; i < total; i++) {
     const slice = payload.slice(i * FRAME_CHUNK_BYTES, (i + 1) * FRAME_CHUNK_BYTES);
-    out.push(JSON.stringify({ t: "frame", p: slice, fc: id, fi: i, fn: total }));
+    out.push(JSON.stringify({ t: "frame", p: slice, fc: id, fi: i, fn: total, ...g }));
   }
   return out;
 }

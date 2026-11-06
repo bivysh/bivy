@@ -45,4 +45,20 @@ await machines.setShared("ada-box", true);
 await store.removeNode(ada!.id, "ada-box");
 assert.deepEqual(await machines.sharedWith(bo!.id), []);
 
+// Session invites: routing only, for current teammates; a guest reaches the
+// machine without it being shared, and loses it on leaving.
+await store.enrollNode(ada!.id, "ada-box2", "ada-box2");
+const later = new Date(Date.now() + 60 * 60_000).toISOString();
+const kept = await machines.setInvites("ada-box2", [
+  { accountId: bo!.id, sessionId: "s1", mode: "view", expiresAt: later },
+  { accountId: eve!.id, sessionId: "s1", mode: "prompt", expiresAt: later },
+  { accountId: bo!.id, sessionId: "s2", mode: "prompt", expiresAt: new Date(Date.now() - 1000).toISOString() },
+]);
+assert.deepEqual(kept.map((i) => [i.accountId, i.sessionId]), [[bo!.id, "s1"]], "outsiders and expired invites are dropped");
+assert.deepEqual((await machines.invitedTo(bo!.id)).map((m) => [m.nodeId, m.sessions]), [["ada-box2", 1]]);
+assert.deepEqual(await machines.access(bo!.id, "ada-box2"), { kind: "teammate", ownerAccountId: ada!.id, guest: true });
+assert.equal(await machines.access(eve!.id, "ada-box2"), undefined);
+await store.teams.removeMember(team.id, bo!.id);
+assert.equal(await machines.access(bo!.id, "ada-box2"), undefined, "leaving the team ends the invite");
+
 console.log("team-machines: ok");

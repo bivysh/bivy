@@ -246,6 +246,8 @@ export interface AccountNode {
   online?: boolean;
   /** Set on a teammate's machine shared with your team: the owner's email. */
   sharedBy?: string;
+  /** Set when you reach it only through session invites: how many. */
+  guestSessions?: number;
   providers?: NodeProviderSummary[];
   /** Manually declared, owner-asserted capability tags (e.g. "gpu", "docker") —
    *  never auto-detected, and not a verified security fact. See

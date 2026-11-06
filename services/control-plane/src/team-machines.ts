@@ -16,7 +16,19 @@ import type { PostgresDatabaseContext } from "./postgres-database.js";
 
 export type MachineAccess =
   | { kind: "owner"; ownerAccountId: string }
-  | { kind: "teammate"; ownerAccountId: string };
+  /** `guest`: reachable only through a session invite, not because it is shared. */
+  | { kind: "teammate"; ownerAccountId: string; guest?: boolean };
+
+/** A teammate invited into one session on a machine (src/session-invites.ts).
+ * Routing metadata only: which account may reach which machine, until when. */
+export interface SessionInviteRecord {
+  accountId: string;
+  sessionId: string;
+  mode: "prompt" | "view";
+  expiresAt: string;
+}
+
+export const MAX_SESSION_INVITES_PER_NODE = 100;
 
 export interface SharedMachine {
   nodeId: string;
@@ -35,7 +47,51 @@ export class PostgresTeamMachines {
         node_id    TEXT PRIMARY KEY REFERENCES nodes(id) ON DELETE CASCADE,
         shared_at  TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      CREATE TABLE IF NOT EXISTS team_session_invites (
+        node_id     TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        session_id  TEXT NOT NULL,
+        mode        TEXT NOT NULL,
+        expires_at  TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (node_id, account_id, session_id)
+      );
     `);
+  }
+
+  /** Replace a machine's session invites with what the machine reports. Only
+   * current members of the owner's team are kept. */
+  async setInvites(nodeId: string, invites: SessionInviteRecord[]): Promise<SessionInviteRecord[]> {
+    const { memberAccountIds } = await this.shareState(nodeId);
+    const owner = (await this.query(`SELECT account_id FROM nodes WHERE id = $1`, [nodeId])).rows[0]?.account_id;
+    const members = new Set(memberAccountIds.filter((id) => id !== owner));
+    const kept = invites
+      .filter((i) => members.has(i.accountId) && i.sessionId && Date.parse(i.expiresAt) > Date.now())
+      .slice(0, MAX_SESSION_INVITES_PER_NODE);
+    await this.query(`DELETE FROM team_session_invites WHERE node_id = $1`, [nodeId]);
+    for (const i of kept) {
+      await this.query(
+        `INSERT INTO team_session_invites (node_id, account_id, session_id, mode, expires_at) VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (node_id, account_id, session_id) DO UPDATE SET mode = EXCLUDED.mode, expires_at = EXCLUDED.expires_at`,
+        [nodeId, i.accountId, i.sessionId, i.mode === "view" ? "view" : "prompt", new Date(i.expiresAt)],
+      );
+    }
+    return kept;
+  }
+
+  /** Machines where `accountId` has an open session invite from a teammate. */
+  async invitedTo(accountId: string): Promise<Array<SharedMachine & { sessions: number }>> {
+    const { rows } = await this.query(
+      `SELECT n.id, n.account_id, a.email, COUNT(*) AS sessions FROM team_session_invites i
+         JOIN nodes n ON n.id = i.node_id
+         JOIN accounts a ON a.id = n.account_id
+         JOIN team_members me ON me.account_id = i.account_id
+         JOIN team_members owner ON owner.account_id = n.account_id AND owner.team_id = me.team_id
+       WHERE i.account_id = $1 AND i.expires_at > now()
+       GROUP BY n.id, n.account_id, a.email
+       ORDER BY a.email, n.id`,
+      [accountId],
+    );
+    return rows.map((row) => ({ nodeId: String(row.id), ownerAccountId: String(row.account_id), ownerEmail: String(row.email), sessions: Number(row.sessions) }));
   }
 
   async setShared(nodeId: string, shared: boolean): Promise<void> {
@@ -70,7 +126,9 @@ export class PostgresTeamMachines {
     if (!owner) return undefined;
     if (owner === accountId) return { kind: "owner", ownerAccountId: owner };
     const shared = (await this.sharedWith(accountId)).some((m) => m.nodeId === nodeId);
-    return shared ? { kind: "teammate", ownerAccountId: owner } : undefined;
+    if (shared) return { kind: "teammate", ownerAccountId: owner };
+    const invited = (await this.invitedTo(accountId)).some((m) => m.nodeId === nodeId);
+    return invited ? { kind: "teammate", ownerAccountId: owner, guest: true } : undefined;
   }
 
   /** What a machine needs to police its teammates' devices: whether it is
