@@ -53,6 +53,7 @@ export * from "./linking.js";
 export * from "./protocol.js";
 export * from "./local-store.js";
 export * from "./account.js";
+export * from "./team.js";
 // Keep the public ephemeral surface intentional: internal provider modules do
 // not become API merely because a compatibility facade imports them.
 export {

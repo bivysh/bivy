@@ -2410,6 +2410,11 @@ a.queue-item:hover { border-color: var(--line-strong); background: var(--surface
 .settings-hint { font-size: 13px; color: var(--muted); margin: 0; line-height: 1.4; overflow-wrap: anywhere; }
 .settings-error { color: var(--danger); font-size: 13px; margin: 4px 0 0; overflow-wrap: anywhere; }
 .row-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+/* One text field with its controls on the same line; wraps on narrow screens. */
+.field-row { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.field-row > .field { flex: 1 1 12rem; inline-size: auto; min-inline-size: 0; }
+.field-row > .field, .field-row > .btn { width: auto; }
+.field-row > select.field { flex: 0 0 auto; }
 /* GitHub Queue waiting list (GithubQueue.tsx): a card per item with the title on
    the left and inline actions (Run… + remove) on the right, and the "Run…" node/
    agent form expanding below. */

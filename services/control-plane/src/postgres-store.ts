@@ -4,6 +4,7 @@ import { randomUUID, randomBytes } from "node:crypto";
 import pg from "pg";
 import { anyNodeEligible } from "@bivy/core";
 import { encryptSecret, decryptSecret, isSecretEnvelope } from "./hosted-crypto.js";
+import { PostgresTeams } from "./teams.js";
 import { PostgresDatabaseContext, type PostgresTransactionContext } from "./postgres-database.js";
 import {
   type Account,
@@ -99,6 +100,7 @@ const workLeaseExpiry = (): string => new Date(Date.now() + WORK_LEASE_MS).toISO
  */
 export class PostgresStore implements ControlPlaneStore {
   private readonly database: PostgresDatabaseContext;
+  readonly teams: PostgresTeams;
 
   // `pool` is an optional injection seam: production passes only a
   // connectionString and we build a real pg.Pool; tests can hand in an
@@ -114,6 +116,7 @@ export class PostgresStore implements ControlPlaneStore {
     // front Postgres with PgBouncer.
     const max = Math.max(Number(process.env.DATABASE_POOL_MAX) || 10, 1);
     this.database = new PostgresDatabaseContext(pool ?? new pg.Pool({ connectionString, max }));
+    this.teams = new PostgresTeams(this.database);
   }
 
   private query(text: string, params?: unknown[]): Promise<pg.QueryResult> {
@@ -820,6 +823,7 @@ export class PostgresStore implements ControlPlaneStore {
       CREATE UNIQUE INDEX IF NOT EXISTS idx_work_items_admission_collapse ON work_items(account_id, collapse_key)
         WHERE collapse_key IS NOT NULL AND (status = 'pending' OR (status = 'needs_attention' AND policy_blocked = true));
     `);
+    await this.teams.init();
     await this.purgeRetiredKeyEscrow();
   }
 
@@ -946,6 +950,7 @@ export class PostgresStore implements ControlPlaneStore {
   }
 
   async deleteAccount(accountId: string): Promise<boolean> {
+    await this.teams.releaseAccount(accountId);
     const result = await this.query(`DELETE FROM accounts WHERE id = $1`, [accountId]);
     return (result.rowCount ?? 0) > 0;
   }

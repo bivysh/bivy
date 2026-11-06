@@ -43,6 +43,7 @@ export type SettingsView =
   | "webhooks"
   | "rulesets"
   | "nodes"
+  | "team"
   | "account"
   | "link";
 
@@ -63,6 +64,7 @@ const SETTINGS_VIEWS: readonly SettingsView[] = [
   "webhooks",
   "rulesets",
   "nodes",
+  "team",
   "account",
   "link",
 ];
