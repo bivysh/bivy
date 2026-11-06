@@ -2227,7 +2227,20 @@ app.put("/api/push/preferences", asyncHandler(async (req, res) => {
 // E2E model-provider auth vault. The control plane stores only ciphertext and
 // per-node wrapped keys; vault keys are wrapped node-to-node, so no route here
 // can decrypt a user's model credentials.
-app.get("/node/model-auth-vault", requireNode, asyncHandler(async (req, res) => {
+//
+// Machines poll the vault every 30 s and every few seconds while waiting for a
+// key; an open app checks for waiting machines every 15 s. This bound leaves
+// room for that and stops a runaway client.
+const vaultKeyRateLimit = rateLimit({
+  windowMs: 60_000,
+  limit: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  keyGenerator: (req) => (req as Request & { node?: NodeRecord }).node?.id ?? (req as Request & { account?: Account }).account?.id ?? ipKeyGenerator(clientIp(req)),
+  message: { error: "Too many vault key requests" },
+});
+
+app.get("/node/model-auth-vault", requireNode, vaultKeyRateLimit, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   res.json({
     ok: true,
@@ -2244,7 +2257,7 @@ const isPairedDevice = async (accountId: string, devicePublicKey: string) =>
   Boolean(devicePublicKey) && (await store.listPairedDevices(accountId)).some((device) => device.id === devicePublicKey);
 
 // A node wraps the vault key for one of the account's paired devices.
-app.put("/node/model-auth-key/device", requireNode, asyncHandler(async (req, res) => {
+app.put("/node/model-auth-key/device", requireNode, vaultKeyRateLimit, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const devicePublicKey = String(req.body?.devicePublicKey ?? "").trim();
   const wrappedKey = String(req.body?.wrappedKey ?? "").trim();
@@ -2258,7 +2271,7 @@ app.put("/node/model-auth-key/device", requireNode, asyncHandler(async (req, res
 // A signed-in device reads its copy of the vault key and the machines waiting
 // for one, so it can answer them when none of the account's machines is
 // online. Everything here is wrapped end to end; the control plane can't open it.
-app.get("/account/model-auth-key", requireUser, asyncHandler(async (req, res) => {
+app.get("/account/model-auth-key", requireUser, vaultKeyRateLimit, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   res.setHeader("cache-control", "no-store");
   const devicePublicKey = String(req.query.devicePublicKey ?? "").trim();
@@ -2269,7 +2282,7 @@ app.get("/account/model-auth-key", requireUser, asyncHandler(async (req, res) =>
   });
 }));
 
-app.put("/account/model-auth-key/wrapped", requireUser, asyncHandler(async (req, res) => {
+app.put("/account/model-auth-key/wrapped", requireUser, vaultKeyRateLimit, asyncHandler(async (req, res) => {
   const account = (req as Request & { account: Account }).account;
   const devicePublicKey = String(req.body?.devicePublicKey ?? "").trim();
   const targetNodeId = String(req.body?.targetNodeId ?? "").trim();
