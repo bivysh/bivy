@@ -20,7 +20,7 @@ import { listRuntimes, catalogRuntimes, accountProviderAliases, agentInstallSpec
 import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
-import { detectSessionLimit, limitResumePlan, sessionLimitNotice } from "./policy/session-limit.js";
+import { detectSessionLimit, limitResumePlan, sessionLimitNotice, type SessionLimit } from "./policy/session-limit.js";
 import { activeRulesetFor } from "./runtime/ruleset-store.js";
 import { createRulesetController } from "./controllers/rulesets.js";
 import { createAuditLog, readAuditEvents } from "./audit/index.js";
@@ -715,6 +715,12 @@ function replayPendingInteractions(sessionId: string) {
       : `The agent has been quiet for ${mins} min. Stop it or keep waiting?`;
     broadcast({ type: "session.turn_attention", sessionId, trigger, idleMs, at, message });
   }
+  // The way past a usage limit is a one-shot notice too, and a limit usually
+  // lands while nobody is watching. Offer it again after the history: a retry
+  // already waiting for the reset (with Cancel), else Fork / Retry at reset.
+  const resumeAt = metadata.getSession(sessionId)?.resumeAt;
+  if (resumeAt) broadcast(resumeScheduledNotice(sessionId, resumeAt));
+  else if (record?.limitHit && !record.isWorking) broadcast(limitHitNotice(record, record.limitHit));
 }
 
 function persistApprovalRequest(request: ApprovalRequest, resolvedAt?: number) {
@@ -8351,20 +8357,31 @@ function scheduleSessionResume(record: SessionRecord, plan: ResumePlan): boolean
   }
   metadata.setResumeAt(record.id, plan.resumeAt);
   metadata.setResumeAttempts(record.id, attempts + 1);
+  broadcast(resumeScheduledNotice(record.id, plan.resumeAt));
   const when = Date.parse(plan.resumeAt);
+  armSessionResumeTimer(record.id, Number.isFinite(when) ? when : Date.now());
+  return true;
+}
+
+/** The notice saying a retry is waiting for the limit to reset, with Cancel. */
+function resumeScheduledNotice(sessionId: string, resumeAt: string) {
+  const when = Date.parse(resumeAt);
   const at = Number.isFinite(when)
     ? new Date(when).toLocaleString("en-US", { timeZone: "UTC", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false })
-    : plan.resumeAt;
-  broadcast({
+    : resumeAt;
+  return {
     type: "session.notice",
-    sessionId: record.id,
+    sessionId,
     level: "info",
     message: `I'll retry this automatically when the limit resets (${at} UTC).`,
     ...(Number.isFinite(when) ? { at: new Date(when).toISOString(), localMessage: "I'll retry this automatically when the limit resets at {time}." } : {}),
     actions: ["cancel-resume"],
-  });
-  armSessionResumeTimer(record.id, Number.isFinite(when) ? when : Date.now());
-  return true;
+  };
+}
+
+/** The offer past a limit the last turn hit: Fork now, or retry at reset. */
+function limitHitNotice(record: SessionRecord, limit: SessionLimit) {
+  return { type: "session.notice", sessionId: record.id, level: "warn", ...sessionLimitNotice(getRuntime(record.runtimeId).displayName, limit) };
 }
 
 /** Fire a due auto-resume: re-open the session if needed and re-send the turn's
@@ -8720,6 +8737,9 @@ function attachSessionListeners(record: SessionRecord) {
       // made forward progress (a user turn, a resume that cleared the limit, a
       // reroute, or a surfaced error), so its durable resume streak resets below.
       let scheduledResume = false;
+      // Only a limit this turn surfaced stays on offer (set below); a turn that
+      // got through, or that the policy is already rerouting or waiting out, clears it.
+      record.limitHit = undefined;
       if (reroutePlan) {
         void record.reroute!.applyReroute(reroutePlan, {
           getCurrentModelName: () => record.session.getCurrentModel()?.name,
@@ -8747,10 +8767,7 @@ function attachSessionListeners(record: SessionRecord) {
         // A usage/rate limit nothing recovered automatically: offer the ways past
         // it — fork to another agent now, or retry when the window resets.
         record.limitHit = detectSessionLimit(turnError, { resetsAtHint });
-        if (record.limitHit) {
-          const notice = sessionLimitNotice(getRuntime(record.runtimeId).displayName, record.limitHit);
-          broadcast({ type: "session.notice", sessionId: record.id, level: "warn", ...notice });
-        }
+        if (record.limitHit) broadcast(limitHitNotice(record, record.limitHit));
         // If the terminal error is an auth failure (expired key/token → 4xx),
         // also raise the sign-in sheet for the failing provider.
         maybeSignalAuthRequired(record, turnError);

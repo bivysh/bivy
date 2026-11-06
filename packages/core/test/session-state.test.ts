@@ -49,3 +49,14 @@ describe("explicit session state", () => {
     });
   });
 });
+
+describe("re-offered notices", () => {
+  it("shows a notice the node sends again (open + history replay) once", () => {
+    const store = new SessionStore();
+    const offer = { type: "session.notice", message: "Claude Code reached its usage limit.", actions: ["fork", "retry-at-reset:2026-11-06T18:30:00Z"] };
+    store.apply(offer as never);
+    store.apply(offer as never);
+    store.apply({ ...offer, actions: ["fork"] } as never);
+    expect(store.getState().activeSession.transcript.map((e) => e.actions)).toEqual([offer.actions, ["fork"]]);
+  });
+});
