@@ -261,6 +261,7 @@ export function normalizeSessions(list: any, prev: SessionSummary[] = []): Sessi
       bivyCreated: s?.bivyCreated === true,
       forkedFrom: s?.forkedFrom || undefined,
       delegatedFrom: s?.delegatedFrom && typeof s.delegatedFrom.sessionId === "string" ? s.delegatedFrom : undefined,
+      startedBy: typeof s?.startedBy === "string" && s.startedBy ? s.startedBy : undefined,
       nodeId: s?.nodeId || undefined,
       runtimeId: s?.runtimeId,
       agentName: s?.agentName,

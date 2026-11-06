@@ -106,7 +106,7 @@ function sessionRepo(s: { source?: string }): string {
 }
 
 function sessionMeta(
-  s: { name?: string; source?: string; branch?: string; agentName?: string; nodeId?: string; forkedFrom?: string; delegatedFrom?: { sessionId: string } },
+  s: { name?: string; source?: string; branch?: string; agentName?: string; nodeId?: string; forkedFrom?: string; delegatedFrom?: { sessionId: string }; startedBy?: string },
   nodeLabel: string | null,
 ): string {
   // Keep the title row for the human title + state badges. Agent/runtime names
@@ -130,7 +130,8 @@ function sessionMeta(
   // descriptor that would only repeat that trigger name is dropped.
   const src = classifySource(s.source);
   const context = repo || (src.automation ? "" : queueSourceMeta(s.source));
-  const parts = [src.automation ? shortSourceLabel(src.kind) : null, s.forkedFrom ? "Forked" : null, s.delegatedFrom ? "Delegated" : null, s.agentName, nodeLabel, context, usefulBranch];
+  // On a machine shared with the team, say whose session it is.
+  const parts = [src.automation ? shortSourceLabel(src.kind) : null, s.forkedFrom ? "Forked" : null, s.delegatedFrom ? "Delegated" : null, s.startedBy ? `By ${s.startedBy}` : null, s.agentName, nodeLabel, context, usefulBranch];
   return parts.filter(Boolean).join(" · ");
 }
 

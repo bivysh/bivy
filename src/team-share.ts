@@ -31,6 +31,12 @@ export function teammateDevicesToRemove(devices: LinkedDevice[], state: { shared
   return devices.filter((d) => d.teammate && (!state.shared || !members.has(d.teammate.accountId)));
 }
 
+/** The teammate whose device has `publicKeyB64`, if it is one. Attribution
+ * only: every device on the machine has the same access. */
+export function teammateByDevice(devices: LinkedDevice[], publicKeyB64: unknown): LinkedDevice["teammate"] | undefined {
+  return typeof publicKeyB64 === "string" && publicKeyB64 ? devices.find((d) => d.publicKeyB64 === publicKeyB64)?.teammate : undefined;
+}
+
 export class TeamShare {
   constructor(private readonly deps: TeamShareDeps) {}
 
