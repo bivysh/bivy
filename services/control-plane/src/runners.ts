@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 //
-// Runners: disposable deployment-run machines, one per piece of work, beside
-// the account's cloud computer, so queued work runs in parallel instead of in
-// line on one machine. The deployment extension owns the fleet; Core owns each
-// runner's node identity and boot payload, places work on it, and forgets the
-// node when the deployment reports the machine gone.
+// Runners: deployment-run machines, one per session or piece of work, with or
+// without the account's cloud computer, so work runs in parallel instead of in
+// line on one machine. A runner sleeps once its work is done and keeps the
+// session, so nothing someone can see disappears when the work ends. The
+// deployment extension owns the fleet; Core owns each runner's node identity
+// and boot payload, places work on it, and forgets the node when the
+// deployment reports the machine gone.
 //
 // A runner is a normal enrolled node with its own room key, generated on its
 // own disk. So it can run only work it can read: work whose instructions the
@@ -32,10 +34,6 @@ export function isRunnerNode(nodeId: string | null | undefined): boolean {
  * computer; the deployment deletes it once it has slept long enough. */
 export function sessionRunnerId(requestId: string): string {
   return `session:${requestId}`;
-}
-
-export function isSessionRunnerId(runnerId: string): boolean {
-  return runnerId.startsWith(sessionRunnerId(""));
 }
 
 /** The label work is placed on for a runner; also its node name. */
@@ -71,9 +69,9 @@ export async function bootRunner(
     ttlMinutes: input.awakeCapMinutes,
     provider: "fly",
     runner: true,
-    // Work ends shortly after it finishes and the deployment deletes it. A
-    // session's runner sleeps once idle, keeping its disk for follow-ups.
-    ...(isSessionRunnerId(input.runnerId) ? { sleepOnIdle: true } : { teardownOnAgentFinish: true }),
+    // Every runner sleeps once idle and keeps its disk: the session it ran
+    // stays there to open, continue or delete.
+    sleepOnIdle: true,
     hostedTasks: true,
     restoreSessionId: input.restoreSessionId,
     nodeLabel: label,

@@ -165,6 +165,12 @@ test("a managed cloud profile is one destination that reuses the account's cloud
     [["Bivy Cloud", config.id, nodeId, false], ["Cloud Runner", "managed-runner", undefined, true]],
     "a deployment with runners also offers a new machine per session, never an existing one",
   );
+  const runnersOnly = cloudDestinations([{ ...config, runners: true, accountMachine: false }], [], []);
+  assert.deepEqual(
+    runnersOnly.map((row) => [row.label, row.config.id, Boolean(row.runner)]),
+    [["Bivy Cloud", "managed-runner", true]],
+    "without a cloud computer the profile is one destination: a new machine per session, under the profile's name",
+  );
   assert.deepEqual(
     [{ id: nodeId, online: false }, { id: "laptop", online: false }, { id: "laptop", online: true }].map(nodePresence),
     ["asleep", "offline", "online"],

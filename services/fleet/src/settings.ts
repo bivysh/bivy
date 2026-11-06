@@ -24,7 +24,7 @@ export interface ComputeProfile {
   teardownOnAgentFinish?: boolean;
   /** This fleet runs one sleeping machine per account. */
   accountMachine?: boolean;
-  /** It also runs disposable per-work runners beside the computer. */
+  /** It runs runners: a sleeping machine per session or piece of work. */
   runners?: boolean;
 }
 
@@ -55,11 +55,17 @@ export class FleetConfig {
     }
     if (!this.coreUrl()) this.problems.push("FLEET_CORE_URL must point at the control plane's internal address");
     if (!this.coreToken()) this.problems.push("DEPLOYMENT_COMPUTE_TOKEN must be the same secret the control plane is configured with");
+    if (!this.accountMachine && !this.runners) this.problems.push("FLEET_ACCOUNT_MACHINE=0 leaves nothing to run: also set FLEET_RUNNERS=1");
   }
 
   get offered(): boolean { return this.problems.length === 0; }
 
-  /** Disposable per-work runners beside each account's computer. */
+  /** One sleeping cloud computer per account. On unless turned off
+   * (`FLEET_ACCOUNT_MACHINE=0`): an account can live on runners alone. */
+  get accountMachine(): boolean { return this.value("ACCOUNT_MACHINE", undefined) !== "0"; }
+
+  /** Runners: a sleeping machine per session or piece of work, with or without
+   * the account's computer. */
   get runners(): boolean { return this.flag("RUNNERS", "MANAGED_RUNNERS"); }
 
   provider(): string { return this.value("PROVIDER", "MANAGED_SESSION_PROVIDER") ?? "fly"; }
@@ -185,7 +191,7 @@ export class FleetConfig {
       image: this.image(runtimeId),
       ttlMinutes: compute.awakeCapMinutes,
       teardownOnAgentFinish: true,
-      accountMachine: true,
+      ...(this.accountMachine ? { accountMachine: true } : {}),
       ...(this.runners ? { runners: true } : {}),
     };
   }

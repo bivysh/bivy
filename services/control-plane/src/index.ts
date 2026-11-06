@@ -324,18 +324,20 @@ async function notifyRelaysWorkAvailable(
   // the account's cloud computer when routing sends the work there.
   if (options.autoProvision !== false) {
     void (async () => {
-      if (!(await accountMachineMode(accountId))) return;
-      // Work a runner can do gets its own machine; anything else (sealed to
-      // the cloud computer, or no runner free) waits for the cloud computer.
-      if (await runnersMode(accountId)) {
+      const offer = await cloudOffer(accountId);
+      if (!offer.computer && !offer.runners) return;
+      // Work a runner can do gets its own machine, which sleeps when the work
+      // is done and keeps the session. Anything else (sealed to the cloud
+      // computer, or no runner free) waits for the cloud computer, if any.
+      if (offer.runners) {
         const launch = async (runnerId: string) => {
-          const launched = await deploymentExtension.runnerLaunch(accountId, { runnerId, requestId: runnerId });
+          const launched = await deploymentExtension.runnerLaunch(accountId, { runnerId, requestId: runnerId, sleeps: true });
           if (!launched.allowed) console.warn(`[runners] launch refused for ${accountId}: ${launched.decision.code ?? launched.decision.reason ?? "denied"}`);
           return launched;
         };
         if (await placeWorkOnRunner(store, accountId, item.id, launch)) return;
       }
-      if (!(await routeWorkToCloudComputer(store, accountId))) return;
+      if (!offer.computer || !(await routeWorkToCloudComputer(store, accountId))) return;
       const acquired = await deploymentExtension.computeAcquire(accountId, { purpose: "automation", requestId: `work:${item.id}` });
       if (!acquired.allowed) console.warn(`[cloud-computer] automation launch refused for ${accountId}: ${acquired.decision.code ?? acquired.decision.reason ?? "denied"}`);
     })().catch((error) => console.error("[cloud-computer] automation acquire failed", error));
@@ -1400,11 +1402,24 @@ function presentNodeClaim(claim: NodeClaim) {
  * is always the account's cloud computer: one sleeping machine per account
  * whose lifecycle the deployment owns. Core never launches machines itself. */
 async function accountMachineMode(accountId: string): Promise<boolean> {
-  return (await deploymentCompute().profile("interactive", accountId).catch(() => null))?.accountMachine === true;
+  return (await cloudOffer(accountId)).computer;
 }
 
 async function runnersMode(accountId: string): Promise<boolean> {
-  return (await deploymentCompute().profile("interactive", accountId).catch(() => null))?.runners === true;
+  return (await cloudOffer(accountId)).runners;
+}
+
+/** What cloud compute the deployment offers the account: its own sleeping
+ * computer, runners (a sleeping machine per session or piece of work), both,
+ * or neither. Either one on its own is a complete offer. */
+async function cloudOffer(accountId: string): Promise<{ computer: boolean; runners: boolean }> {
+  const profile = await deploymentCompute().profile("interactive", accountId).catch(() => null);
+  return { computer: profile?.accountMachine === true, runners: profile?.runners === true };
+}
+
+async function anyCloudCompute(accountId: string): Promise<boolean> {
+  const offer = await cloudOffer(accountId);
+  return offer.computer || offer.runners;
 }
 
 /** Ask the deployment for the account's cloud computer and answer with the
@@ -1533,8 +1548,13 @@ app.post("/account/onboarding/auth-runner", managedOnboardingRateLimit, requireU
   // establish the later interactive profile before redirects/reloads can lose
   // browser-only onboarding state.
   await ensureManagedDefaultForAccount(account.id);
-  if (!(await accountMachineMode(account.id))) return res.status(503).json({ error: "Managed setup provider is not configured." });
-  await respondCloudComputer(res, account.id, { purpose: "auth-runner", requestId: String(req.body?.requestId ?? randomUUID()) });
+  const offer = await cloudOffer(account.id);
+  const requestId = String(req.body?.requestId ?? randomUUID());
+  // Without a cloud computer the sign-in runs on a runner: it sleeps afterwards
+  // and the sign-in reaches the account's other machines through the vault.
+  if (!offer.computer && offer.runners) return respondSessionRunner(res, account.id, requestId);
+  if (!offer.computer) return res.status(503).json({ error: "Managed setup provider is not configured." });
+  await respondCloudComputer(res, account.id, { purpose: "auth-runner", requestId });
 }));
 
 // Establish the durable, non-secret profile used by the repo-first composer.
@@ -3848,10 +3868,10 @@ app.get("/account/ephemeral-configs", asyncHandler(async (req, res) => {
   if (managedComputeEnabled() && deploymentCompute().configured) {
     await ensureManagedDefaultForAccount(client.accountId).catch(() => undefined);
   }
-  const runners = await runnersMode(client.accountId);
+  const offer = await cloudOffer(client.accountId);
   res.json((await store.getEphemeralConfigs(client.accountId))
     .filter((config) => config.computeSource === "managed")
-    .map((config) => runners ? { ...config, runners: true } : config));
+    .map((config) => ({ ...config, ...(offer.runners ? { runners: true } : {}), ...(offer.computer ? {} : { accountMachine: false }) })));
 }));
 
 app.get("/account/queue-routing", asyncHandler(async (req, res) => {
@@ -3873,7 +3893,7 @@ app.get("/account/hosted-provisioning", asyncHandler(async (req, res) => {
   const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const status = await store.getHostedProvisioningStatus(client.accountId);
-  res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid(), execution: await cloudComputerReadiness(store, client.accountId, managedComputeEnabled() && await accountMachineMode(client.accountId)) });
+  res.json({ ...status, encryptionReady: hostedEncryptionAvailable(), keyId: hostedPrimaryKid(), execution: await cloudComputerReadiness(store, client.accountId, managedComputeEnabled() && await anyCloudCompute(client.accountId)) });
 }));
 
 app.put("/account/hosted-provisioning", asyncHandler(async (req, res) => {
@@ -3972,7 +3992,7 @@ app.get("/account/github/central-app", asyncHandler(async (req, res) => {
     configured: Boolean(central),
     appId: central?.appId,
     slug: central?.slug,
-    managedComputeAvailable: managedComputeEnabled() && await accountMachineMode(client.accountId),
+    managedComputeAvailable: managedComputeEnabled() && await anyCloudCompute(client.accountId),
     installations: installations.map(({ installationId, githubAccount, githubAccountType, repositorySelection, createdAt }) => ({
       installationId, githubAccount, githubAccountType, repositorySelection, createdAt,
     })),
@@ -4103,7 +4123,7 @@ app.delete("/account/github/central-app/installations/:installationId", asyncHan
 app.get("/account/hosted-machines", asyncHandler(async (req, res) => {
   const client = await resolveAccountClient(req);
   if (!client) return res.status(401).json({ error: "Unauthorized" });
-  if (!(await accountMachineMode(client.accountId))) return res.json([]);
+  if (!(await anyCloudCompute(client.accountId))) return res.json([]);
   const nodes = await store.listNodes(client.accountId);
   res.json((await deploymentExtension.computeMachines(client.accountId).catch(() => [])).map((m) => ({
     milestones: nodes.find((n) => n.id === m.nodeId)?.milestones,
@@ -4130,7 +4150,7 @@ app.delete("/account/hosted-machines/:nodeId", asyncHandler(async (req, res) => 
   const nodeId = String(req.params.nodeId || "").trim();
   if (!nodeId) return res.status(400).json({ error: "nodeId is required" });
   const runner = isRunnerNode(nodeId);
-  if ((!runner && !isCloudComputerNode(client.accountId, nodeId)) || !(await accountMachineMode(client.accountId))) {
+  if ((!runner && !isCloudComputerNode(client.accountId, nodeId)) || !(await (runner ? runnersMode : accountMachineMode)(client.accountId))) {
     return res.status(404).json({ error: "Hosted machine not found" });
   }
   const released = await (runner ? deploymentExtension.runnerRelease(client.accountId, nodeId) : deploymentExtension.computeRelease(client.accountId, nodeId)).catch(() => false);

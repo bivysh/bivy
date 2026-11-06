@@ -764,6 +764,9 @@ export interface EphemeralNodeConfig {
   /** The deployment can also start a fresh runner for a session (the "Cloud
    * Runner" destination, `CLOUD_RUNNER_CONFIG_ID`). Reported, never stored. */
   runners?: boolean;
+  /** False when the deployment runs no cloud computer for the account, only
+   * runners. Reported, never stored; absent means it does. */
+  accountMachine?: boolean;
   createdAt: string;
   updatedAt: string;
 }

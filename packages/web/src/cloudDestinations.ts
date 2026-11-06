@@ -82,7 +82,9 @@ export function nodePresence(node: NodeLike | undefined): Presence {
  * The picker's cloud rows. Each deployment-provided profile ("Bivy Cloud") is
  * ONE destination that reuses the account's cloud computer while it is online
  * and otherwise wakes it on demand. A deployment that runs runners also
- * offers "Cloud Runner": a new machine for each session.
+ * offers "Cloud Runner": a new machine for each session. Without a cloud
+ * computer (runners only), the runner row is the profile's one destination and
+ * carries its name.
  */
 export function cloudDestinations(
   configs: EphemeralNodeConfig[],
@@ -97,9 +99,11 @@ export function cloudDestinations(
   return configs.filter((config) => config.computeSource === "managed").flatMap((config) => {
     const reuse = live[0];
     const asleep = !reuse && Boolean(sleeping);
-    const computer: CloudDestination = { key: config.id, label: (config.name || "Bivy Cloud").replace(/^Hosted\s+/i, ""), online: Boolean(reuse), asleep, nodeId: reuse?.nodeId ?? sleeping?.id, config };
-    if (!config.runners) return [computer];
-    const runner = { ...config, id: CLOUD_RUNNER_CONFIG_ID, name: "Cloud Runner" };
-    return [computer, { key: runner.id, label: runner.name, online: false, asleep: false, runner: true, config: runner }];
+    const name = (config.name || "Bivy Cloud").replace(/^Hosted\s+/i, "");
+    const computer: CloudDestination = { key: config.id, label: name, online: Boolean(reuse), asleep, nodeId: reuse?.nodeId ?? sleeping?.id, config };
+    if (!config.runners) return config.accountMachine === false ? [] : [computer];
+    const runner = { ...config, id: CLOUD_RUNNER_CONFIG_ID, name: config.accountMachine === false ? name : "Cloud Runner" };
+    const runnerRow: CloudDestination = { key: runner.id, label: runner.name, online: false, asleep: false, runner: true, config: runner };
+    return config.accountMachine === false ? [runnerRow] : [computer, runnerRow];
   });
 }
