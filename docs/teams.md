@@ -151,6 +151,26 @@ Each frame carries a short fingerprint of the key it's sealed under (`g`), so
 devices skip frames meant for someone else instead of mistaking them for a
 changed key.
 
+## Policies and activity
+
+Admins set two switches for the whole team in **Settings → Team → Policies**:
+
+| Policy | When off |
+|---|---|
+| Members can share machines | No one can share a machine. Turning it off ends every share at once; machines remove teammates' devices and switch their own sharing off within a minute. |
+| Members can invite teammates into a session | No one can create session invites. Turning it off ends every invite at once; machines drop them within a minute. |
+
+Both are on for a new team. Members see the policies; only admins change
+them.
+
+**Activity** (admins only) lists the last 1,000 changes to who is in the team
+and what they can reach: the team being started or renamed, invites, people
+joining, leaving or being removed, role changes, policy changes, machines
+shared or unshared, and session invites changing on a machine. Each entry
+names who did it and content-free details (an email, a role, a machine name).
+It never contains anything anyone works on; the control plane doesn't have
+that.
+
 ## What the control plane holds
 
 The roster: team name, members' account ids and emails, roles and open
@@ -195,6 +215,9 @@ All routes need a signed-in account (`Authorization: Bearer <session>`).
 | `DELETE /account/team/members/:accountId` | admin, or yourself to leave |
 | `POST /account/team/invite-preview` `{ token }` | anyone |
 | `POST /account/team/join` `{ token }` | anyone |
+| `GET /account/team/policies` | anyone |
+| `PATCH /account/team/policies` `{ shareMachines?, sessionInvites? }` | admin |
+| `GET /account/team/activity` | admin |
 
 A machine reports its open session invites with `PUT /node/session-invites`
 (account, session id, mode and expiry only, never keys). A machine reports its

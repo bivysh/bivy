@@ -2692,12 +2692,14 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     try {
       const sessionId = String(msg.sessionId ?? "");
       if (!openSessions.has(sessionId) && !metadata.getSession?.(sessionId)) throw new Error("Session not found");
-      sessionInvites.create({
+      const created = sessionInvites.create({
         sessionId, accountId: String(msg.accountId ?? ""), email: String(msg.email ?? ""),
         mode: msg.mode === "view" ? "view" : "prompt",
         durationMs: msg.duration === "day" ? INVITE_DURATIONS_MS.day : INVITE_DURATIONS_MS.week,
       });
       await publishSessionInvites();
+      // The control plane drops invites the team doesn't allow; say so.
+      if (!sessionInvites.get(created.id)) throw new Error("Your team doesn't allow session invites, or that person isn't in your team.");
       ctx.reply({ type: "session.invites", requestId: msg.requestId, invites: inviteViews(sessionId) });
     } catch (error) {
       ctx.reply({ type: "session.invites.error", requestId: msg.requestId, httpStatus: 400, error: (error as Error).message });
@@ -4613,6 +4615,12 @@ const teamShare = new TeamShare({
   enabled: () => readSettings().teamShare === true,
   devices: () => pairingStore.listDevices(),
   revoke: (deviceId) => { linkedDevices.revoke(deviceId); },
+  disable: () => {
+    const settings = readSettings();
+    settings.teamShare = false;
+    writeSettings(settings);
+    broadcast({ type: "node.settings", settings: nodeSettingsSnapshot() });
+  },
 });
 let teamVaultTimer: ReturnType<typeof setInterval> | undefined;
 function teamTick(): void {

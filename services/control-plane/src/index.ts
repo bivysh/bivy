@@ -1361,6 +1361,8 @@ registerTeamRoutes(app, {
   teams: store.teams,
   vault: store.teamVault,
   machines: store.teamMachines,
+  admin: store.teamAdmin,
+  accountEmail: async (accountId) => (await store.getAccount(accountId))?.email ?? "",
   requireUser,
   requireNode,
   authorize: (accountId, operation, context) => deploymentDecision(accountId, operation, undefined, context),
