@@ -157,6 +157,8 @@ export interface SessionSummary {
   forkedFrom?: string;
   /** The parent session when this one was delegated to (docs/agent-delegation.md). */
   delegatedFrom?: import("./delegations.js").DelegatedFrom;
+  /** On a machine shared with the team: the teammate who started it. */
+  startedBy?: string;
   /** Relay/account mode: node that owns this session. Used by all-node lists. */
   nodeId?: string;
   runtimeId?: string;

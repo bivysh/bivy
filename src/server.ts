@@ -254,7 +254,7 @@ import {
   mintLocalGithubAppVaultKey,
 } from "./github-app-vault.js";
 import { MAX_TEAM_INSTRUCTIONS_BYTES, TeamVaultSync } from "./team-vault.js";
-import { TeamShare } from "./team-share.js";
+import { TeamShare, teammateByDevice } from "./team-share.js";
 import { redactSecrets, registerSecretValue } from "./redact.js";
 import {
   getSttConfig,
@@ -3748,6 +3748,11 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
       gateNow,
     );
     persistSessionMetadata(record);
+    // On a machine shared with the team, note which teammate started it. The
+    // device names its own key; the email comes from this machine's pairing
+    // record, never from the client.
+    const starter = teammateByDevice(pairingStore.listDevices(), msg.byDevice);
+    if (starter) metadata.upsertSession({ id: record.id, startedBy: starter.email });
     // Session creation returns only after the selected repository/workspace and
     // runtime are usable. On ephemeral nodes this records a content-free latency
     // milestone; ordinary personal nodes have no hosted Machine and ignore it.
@@ -7135,6 +7140,7 @@ async function sessionListRows() {
       bivyCreated: Boolean(meta),
       forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
       delegatedFrom: rec?.delegatedFrom ?? meta?.delegatedFrom,
+      startedBy: meta?.startedBy,
       branch: rec?.worktree?.branch ?? meta?.branch,
       sandbox: rec?.sandbox ?? normalizeSandboxTier(meta?.sandbox),
       approvalMode: rec?.approvalMode,
@@ -11322,6 +11328,7 @@ app.get("/api/sessions", async (_req, res, next) => {
         bivyCreated: Boolean(meta),
         forkedFrom: rec?.forkedFrom ?? meta?.forkedFrom,
         delegatedFrom: rec?.delegatedFrom ?? meta?.delegatedFrom,
+        startedBy: meta?.startedBy,
         branch: rec?.worktree?.branch ?? meta?.branch,
         prUrl: rec?.prUrl ?? meta?.prUrl,
         prs: rec?.prs ?? meta?.prs,

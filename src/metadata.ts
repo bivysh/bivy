@@ -32,6 +32,8 @@ export type MetadataSession = {
   forkedFrom?: string;
   /** The parent session of a delegated child (docs/agent-delegation.md). */
   delegatedFrom?: { sessionId: string; nodeId?: string; machine?: string; title?: string };
+  /** The teammate who started it, on a machine shared with the team (src/team-share.ts). */
+  startedBy?: string;
   /** Content-free provenance for a Session created by an unattended Run. Used
    * to preserve child-Run nesting limits across daemon restarts. */
   automationRunId?: string;

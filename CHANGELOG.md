@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Team instructions.** Team admins write instructions in Settings → Team, and every agent session on every member's machines gets them, ahead of each person's own instructions, which win where they conflict. They're end-to-end encrypted with a team key that members' machines pass to each other, so Bivy's servers can't read them. When someone leaves, the team moves to a new key they don't have. See [Teams](docs/teams.md#team-instructions).
 - **Teams.** Settings → Team lets you start a team, invite people by email or with a link, make them admins or members, and remove them. Opening an invite link takes you to Settings → Team to join. The server keeps only the team list; a team gives no one access to another member's machines, sessions or keys. A deployment's policy service is asked before a team is created or someone joins, and hears when the member count changes. See [Teams](docs/teams.md).
 
+### Changed
+
+- On a teammate's shared machine, the sign-in card says that a sign-in made there stays on that machine for its owner and team, and sessions a teammate starts show "By <email>" in the session list.
+
 ## [0.22.9] - 2026-11-06
 
 ### Added

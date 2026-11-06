@@ -225,6 +225,8 @@ export interface AgentSecretInfo { id: string; description?: string; backend: st
 export class AppController {
   readonly store = new SessionStore();
   readonly local = createLocalStore(clientStorage());
+  /** This browser's device public key, once known (see draftSessionFields). */
+  private devicePub: string | null = null;
   readonly direct: boolean;
   /** Account-free ("solo") mode: paired to a node over the relay via a room
    *  token from the QR, with NO control plane. Not signed in (no `local.s`), so
@@ -326,6 +328,7 @@ export class AppController {
   private readonly accountCoordinator: AutomationsAccountCoordinator;
 
   constructor() {
+    void deviceKeypair(this.local).then((key) => { this.devicePub = key.pub; }, () => undefined);
     this.nodeCoordinator = new NodeConnectionCoordinator({
       facts: () => ({ direct: this.direct, solo: this.solo, signedIn: Boolean(this.local.s), currentNodeId: this.local.cur || null }),
       status: () => this.store.getState().connection.status,
@@ -2330,6 +2333,8 @@ export class AppController {
       sandbox: s.draft.sandbox || undefined,
       acknowledgeReducedProtections: s.draft.acknowledgeReducedProtections || undefined,
       model,
+      // Lets a machine shared with the team say which teammate started it.
+      byDevice: this.devicePub ?? undefined,
     };
   }
 

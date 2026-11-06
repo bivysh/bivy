@@ -83,8 +83,8 @@ sleeping cloud computer.
 - **Sign-ins stay with the machine.** If a teammate signs in to Claude,
   ChatGPT or another provider while connected to your shared machine, that
   sign-in is stored on your machine, and you and the rest of the team can use
-  it there. Sign in on a machine of your own for anything you want to keep
-  to yourself.
+  it there. The sign-in card says so on a teammate's machine. Sign in on a
+  machine of your own for anything you want to keep to yourself.
 - **Turning sharing off** removes every teammate device from the machine and
   rotates its room key. The owner can also remove one teammate's devices from
   the list under the switch.
@@ -93,7 +93,12 @@ Under the hood, a teammate's relay ticket names the owner's account and is
 pinned to that one machine. The relay doesn't change: it still admits only
 devices with the room's account.
 
+Sessions a teammate starts on a shared machine show "By <their email>" in the
+session list. The machine takes the email from its own record of the device
+that sent the request, so it is attribution, not a security boundary: anyone
+on the machine has the same access.
 
+## What the control plane holds
 
 The roster: team name, members' account ids and emails, roles and open
 invites. For team instructions, it holds only ciphertext and copies of the

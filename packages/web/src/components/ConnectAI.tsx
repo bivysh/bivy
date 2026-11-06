@@ -33,7 +33,10 @@ export function ConnectAI({ state, place, startError, onRetry, onDone, onUseOwn,
   // The selected machine decides, once there is one: picking your own computer
   // after choosing Bivy Cloud keeps sign-ins on that computer.
   const cloud = nodeId ? nodeId.startsWith("eph-") : place === "cloud";
-  const machine = state.connection.nodes.find((node) => node.id === nodeId)?.name || "your computer";
+  const current = state.connection.nodes.find((node) => node.id === nodeId);
+  const machine = current?.name || "your computer";
+  // A teammate's shared machine keeps the sign-in too, for its owner and team.
+  const sharedBy = current?.sharedBy;
   const providers = state.catalogs.providers;
   const isConnected = (provider: string) => providers.some((p) => (p.id === provider || p.id === modelAuthApiKeyProvider(provider)) && p.configured);
   // Once the machine has listed its providers, offer only the ones it can use.
@@ -66,10 +69,20 @@ export function ConnectAI({ state, place, startError, onRetry, onDone, onUseOwn,
       <h2 id="connect-ai-title" className="card-title">Connect your AI</h2>
       <p className="card-sub">
         Sign in with the plans you already pay for. Connect both to switch agents any time.{" "}
-        {cloud
-          ? "Your sign-in stays encrypted on this cloud computer. Another machine that's online can restore it, and this browser can restore an API key."
-          : `Your sign-ins stay on ${machine}; Bivy's servers never get a copy.`}
+        {sharedBy
+          ? ""
+          : cloud
+            ? "Your sign-in stays encrypted on this cloud computer. Another machine that's online can restore it, and this browser can restore an API key."
+            : `Your sign-ins stay on ${machine}; Bivy's servers never get a copy.`}
       </p>
+      {sharedBy && (
+        <div className="banner inline" data-tone="warn" role="note">
+          <span className="banner-text">
+            {machine} belongs to {sharedBy}. A sign-in here stays on this machine, where {sharedBy} and your team can use it. Sign in on
+            a machine of your own to keep it to yourself.
+          </span>
+        </div>
+      )}
 
       {!online && (startError
         ? <div className="banner inline" data-tone="danger" role="alert">
