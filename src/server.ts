@@ -256,6 +256,7 @@ import {
 import { MAX_TEAM_INSTRUCTIONS_BYTES, TeamVaultSync } from "./team-vault.js";
 import { teamKeyStore } from "./secrets.js";
 import { TeamShare, teammateByDevice } from "./team-share.js";
+import { INVITE_DURATIONS_MS, SessionInvites, guestEvent, guestMayRun } from "./session-invites.js";
 import { redactSecrets, registerSecretValue } from "./redact.js";
 import {
   getSttConfig,
@@ -2657,6 +2658,11 @@ function widgetWorkspace(sessionId: string): string {
   return (record ? harnessDirFor(record) : meta?.worktree || meta?.workspace) || os.homedir();
 }
 
+/** A session's invites as the owner's app shows them: never the keys. */
+function inviteViews(sessionId: string) {
+  return sessionInvites.list().filter((i) => i.sessionId === sessionId).map(({ id, email, mode, expiresAt, createdAt }) => ({ id, email, mode, expiresAt, createdAt }));
+}
+
 const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   ...createAppCommands(appService, (id) => { const record = resolveSession(id); return record ? harnessDirFor(record) : runTerms.liveRun(id)?.workspace; }, (app) => {
     const record = resolveSession(app.sessionId);
@@ -2676,6 +2682,32 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   // The machines on this machine's tailnet that run Bivy, this one first.
   async "tailnet.machines"(msg, ctx) {
     ctx.reply({ type: "tailnet.machines.ok", requestId: msg.requestId, machines: await tailnetMachines() });
+  },
+  // Session menu → Invite a teammate (src/session-invites.ts). Guests can't
+  // reach these: they aren't in any guest command list.
+  "session.invites.list"(msg, ctx) {
+    ctx.reply({ type: "session.invites", requestId: msg.requestId, invites: inviteViews(String(msg.sessionId ?? "")) });
+  },
+  async "session.invite.create"(msg, ctx) {
+    try {
+      const sessionId = String(msg.sessionId ?? "");
+      if (!openSessions.has(sessionId) && !metadata.getSession?.(sessionId)) throw new Error("Session not found");
+      sessionInvites.create({
+        sessionId, accountId: String(msg.accountId ?? ""), email: String(msg.email ?? ""),
+        mode: msg.mode === "view" ? "view" : "prompt",
+        durationMs: msg.duration === "day" ? INVITE_DURATIONS_MS.day : INVITE_DURATIONS_MS.week,
+      });
+      await publishSessionInvites();
+      ctx.reply({ type: "session.invites", requestId: msg.requestId, invites: inviteViews(sessionId) });
+    } catch (error) {
+      ctx.reply({ type: "session.invites.error", requestId: msg.requestId, httpStatus: 400, error: (error as Error).message });
+    }
+  },
+  async "session.invite.revoke"(msg, ctx) {
+    const invite = sessionInvites.get(String(msg.id ?? ""));
+    sessionInvites.revoke(String(msg.id ?? ""));
+    await publishSessionInvites();
+    ctx.reply({ type: "session.invites", requestId: msg.requestId, invites: inviteViews(invite?.sessionId ?? String(msg.sessionId ?? "")) });
   },
   // Settings → Keys for agents: the keys agents asked for, never their values.
   "secrets.list"(msg, ctx) {
@@ -3790,7 +3822,48 @@ const relayCtx: CommandCtx = { reply: (event) => relay?.sendEvent(event), broadc
 // Shared per-client size slot for all relay-tunneled clients (see below).
 const RELAY_CLIENT_ID = "relay";
 
-async function handleRelayMessage(msg: ClientMessage) {
+// Teammates invited into one session (src/session-invites.ts). A guest's
+// request ids are remembered so their replies reach only them.
+const sessionInvites = new SessionInvites(appDir);
+const guestRequests = new Map<string, string>();
+function rememberGuestRequest(requestId: string, inviteId: string) {
+  guestRequests.set(requestId, inviteId);
+  if (guestRequests.size > 500) guestRequests.delete(guestRequests.keys().next().value!);
+}
+function guestCommandSession(command: Record<string, unknown>): string | undefined {
+  if (typeof command.sessionId === "string") return command.sessionId;
+  if (command.kind === "approval") return approvals.list().find((a) => a.id === String(command.id ?? ""))?.sessionId;
+  return undefined;
+}
+const relayGuests = {
+  invites: () => sessionInvites.list(),
+  forAccount: (accountId: string) => sessionInvites.forAccount(accountId),
+  eventFor: (inviteId: string, event: unknown) => {
+    const invite = sessionInvites.get(inviteId);
+    return invite ? guestEvent(invite, event, (requestId) => guestRequests.get(requestId) === inviteId) : null;
+  },
+};
+
+/** Tell the control plane who may reach this machine for which session, and
+ * drop invites it refused (the teammate has left the team). */
+async function publishSessionInvites(): Promise<void> {
+  const res = await modelAuthFetch("/node/session-invites", { method: "PUT", body: JSON.stringify({ invites: sessionInvites.routing() }) }).catch(() => null);
+  if (!res?.ok) return;
+  const { invites } = (await res.json()) as { invites?: Array<{ accountId: string; sessionId: string }> };
+  if (Array.isArray(invites)) sessionInvites.keepRouted(invites);
+}
+
+async function handleRelayMessage(msg: ClientMessage, guest?: { inviteId: string }) {
+  if (guest) {
+    const invite = sessionInvites.get(guest.inviteId);
+    if (!invite) return;
+    if (typeof msg.requestId === "string") rememberGuestRequest(msg.requestId, invite.id);
+    const allowed = guestMayRun(invite, msg, guestCommandSession);
+    if (!allowed.ok) {
+      relay?.sendEvent({ type: "session.error", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined, sessionId: invite.sessionId, error: allowed.reason });
+      return;
+    }
+  }
   try {
     const requestId = typeof msg.requestId === "string" && msg.requestId.trim() ? msg.requestId : randomUUID();
     const dispatched = await remoteSessionAdmission.run(
@@ -3835,8 +3908,9 @@ function startRelayIfConfigured() {
   stopRelayConnection();
   const config = loadRelayConfig(appDir);
   if (!config) return false;
-  relay = new RelayConnector(config, (msg) => void handleRelayMessage(msg), {
+  relay = new RelayConnector(config, (msg, guest) => void handleRelayMessage(msg, guest), {
     pairing: pairingStore,
+    guests: relayGuests,
     teamShared: () => readSettings().teamShare === true,
     previews: appGateway ? undefined : remotePreview,
     onWorkAvailable: (hint) => {
@@ -4526,6 +4600,7 @@ let teamVaultTimer: ReturnType<typeof setInterval> | undefined;
 function teamTick(): void {
   void teamVault.sync().catch(() => undefined);
   void teamShare.check().catch(() => undefined);
+  void publishSessionInvites().catch(() => undefined);
 }
 function startTeamVaultWatcher(): void {
   if (teamVaultTimer) return;

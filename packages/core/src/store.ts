@@ -159,6 +159,9 @@ export interface SessionSummary {
   delegatedFrom?: import("./delegations.js").DelegatedFrom;
   /** On a machine shared with the team: the teammate who started it. */
   startedBy?: string;
+  /** Set when you are a guest in this session on a teammate's machine:
+   *  `view` can only read it, `prompt` can also drive the agent. */
+  guestMode?: "view" | "prompt";
   /** Relay/account mode: node that owns this session. Used by all-node lists. */
   nodeId?: string;
   runtimeId?: string;

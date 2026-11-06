@@ -156,7 +156,7 @@ export function NodeSwitcher() {
                   >
                     <StatusDot status={n.online ? "online" : "idle"} label={`${n.online ? "Online" : "Offline"} — `} />
                     <span className="node-menu-name">{n.name || n.id}</span>
-                    <span className="node-menu-meta">{n.sharedBy}</span>
+                    <span className="node-menu-meta">{n.guestSessions ? `${n.sharedBy} · ${n.guestSessions === 1 ? "1 session" : `${n.guestSessions} sessions`}` : n.sharedBy}</span>
                     {n.id === currentNodeId && <span className="node-menu-check">✓</span>}
                   </button>
                 </div>
