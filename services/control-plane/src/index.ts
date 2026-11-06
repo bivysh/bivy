@@ -1743,15 +1743,19 @@ async function resolveAccountClient(req: Request): Promise<ResolvedClient | unde
 // enrollment token (its account's nodes — so `bivy nodes` on an installed node
 // can enumerate siblings). A leaked QR therefore reveals just the node it was
 // minted for, never the whole account.
-/** Machines teammates share with this account's team, marked with who shares them. */
-async function teamSharedNodes(accountId: string): Promise<Array<NodeRecord & { sharedBy: string }>> {
+/** Machines teammates share with this account's team, or invited it into a
+ * session on, marked with whose they are. */
+async function teamSharedNodes(accountId: string): Promise<Array<NodeRecord & { sharedBy: string; guestSessions?: number }>> {
   const shared = await store.teamMachines.sharedWith(accountId);
-  const out: Array<NodeRecord & { sharedBy: string }> = [];
-  for (const owner of new Set(shared.map((m) => m.ownerAccountId))) {
+  const sharedIds = new Set(shared.map((m) => m.nodeId));
+  const invited = (await store.teamMachines.invitedTo(accountId)).filter((m) => !sharedIds.has(m.nodeId));
+  const machines = [...shared.map((m) => ({ ...m, sessions: undefined as number | undefined })), ...invited];
+  const out: Array<NodeRecord & { sharedBy: string; guestSessions?: number }> = [];
+  for (const owner of new Set(machines.map((m) => m.ownerAccountId))) {
     const theirs = await store.listNodes(owner);
-    for (const machine of shared.filter((m) => m.ownerAccountId === owner)) {
+    for (const machine of machines.filter((m) => m.ownerAccountId === owner)) {
       const node = theirs.find((n) => n.id === machine.nodeId);
-      if (node) out.push({ ...node, sharedBy: machine.ownerEmail });
+      if (node) out.push({ ...node, sharedBy: machine.ownerEmail, ...(machine.sessions ? { guestSessions: machine.sessions } : {}) });
     }
   }
   return out;

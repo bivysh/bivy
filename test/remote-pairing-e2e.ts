@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocket } from "ws";
 import { TeamShare } from "../src/team-share.js";
+import { SessionInvites, guestEvent } from "../src/session-invites.js";
 import { RelayConnector, type RelayConfig } from "../src/remote/index.js";
 import { PairingStore } from "../src/device-registry.js";
 import { generatePairingKeypair, pairingProof, deriveWrapKey, unwrapRoomKey } from "../src/pairing-crypto.js";
@@ -172,7 +173,17 @@ async function main() {
   const received: any[] = [];
   const config: RelayConfig = { url: `ws://localhost:${RELAY}`, enrollmentToken: enr, controlPlaneUrl: `http://localhost:${CP}` };
   let teamShared = false;
-  const connector = new RelayConnector(config, (msg) => received.push(msg), { pairing: store, teamShared: () => teamShared });
+  const invites = new SessionInvites(root + "/.bivy-test-invites-" + Date.now());
+  const guestFrames: Array<{ msg: any; inviteId?: string }> = [];
+  const guests = {
+    invites: () => invites.list(),
+    forAccount: (accountId: string) => invites.forAccount(accountId),
+    eventFor: (inviteId: string, event: unknown) => {
+      const invite = invites.get(inviteId);
+      return invite ? guestEvent(invite, event, () => false) : null;
+    },
+  };
+  const connector = new RelayConnector(config, (msg, guest) => { received.push(msg); guestFrames.push({ msg, inviteId: guest?.inviteId }); }, { pairing: store, teamShared: () => teamShared, guests });
   connector.start();
   await delay(800);
 
@@ -265,6 +276,58 @@ async function main() {
   await teamShareCheck.check();
   ok(!store.listDevices().some((d) => d.teammate), "the machine removed the departed teammate's device");
   ok(!store.roomKey().equals(roomKeyBefore), "and rotated its room key");
+
+  // 6. A session invite: a teammate gets one session, under its own key.
+  teamShared = false;
+  await share(false);
+  const guest = await http("/auth/dev-login", { email: "guest@bivy.test" });
+  const invite2 = await http("/account/team/invites", {}, login.json.token);
+  await http("/account/team/join", { token: invite2.json.url.split("#")[1] }, guest.json.token);
+  const guestId = (await (await fetch(`http://localhost:${CP}/account/team`, { headers: { authorization: `Bearer ${guest.json.token}` } })).json() as any)
+    .members.find((m: any) => m.email === "guest@bivy.test").accountId;
+  const guestDevice = generatePairingKeypair();
+  const guestGrant = () => http("/client/pair-grant", { nodeId: "node_pair_1", devicePublicKeyB64: guestDevice.publicKeyB64 }, guest.json.token);
+  ok((await guestGrant()).status === 404, "without an invite, a teammate can't reach an unshared machine");
+  const inv = invites.create({ sessionId: "s1", accountId: guestId, email: "guest@bivy.test", mode: "view", durationMs: 60 * 60_000 });
+  const routed = await (await fetch(`http://localhost:${CP}/node/session-invites`, {
+    method: "PUT", headers: { "content-type": "application/json", authorization: `Bearer ${enr}` }, body: JSON.stringify({ invites: invites.routing() }),
+  })).json() as any;
+  ok(routed.invites.length === 1 && !JSON.stringify(routed).includes(inv.keyB64), "the control plane gets routing only, never the invite key");
+  const guestNodes = await (await fetch(`http://localhost:${CP}/nodes`, { headers: { authorization: `Bearer ${guest.json.token}` } })).json() as any[];
+  ok(guestNodes.some((n) => n.id === "node_pair_1" && n.guestSessions === 1), "the guest's machine list shows the invite");
+  const guestWelcome = await accountPair("node_pair_1", guest.json.token, (await guestGrant()).json.grant, guestDevice.publicKeyB64);
+  const guestKey = guestWelcome.k === "pair.welcome" ? unwrapRoomKey(deriveWrapKey(guestDevice.privateKeyB64, store.nodePublicKeyB64(), "pair"), guestWelcome.wrapped) : null;
+  ok(Boolean(guestKey) && guestKey!.equals(Buffer.from(inv.keyB64, "base64")), "the guest's device gets the invite key");
+  ok(!guestKey!.equals(store.roomKey()) && !store.listDevices().some((d) => d.publicKeyB64 === guestDevice.publicKeyB64), "never the room key, and it isn't one of the machine's devices");
+
+  // The guest's frames open under the invite key and are marked as theirs; they
+  // see their session's events and nothing else.
+  const guestTicket = (await http("/client/relay-ticket", { nodeId: "node_pair_1" }, guest.json.token)).json.ticket;
+  const gws = new WebSocket(`ws://localhost:${RELAY}/client?ticket=${guestTicket}&nodeId=node_pair_1`);
+  const guestSaw: any[] = [];
+  await new Promise<void>((res, rej) => { gws.on("message", (d) => {
+    const env = JSON.parse(d.toString());
+    if (env.t === "ready") res();
+    if (env.t === "frame") { try { guestSaw.push(openFrame(guestKey!, env.p).data); } catch { /* room-key frame */ } }
+  }); setTimeout(() => rej(new Error("guest ws")), 8000); });
+  gws.send(JSON.stringify({ t: "frame", p: sealFrame(guestKey!, { kind: "session.open", sessionId: "s1" }) }));
+  await delay(500);
+  ok(guestFrames.some((f) => f.msg.kind === "session.open" && f.inviteId === inv.id), "the machine knows the frame came from that guest");
+  connector.sendEvent({ type: "session.event", sessionId: "s1", event: { type: "message_end" } });
+  connector.sendEvent({ type: "session.event", sessionId: "s2", event: { type: "message_end" } });
+  connector.sendEvent({ type: "sessions.list", sessions: [{ id: "s1" }, { id: "s2" }] });
+  await delay(600);
+  ok(guestSaw.some((e) => e.sessionId === "s1") && !guestSaw.some((e) => e.sessionId === "s2"), "the guest sees their session's events, not others'");
+  const listed2 = guestSaw.find((e) => e.type === "sessions.list");
+  ok(listed2?.sessions.length === 1 && listed2.sessions[0].guestMode === "view", "and a session list cut to their session, marked view-only");
+
+  // Revoking deletes the key: the guest's next frame opens under nothing.
+  invites.revoke(inv.id);
+  const before = guestFrames.length;
+  gws.send(JSON.stringify({ t: "frame", p: sealFrame(guestKey!, { kind: "session.open", sessionId: "s1" }) }));
+  await delay(500);
+  ok(guestFrames.length === before, "after revoking, the guest's frames are no longer accepted");
+  gws.close();
 
   connector.stop();
   console.log("\nAll X25519 pairing e2e checks passed.");

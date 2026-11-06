@@ -251,4 +251,15 @@ export function registerTeamRoutes(app: Express, deps: TeamRouteDeps): void {
   app.get("/node/team-share", requireNode, handle(async (req, res) => {
     res.json(await deps.machines.shareState(nodeOf(req).id));
   }));
+
+  // The machine reports its open session invites (src/session-invites.ts);
+  // the reply is what was kept (current teammates, not yet expired).
+  app.put("/node/session-invites", requireNode, handle(async (req, res) => {
+    const raw = Array.isArray(req.body?.invites) ? req.body.invites : [];
+    const invites = raw.map((i: Record<string, unknown>) => ({
+      accountId: String(i?.accountId ?? ""), sessionId: String(i?.sessionId ?? "").slice(0, 200),
+      mode: i?.mode === "view" ? "view" as const : "prompt" as const, expiresAt: String(i?.expiresAt ?? ""),
+    }));
+    res.json({ invites: await deps.machines.setInvites(nodeOf(req).id, invites) });
+  }));
 }

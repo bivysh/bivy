@@ -281,6 +281,14 @@ export class PairingStore {
   }
 
   /** Trust a device that was authorized by the control plane account session. */
+  /** Welcome a guest's device with a key of its own (a session invite's, see
+   * src/session-invites.ts) instead of the room key. The device is not added
+   * to this machine's devices: it can reach only what that key opens. */
+  welcomeGuest(devicePublicKeyB64: string, key: Buffer, inviteId: string): PairWelcome {
+    const wrapKey = deriveWrapKey(this.data.nodeKeypair.privateKeyB64, devicePublicKeyB64, "pair");
+    return { deviceId: `guest_${inviteId}`, nodePublicKeyB64: this.data.nodeKeypair.publicKeyB64, wrapped: wrapRoomKey(wrapKey, key) };
+  }
+
   trustDevice(input: { devicePublicKeyB64: string; label?: string; teammate?: LinkedDevice["teammate"] }): PairWelcome | null {
     return this.welcomeForTrustedDevice(input);
   }
