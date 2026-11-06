@@ -9,9 +9,9 @@
 // is generated on its disk and reaches devices only by pairing, so the control
 // plane never has it.
 import { createHash } from "node:crypto";
-import { ephemeralNodeLabel, flyMachineBoot, type BootstrapOpts } from "@bivy/core";
+import { ACCOUNT_SEAL_PREFIX, ephemeralNodeLabel, flyMachineBoot, type BootstrapOpts } from "@bivy/core";
 import { centralGithubAppConfig, resolveGithubIdentity } from "./central-github-app.js";
-import type { CentralGithubAppRepository, EphemeralConfigurationRepository, HostedMachineRepository, NodeRepository, QueueRouting, WorkQueueRepository } from "./store.js";
+import type { CentralGithubAppRepository, EphemeralConfigurationRepository, HostedMachineRepository, NodeRepository, QueueRouting, SessionStateRepository, WorkQueueRepository } from "./store.js";
 
 /** Stable for the life of the account, so it is also the automation target:
  * instructions are sealed to the key this node generated for itself. */
@@ -58,6 +58,8 @@ export interface CloudComputerBootInput {
   controlPlaneUrl: string;
   /** The deployment runs runners: hand sealed queued work to them. */
   handOffToRunners?: boolean;
+  /** A session to restore on a new disk (see restorableSnapshot). */
+  restoreSessionId?: string;
 }
 
 export interface CloudComputerBoot {
@@ -71,8 +73,8 @@ export interface CloudComputerBoot {
  * fresh enrollment token is issued every time (re-enrollment revokes the
  * previous one). The payload carries no room key: the node keeps the one it
  * generated in its data dir on the persistent volume, or mints one on a new
- * disk. A new disk therefore cannot open snapshots sealed under the old key;
- * sessions from a lost disk are not restored.
+ * disk. A new disk restores a session from its account-sealed snapshot, which
+ * it opens once the account vault reaches it.
  */
 export async function bootCloudComputer(
   store: Pick<NodeRepository, "enrollNode"> & Pick<HostedMachineRepository, "getHostedProvisioning"> & Pick<CentralGithubAppRepository, "listCentralGithubInstallations">,
@@ -94,6 +96,7 @@ export async function bootCloudComputer(
     // One machine serves the user's sessions and their automations.
     hostedTasks: true,
     handOffToRunners: input.handOffToRunners,
+    restoreSessionId: input.restoreSessionId,
     nodeLabel: ephemeralNodeLabel(nodeId),
     // Model credentials reach it like any node: end-to-end account vault sync
     // from the user's other machines, or a provider sign-in on the machine.
@@ -199,4 +202,20 @@ export async function routeWorkToCloudComputer(
     await store.assignWorkItem(accountId, item.id, { label: targetLabel, runtimeId: item.runtimeId, model: item.model, ephemeral: true });
   }
   return pending.length > 0 || (await store.listWorkItems(accountId, 100)).some((item) => item.status === "pending" && item.label === targetLabel);
+}
+
+/**
+ * The session a new machine should restore, when it can: only a snapshot
+ * sealed to the account opens on another machine. One sealed to the old
+ * machine's own key (written before account seal keys) is left alone.
+ */
+export async function restorableSnapshot(
+  store: Pick<SessionStateRepository, "getSessionSnapshot">,
+  accountId: string,
+  sessionId: unknown,
+): Promise<string | undefined> {
+  const id = typeof sessionId === "string" ? sessionId.trim().slice(0, 200) : "";
+  if (!id) return undefined;
+  const snapshot = await store.getSessionSnapshot(accountId, id);
+  return snapshot?.ciphertext.startsWith(ACCOUNT_SEAL_PREFIX) ? id : undefined;
 }

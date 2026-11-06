@@ -7,17 +7,17 @@
 // standby can take over — but that copy evaporates if every node goes away, which
 // is exactly the destroy-lane ephemeral case (Fly Machines/Hetzner/EC2 that are
 // torn down when the agent finishes). This reuses the SAME replication frame
-// (full transcript + git checkpoint bundle + runtimeSessionRef) but seals it under
-// the session room key and stores it as an opaque control-plane BLOB, so a
-// torn-down session can be rebuilt onto a fresh machine later. The control plane
-// only ever sees ciphertext — same posture as the E2E session title.
+// (full transcript + git checkpoint bundle + runtimeSessionRef) but seals it
+// (to the account, see seal-keys.ts) and stores it as an opaque control-plane
+// BLOB, so a torn-down session can be rebuilt onto a fresh machine later. The
+// control plane only ever sees ciphertext — same posture as the E2E session title.
 //
 // This module is the pure build/apply core (injected deps, no daemon/relay), so
 // it's unit-testable like replicator.ts; the daemon wires the real EventLog /
-// checkpoint deps, the room key from relay.json, and the control-plane transport.
+// checkpoint deps, the seal keys, and the control-plane transport.
 
 import { OwnerReplicator, StandbyApplier, type OwnerReplicatorDeps, type StandbyApplierDeps, type ReplWireFrame } from "./replicator.js";
-import { seal, open } from "../e2e.js";
+import type { Opener, Sealer } from "./seal-keys.js";
 
 /** Portable execution facts. Never reuse paths from the destroyed machine. */
 export interface SnapshotSessionInfo {
@@ -37,20 +37,20 @@ export interface SnapshotBuildDeps extends OwnerReplicatorDeps {
 /**
  * Build a full, sealed snapshot of a session: a complete replication frame (ALL
  * transcript records + a full git checkpoint bundle + the runtime resume token),
- * serialized and encrypted under the session room key. Returns null when there's
+ * serialized and sealed with `sealer`. Returns null when there's
  * nothing to snapshot yet (no records and no checkpoint).
  *
  * A fresh `OwnerReplicator` has no cursor, so `buildTurnFrame` produces a FULL
  * frame + full bundle — exactly what a from-scratch rebuild on a new machine
  * needs (it holds no base to delta against).
  */
-export async function buildSessionSnapshot(sessionId: string, roomKey: Buffer, deps: SnapshotBuildDeps): Promise<string | null> {
+export async function buildSessionSnapshot(sessionId: string, sealer: Sealer, deps: SnapshotBuildDeps): Promise<string | null> {
   const owner = new OwnerReplicator({ ...deps, worktreeSync: () => true });
   const frame = await owner.buildTurnFrame(sessionId);
   // Nothing worth persisting yet: no transcript and no checkpoint (a fresh owner
   // has no cursor, so buildReplFrame emits a zero-record frame rather than null).
   if (!frame || (frame.records.length === 0 && !frame.checkpointCommit)) return null;
-  return seal(roomKey, JSON.stringify({ ...frame, sessionInfo: deps.sessionInfo?.(sessionId) }));
+  return sealer(JSON.stringify({ ...frame, sessionInfo: deps.sessionInfo?.(sessionId) }));
 }
 
 export interface AppliedSnapshot {
@@ -70,8 +70,8 @@ export interface AppliedSnapshot {
  * can re-derive a resumable runtime session (writeHistory / seeded fallback).
  * Throws on a bad key / corrupt blob, or if the frame can't apply cleanly.
  */
-export async function applySessionSnapshot(sealed: string, roomKey: Buffer, deps: StandbyApplierDeps & { expectedSessionId?: string }): Promise<AppliedSnapshot> {
-  const frame = JSON.parse(open(roomKey, sealed)) as ReplWireFrame & { sessionInfo?: SnapshotSessionInfo };
+export async function applySessionSnapshot(sealed: string, opener: Opener, deps: StandbyApplierDeps & { expectedSessionId?: string }): Promise<AppliedSnapshot> {
+  const frame = JSON.parse(opener(sealed)) as ReplWireFrame & { sessionInfo?: SnapshotSessionInfo };
   if (deps.expectedSessionId && frame.sessionId !== deps.expectedSessionId) throw new Error("Snapshot session identity mismatch");
   const applier = new StandbyApplier(deps);
   const ack = await applier.receive(frame);

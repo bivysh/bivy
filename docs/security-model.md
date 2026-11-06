@@ -603,8 +603,9 @@ sensitive.
     uses a stored PAT rather than a GitHub App; a cloud computer first booted
     by an earlier version keeps the room key that version generated until its
     disk is replaced, so a database backup taken before the upgrade could still
-    decrypt its traffic; and because snapshots are sealed with the disk's key,
-    losing the disk loses the machine's session history. See
+    decrypt its traffic; and a new disk can restore a session only from a
+    snapshot sealed to the account (the seal key travels in the end-to-end
+    vault, so it also needs one of your other machines online). See
     [`hosted-provisioning-trust-model.md`](hosted-provisioning-trust-model.md),
     [`key-management.md`](key-management.md), and
     [`ephemeral-sessions.md`](ephemeral-sessions.md).

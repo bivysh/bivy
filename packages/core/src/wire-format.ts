@@ -90,3 +90,8 @@ export const MAX_REASSEMBLY_GROUPS = 16;
 /** Independently sealed large-response pages and maximum logical JSON size. */
 export const TRANSFER_PAGE_BYTES = 384 * 1024;
 export const MAX_TRANSFER_BYTES = 64 * 1024 * 1024;
+
+/** Prefix of a session snapshot sealed to the account rather than to one
+ * machine: `bivy-acct-v1:<kid>:<ciphertext>` (src/session/seal-keys.ts). The
+ * control plane reads only the prefix, to tell which machines can restore it. */
+export const ACCOUNT_SEAL_PREFIX = "bivy-acct-v1:";

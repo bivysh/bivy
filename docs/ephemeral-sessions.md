@@ -153,14 +153,25 @@ deletes the runner.
 ## Snapshots and a lost disk
 
 - **Snapshot.** `src/session/snapshot.ts` seals `{records, checkpointCommit,
-  bundle, runtimeSessionRef}` under the node's room key and stores it as an
-  opaque blob in `session_snapshots`. The control plane sees ciphertext only.
+  bundle, runtimeSessionRef}` to the account and stores it as an opaque blob
+  in `session_snapshots`. The control plane sees ciphertext only.
+- **Account seal keys.** The seal key travels inside the end-to-end credential
+  vault (`src/session/seal-keys.ts`, [credential-sync.md](credential-sync.md)),
+  so every machine that can unwrap the vault can open the snapshot, whichever
+  machine wrote it. A sealed snapshot names its key:
+  `bivy-acct-v1:<kid>:<ciphertext>`. A machine that doesn't hold the key yet
+  waits up to 90 seconds for a peer to wrap the vault key for it. A snapshot
+  without the prefix was written before account seal keys and opens only with
+  the writing machine's room key.
 - **Lost volume.** When the fleet destroys the machine and its volume it
   calls `/internal/compute/retired`; the node stays enrolled. Reopening a
   session calls `/account/managed-machines/restore`, which acquires a machine
-  for the same node. A new disk generates a new room key and cannot open
-  snapshots sealed under the old one, so the lost disk's session history is
-  not restored; the bootstrap ignores a `restoreSessionId`.
+  for the same node. The fleet asks for the session's `restoreSessionId` on a
+  new disk, and the control plane passes it into the boot payload
+  (`BIVY_RESTORE`) when the snapshot is account-sealed; a runner's boot works
+  the same way. The new machine restores the transcript and the last git
+  checkpoint once one of your other machines is online to hand it the vault
+  key. A machine-sealed snapshot from an earlier version is not restored.
 
 ## Automations
 

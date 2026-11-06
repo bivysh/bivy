@@ -9,6 +9,7 @@ export * from "./base64.js";
 export * from "./crypto.js";
 export * from "./relay-frame.js";
 export * from "./markdown.js";
+export { ACCOUNT_SEAL_PREFIX } from "./wire-format.js";
 export * from "./message-components.js";
 export * from "./tool-activity.js";
 export * from "./tool-format.js";

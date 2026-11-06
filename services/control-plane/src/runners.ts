@@ -50,6 +50,8 @@ export interface RunnerBootInput {
   awakeCapMinutes: number;
   relayUrl: string;
   controlPlaneUrl: string;
+  /** A session to restore from its account-sealed snapshot. */
+  restoreSessionId?: string;
 }
 
 /** Enroll a runner's node and build its Fly boot payload. Like the cloud
@@ -73,6 +75,7 @@ export async function bootRunner(
     // session's runner sleeps once idle, keeping its disk for follow-ups.
     ...(isSessionRunnerId(input.runnerId) ? { sleepOnIdle: true } : { teardownOnAgentFinish: true }),
     hostedTasks: true,
+    restoreSessionId: input.restoreSessionId,
     nodeLabel: label,
     ...await githubBootIdentity(store, input.accountId),
   };
