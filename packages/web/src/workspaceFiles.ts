@@ -60,6 +60,9 @@ export function languageFor(path: string): string | undefined {
   return dot > 0 ? LANGUAGES[name.slice(dot + 1).toLowerCase()] : undefined;
 }
 
+/** Files the viewer can show rendered, with Source a toggle away. */
+export const isMarkdownPath = (path: string) => languageFor(path) === "markdown";
+
 /** Highlighting is for reading, not for megabyte dumps: past this, plain text. */
 export const HIGHLIGHT_MAX_CHARS = 200_000;
 

@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - ACP agents (Grok, OpenCode, Copilot, Gemini and any custom `BIVY_ACP_COMMAND`) also show "Retrying (n/m)…" while they retry a failed model call. Grok reports its retries this way.
 - The model and reasoning-effort pickers follow an ACP agent when it changes them itself (ACP `config_option_update`), for example after its own `/model` command.
+- Markdown files open rendered in the Files viewer, with headings, lists, tables, highlighted code and Mermaid diagrams as in chat. Switch to Source to read the file as written.
 
 ### Changed
 
