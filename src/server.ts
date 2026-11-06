@@ -121,6 +121,7 @@ import { webAppDirs, webAppRouter } from "./web-app.js";
 import { RelayConnector, loadRelayConfig, loadDirectListenerConfig, discoverTailnetMachines, soloCredentials, type ClientMessage, type TailnetMachine } from "./remote/index.js";
 import { readEphemeralTeardownConfig, shouldSelfTeardown, snapshotsDurableForTeardown, performSelfTeardown, type SnapshotFlushResult } from "./ephemeral-teardown.js";
 import { buildSessionSnapshot, applySessionSnapshot } from "./session/snapshot.js";
+import { setRefreshCoordinator, type RefreshCoordinator } from "./runtime/oauth/refresh-policy.js";
 import { accountSealer, currentSealKey, holdsAll, keyringStore, mergeKeyrings, mintSealKey, parseKeyring, roomKeySealer, sealedKid, snapshotOpener, type SealKeyring } from "./session/seal-keys.js";
 import { clearTurnActivity } from "./session/turn-activity.js";
 import { rebuildSnapshotRuntime } from "./session/snapshot-runtime.js";
@@ -3809,6 +3810,7 @@ function stopRelayConnection() {
   // shared relay size slot so local PTYs it may have shrunk grow back.
   terminals.dropClient(RELAY_CLIENT_ID);
   sessionAdvertiseTarget = undefined;
+  setRefreshCoordinator(undefined);
   if (advertiseResyncTimer) clearInterval(advertiseResyncTimer);
   advertiseResyncTimer = undefined;
   if (nodeHeartbeatTimer) clearInterval(nodeHeartbeatTimer);
@@ -3838,6 +3840,7 @@ function startRelayIfConfigured() {
   relay.start();
   if (config.controlPlaneUrl && config.enrollmentToken) {
     sessionAdvertiseTarget = { controlPlaneUrl: config.controlPlaneUrl, enrollmentToken: config.enrollmentToken };
+    setRefreshCoordinator(controlPlaneRefreshCoordinator);
     void syncModelAuthFromControlPlane();
     void checkAutomationTemplates();
     if (remoteRuntimeEnabled()) {
@@ -4209,6 +4212,58 @@ async function syncModelAuthFromControlPlane() {
     console.warn("[auth-sync] model auth sync failed:", (error as Error).message);
   }
 }
+
+// --- Refresh turns for account-synced sign-ins (refresh-policy.ts) -----------
+// One of the account's machines refreshes a rotating sign-in at a time. The
+// control plane arbitrates a short lease; the holder refreshes, publishes the
+// new token through the end-to-end vault, and only then releases the lease.
+const REFRESH_TURN_WAIT_MS = 20_000;
+const REFRESH_TURN_POLL_MS = 2_000;
+
+async function publishRefreshedSignIn(): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await pushModelAuthToControlPlane(false, true);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+    }
+  }
+  console.warn("[auth-sync] couldn't publish a refreshed sign-in; other machines will get it on the next sync");
+}
+
+const controlPlaneRefreshCoordinator: RefreshCoordinator = {
+  async take(provider, label, isFresh) {
+    const key = `oauth-refresh:${provider}:${label}`;
+    const release = () => modelAuthFetch("/node/lease", { method: "DELETE", body: JSON.stringify({ key }) }).catch(() => null);
+    const deadline = Date.now() + REFRESH_TURN_WAIT_MS;
+    for (;;) {
+      const res = await modelAuthFetch("/node/lease", { method: "POST", body: JSON.stringify({ key }) }).catch(() => null);
+      // Offline, or a control plane without leases: the caller falls back to
+      // this machine's own refresh policy.
+      if (!res?.ok) return undefined;
+      const lease = (await res.json().catch(() => ({}))) as { granted?: boolean };
+      // Holding the lease or not, pick up what the last holder published: it
+      // publishes before releasing, so with the lease this is the newest token.
+      await syncModelAuthFromControlPlane();
+      if (lease.granted) {
+        if (await isFresh()) {
+          await release();
+          return "busy";
+        }
+        return {
+          finish: async (refreshed) => {
+            if (refreshed) await publishRefreshedSignIn();
+            await release();
+          },
+        };
+      }
+      if (await isFresh()) return "busy";
+      if (Date.now() >= deadline) return "busy";
+      await new Promise((resolve) => setTimeout(resolve, REFRESH_TURN_POLL_MS));
+    }
+  },
+};
 
 async function processModelAuthKeyRequests(requests: Array<{ nodeId: string; publicKey: string }>) {
   if (!sessionAdvertiseTarget || requests.length === 0) return;

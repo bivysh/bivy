@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createCredentialVault } from "../src/runtime/credential-store.js";
+import { setRefreshCoordinator } from "../src/runtime/oauth/refresh-policy.js";
 import { exportSyncableRecords } from "../src/credentials/api.js";
 import {
   extractAuthCode,
@@ -302,6 +303,65 @@ await check("a runner never spends the refresh token: an expired sign-in stays w
   }
   assert.equal(exchanges, 0, "no token exchange");
   assert.equal((await store.read("anthropic"))?.refresh, "rt", "the stored refresh token is untouched");
+});
+
+await check("a runner holding the refresh turn refreshes an account sign-in and publishes it", async () => {
+  const dir = tmpDir();
+  const store = createCredentialVault(dir);
+  await store.modify("anthropic", async () => ({ type: "oauth", access: "old", refresh: "rt", expires: Date.now() - 1000 }));
+  let exchanges = 0;
+  stubFetch(() => { exchanges += 1; return { json: { access_token: "new", refresh_token: "rt-2", expires_in: 3600 } }; });
+  const finished: boolean[] = [];
+  setRefreshCoordinator({ take: async () => ({ finish: async (refreshed) => void finished.push(refreshed) }) });
+  process.env.BIVY_OAUTH_REFRESH = "0";
+  try {
+    assert.equal((await refreshModelOAuthState(dir, "anthropic")).access, "new");
+  } finally {
+    delete process.env.BIVY_OAUTH_REFRESH;
+    setRefreshCoordinator(undefined);
+  }
+  assert.equal(exchanges, 1);
+  assert.deepEqual(finished, [true], "the refreshed sign-in is published before the turn is given up");
+});
+
+await check("a second machine takes the sign-in the first one refreshed instead of spending the old token", async () => {
+  // Two machines hold copies of one account sign-in. The stand-in coordinator
+  // plays the control plane's lease and the vault: the holder publishes, and
+  // the next machine imports what was published before it decides.
+  const machines = [tmpDir(), tmpDir()];
+  for (const dir of machines) {
+    await createCredentialVault(dir).modify("anthropic", async () => ({ type: "oauth", access: "old", refresh: "rt", expires: Date.now() - 1000 }));
+  }
+  let published: { access: string; refresh: string; expires: number } | undefined;
+  let exchanges = 0;
+  stubFetch((call) => {
+    exchanges += 1;
+    assert.match(call.body, /rt(?!-)/, "only the unspent refresh token is ever exchanged");
+    return { json: { access_token: "new", refresh_token: "rt-2", expires_in: 3600 } };
+  });
+  const coordinatorFor = (dir: string) => ({
+    take: async (_provider: string, _label: string, isFresh: () => Promise<boolean>) => {
+      if (published) await createCredentialVault(dir).modify("anthropic", async () => ({ type: "oauth", ...published! }));
+      if (await isFresh()) return "busy" as const;
+      return {
+        finish: async () => {
+          const cred = await createCredentialVault(dir).read("anthropic") as { access: string; refresh: string; expires: number };
+          published = { access: cred.access, refresh: cred.refresh, expires: cred.expires };
+        },
+      };
+    },
+  });
+  try {
+    setRefreshCoordinator(coordinatorFor(machines[0]));
+    assert.equal((await refreshModelOAuthState(machines[0], "anthropic")).access, "new");
+    setRefreshCoordinator(coordinatorFor(machines[1]));
+    const second = await refreshModelOAuthState(machines[1], "anthropic");
+    assert.deepEqual([second.state, second.access], ["fresh", "new"]);
+  } finally {
+    setRefreshCoordinator(undefined);
+  }
+  assert.equal(exchanges, 1, "the rotated refresh token was spent once, by one machine");
+  assert.equal((await createCredentialVault(machines[1]).read("anthropic"))?.refresh, "rt-2");
 });
 
 await check("a token that would expire within the asked window is refreshed ahead of time", async () => {

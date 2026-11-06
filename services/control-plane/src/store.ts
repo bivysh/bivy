@@ -1362,6 +1362,23 @@ export interface VaultRepository {
 
 }
 
+/** A short, exclusive right one machine holds for an account: "refresh this
+ * sign-in now" and the like. Expires on its own, so a machine that dies
+ * holding one never blocks the others for long. */
+export interface AccountLease {
+  granted: boolean;
+  /** The node holding it now (this caller when granted). */
+  holder: string;
+  expiresAt: string;
+}
+
+export interface AccountLeaseRepository {
+  /** Take `key` for `holder`, or renew it if `holder` already has it. */
+  acquireAccountLease(accountId: string, key: string, holder: string, ttlMs: number): Promise<AccountLease>;
+  /** Give `key` up early; a no-op unless `holder` holds it. */
+  releaseAccountLease(accountId: string, key: string, holder: string): Promise<void>;
+}
+
 export interface SessionStateRepository {
   // Durable E2E session snapshots for rebuild-resume (Gap B) — opaque ciphertext.
   getSessionSnapshot(accountId: string, sessionId: string): Promise<SessionSnapshotRecord | undefined>;
@@ -1620,6 +1637,7 @@ export interface ControlPlaneStore
     HostedMachineRepository,
     VaultRepository,
     SessionStateRepository,
+    AccountLeaseRepository,
     GithubAppVaultRepository,
     InboundHookRepository,
     NodeClaimRepository,
