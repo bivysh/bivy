@@ -155,9 +155,34 @@ Node-only imports can later be promoted with
 Source logins are left untouched. Subscription OAuth credentials are not universal
 API keys: only compatible provider endpoints and Bivy-managed runtimes can use
 them, subject to provider policies. Agent-managed runtimes are not automatically
-switched to Bivy auth. Copying a rotating refresh token does not coordinate refresh
-with the original CLI or all other machines; concurrent refresh can invalidate a
-login and require signing in again. This command does not eliminate that limitation.
+switched to Bivy auth. Bivy coordinates refresh between your machines (see
+[Refreshing synced sign-ins](#refreshing-synced-sign-ins)), but not with the
+original CLI: if that CLI keeps refreshing its own copy, the two can invalidate
+each other and you sign in again. This command does not eliminate that limitation.
+
+### Refreshing synced sign-ins
+
+Anthropic and OpenAI rotate the refresh token on every refresh, so two machines
+refreshing copies of one sign-in would log each other out. For a sign-in synced
+to the account, one machine refreshes at a time:
+
+1. A machine whose access token has expired asks the control plane for the
+   sign-in's refresh lease (`POST /node/lease`, key
+   `oauth-refresh:<provider>:<label>`, 60 seconds).
+2. Whether it got the lease or not, it syncs the vault first. A holder
+   publishes before it releases, so the newest token is already there; if it
+   is fresh, the machine uses it and refreshes nothing.
+3. The holder refreshes, publishes the new token through the end-to-end vault,
+   and releases the lease. Other machines wait up to 20 seconds and then take
+   the published token.
+
+The control plane only arbitrates who holds the lease; it never sees a token.
+Because any of your machines can be the holder, a synced sign-in stays alive
+with no persistent machine at all: a runner (`BIVY_OAUTH_REFRESH=0`) refreshes
+while it holds the lease, and without a reachable control plane it uses the
+access tokens it has and leaves the refresh token alone. A sign-in kept on one
+machine (`sync: "node"`) is refreshed there, as before. The same applies when
+Bivy writes Codex's `auth.json` from the vault.
 
 ## Runtime mapping
 

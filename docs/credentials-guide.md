@@ -184,7 +184,9 @@ others (e.g. Gemini CLI) remain per-node native logins.
   the repository under **Assign for project**, then select **Use for …**.
 - **Keep a key on one machine:** set **Available on** to “Only this machine”.
 - **Rotate a key:** re-save it at the same label. OAuth refresh happens
-  automatically and touches only that specific account.
+  automatically and touches only that specific account. A sign-in synced to
+  all your machines is refreshed by one machine at a time, which passes the new
+  token to the others, so machines don't log each other out.
 
 ---
 

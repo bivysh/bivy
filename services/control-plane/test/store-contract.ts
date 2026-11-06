@@ -191,6 +191,23 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(await store.getSessionOwnership(other.id, "s1"), undefined);
   });
 
+  // --- Account leases --------------------------------------------------------
+  await test("an account lease has one holder until it is released or expires", async (store) => {
+    const account = await store.findOrCreateAccount("contract-lease@example.com");
+    const key = "oauth-refresh:anthropic:default";
+    const first = await store.acquireAccountLease(account.id, key, "node-a", 60_000);
+    assert.equal(first.granted, true);
+    const contended = await store.acquireAccountLease(account.id, key, "node-b", 60_000);
+    assert.deepEqual([contended.granted, contended.holder], [false, "node-a"]);
+    assert.equal((await store.acquireAccountLease(account.id, key, "node-a", 60_000)).granted, true, "the holder renews its own lease");
+    await store.releaseAccountLease(account.id, key, "node-b");
+    assert.equal((await store.acquireAccountLease(account.id, key, "node-b", 60_000)).granted, false, "only the holder can release it");
+    await store.releaseAccountLease(account.id, key, "node-a");
+    assert.equal((await store.acquireAccountLease(account.id, key, "node-b", 1_000)).granted, true, "a released lease is free");
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    assert.equal((await store.acquireAccountLease(account.id, key, "node-c", 60_000)).granted, true, "an expired lease is free");
+  });
+
   // --- Inbound hooks ---------------------------------------------------------
   await test("inbound hooks: create, app-meta, serving node cleared on node delete", async (store) => {
     const acct = await store.findOrCreateAccount("contract-hook@example.com");

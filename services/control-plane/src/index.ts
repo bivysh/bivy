@@ -1825,6 +1825,33 @@ app.post("/node/name", requireNode, asyncHandler(async (req, res) => {
   res.json({ ok: true, node: updated });
 }));
 
+// --- Account leases ---------------------------------------------------------
+// A short, exclusive right one of the account's machines holds. The control
+// plane only arbitrates who holds a key; what the holder does with it happens
+// on the machine (e.g. refreshing a sign-in and writing the result back to the
+// end-to-end vault). One row per kind: its key pattern and how long it lasts.
+const LEASE_KINDS: Array<{ pattern: RegExp; ttlMs: number }> = [
+  // One machine refreshes a rotating sign-in at a time (provider:label).
+  { pattern: /^oauth-refresh:[a-z0-9._-]{1,64}:[A-Za-z0-9._-]{1,64}$/, ttlMs: 60_000 },
+];
+const leaseKind = (key: unknown) => (typeof key === "string" ? LEASE_KINDS.find((kind) => kind.pattern.test(key)) : undefined);
+
+app.post("/node/lease", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const key = req.body?.key;
+  const kind = leaseKind(key);
+  if (!kind) return res.status(400).json({ error: "unknown lease" });
+  res.json(await store.acquireAccountLease(node.accountId, key, node.id, kind.ttlMs));
+}));
+
+app.delete("/node/lease", requireNode, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const key = req.body?.key;
+  if (!leaseKind(key)) return res.status(400).json({ error: "unknown lease" });
+  await store.releaseAccountLease(node.accountId, key, node.id);
+  res.json({ ok: true });
+}));
+
 // --- Durable E2E session snapshots for rebuild-resume (Gap B) ---------------
 // A destroy-lane machine's daemon flushes a sealed snapshot (transcript + git
 // checkpoint + runtime resume token) before teardown; a freshly re-provisioned

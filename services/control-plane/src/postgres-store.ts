@@ -49,6 +49,7 @@ import {
   type DeviceVaultWrappedKeyRecord,
   type DeviceVaultKeyRequest,
   type SessionSnapshotRecord,
+  type AccountLease,
   type SessionCorrelation,
   type SessionCorrelationInput,
   type GithubAppVault,
@@ -535,6 +536,14 @@ export class PostgresStore implements ControlPlaneStore {
       -- session_ownership. Opaque ciphertext only (a sealed replication frame),
       -- like session_index.title_enc — the control plane can't read it. Lets a
       -- torn-down destroy-lane session be rebuilt onto a fresh machine.
+      CREATE TABLE IF NOT EXISTS account_leases (
+        account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+        lease_key   TEXT NOT NULL,
+        holder      TEXT NOT NULL,
+        expires_at  TIMESTAMPTZ NOT NULL,
+        PRIMARY KEY (account_id, lease_key)
+      );
+      CREATE INDEX IF NOT EXISTS idx_account_leases_expires ON account_leases(expires_at);
       CREATE TABLE IF NOT EXISTS session_snapshots (
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         session_id  TEXT NOT NULL,
@@ -2295,6 +2304,32 @@ export class PostgresStore implements ControlPlaneStore {
 
   // --- Durable E2E session snapshots (Gap B) ---------------------------
 
+  async acquireAccountLease(accountId: string, key: string, holder: string, ttlMs: number): Promise<AccountLease> {
+    const expiresAt = new Date(Date.now() + Math.max(1_000, ttlMs));
+    // Clear the row when it has expired or is ours, then insert if absent. Two
+    // statements, but still safe: if another machine inserts in between, our
+    // insert does nothing and we report the lease as held by them.
+    await this.query(
+      `DELETE FROM account_leases WHERE account_id = $1 AND lease_key = $2 AND (expires_at <= $3 OR holder = $4)`,
+      [accountId, key, new Date(), holder],
+    );
+    const { rows } = await this.query(
+      `INSERT INTO account_leases (account_id, lease_key, holder, expires_at) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (account_id, lease_key) DO NOTHING RETURNING holder, expires_at`,
+      [accountId, key, holder, expiresAt],
+    );
+    // Postgres returns no row when the insert did nothing; pg-mem returns the
+    // existing one. Comparing the holder is right for both.
+    if (rows[0]?.holder === holder) return { granted: true, holder, expiresAt: new Date(rows[0].expires_at).toISOString() };
+    const current = await this.query(`SELECT holder, expires_at FROM account_leases WHERE account_id = $1 AND lease_key = $2`, [accountId, key]);
+    const row = current.rows[0];
+    return { granted: false, holder: String(row?.holder ?? ""), expiresAt: row ? new Date(row.expires_at).toISOString() : expiresAt.toISOString() };
+  }
+
+  async releaseAccountLease(accountId: string, key: string, holder: string): Promise<void> {
+    await this.query(`DELETE FROM account_leases WHERE account_id = $1 AND lease_key = $2 AND holder = $3`, [accountId, key, holder]);
+  }
+
   async getSessionSnapshot(accountId: string, sessionId: string): Promise<SessionSnapshotRecord | undefined> {
     const { rows } = await this.query(`SELECT * FROM session_snapshots WHERE account_id = $1 AND session_id = $2`, [accountId, sessionId]);
     const row = rows[0];
@@ -3335,6 +3370,8 @@ export class PostgresStore implements ControlPlaneStore {
     }
     const { rowCount } = await this.query(`DELETE FROM auth_rate_limits WHERE reset_at < $1`, [nowIso]);
     total += rowCount ?? 0;
+    const { rowCount: leasesRemoved } = await this.query(`DELETE FROM account_leases WHERE expires_at < $1`, [nowIso]);
+    total += leasesRemoved ?? 0;
     const { rowCount: pushRemoved } = await this.query(`DELETE FROM native_push_subscriptions WHERE updated_at < $1`,
       [new Date(Date.parse(nowIso) - 7 * 24 * 60 * 60_000).toISOString()]);
     total += pushRemoved ?? 0;

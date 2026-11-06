@@ -28,7 +28,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createCredentialVault } from "./credential-store.js";
-import { oauthRefreshAllowed } from "./oauth/refresh-policy.js";
+import { oauthRefreshAllowed, refreshCoordinator, type RefreshTurn } from "./oauth/refresh-policy.js";
 
 // Codex's own OAuth app — verified identical to the app Pi's `openai-codex` login
 // uses, so a refresh grant minted here is honored by Codex's backend.
@@ -81,10 +81,10 @@ interface RefreshedTokens {
 }
 
 /** Exchange a refresh token for a fresh token set (incl. the `id_token`). */
-async function refreshCodexTokens(refreshToken: string): Promise<RefreshedTokens | undefined> {
+async function refreshCodexTokens(refreshToken: string, turn?: RefreshTurn): Promise<RefreshedTokens | undefined> {
   // Minting auth.json spends the rotating refresh token, so a machine that
-  // must not refresh gets no Codex login from the vault.
-  if (!oauthRefreshAllowed()) return undefined;
+  // must not refresh (and doesn't hold the refresh turn) gets no Codex login.
+  if (!turn && !oauthRefreshAllowed()) return undefined;
   let res: Response;
   try {
     res = await fetch(CODEX_TOKEN_URL, {
@@ -151,12 +151,35 @@ export async function ensureCodexAuth(credsDir: string): Promise<string | undefi
     return codexHome;
   }
 
-  const cred = await store.read("openai-codex").catch(() => undefined);
-  if (!cred || cred.type !== "oauth" || typeof cred.refresh !== "string" || !cred.refresh) return undefined;
+  // An account-synced login is refreshed by one machine at a time; take the
+  // turn first, which may import a token another machine just refreshed.
+  const record = await store.readRecord("openai-codex").catch(() => undefined);
+  const coordinator = record?.sync === "account" ? refreshCoordinator() : undefined;
+  const taken = coordinator ? await coordinator.take("openai-codex", record!.label, async () => false) : undefined;
+  if (taken === "busy") return undefined;
+  const turn = taken;
+  // Once a refresh token is spent, publish whatever the vault now holds, even
+  // if writing auth.json fails afterwards.
+  let spent = false;
+  try {
+    const cred = await store.read("openai-codex").catch(() => undefined);
+    if (!cred || cred.type !== "oauth" || typeof cred.refresh !== "string" || !cred.refresh) return undefined;
+    const refreshed = await refreshCodexTokens(cred.refresh, turn);
+    if (!refreshed) return undefined;
+    spent = true;
+    return await mintCodexAuth(store, cred, refreshed, codexHome, authFile) ? codexHome : undefined;
+  } finally {
+    await turn?.finish(spent).catch(() => undefined);
+  }
+}
 
-  const refreshed = await refreshCodexTokens(cred.refresh);
-  if (!refreshed) return undefined;
-
+async function mintCodexAuth(
+  store: ReturnType<typeof createCredentialVault>,
+  cred: { accountId?: unknown } & Record<string, unknown>,
+  refreshed: RefreshedTokens,
+  codexHome: string,
+  authFile: string,
+): Promise<boolean> {
   // Persist the rotated refresh token back to the vault FIRST — OpenAI rotates it
   // on every grant, so the previous one is now dead. If we can't persist it, bail
   // rather than strand the vault on a token we've just invalidated. Use the same
@@ -172,7 +195,7 @@ export async function ensureCodexAuth(credsDir: string): Promise<string | undefi
       refreshedAt,
     }));
   } catch {
-    return undefined;
+    return false;
   }
 
   const accountId = typeof cred.accountId === "string" ? cred.accountId : undefined;
@@ -194,7 +217,7 @@ export async function ensureCodexAuth(credsDir: string): Promise<string | undefi
     fs.writeFileSync(tmp, `${JSON.stringify(authJson, null, 2)}\n`, { mode: 0o600 });
     fs.renameSync(tmp, authFile);
   } catch {
-    return undefined;
+    return false;
   }
-  return codexHome;
+  return true;
 }

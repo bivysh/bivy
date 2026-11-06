@@ -16,7 +16,7 @@ import { createPkce } from "../../integrations/oauth.js";
 import { createCredentialVault, type OAuthCredential } from "../credential-store.js";
 import { DEFAULT_LABEL, type SyncPolicy } from "../../credentials/records.js";
 import { getModelOAuthProvider, type ModelOAuthProvider } from "./model-oauth-providers.js";
-import { oauthRefreshAllowed } from "./refresh-policy.js";
+import { oauthRefreshAllowed, refreshCoordinator, type RefreshTurn } from "./refresh-policy.js";
 
 // --- Bivy-owned login interaction (same shape Pi used, now ours) -------------
 
@@ -472,8 +472,8 @@ export async function loginModelOAuth(credsDir: string, providerId: string, inte
 }
 
 /** Exchange the refresh token for a fresh credential (network call; throws on failure). */
-async function refreshTokens(provider: ModelOAuthProvider, current: OAuthCredential): Promise<OAuthTokens> {
-  if (!oauthRefreshAllowed()) throw new Error(`This machine doesn't refresh sign-ins; "${provider.id}" is refreshed by the machine that owns the login`);
+async function refreshTokens(provider: ModelOAuthProvider, current: OAuthCredential, turn?: RefreshTurn): Promise<OAuthTokens> {
+  if (!turn && !oauthRefreshAllowed()) throw new Error(`This machine doesn't refresh sign-ins; "${provider.id}" is refreshed by the machine that owns the login`);
   const refresh = typeof current.refresh === "string" ? current.refresh : "";
   if (!refresh) throw new Error(`No refresh token stored for "${provider.id}"`);
   const payload = await postToken(provider.tokenUrl, provider.tokenEncoding, {
@@ -505,10 +505,34 @@ export async function refreshModelOAuthState(
 ): Promise<OAuthRefreshResult> {
   const provider = getModelOAuthProvider(providerId);
   if (!provider) return { state: "reconnect_required", error: "Provider does not support OAuth refresh" };
+  const vault = createCredentialVault(credsDir);
+  const needsRefresh = (current: { type?: string; expires?: unknown; access?: unknown } | undefined) =>
+    Boolean(current && current.type === "oauth"
+      && (Number(current.expires) <= Date.now() + minValidityMs || (rejectedAccess !== undefined && current.access === rejectedAccess)));
+  // A sign-in synced to the account is refreshed by one machine at a time
+  // (refresh-policy.ts): take the turn first, outside the store lock, because
+  // taking it may import a token another machine already refreshed.
+  let turn: RefreshTurn | undefined;
+  let refreshed = false;
+  const stored = async () => {
+    const record = await vault.readRecord(providerId, label).catch(() => undefined);
+    return { sync: record?.sync, cred: record?.source.kind === "stored" ? record.source.cred : undefined };
+  };
+  const before = await stored();
+  const coordinator = before.sync === "account" && needsRefresh(before.cred) ? refreshCoordinator() : undefined;
+  if (coordinator) {
+    const taken = await coordinator.take(provider.id, label, async () => !needsRefresh((await stored()).cred));
+    if (taken === "busy") {
+      const latest = (await stored()).cred;
+      if (latest?.type === "oauth" && !needsRefresh(latest)) return { state: "fresh", access: latest.access };
+      return { state: "transient_failure", error: "Another of your machines is refreshing this sign-in; try again in a moment" };
+    }
+    turn = taken;
+  }
   try {
     let found = false;
     let wasExpired = false;
-    const result = await createCredentialVault(credsDir).modifyRecord(providerId, label, async (current) => {
+    const result = await vault.modifyRecord(providerId, label, async (current) => {
       if (!current || current.type !== "oauth") return current;
       found = true;
       const expired = Number(current.expires) <= Date.now() + minValidityMs;
@@ -518,13 +542,17 @@ export async function refreshModelOAuthState(
       // replacement instead of rotating its refresh token again.
       if (!expired && (!rejectedAccess || current.access !== rejectedAccess)) return current;
       wasExpired = expired;
-      return credentialFrom(await refreshTokens(provider, current));
+      const next = credentialFrom(await refreshTokens(provider, current, turn));
+      refreshed = true;
+      return next;
     });
     if (!found || !result || result.type !== "oauth") return { state: "reconnect_required", error: "No OAuth credential is stored" };
     return { state: wasExpired ? "expired" : "fresh", access: result.access };
   } catch (error) {
     const reconnect = error instanceof OAuthTokenError && (error.code === "invalid_grant" || error.code === "invalid_token" || error.status === 401);
     return { state: reconnect ? "reconnect_required" : "transient_failure", error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    await turn?.finish(refreshed).catch(() => undefined);
   }
 }
 

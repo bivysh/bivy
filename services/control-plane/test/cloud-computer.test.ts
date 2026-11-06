@@ -245,6 +245,17 @@ async function main() {
   const laptopEnroll = await req(port, "POST", "/nodes/enroll", { nodeId: "node_laptop", name: "laptop" }, token);
   expect((await req(port, "POST", "/node/runners", { itemId }, laptopEnroll.json?.enrollmentToken)).status === 403, "only the cloud computer starts runners");
 
+  // One machine refreshes a synced sign-in at a time: the lease has one holder
+  // across the account's machines until that holder gives it up.
+  const laptopToken = laptopEnroll.json?.enrollmentToken;
+  const refreshKey = { key: "oauth-refresh:anthropic:default" };
+  expect((await req(port, "POST", "/node/lease", refreshKey, relay.enrollmentToken)).json?.granted === true, "a machine takes the refresh lease");
+  const contended = await req(port, "POST", "/node/lease", refreshKey, laptopToken);
+  expect(contended.json?.granted === false && contended.json?.holder === nodeId, "another of the account's machines waits for it");
+  await req(port, "DELETE", "/node/lease", refreshKey, relay.enrollmentToken);
+  expect((await req(port, "POST", "/node/lease", refreshKey, laptopToken)).json?.granted === true, "once released, the next machine gets it");
+  expect((await req(port, "POST", "/node/lease", { key: "anything-else" }, laptopToken)).status === 400, "only known lease kinds can be taken");
+
   // A runner: its own node for one piece of work, booted to work alone and
   // forgotten once the deployment deletes it.
   const runnerBoot = await req(port, "POST", "/internal/compute/runner-bootstrap", { accountId, runnerId: "work:w1", awakeCapMinutes: 180 }, EXTENSION_TOKEN);
