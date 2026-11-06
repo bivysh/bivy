@@ -27,6 +27,7 @@ import { CredentialVault } from "./CredentialVault.js";
 import { AgentInstructionsPanel } from "./AgentInstructionsPanel.js";
 import { AgentKeysPanel } from "./AgentKeysPanel.js";
 import { TeamPanel } from "./TeamPanel.js";
+import { TeamShareSection } from "./TeamShareSection.js";
 import { Toggle } from "./Toggle.js";
 import { useMediaQuery } from "../useMediaQuery.js";
 import { nodePresence, PRESENCE } from "../cloudDestinations.js";
@@ -1298,6 +1299,7 @@ function NodesPanel({ state }: { state: AppState }) {
       )}
 
       <MachineCapabilitiesSection online={nodeOnline} />
+      {hosted && !selectedNode?.sharedBy && <TeamShareSection state={state} />}
 
       {!nodeOnline ? (
         <p className="muted">

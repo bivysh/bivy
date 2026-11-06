@@ -70,7 +70,9 @@ export function NodeSwitcher() {
   // so they'd otherwise show up twice: here under "Your machines" AND as a cloud
   // row. Keep them out of the persistent list — the cloud section is their only
   // home. Applies to every provider, which all mint `eph-` node ids at launch.
-  const persistentNodes = nodes.filter((n) => !n.id.startsWith("eph-"));
+  const persistentNodes = nodes.filter((n) => !n.id.startsWith("eph-") && !n.sharedBy);
+  // Teammates' machines shared with your team (Settings → Machines → Share with team).
+  const teamNodes = nodes.filter((n) => !n.id.startsWith("eph-") && n.sharedBy);
   const cloud = useMemo(() => cloudDestinations(ephemeralConfigs, hostedMachines, nodes), [ephemeralConfigs, hostedMachines, nodes]);
   const cloudRows = cloud;
   const isPicked = (row: CloudDestination) => draftRunner
@@ -139,6 +141,28 @@ export function NodeSwitcher() {
               </button>
             </div>
           ))}
+          {teamNodes.length > 0 && (
+            <>
+              <div className="node-menu-head">Shared with you</div>
+              {teamNodes.map((n) => (
+                <div className="node-menu-row" key={n.id}>
+                  <button
+                    className={`menu-item node-menu-item${n.id === currentNodeId ? " active" : ""}`}
+                    role="menuitem"
+                    onClick={() => {
+                      setOpen(false);
+                      controller.switchNode(n.id);
+                    }}
+                  >
+                    <StatusDot status={n.online ? "online" : "idle"} label={`${n.online ? "Online" : "Offline"} — `} />
+                    <span className="node-menu-name">{n.name || n.id}</span>
+                    <span className="node-menu-meta">{n.sharedBy}</span>
+                    {n.id === currentNodeId && <span className="node-menu-check">✓</span>}
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
           {cloudMachinesEnabled && cloudRows.length > 0 && (
             <>
               <div className="node-menu-head">Cloud</div>

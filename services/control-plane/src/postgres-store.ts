@@ -6,6 +6,7 @@ import { anyNodeEligible } from "@bivy/core";
 import { encryptSecret, decryptSecret, isSecretEnvelope } from "./hosted-crypto.js";
 import { PostgresTeams } from "./teams.js";
 import { PostgresTeamVault } from "./team-vault.js";
+import { PostgresTeamMachines } from "./team-machines.js";
 import { PostgresDatabaseContext, type PostgresTransactionContext } from "./postgres-database.js";
 import {
   type Account,
@@ -103,6 +104,7 @@ export class PostgresStore implements ControlPlaneStore {
   private readonly database: PostgresDatabaseContext;
   readonly teams: PostgresTeams;
   readonly teamVault: PostgresTeamVault;
+  readonly teamMachines: PostgresTeamMachines;
 
   // `pool` is an optional injection seam: production passes only a
   // connectionString and we build a real pg.Pool; tests can hand in an
@@ -119,6 +121,7 @@ export class PostgresStore implements ControlPlaneStore {
     const max = Math.max(Number(process.env.DATABASE_POOL_MAX) || 10, 1);
     this.database = new PostgresDatabaseContext(pool ?? new pg.Pool({ connectionString, max }));
     this.teamVault = new PostgresTeamVault(this.database);
+    this.teamMachines = new PostgresTeamMachines(this.database);
     this.teams = new PostgresTeams(this.database, this.teamVault);
   }
 
@@ -828,6 +831,7 @@ export class PostgresStore implements ControlPlaneStore {
     `);
     await this.teams.init();
     await this.teamVault.init();
+    await this.teamMachines.init();
     await this.purgeRetiredKeyEscrow();
   }
 

@@ -754,6 +754,10 @@ export interface NodeSettings {
    *  `waiting-for-key`: the team has instructions this machine can't open until
    *  another member's machine seals the team key for it. Absent on older nodes. */
   teamInstructions?: { state: "none" | "ready" | "waiting-for-key"; maxBytes: number; teamName?: string; canEdit?: boolean; text?: string; updatedAt?: number; generation?: number };
+  /** Whether this machine is shared with its team (`teamName`, if in one), and
+   *  the teammates' devices paired with it. Set with `teamShare: boolean`.
+   *  Absent on nodes that predate the feature. */
+  teamShare?: { enabled: boolean; teamName?: string; teammateDevices: Array<{ id: string; label: string; email: string }> };
 }
 
 export interface ConnectionAccountState {

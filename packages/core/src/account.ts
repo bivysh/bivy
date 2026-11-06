@@ -244,6 +244,8 @@ export interface AccountNode {
   id: string;
   name?: string;
   online?: boolean;
+  /** Set on a teammate's machine shared with your team: the owner's email. */
+  sharedBy?: string;
   providers?: NodeProviderSummary[];
   /** Manually declared, owner-asserted capability tags (e.g. "gpu", "docker") —
    *  never auto-detected, and not a verified security fact. See

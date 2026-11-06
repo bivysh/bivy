@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { createHash } from "node:crypto";
 
+import type { PostgresTeamMachines } from "./team-machines.js";
 import type { PostgresTeamVault } from "./team-vault.js";
 import type { TeamRepository } from "./teams.js";
 
@@ -1629,4 +1630,6 @@ export interface ControlPlaneStore
   readonly teams: TeamRepository;
   /** End-to-end encrypted team vault (team-vault.ts). */
   readonly teamVault: PostgresTeamVault;
+  /** Machines shared with a team (team-machines.ts). */
+  readonly teamMachines: PostgresTeamMachines;
 }

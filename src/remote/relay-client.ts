@@ -107,6 +107,9 @@ export interface RelayConnectorOptions {
   // encryption, and the responder for X25519 pairing handshakes over the relay.
   // Required — there is no static-key fallback.
   pairing: PairingStore;
+  // Whether this machine is shared with its team. Without it, teammates'
+  // devices are refused even when the control plane vouches for them.
+  teamShared?: () => boolean;
   // Preview bytes use separate outbound streams, never session frame payloads.
   previews?: {
     ready(origin: string | undefined, relayUrl: string): void;
@@ -327,8 +330,11 @@ export class RelayConnector {
       });
     } else if (msg.k === "pair.account" && msg.devicePublicKeyB64 && msg.sessionToken) {
       const auth = await this.authorizeAccountPairing(msg.sessionToken, msg.devicePublicKeyB64, msg.label, msg.ephemeral === true);
-      if (auth.ok) welcome = this.pairing.trustDevice({ devicePublicKeyB64: msg.devicePublicKeyB64, label: msg.label });
-      else reason = auth.reason;
+      if (!auth.ok) reason = auth.reason;
+      // The control plane vouches for a teammate only while this machine is
+      // shared; the machine's own switch has the last word.
+      else if (auth.teammate && !this.options.teamShared?.()) reason = "This machine isn't shared with your team.";
+      else welcome = this.pairing.trustDevice({ devicePublicKeyB64: msg.devicePublicKeyB64, label: msg.label, ...(auth.teammate ? { teammate: auth.teammate } : {}) });
     } else {
       return;
     }
@@ -349,7 +355,7 @@ export class RelayConnector {
     devicePublicKeyB64: string,
     label?: string,
     ephemeral = false,
-  ): Promise<{ ok: true } | { ok: false; reason: string }> {
+  ): Promise<{ ok: true; teammate?: { accountId: string; email: string } } | { ok: false; reason: string }> {
     if (!this.config.controlPlaneUrl) return { ok: false, reason: "Node is not linked to a control plane." };
     try {
       const res = await fetch(`${this.config.controlPlaneUrl.replace(/\/$/, "")}/node/authorize-client`, {
@@ -361,8 +367,12 @@ export class RelayConnector {
         // on the mintTicket path, the whole relay reconnect) indefinitely.
         signal: AbortSignal.timeout(10_000),
       });
-      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string };
-      if (res.ok && data.ok === true) return { ok: true };
+      const data = (await res.json().catch(() => ({}))) as { ok?: boolean; error?: string; teammate?: boolean; accountId?: string; email?: string };
+      if (res.ok && data.ok === true) {
+        return data.teammate === true && data.accountId
+          ? { ok: true, teammate: { accountId: data.accountId, email: String(data.email ?? "") } }
+          : { ok: true };
+      }
       return { ok: false, reason: data.error || `Pairing rejected (${res.status}).` };
     } catch (err) {
       return { ok: false, reason: (err as Error)?.message || "Could not reach the control plane to pair." };
