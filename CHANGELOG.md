@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Follow-ups continue on a runner.** A comment, review or other follow-up on a session whose machine is gone now continues on a new runner that first restores the session from its account-sealed snapshot; a follow-up on a sleeping runner's session wakes that runner. Where cloud work runs is now one rules table. See [Automations](docs/ephemeral-sessions.md#automations).
+
 - **Runners without a cloud computer, and runners that keep their work.** A deployment can now offer runners on their own (`FLEET_ACCOUNT_MACHINE=0` with `FLEET_RUNNERS=1`): no computer is created at sign-up or on request, the picker shows one cloud destination that starts a machine per session, and queued work goes to runners. Every runner, including one started for queued work, now sleeps when the work is done instead of being deleted, so the session, its files and previews stay there to open or continue. See [Runners](docs/ephemeral-sessions.md#runners).
 - **Sign-ins stay alive across your machines.** A Claude or ChatGPT sign-in synced to all your machines is now refreshed by one machine at a time: it takes a short lease from the control plane, refreshes, passes the new token to the others through the end-to-end vault, and only then lets go. Machines no longer log each other out by refreshing at once, and a runner can keep a sign-in alive with no always-on machine. The control plane never sees a token. See [Refreshing synced sign-ins](docs/credential-sync.md#refreshing-synced-sign-ins).
 

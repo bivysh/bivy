@@ -15,8 +15,8 @@
 // another node's key stays with that node.
 import { createHash } from "node:crypto";
 import { ephemeralNodeLabel, flyMachineBoot, type BootstrapOpts } from "@bivy/core";
-import { cloudRouteSourceLabel, githubBootIdentity, type CloudComputerBoot } from "./cloud-computer.js";
-import type { CentralGithubAppRepository, EphemeralConfigurationRepository, HostedMachineRepository, NodeRepository, WorkQueueRepository } from "./store.js";
+import { githubBootIdentity, type CloudComputerBoot } from "./cloud-computer.js";
+import type { CentralGithubAppRepository, HostedMachineRepository, NodeRepository } from "./store.js";
 
 const RUNNER_NODE = /^eph-runner-[0-9a-f]{16}$/;
 
@@ -78,41 +78,4 @@ export async function bootRunner(
     ...await githubBootIdentity(store, input.accountId),
   };
   return { nodeId, ...flyMachineBoot(bootstrap) };
-}
-
-/** Work a runner can do: not sealed to another node's key, and not the
- * continuation of a session another node holds (its snapshot is sealed too). */
-export function runnerCanRun(item: { body?: string; targetKind?: string }): boolean {
-  return !item.body?.startsWith("bivy-room-v1:") && item.targetKind !== "existing_session";
-}
-
-export type LaunchRunner = (runnerId: string) => Promise<{ allowed: boolean }>;
-
-/**
- * Place one queued item on a new runner when the account's routing sends work
- * to the cloud: label it for the runner, then ask the deployment for the
- * machine. Returns false (and puts the item back) when the item isn't for the
- * cloud, a runner can't read it, or the deployment refuses or fails, so the
- * caller can fall back to the cloud computer.
- */
-export async function placeWorkOnRunner(
-  store: Pick<EphemeralConfigurationRepository, "getQueueRouting" | "getEphemeralConfigs"> & Pick<NodeRepository, "listNodes"> & Pick<WorkQueueRepository, "listWorkItems" | "assignWorkItem">,
-  accountId: string,
-  itemId: string,
-  launch: LaunchRunner,
-): Promise<boolean> {
-  const sourceLabel = await cloudRouteSourceLabel(store, accountId);
-  if (sourceLabel === undefined) return false;
-  const item = (await store.listWorkItems(accountId, 100)).find((i) => i.id === itemId);
-  if (!item || item.status !== "pending" || item.label !== sourceLabel || !runnerCanRun(item)) return false;
-  const runnerId = `work:${item.id}`;
-  const routing = { runtimeId: item.runtimeId, model: item.model };
-  await store.assignWorkItem(accountId, item.id, { ...routing, ephemeral: true, label: `bivy/${runnerLabel(runnerNodeId(accountId, runnerId))}` });
-  const launched = await launch(runnerId).catch((error) => {
-    console.warn(`[runners] launch for ${item.id} failed:`, error instanceof Error ? error.message : error);
-    return { allowed: false };
-  });
-  if (launched.allowed) return true;
-  await store.assignWorkItem(accountId, item.id, { ...routing, ephemeral: item.ephemeral, label: sourceLabel });
-  return false;
 }
