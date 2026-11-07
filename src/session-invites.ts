@@ -168,13 +168,20 @@ export function eventSessionId(event: unknown): string | undefined {
   return candidates.find((value) => typeof value === "string" && value) as string | undefined;
 }
 
+/** A guest's request id as the machine runs it: in the guest's own namespace,
+ *  so it can never match a request id another client is waiting on. */
+export function guestRequestId(inviteId: string, requestId: string): string {
+  return `guest.${inviteId}.${requestId}`;
+}
+
 /**
  * The copy of an outgoing event a guest may see, or null. Session lists are
  * cut to the guest's session (marked with the guest's mode, so the app can
- * stop a viewer from typing); replies to the guest's own requests pass; any
- * other event passes only if it is about the guest's session.
+ * stop a viewer from typing); replies to the guest's own requests pass, with
+ * the id the guest sent; any other event passes only if it is about the
+ * guest's session.
  */
-export function guestEvent(invite: Pick<SessionInvite, "sessionId" | "mode">, event: unknown, ownRequest: (requestId: string) => boolean): unknown | null {
+export function guestEvent(invite: Pick<SessionInvite, "id" | "sessionId" | "mode">, event: unknown): unknown | null {
   const e = event as Record<string, any> | null;
   if (!e || typeof e !== "object") return null;
   if (e.type === "sessions.list" && Array.isArray(e.sessions)) {
@@ -183,6 +190,7 @@ export function guestEvent(invite: Pick<SessionInvite, "sessionId" | "mode">, ev
       .map((s: Record<string, unknown>) => ({ ...s, guestMode: invite.mode }));
     return { ...e, sessions };
   }
-  if (typeof e.requestId === "string" && ownRequest(e.requestId)) return e;
+  const own = guestRequestId(invite.id, "");
+  if (typeof e.requestId === "string" && e.requestId.startsWith(own)) return { ...e, requestId: e.requestId.slice(own.length) };
   return eventSessionId(e) === invite.sessionId ? e : null;
 }

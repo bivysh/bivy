@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { SessionInvites, guestEvent, guestMayRun } from "../src/session-invites.js";
+import { SessionInvites, guestEvent, guestMayRun, guestRequestId } from "../src/session-invites.js";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "invites-"));
 let now = Date.parse("2026-11-06T12:00:00Z");
@@ -14,8 +14,8 @@ const sessionOf = (c: Record<string, unknown>) => (typeof c.sessionId === "strin
 
 // A viewer reads its session; a prompter may also drive it; neither reaches
 // another session or anything machine-wide.
-const view = { sessionId: "s1", mode: "view" as const };
-const prompt = { sessionId: "s1", mode: "prompt" as const };
+const view = { id: "inv-1", sessionId: "s1", mode: "view" as const };
+const prompt = { id: "inv-1", sessionId: "s1", mode: "prompt" as const };
 assert.equal(guestMayRun(view, { kind: "session.open", sessionId: "s1" }, sessionOf).ok, true);
 assert.equal(guestMayRun(view, { kind: "prompt", sessionId: "s1" }, sessionOf).ok, false);
 assert.equal(guestMayRun(prompt, { kind: "prompt", sessionId: "s1" }, sessionOf).ok, true);
@@ -26,14 +26,16 @@ for (const kind of ["session.new", "node.settings.set", "terminal.open.tui", "se
 assert.equal(guestMayRun(view, { kind: "sessions.list" }, sessionOf).ok, true, "listing is allowed; the reply is cut");
 
 // Events: their session, their replies, and a cut session list only.
-const mine = (id: string) => id === "req-guest";
-assert.ok(guestEvent(view, { type: "session.event", sessionId: "s1" }, mine));
-assert.equal(guestEvent(view, { type: "session.event", sessionId: "s2" }, mine), null);
-assert.equal(guestEvent(view, { type: "approval.created", approval: { sessionId: "s2" } }, mine), null);
-assert.equal(guestEvent(view, { type: "node.settings", settings: {} }, mine), null);
-assert.ok(guestEvent(view, { type: "models.list", requestId: "req-guest" }, mine), "their own replies pass");
-assert.equal(guestEvent(view, { type: "models.list", requestId: "req-owner" }, mine), null);
-assert.deepEqual((guestEvent(view, { type: "sessions.list", sessions: [{ id: "s1" }, { id: "s2" }] }, mine) as any).sessions, [{ id: "s1", guestMode: "view" }]);
+assert.ok(guestEvent(view, { type: "session.event", sessionId: "s1" }));
+assert.equal(guestEvent(view, { type: "session.event", sessionId: "s2" }), null);
+assert.equal(guestEvent(view, { type: "approval.created", approval: { sessionId: "s2" } }), null);
+assert.equal(guestEvent(view, { type: "node.settings", settings: {} }), null);
+// A guest's ids run in its own namespace: its replies come back with the id it
+// sent, and sending another client's id never gets that client's reply.
+assert.deepEqual(guestEvent(view, { type: "models.list", requestId: guestRequestId("inv-1", "req-1") }), { type: "models.list", requestId: "req-1" }, "their own replies pass");
+assert.equal(guestEvent(view, { type: "artifacts.list", requestId: "req-1" }), null, "the same id from another client stays theirs");
+assert.equal(guestEvent(view, { type: "models.list", requestId: guestRequestId("inv-2", "req-1") }), null, "another guest's reply");
+assert.deepEqual((guestEvent(view, { type: "sessions.list", sessions: [{ id: "s1" }, { id: "s2" }] }) as any).sessions, [{ id: "s1", guestMode: "view" }]);
 
 // Inviting again replaces; the control plane gets no keys; expiry drops the invite and its key.
 const first = invites.create({ sessionId: "s1", accountId: "bo", email: "bo@example.com", mode: "view", durationMs: 60 * 60_000 });
