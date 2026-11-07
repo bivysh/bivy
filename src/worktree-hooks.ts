@@ -356,11 +356,12 @@ export function describeWorktreeHook(result: WorktreeHookResult): string {
 interface PendingSetup { promise: Promise<WorktreeHookResult | undefined>; settled: boolean; reported: boolean }
 const pendingSetups = new Map<string, PendingSetup>();
 
-export function startWorktreeSetup(opts: { worktreePath: string; sourcePath?: string; env?: NodeJS.ProcessEnv; allowHook?: AllowHook }): void {
-  if (!worktreeHooksEnabled(opts.env ?? process.env)) return;
+/** Start the machine and worktree setup the worktree declares; false when there is none. */
+export function startWorktreeSetup(opts: { worktreePath: string; sourcePath?: string; env?: NodeJS.ProcessEnv; allowHook?: AllowHook }): boolean {
+  if (!worktreeHooksEnabled(opts.env ?? process.env)) return false;
   const declared = worktreeHook(opts.worktreePath, "setup");
   const machine = machineSetupEnabled(opts.env ?? process.env) ? worktreeHook(opts.worktreePath, "machine-setup") : {};
-  if (!declared.step && !declared.error && !machine.step) return;
+  if (!declared.step && !declared.error && !machine.step) return false;
   const entry: PendingSetup = { settled: false, reported: false, promise: Promise.resolve(undefined) };
   // The machine first, then the worktree; a failed machine setup is what the
   // person hears about, and the worktree's setup doesn't run on top of it.
@@ -370,6 +371,7 @@ export function startWorktreeSetup(opts: { worktreePath: string; sourcePath?: st
     return (await runWorktreeHook("setup", opts)) ?? prepared;
   })().finally(() => { entry.settled = true; });
   pendingSetups.set(path.resolve(opts.worktreePath), entry);
+  return true;
 }
 
 /**
