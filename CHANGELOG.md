@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Account-only settings links open Settings on a machine without an account.** A link to Settings → Team or Link a device, opened on a node you reach directly, now lands on Settings instead of a Create team form that could only fail.
 - **Your agent's own "ask me first" rules hold in Bivy.** A Claude `permissions.ask` rule, or a managed Codex `prompt-user` rule, now always gets an approval card: in every approval mode, at full access too, and without "Allow … this session". Before, Bivy's approval mode could approve those calls for you, and Codex turned down `prompt-user` commands without asking.
 
 - **Fork and Retry at reset come back when you open the chat.** When an agent hits a usage limit, the offer to fork the work to another agent or retry automatically when the limit resets was shown only to an app that had the session open at that moment, so opening the chat later showed the limit with nothing to tap. It is now offered again every time the session is opened, and a retry already waiting for the reset shows again with its Cancel button.

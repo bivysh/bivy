@@ -42,7 +42,9 @@ type View = SettingsView;
 /** Views that moved out of Settings into the Automations hub. They remain valid
  *  `SettingsView` values only so stale `/settings/:view` deep links parse and can
  *  be redirected — they are never listed in the Settings nav. */
-type MovedView = "github" | "linear" | "slack" | "queue" | "webhooks" | "rulesets";
+/** Panels that need a Bivy account, so only signed-in (hosted) clients show them. */
+const HOSTED_ONLY: ReadonlySet<View> = new Set<View>(["team", "link"]);
+type MovedView ="github" | "linear" | "slack" | "queue" | "webhooks" | "rulesets";
 const MOVED_TO_AUTOMATIONS: readonly MovedView[] = ["github", "linear", "slack", "queue", "webhooks", "rulesets"];
 function isMovedView(v: View | null): v is MovedView {
   return v !== null && (MOVED_TO_AUTOMATIONS as readonly string[]).includes(v);
@@ -258,11 +260,15 @@ export function Settings({
   // null === the mobile root menu. On desktop we always resolve to a panel —
   // reflect that resolution back into the URL so `/settings` never lingers
   // without a section once there's room to show one.
-  const activeView: View | null = view ?? (isDesktop ? DEFAULT : null);
+  // A deep link to an account-only panel on a client reached directly (no
+  // account) falls back like `/settings` does, instead of a dead form.
+  const usable = view !== null && (hosted || !HOSTED_ONLY.has(view)) ? view : null;
+  const activeView: View | null = usable ?? (isDesktop ? DEFAULT : null);
   useEffect(() => {
-    if (isDesktop && view === null) onViewChange(DEFAULT);
+    if (view !== null && usable === null) onViewChange(isDesktop ? DEFAULT : null);
+    else if (isDesktop && view === null) onViewChange(DEFAULT);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isDesktop, view]);
+  }, [isDesktop, view, usable]);
 
   // Integrations + automation/policy sections moved to the Automations hub. A
   // stale deep link (bookmark / OAuth return) to one of those `/settings/:view`
