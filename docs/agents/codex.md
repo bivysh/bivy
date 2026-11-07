@@ -47,7 +47,8 @@ catalog and starts at that model's default. A pick applies from the next turn.
 - **Permission requests** (more network or filesystem access than the sandbox
   allows) are an approval card in every approval mode except "never".
 - **MCP tool approvals** follow the same policy as any other tool call. An MCP
-  server's own form or link prompt is declined, since Bivy can't show one yet.
+  server's own form or link prompt shows as a question card, and the answer
+  goes back to the server.
 - **A message sent while Codex is working** joins the running turn
   (`turn/steer`) instead of waiting for it to finish.
 

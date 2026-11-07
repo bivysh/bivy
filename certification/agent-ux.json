@@ -1,5 +1,5 @@
 {
-  "about": "Tasks for `pnpm run eval:agent-ux`: can an agent, told nothing but Bivy's agent note, use Bivy well? Each task runs in a fresh git workspace seeded with `files`. `answer` is what the harness replies to a question card. In `expect`: `block` is a chat card type that must appear at least `min` times (default 1), `asked` means the agent raised a question card, `approval` that it raised an approval card for that tool (the harness declines them all, so nothing changes on the account), `reply` is text its last answer must contain ({machine} is the node's name), and `file` is a path glob that must exist afterwards.",
+  "about": "Tasks for `pnpm run eval:agent-ux`: can an agent, told nothing but Bivy's agent note, use Bivy well? Each task runs in a fresh git workspace seeded with `files`. `answer` is what the harness replies to a question card. In `expect`: `block` is a chat card type that must appear at least `min` times (default 1), `shown` is a file glob the agent must have put in the chat (an attachment card, a `::view` line or a markdown image), `asked` means the agent raised a question card, `approval` that it raised an approval card for that tool (the harness declines them all, so nothing changes on the account), `reply` is text its last answer must contain ({machine} is the node's name), and `file` is a path glob that must exist afterwards.",
   "tasks": [
     {
       "id": "show-a-file",
@@ -10,7 +10,7 @@
       },
       "expect": [
         {
-          "block": "bivy_attachment"
+          "shown": "report.md"
         }
       ]
     },

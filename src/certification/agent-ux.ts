@@ -9,6 +9,7 @@
 
 export type AgentUxExpectation =
   | { block: string; min?: number }
+  | { shown: string }
   | { asked: true }
   | { approval: string }
   | { reply: string }
@@ -32,6 +33,8 @@ export interface AgentUxObservation {
   approvals: string[];
   /** The agent's last message text. */
   reply: string;
+  /** Workspace files the agent put in the chat (see shownFiles). */
+  shown: string[];
   /** Workspace files afterwards, relative paths. */
   files: string[];
 }
@@ -50,6 +53,12 @@ export function scoreAgentUx(expect: AgentUxExpectation[], seen: AgentUxObservat
       const min = rule.min ?? 1;
       return { expectation: `${min}+ ${rule.block}`, passed: (seen.blocks[rule.block] ?? 0) >= min };
     }
+    if ("shown" in rule) {
+      const pattern = globToRegExp(rule.shown);
+      // Compare as many trailing path segments as the glob has.
+      const depth = rule.shown.split("/").length;
+      return { expectation: `showed ${rule.shown}`, passed: seen.shown.some((file) => pattern.test(file.split("/").slice(-depth).join("/"))) };
+    }
     if ("asked" in rule) return { expectation: "asked a question", passed: seen.asked };
     if ("approval" in rule) return { expectation: `asked to approve ${rule.approval}`, passed: seen.approvals.includes(rule.approval) };
     if ("reply" in rule) {
@@ -59,6 +68,28 @@ export function scoreAgentUx(expect: AgentUxExpectation[], seen: AgentUxObservat
     const pattern = globToRegExp(rule.file);
     return { expectation: `file ${rule.file}`, passed: seen.files.some((file) => pattern.test(file)) };
   });
+}
+
+/** Every file the agent's messages place in the chat: a `::view{src=…}` line
+ *  or a markdown image, as written (an agent may write `./x` or an absolute
+ *  path; a glob in the task matches the end of it). An attachment card
+ *  (`bivy attach`) counts by its file name. */
+export function shownFiles(messages: unknown): string[] {
+  const shown: string[] = [];
+  const text = (content: unknown) => typeof content === "string" ? content
+    : (Array.isArray(content) ? content : []).map((b) => (b as { type?: string; text?: string }).type === "text" ? (b as { text: string }).text : "").join("\n");
+  for (const m of Array.isArray(messages) ? messages as Array<{ role?: string; content?: unknown }> : []) {
+    if (m.role !== "assistant") continue;
+    for (const line of text(m.content).split("\n")) {
+      const view = /^\s*::view\{(?:[^}]*\s)?src=(?:"([^"]+)"|([^\s}]+))/.exec(line);
+      if (view) shown.push(view[1] ?? view[2]!);
+    }
+    for (const image of text(m.content).matchAll(/!\[[^\]]*\]\(([^)\s]+)/g)) shown.push(image[1]!);
+    for (const block of Array.isArray(m.content) ? m.content as Array<{ type?: string; ref?: { name?: string } }> : []) {
+      if (block.type === "bivy_attachment" && block.ref?.name) shown.push(block.ref.name);
+    }
+  }
+  return shown;
 }
 
 /** Count `bivy_*` chat card blocks anywhere in a history payload's messages. */

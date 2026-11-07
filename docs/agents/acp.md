@@ -113,6 +113,11 @@ bundle. When one of them ships a first-party ACP server, promoting it is a one-l
   shim publishes them as a `runtime.commands` event and the composer offers
   them. Picking one sends the slash line as a prompt, which is how ACP invokes
   commands.
+- **Questions:** ACP has no standard "ask the user" request yet, so an agent's
+  own extension request is a row in the shim's `QUESTION_REQUESTS` table (today
+  Grok's `_x.ai/ask_user_question`). Its questions show as Bivy's question card,
+  and the answer goes back in the agent's own shape: answered, dismissed, or
+  replied in the chat.
 - **Usage:** each turn's token counts (the `session/prompt` reply's `usage`, or
   `_meta.usage` as Grok sends it) add up to the session's running total, and a
   `usage_update` cost in USD is the session cost.

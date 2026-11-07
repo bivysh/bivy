@@ -113,6 +113,17 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         });
         return;
       }
+      // The agent asks the user through its own extension request (Grok's shape).
+      if (process.env.ACP_ASK === "1") {
+        const requestId = 8002;
+        const response = new Promise((resolve) => clientResponses.set(requestId, resolve));
+        send({ jsonrpc: "2.0", id: requestId, method: "_x.ai/ask_user_question", params: { sessionId, toolCallId: "ask-call-1", questions: [{ question: "Python or Bash?", options: [{ label: "Python" }, { label: "Bash", description: "a shell script" }], multiSelect: null }], mode: "default" } });
+        response.then((message) => {
+          if (process.env.BIVY_TEST_ASK_DUMP) fs.writeFileSync(process.env.BIVY_TEST_ASK_DUMP, JSON.stringify(message.result ?? message.error));
+          reply(id, { stopReason: "end_turn" });
+        });
+        return;
+      }
       if (process.env.ACP_FS_WRITE_PATH) {
         const requestId = 8001;
         const response = new Promise((resolve) => clientResponses.set(requestId, resolve));

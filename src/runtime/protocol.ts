@@ -1053,7 +1053,7 @@ class ProtocolSession implements RuntimeSession {
         // runtimes' deny channel, plus `handled` and the structured answers (or
         // an MCP elicitation's result) for a shim that can return them natively.
         const reply = decision?.handled
-          ? { decision: "deny", reason: decision.result, handled: true, ...(decision.answers ? { answers: decision.answers } : {}), ...(decision.elicitation ? { elicitation: decision.elicitation } : {}) }
+          ? { decision: "deny", reason: decision.result, handled: true, ...(decision.answers ? { answers: decision.answers } : {}), ...(decision.questionOutcome ? { questionOutcome: decision.questionOutcome } : {}), ...(decision.elicitation ? { elicitation: decision.elicitation } : {}) }
           : { decision: decision?.block ? "deny" : "allow", reason: decision?.reason };
         try {
           this.write({ id: randomUUID(), type: "tool.decision", sessionId: this.id, toolCallId, ...reply });

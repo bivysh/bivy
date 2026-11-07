@@ -7,7 +7,7 @@ older binary without the ACP mode falls back to one headless prompt per turn
 (`grok -p` / `--single`); force that path with `BIVY_GROK_ACP=0`.
 
 - **Runtime id:** `grok` · **Tier:** Supported · **In picker:** Yes
-- **Release-tested against:** Grok CLI 1.0.70 (the governed ACP path)
+- **Release-tested against:** Grok CLI 1.0.77 (the governed ACP path)
 
 ## Install
 
@@ -43,10 +43,17 @@ when a Grok session ends.
 
 ## Models
 
-Wired via `-m <id>`. The curated default matches the official Grok CLI's
-current catalog (`grok-4.6`, per the authenticated model catalog). Override with
+On the ACP path the picker lists the models the signed-in session reports
+(Grok 4.7 today). The pipe fallback passes `-m <id>` from a curated list.
+Override with
 `BIVY_GROK_MODELS` (JSON array of `{id,name?,provider?}`) if your install exposes
 more.
+
+## Questions
+
+**Yes.** When Grok asks you something (its `ask_user_question` tool), the
+question shows as Bivy's question card. Answering it, dismissing it, or
+replying in the chat instead each goes back to Grok as such.
 
 ## Reasoning effort
 

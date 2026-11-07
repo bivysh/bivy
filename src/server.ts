@@ -6786,7 +6786,7 @@ const guardianInterceptorImpl: ToolInterceptor = async ({ sessionId, toolName, i
     const questions = validQuestions((input as { questions?: unknown } | undefined)?.questions);
     if (!questions) return;
     const answer = await questionManager.request({ sessionId, questions, signal });
-    return { handled: true, result: formatQuestionResult(questions, answer), ...(answer.behavior === "completed" ? { answers: answer.answers } : {}) };
+    return { handled: true, result: formatQuestionResult(questions, answer), questionOutcome: answer.behavior, ...(answer.behavior === "completed" ? { answers: answer.answers } : {}) };
   }
   // An MCP server asking the user for something (a form, a page to open),
   // which an adapter raised as ELICITATION_TOOL. Same card, same pre-policy
