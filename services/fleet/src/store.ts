@@ -75,6 +75,9 @@ export interface RunnerRecord {
   updatedAt: string;
 }
 
+/** An X25519 keypair, base64url: raw public key, PKCS#8 private key. */
+export interface PoolKey { publicKey: string; privateKey: string }
+
 export interface FleetStore {
   init(): Promise<void>;
   get(accountId: string): Promise<CloudComputerRecord | undefined>;
@@ -89,6 +92,11 @@ export interface FleetStore {
   deleteRunner(accountId: string, runnerId: string): Promise<void>;
   /** Every runner, or one account's. */
   listRunners(accountId?: string): Promise<RunnerRecord[]>;
+  /** The account's pool key (pool-key.ts), when the account let this fleet's
+   * machines start with its sign-ins. */
+  getPoolKey(accountId: string): Promise<PoolKey | undefined>;
+  putPoolKey(accountId: string, key: PoolKey): Promise<void>;
+  deletePoolKey(accountId: string): Promise<void>;
   /** Run `fn` holding the account's lock, so two requests never create two machines. */
   withAccountLock<T>(accountId: string, fn: () => Promise<T>): Promise<T>;
   /** Close a metering run. `machineSeconds` are Standard seconds: awake time
@@ -120,6 +128,12 @@ const SCHEMA = `
     account_id     TEXT PRIMARY KEY,
     size           TEXT NOT NULL,
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  CREATE TABLE IF NOT EXISTS fleet_pool_keys (
+    account_id     TEXT PRIMARY KEY,
+    public_key     TEXT NOT NULL,
+    private_key    TEXT NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
   );
   CREATE TABLE IF NOT EXISTS fleet_runs (
     account_id      TEXT NOT NULL,
@@ -168,6 +182,22 @@ export class PostgresFleetStore implements FleetStore {
   async sizePreference(accountId: string): Promise<string | undefined> {
     const { rows } = await this.pool.query(`SELECT size FROM fleet_preferences WHERE account_id = $1`, [accountId]);
     return rows[0]?.size as string | undefined;
+  }
+
+  async getPoolKey(accountId: string): Promise<PoolKey | undefined> {
+    const { rows } = await this.pool.query(`SELECT public_key, private_key FROM fleet_pool_keys WHERE account_id = $1`, [accountId]);
+    return rows[0] ? { publicKey: rows[0].public_key, privateKey: rows[0].private_key } : undefined;
+  }
+
+  async putPoolKey(accountId: string, key: PoolKey): Promise<void> {
+    await this.pool.query(
+      `INSERT INTO fleet_pool_keys (account_id, public_key, private_key) VALUES ($1, $2, $3) ON CONFLICT (account_id) DO NOTHING`,
+      [accountId, key.publicKey, key.privateKey],
+    );
+  }
+
+  async deletePoolKey(accountId: string): Promise<void> {
+    await this.pool.query(`DELETE FROM fleet_pool_keys WHERE account_id = $1`, [accountId]);
   }
 
   async setSizePreference(accountId: string, size: string): Promise<void> {
@@ -272,6 +302,10 @@ export class MemoryFleetStore implements FleetStore {
   async list() { return [...this.records.values()].map((r) => ({ ...r })); }
   async sizePreference(accountId: string) { return this.sizes.get(accountId); }
   async setSizePreference(accountId: string, size: string) { this.sizes.set(accountId, size); }
+  readonly poolKeys = new Map<string, PoolKey>();
+  async getPoolKey(accountId: string) { return this.poolKeys.get(accountId); }
+  async putPoolKey(accountId: string, key: PoolKey) { if (!this.poolKeys.has(accountId)) this.poolKeys.set(accountId, key); }
+  async deletePoolKey(accountId: string) { this.poolKeys.delete(accountId); }
   async getRunner(accountId: string, runnerId: string) { const r = this.runners.get(`${accountId}/${runnerId}`); return r ? { ...r } : undefined; }
   async putRunner(record: RunnerRecord) { this.runners.set(`${record.accountId}/${record.runnerId}`, { ...record }); }
   async deleteRunner(accountId: string, runnerId: string) { this.runners.delete(`${accountId}/${runnerId}`); }

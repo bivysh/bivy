@@ -73,6 +73,8 @@ async function main() {
           { id: "fly-x", nodeId: "eph-runner-fedcba9876543210", provider: "fly", kind: "runner", state: "asleep", deleteAt: "soon", createdAt: "2026-10-27T00:00:00Z" },
         ] },
         "/v1/compute/release": { released: true },
+        "/v1/compute/pool-key": { publicKey: "pool-pub" },
+        "/v1/compute/pool-key/delete": { deleted: true },
         "/v1/compute/runners/release": { released: true },
         "/v1/compute/runners/wake": { state: "waking" },
         "/v1/compute/runners/launch": { nodeId: body.runnerId ? `eph-runner-${createHash("sha256").update(`${body.subject?.accountId}:${body.runnerId}`).digest("hex").slice(0, 16)}` : "", state: "launching" },
@@ -255,6 +257,23 @@ async function main() {
   await req(port, "DELETE", "/node/lease", refreshKey, relay.enrollmentToken);
   expect((await req(port, "POST", "/node/lease", refreshKey, laptopToken)).json?.granted === true, "once released, the next machine gets it");
   expect((await req(port, "POST", "/node/lease", { key: "anything-else" }, laptopToken)).status === 400, "only known lease kinds can be taken");
+
+  // "Cloud machines can start with my sign-ins": off by default; on, the
+  // account's machines wrap the vault key to the deployment's pool key and only
+  // the deployment's own machines are handed that wrap.
+  expect((await req(port, "GET", "/account/cloud-sign-ins", undefined, token)).json?.enabled === false, "cloud sign-ins are off until the account turns them on");
+  expect((await req(port, "PUT", "/account/cloud-sign-ins", { enabled: true }, token)).json?.enabled === true, "the account turns them on");
+  await req(port, "PUT", "/node/model-auth-vault", { ciphertext: "vault-ct" }, laptopToken);
+  const holder = await req(port, "GET", "/node/model-auth-vault", undefined, laptopToken);
+  expect(holder.json?.poolKey?.publicKey === "pool-pub" && holder.json?.poolKey?.wrapped === false, "a machine holding the key learns the pool key needs a wrap");
+  expect((await req(port, "PUT", "/node/model-auth-key/pool", { publicKey: "someone-else", wrappedKey: "w", wrappedByPublicKey: "laptop-pub" }, laptopToken)).status === 409, "a wrap for any other key is refused");
+  await req(port, "PUT", "/node/model-auth-key/pool", { publicKey: "pool-pub", wrappedKey: "wrapped-for-pool", wrappedByPublicKey: "laptop-pub" }, laptopToken);
+  expect((await req(port, "GET", "/node/model-auth-vault", undefined, relay.enrollmentToken)).json?.poolWrappedKey?.wrappedKey === "wrapped-for-pool", "the cloud computer is handed the pool wrap");
+  expect(!(await req(port, "GET", "/node/model-auth-vault", undefined, laptopToken)).json?.poolWrappedKey, "the account's own machines aren't");
+  await req(port, "PUT", "/account/cloud-sign-ins", { enabled: false }, token);
+  const after = await req(port, "GET", "/node/model-auth-vault", undefined, laptopToken);
+  expect(!after.json?.poolKey && after.json?.vault?.needsRotation === true, "turning it off forgets the pool key and re-keys the vault");
+  expect(calls.some((c) => c.path === "/v1/compute/pool-key/delete"), "and the deployment deletes its keypair");
 
   // A runner: its own node for one piece of work, booted to work alone. It
   // sleeps when done, keeping the session, and is forgotten once the

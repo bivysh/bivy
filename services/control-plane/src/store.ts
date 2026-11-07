@@ -1357,6 +1357,14 @@ export interface VaultRepository {
   setModelAuthDeviceKey(accountId: string, devicePublicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<void>;
   /** Paired devices that hold no wrap of the current vault key yet. */
   listModelAuthDevicesMissingKey(accountId: string): Promise<string[]>;
+  /** The deployment's pool key for the account (its machines may start with
+   * the account's sign-ins), with the vault key wrapped to it once a machine
+   * has done so. Absent when the account hasn't turned this on. */
+  getModelAuthPoolKey(accountId: string): Promise<{ publicKey: string; wrappedKey?: string; wrappedByPublicKey?: string } | undefined>;
+  setModelAuthPoolKey(accountId: string, publicKey: string): Promise<void>;
+  setModelAuthPoolWrap(accountId: string, publicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<boolean>;
+  /** Turn it off: forget the pool key and, if a wrap existed, require a re-key. */
+  deleteModelAuthPoolKey(accountId: string): Promise<void>;
 
   // Device→device provider-token vault (P2 / Gap A) — recipients are paired devices.
   getDeviceVault(accountId: string): Promise<DeviceVault | undefined>;

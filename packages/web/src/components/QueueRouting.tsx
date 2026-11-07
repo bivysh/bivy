@@ -6,7 +6,7 @@
 // Rendered by the Automations hub's Work Queue tab; gated by
 // EPHEMERAL_MACHINES_ENABLED.
 import { useEffect, useState } from "react";
-import type { AccountNode, EphemeralNodeConfig, HostedProvisioningStatus, QueueRouting } from "@bivy/core";
+import type { AccountNode, CloudSignIns, EphemeralNodeConfig, HostedProvisioningStatus, QueueRouting } from "@bivy/core";
 import { controller } from "../store/useStore.js";
 import { Badge } from "./Badge.js";
 
@@ -22,10 +22,12 @@ export function QueueRoutingSection({
   const [routing, setRouting] = useState<QueueRouting | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [signIns, setSignIns] = useState<CloudSignIns | null>(null);
 
   useEffect(() => {
     controller.listNodes().then(setNodes).catch(() => {});
     controller.getQueueRouting().then(setRouting).catch(() => setRouting(null));
+    controller.getCloudSignIns().then(setSignIns).catch(() => setSignIns(null));
     controller.listEphemeralConfigs()
       .then((configs) => setClouds(configs.filter((config) => config.computeSource === "managed")))
       .catch(() => {});
@@ -89,6 +91,20 @@ export function QueueRoutingSection({
     return routeReady ? "Runs go to whichever of your machines is online." : "Runs wait until one of your machines is online.";
   };
 
+  const saveSignIns = async (enabled: boolean) => {
+    setErr(null);
+    setBusy(true);
+    try {
+      const next = await controller.setCloudSignIns(enabled);
+      setSignIns((current) => (current ? { ...current, enabled: next } : current));
+    } catch (e) {
+      setErr(String((e as Error)?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const routesToCloud = routing?.primary.kind === "config" || Boolean(routing?.fallback);
+
   return (
     <>
       <div className="banner routing-status" data-tone={routeReady ? "ok" : "warn"} role="status">
@@ -125,6 +141,19 @@ export function QueueRoutingSection({
             ))}
           </select>
         </label>
+      )}
+      {signIns?.available && routesToCloud && (
+        <div className="settings-field">
+          <label className="autom-check-row">
+            <input type="checkbox" checked={signIns.enabled} disabled={busy} onChange={(e) => void saveSignIns(e.target.checked)} />
+            <span>Cloud machines can start with my sign-ins</span>
+          </label>
+          <p className="settings-hint">
+            {signIns.enabled
+              ? "Runs start in the cloud even when none of your machines is online. Your sign-ins stay encrypted to the cloud machines that run your work; the service that schedules your runs can't open them."
+              : "Off: a cloud run gets your sign-ins from one of your machines, or from Bivy open on your phone or browser, so with all of them offline it waits."}
+          </p>
+        </div>
       )}
       {err && <Badge tone="danger">{err}</Badge>}
     </>

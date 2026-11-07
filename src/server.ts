@@ -270,6 +270,7 @@ import {
 } from "./stt.js";
 import { synthesizeOpenAiSpeech } from "./tts.js";
 import { seal, open } from "./e2e.js";
+import { deriveWrapKey } from "./pairing-crypto.js";
 import { recoverModelAuthKey } from "./model-auth-key-recovery.js";
 import { runPrompt, trustedInstructions } from "./work-instructions.js";
 import { RunDelegationService, parseDelegationSource, type SafeRunResult, type StartRunInput } from "./run-tools.js";
@@ -3984,7 +3985,22 @@ type ModelAuthVaultResponse = {
   requests?: Array<{ nodeId: string; publicKey: string }>;
   /** Paired devices that hold no copy of the current vault key yet. */
   devicesMissingKey?: string[];
+  /** The account's pool key, when it let the deployment's machines start with
+   *  its sign-ins; `wrapped` says whether the vault key is wrapped to it yet. */
+  poolKey?: { publicKey: string; wrapped: boolean };
+  /** For one of the deployment's machines: the vault key wrapped to the pool key. */
+  poolWrappedKey?: { wrappedKey: string; wrappedByPublicKey: string };
 };
+
+/** The pool key a deployment machine boots with (services/fleet pool-key.ts). */
+function readPoolKey(): { publicKey: string; privateKey: string } | undefined {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(process.env.BIVY_POOL_KEY_FILE || "/etc/bivy/pool-key.json", "utf8")) as { publicKey?: unknown; privateKey?: unknown };
+    return typeof parsed.publicKey === "string" && typeof parsed.privateKey === "string" ? { publicKey: parsed.publicKey, privateKey: parsed.privateKey } : undefined;
+  } catch {
+    return undefined;
+  }
+}
 const modelAuthVaultKeyPath = path.join(appDir, "model-auth-vault.json");
 let lastPushedModelAuthCiphertext = "";
 const sealKeyring = keyringStore(appDir);
@@ -4230,13 +4246,24 @@ async function syncModelAuthFromControlPlane() {
     const targetVault = data.vault;
     let vaultKeyB64 = readLocalModelAuthVaultKey();
 
-    if (targetVault?.ciphertext && (vaultKeyB64 || data.wrappedKey)) {
+    // A deployment machine can open the wrap made for the account's pool key
+    // itself, so it starts with the sign-ins with no other machine online.
+    const poolKey = data.poolWrappedKey ? readPoolKey() : undefined;
+    const poolUnwrap = poolKey && data.poolWrappedKey
+      ? () => open(deriveWrapKey(poolKey.privateKey, data.poolWrappedKey!.wrappedByPublicKey, "model-auth-vault"), data.poolWrappedKey!.wrappedKey)
+      : undefined;
+    if (targetVault?.ciphertext && (vaultKeyB64 || data.wrappedKey || poolUnwrap)) {
       let decrypted;
       try {
         const wrapped = data.wrappedKey;
+        const peerUnwrap = wrapped ? () => pairingStore.unwrapFromNodePublicKey(wrapped.wrappedByPublicKey, wrapped.wrappedKey) : undefined;
         const recovered = recoverModelAuthKey({
           localKey: vaultKeyB64,
-          unwrap: wrapped ? () => pairingStore.unwrapFromNodePublicKey(wrapped.wrappedByPublicKey, wrapped.wrappedKey) : undefined,
+          unwrap: peerUnwrap || poolUnwrap ? () => {
+            try { if (peerUnwrap) return peerUnwrap(); } catch { /* fall back to the pool wrap */ }
+            if (poolUnwrap) return poolUnwrap();
+            throw new Error("no usable wrap");
+          } : undefined,
           decrypt: (key) => decryptModelAuthEnvelope(targetVault.ciphertext, key),
         });
         if (!recovered) throw new Error("No available key can decrypt the account vault");
@@ -4302,6 +4329,7 @@ async function syncModelAuthFromControlPlane() {
 
     await processModelAuthKeyRequests(data.requests ?? []);
     await wrapVaultKeyForDevices(data.vault?.ciphertext ? data.devicesMissingKey ?? [] : []);
+    if (data.vault?.ciphertext && data.poolKey && !data.poolKey.wrapped) await wrapVaultKeyForPool(data.poolKey.publicKey);
     // With no account vault there is nothing to hydrate; with one, ready once
     // this node holds its key. (The cold-start retry reports it too when no
     // peer answers, so a waiting launch can move on.)
@@ -4376,6 +4404,17 @@ async function wrapVaultKeyForDevices(devices: string[]) {
       body: JSON.stringify({ devicePublicKey, wrappedByPublicKey: pairingStore.nodePublicKeyB64(), wrappedKey: pairingStore.wrapForNodePublicKey(devicePublicKey, vaultKeyB64) }),
     }).catch(() => null);
   }
+}
+
+/** Wrap the vault key to the account's pool key, so the deployment's machines
+ *  can open it when no machine or device of the account is online. */
+async function wrapVaultKeyForPool(poolPublicKey: string) {
+  const vaultKeyB64 = readLocalModelAuthVaultKey();
+  if (!sessionAdvertiseTarget || !vaultKeyB64) return;
+  await modelAuthFetch("/node/model-auth-key/pool", {
+    method: "PUT",
+    body: JSON.stringify({ publicKey: poolPublicKey, wrappedByPublicKey: pairingStore.nodePublicKeyB64(), wrappedKey: pairingStore.wrapForNodePublicKey(poolPublicKey, vaultKeyB64) }),
+  }).catch(() => null);
 }
 
 async function processModelAuthKeyRequests(requests: Array<{ nodeId: string; publicKey: string }>) {

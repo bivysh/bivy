@@ -468,6 +468,16 @@ export class PostgresStore implements ControlPlaneStore {
         PRIMARY KEY (account_id, device_pub)
       );
 
+      -- The deployment's pool key for an account that let the deployment's
+      -- machines start with its sign-ins, and the vault key wrapped to it.
+      CREATE TABLE IF NOT EXISTS model_auth_pool_keys (
+        account_id             TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+        pool_public_key        TEXT NOT NULL,
+        wrapped_key            TEXT,
+        wrapped_by_public_key  TEXT,
+        updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+
       CREATE TABLE IF NOT EXISTS model_auth_key_requests (
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         node_id     TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
@@ -2073,6 +2083,7 @@ export class PostgresStore implements ControlPlaneStore {
         // slip in after needs_rotation clears but before old wraps disappear.
         await client.query(`DELETE FROM model_auth_wrapped_keys WHERE account_id = $1`, [accountId]);
         await client.query(`DELETE FROM model_auth_device_keys WHERE account_id = $1`, [accountId]);
+        await client.query(`UPDATE model_auth_pool_keys SET wrapped_key = NULL, wrapped_by_public_key = NULL WHERE account_id = $1`, [accountId]);
         await client.query(
         `INSERT INTO model_auth_key_requests (account_id, node_id, public_key, created_at)
          SELECT k.account_id, k.node_id, k.public_key, now()
@@ -2105,6 +2116,39 @@ export class PostgresStore implements ControlPlaneStore {
        ON CONFLICT (account_id, device_pub) DO UPDATE SET wrapped_key = EXCLUDED.wrapped_key, wrapped_by_public_key = EXCLUDED.wrapped_by_public_key, updated_at = now()`,
       [accountId, devicePublicKey, wrappedKey, wrappedByPublicKey],
     );
+  }
+
+  async getModelAuthPoolKey(accountId: string): Promise<{ publicKey: string; wrappedKey?: string; wrappedByPublicKey?: string } | undefined> {
+    const { rows } = await this.query(`SELECT * FROM model_auth_pool_keys WHERE account_id = $1`, [accountId]);
+    const row = rows[0];
+    if (!row) return undefined;
+    return { publicKey: row.pool_public_key, ...(row.wrapped_key ? { wrappedKey: row.wrapped_key, wrappedByPublicKey: row.wrapped_by_public_key } : {}) };
+  }
+
+  async setModelAuthPoolKey(accountId: string, publicKey: string): Promise<void> {
+    // A new pool key invalidates any wrap made for the old one.
+    await this.query(
+      `INSERT INTO model_auth_pool_keys (account_id, pool_public_key, updated_at) VALUES ($1, $2, now())
+       ON CONFLICT (account_id) DO UPDATE SET
+         wrapped_key = CASE WHEN model_auth_pool_keys.pool_public_key = EXCLUDED.pool_public_key THEN model_auth_pool_keys.wrapped_key ELSE NULL END,
+         wrapped_by_public_key = CASE WHEN model_auth_pool_keys.pool_public_key = EXCLUDED.pool_public_key THEN model_auth_pool_keys.wrapped_by_public_key ELSE NULL END,
+         pool_public_key = EXCLUDED.pool_public_key, updated_at = now()`,
+      [accountId, publicKey],
+    );
+  }
+
+  async setModelAuthPoolWrap(accountId: string, publicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<boolean> {
+    const { rowCount } = await this.query(
+      `UPDATE model_auth_pool_keys SET wrapped_key = $3, wrapped_by_public_key = $4, updated_at = now() WHERE account_id = $1 AND pool_public_key = $2`,
+      [accountId, publicKey, wrappedKey, wrappedByPublicKey],
+    );
+    return (rowCount ?? 0) > 0;
+  }
+
+  async deleteModelAuthPoolKey(accountId: string): Promise<void> {
+    const removed = await this.query(`DELETE FROM model_auth_pool_keys WHERE account_id = $1 RETURNING wrapped_key`, [accountId]);
+    // The deployment could open that wrap: re-key so it can't open what's synced next.
+    if (removed.rows[0]?.wrapped_key) await this.query(`UPDATE model_auth_vaults SET needs_rotation = true WHERE account_id = $1`, [accountId]);
   }
 
   async listModelAuthDevicesMissingKey(accountId: string): Promise<string[]> {

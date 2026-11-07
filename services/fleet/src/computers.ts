@@ -5,6 +5,7 @@
 // when quiet and wakes on use. Core owns the node's identity and boot payload
 // (asked for through CoreClient); this owns where the machine runs, when it
 // starts, its disk, metering and cleanup.
+import { withPoolKey } from "./pool-key.js";
 import { createHash } from "node:crypto";
 import type { Machine, MachineFile, MachineProvider, MachineSpec } from "./provider.js";
 import type { CloudComputerRecord, FleetStore } from "./store.js";
@@ -519,7 +520,7 @@ export class CloudComputers {
       awakeCapMinutes: settings.awakeCapMinutes,
       restoreSessionId: hadVolume && volumeId === previous?.volumeId ? undefined : restoreSessionId,
     });
-    const machine = await provider.createMachine(app, this.spec(accountId, boot, volumeId, size));
+    const machine = await provider.createMachine(app, this.spec(accountId, await withPoolKey(this.deps.store, accountId, boot), volumeId, size));
     const now = this.iso();
     const record: CloudComputerRecord = {
       accountId, nodeId: boot.nodeId, app, machineId: machine.id, volumeId, diskGb,
@@ -540,14 +541,14 @@ export class CloudComputers {
     if ((record.image !== settings.image || record.size !== size) && record.volumeId) {
       const boot = await this.deps.core.bootstrap(record.accountId, { awakeCapMinutes: settings.awakeCapMinutes });
       try {
-        await provider.updateMachine(record.app, machine.id, this.spec(record.accountId, boot, record.volumeId, size));
+        await provider.updateMachine(record.app, machine.id, this.spec(record.accountId, await withPoolKey(this.deps.store, record.accountId, boot), record.volumeId, size));
         running = size;
       } catch (error) {
         if (record.size === size) throw error;
         // A volume is pinned to its host, which may not fit the new size.
         // Waking at the old size beats not waking; the next start tries again.
         console.warn(`[fleet] resize of ${record.app} to ${size} failed:`, error instanceof Error ? error.message : error);
-        if (record.image !== settings.image) await provider.updateMachine(record.app, machine.id, this.spec(record.accountId, boot, record.volumeId, record.size));
+        if (record.image !== settings.image) await provider.updateMachine(record.app, machine.id, this.spec(record.accountId, await withPoolKey(this.deps.store, record.accountId, boot), record.volumeId, record.size));
       }
     }
     await provider.startMachine(record.app, machine.id);

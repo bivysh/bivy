@@ -611,7 +611,10 @@ sensitive.
     disk is replaced, so a database backup taken before the upgrade could still
     decrypt its traffic; and a new disk can restore a session only from a
     snapshot sealed to the account (the seal key travels in the end-to-end
-    vault, so it also needs one of your other machines online). See
+    vault, so it also needs one of your other machines online, unless you let
+    cloud machines start with your sign-ins: then the fleet holds a pool key
+    that opens the vault wrap, which is the same party that runs those
+    machines, never the control plane). See
     [`hosted-provisioning-trust-model.md`](hosted-provisioning-trust-model.md),
     [`key-management.md`](key-management.md), and
     [`ephemeral-sessions.md`](ephemeral-sessions.md).

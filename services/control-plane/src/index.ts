@@ -2280,7 +2280,57 @@ app.get("/node/model-auth-vault", requireNode, vaultKeyRateLimit, asyncHandler(a
     // Paired devices without a copy of the current vault key: the node wraps
     // one for each, so a device can hand the key to a new machine.
     devicesMissingKey: await store.listModelAuthDevicesMissingKey(node.accountId),
+    ...await poolKeyFor(node),
   });
+}));
+
+/** The account's pool key, if it let the deployment's machines start with its
+ * sign-ins: every machine learns the public key (one that holds the vault key
+ * wraps it), and the deployment's own machines get the wrap to open. */
+async function poolKeyFor(node: NodeRecord): Promise<{ poolKey?: { publicKey: string; wrapped: boolean }; poolWrappedKey?: { wrappedKey: string; wrappedByPublicKey: string } }> {
+  const pool = await store.getModelAuthPoolKey(node.accountId);
+  if (!pool) return {};
+  const cloudMachine = isRunnerNode(node.id) || isCloudComputerNode(node.accountId, node.id);
+  return {
+    poolKey: { publicKey: pool.publicKey, wrapped: Boolean(pool.wrappedKey) },
+    ...(cloudMachine && pool.wrappedKey ? { poolWrappedKey: { wrappedKey: pool.wrappedKey, wrappedByPublicKey: pool.wrappedByPublicKey! } } : {}),
+  };
+}
+
+// A machine that holds the vault key wraps it to the account's pool key.
+app.put("/node/model-auth-key/pool", requireNode, vaultKeyRateLimit, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  const publicKey = String(req.body?.publicKey ?? "").trim();
+  const wrappedKey = String(req.body?.wrappedKey ?? "").trim();
+  const wrappedByPublicKey = String(req.body?.wrappedByPublicKey ?? "").trim();
+  if (!publicKey || !wrappedKey || !wrappedByPublicKey) return res.status(400).json({ error: "Missing publicKey, wrappedByPublicKey or wrappedKey" });
+  if (!(await store.setModelAuthPoolWrap(node.accountId, publicKey, wrappedByPublicKey, wrappedKey))) return res.status(409).json({ error: "That isn't the account's current pool key" });
+  res.json({ ok: true });
+}));
+
+// "Cloud machines can start with my sign-ins": the deployment's machines get
+// the vault key through the account's pool key, so unattended work starts with
+// none of the account's machines or devices online. Off by default.
+app.get("/account/cloud-sign-ins", requireUser, vaultKeyRateLimit, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  res.setHeader("cache-control", "no-store");
+  const available = managedComputeEnabled() && await anyCloudCompute(account.id);
+  res.json({ available, enabled: available && Boolean(await store.getModelAuthPoolKey(account.id)) });
+}));
+
+app.put("/account/cloud-sign-ins", requireUser, vaultKeyRateLimit, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const enabled = req.body?.enabled === true;
+  if (enabled) {
+    if (!(managedComputeEnabled() && await anyCloudCompute(account.id))) return res.status(404).json({ error: "This deployment runs no cloud machines" });
+    await store.setModelAuthPoolKey(account.id, await deploymentExtension.computePoolKey(account.id));
+    // Wake the account's machines, so one that holds the vault key wraps it now.
+    void notifyRelaysWorkAvailable(account.id, { id: "model-auth", label: "model-auth" }, { autoProvision: false }).catch(() => {});
+  } else {
+    await store.deleteModelAuthPoolKey(account.id);
+    await deploymentExtension.computePoolKeyDelete(account.id).catch((error) => console.warn("[cloud-sign-ins] pool key not deleted:", error instanceof Error ? error.message : error));
+  }
+  res.json({ enabled });
 }));
 
 const isPairedDevice = async (accountId: string, devicePublicKey: string) =>

@@ -72,6 +72,19 @@ Current model:
   and re-keys the vault; every re-key drops all device copies, and machines
   wrap the new key for the devices that remain.
 
+- **Cloud machines can start with your sign-ins (opt-in).** With
+  **Automations → Runs on → Cloud machines can start with my sign-ins**
+  turned on, the deployment's fleet makes an X25519 *pool key* for your
+  account and gives the control plane only its public half. One of your
+  machines wraps the vault key to it (`model_auth_pool_keys`); every machine
+  the fleet starts for you boots with the private half
+  (`/etc/bivy/pool-key.json`) and opens that wrap itself. So a cloud run
+  starts with your sign-ins when none of your machines or devices is online,
+  and no machine is kept running for it. The control plane stores only the
+  wrap and can't open it; whoever runs the fleet can, and they already run
+  the machines that use your credentials. Turning it off deletes the keypair
+  and re-keys the vault. Off by default.
+
 If you lose every node and device that can unwrap the vault, the stored
 ciphertext can no longer be decrypted — sign in to each provider again on a new
 node.

@@ -17,6 +17,7 @@
 // session, so a stopped one keeps its machine and disk and wakes when used,
 // like the computer. Asleep it holds no runner slot. After `sleepDeleteDays`
 // asleep, with the account warned first, it is deleted.
+import { withPoolKey } from "./pool-key.js";
 import { createHash } from "node:crypto";
 import type { MachineProvider, MachineSpec } from "./provider.js";
 import type { FleetStore, RunnerRecord } from "./store.js";
@@ -135,7 +136,7 @@ export class Runners {
         const boot = await core.bootstrapRunner(accountId, { runnerId, awakeCapMinutes: settings.awakeCapMinutes, restoreSessionId: input.sessionId });
         record = { ...record, nodeId: boot.nodeId };
         await this.save(record);
-        const machine = await provider.createMachine(record.app, this.spec(record, boot));
+        const machine = await provider.createMachine(record.app, this.spec(record, await withPoolKey(this.deps.store, record.accountId, boot)));
         record = { ...record, machineId: machine.id };
         await this.save(record);
         return { allowed: true, nodeId: boot.nodeId, state: "launching" };
@@ -273,7 +274,7 @@ export class Runners {
       const { settings, provider, core } = this.deps;
       if (record.image !== settings.image && record.volumeId) {
         const boot = await core.bootstrapRunner(record.accountId, { runnerId: record.runnerId, awakeCapMinutes: settings.awakeCapMinutes });
-        await provider.updateMachine(record.app, record.machineId!, this.spec(record, boot));
+        await provider.updateMachine(record.app, record.machineId!, this.spec(record, await withPoolKey(this.deps.store, record.accountId, boot)));
       }
       await provider.startMachine(record.app, record.machineId!);
       const now = this.iso();

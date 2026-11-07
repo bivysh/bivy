@@ -33,6 +33,8 @@ export function flyInit(opts: BootstrapOpts): {
     "mkdir -p /etc/bivy /workspace",
     "chmod 700 /etc/bivy",
     "chmod 600 /etc/bivy/relay.json /etc/bivy/start.sh",
+    // The account's pool key, when the deployment adds one (it opens the vault wrap).
+    "chmod 600 /etc/bivy/pool-key.json 2>/dev/null || true",
     "export BIVY_DATA_DIR=/etc/bivy",
     "export BIVY_WORKSPACE=/workspace",
     // A sleeping machine keeps its state on the volume, and a runner works on

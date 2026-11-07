@@ -847,6 +847,24 @@ export async function fetchQueueRouting(store: LocalStore, fetchImpl: typeof fet
   return coerceRouting(await res.json().catch(() => ({})));
 }
 
+/** Whether the deployment's cloud machines may start with the account's
+ * sign-ins (the vault key wrapped to the deployment's pool key). */
+export interface CloudSignIns { available: boolean; enabled: boolean }
+
+export async function fetchCloudSignIns(store: LocalStore, fetchImpl: typeof fetch = fetch): Promise<CloudSignIns> {
+  const res = await fetchImpl(`${cpBase(store)}/account/cloud-sign-ins`, { headers: authHeaders(store) });
+  if (!res.ok) return { available: false, enabled: false };
+  const data: any = await res.json().catch(() => ({}));
+  return { available: data?.available === true, enabled: data?.enabled === true };
+}
+
+export async function setCloudSignIns(store: LocalStore, enabled: boolean, fetchImpl: typeof fetch = fetch): Promise<boolean> {
+  const res = await fetchImpl(`${cpBase(store)}/account/cloud-sign-ins`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify({ enabled }) });
+  const data: any = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `cloud sign-ins update failed: ${res.status}`);
+  return data?.enabled === true;
+}
+
 export async function setQueueRouting(store: LocalStore, routing: QueueRouting, fetchImpl: typeof fetch = fetch): Promise<QueueRouting> {
   const res = await fetchImpl(`${cpBase(store)}/account/queue-routing`, { method: "PUT", headers: authHeaders(store), body: JSON.stringify(routing) });
   const data: any = await res.json().catch(() => ({}));
