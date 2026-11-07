@@ -37,9 +37,12 @@ describe("formatApproval", () => {
   });
 
   it("shows what a Claude Code edit changes, and where", () => {
-    const f = formatApproval({ toolName: "Edit", toolInput: { file_path: "src/totals.ts", old_string: "round(x)", new_string: "round(x * 100) / 100" } });
+    // The whole change, as a diff: a long edit used to be cut at 420 characters.
+    const long = Array.from({ length: 60 }, (_, i) => `line ${i}`).join("\n");
+    const f = formatApproval({ toolName: "Edit", toolInput: { file_path: "src/totals.ts", old_string: "round(x)", new_string: long } });
     expect(f.title).toBe("Edit src/totals.ts?");
-    expect(f.fields).toEqual([["File", "src/totals.ts"], ["Find", "round(x)"], ["Replace", "round(x * 100) / 100"]]);
+    expect(f.fields).toEqual([["File", "src/totals.ts"]]);
+    expect(f.diffs).toMatchObject([{ oldText: "round(x)", newText: long, added: 60, removed: 1 }]);
   });
 
   it("shows every automation change an agent proposes, in full, and treats removals as permanent", () => {
