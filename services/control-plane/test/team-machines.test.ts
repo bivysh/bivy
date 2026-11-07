@@ -29,7 +29,7 @@ assert.equal(await machines.access(eve!.id, "ada-box"), undefined, "not outside 
 assert.deepEqual(await machines.sharedWith(ada!.id), [], "your own machines aren't listed as shared with you");
 assert.deepEqual(
   { ...(await machines.shareState("ada-box")), memberAccountIds: (await machines.shareState("ada-box")).memberAccountIds.sort() },
-  { shared: true, memberAccountIds: [ada!.id, bo!.id].sort() },
+  { shared: true, memberAccountIds: [ada!.id, bo!.id].sort(), teamId: team.id },
 );
 
 // Leaving the team ends access at once, without the machine changing anything.
@@ -60,5 +60,21 @@ assert.deepEqual(await machines.access(bo!.id, "ada-box2"), { kind: "teammate", 
 assert.equal(await machines.access(eve!.id, "ada-box2"), undefined);
 await store.teams.removeMember(team.id, bo!.id);
 assert.equal(await machines.access(bo!.id, "ada-box2"), undefined, "leaving the team ends the invite");
+
+// A machine is shared with the team its owner was in: leaving ends it, so it
+// doesn't carry into the owner's next team.
+{
+  const [cy, dee] = await Promise.all(["cy@example.com", "dee@example.com"].map((e) => store.findOrCreateAccount(e)));
+  const { team: first } = await store.teams.createTeam(cy!.id, "First");
+  await store.teams.acceptInvite((await store.teams.createInvite(first.id, cy!.id, normalizeTeamInvite({ role: "admin" }))).token, dee!);
+  await store.enrollNode(cy!.id, "cy-box", "cy-box");
+  await machines.setShared("cy-box", true);
+  assert.equal((await machines.shareState("cy-box")).teamId, first.id);
+  await store.teams.removeMember(first.id, cy!.id);
+  const { team: next } = await store.teams.createTeam(eve!.id, "Next");
+  await store.teams.acceptInvite((await store.teams.createInvite(next.id, eve!.id, normalizeTeamInvite({}))).token, cy!);
+  assert.equal(await machines.access(eve!.id, "cy-box"), undefined, "not shared with the new team");
+  assert.deepEqual(await machines.shareState("cy-box"), { shared: false, memberAccountIds: (await machines.shareState("cy-box")).memberAccountIds, teamId: next.id });
+}
 
 console.log("team-machines: ok");
