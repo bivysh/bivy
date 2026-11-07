@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Machine sharing ends when you leave the team.** A machine shared with your team stopped being reachable by that team once you left, but stayed marked as shared, so it could reappear for a team you joined later. Leaving a team or deleting it now ends sharing, and the machine's switch remembers its team and turns itself off when your team changes.
 - **Account-only settings links open Settings on a machine without an account.** A link to Settings → Team or Link a device, opened on a node you reach directly, now lands on Settings instead of a Create team form that could only fail.
 - **Your agent's own "ask me first" rules hold in Bivy.** A Claude `permissions.ask` rule, or a managed Codex `prompt-user` rule, now always gets an approval card: in every approval mode, at full access too, and without "Allow … this session". Before, Bivy's approval mode could approve those calls for you, and Codex turned down `prompt-user` commands without asking.
 

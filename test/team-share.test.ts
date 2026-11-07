@@ -41,4 +41,33 @@ assert.equal(teammateByDevice(devices, undefined), undefined);
   await assert.rejects(share.publish(), TeamPolicyError);
 }
 
+// The switch is for the team it was turned on for: when the owner's team
+// changes, it turns off instead of sharing the machine with the new team.
+{
+  let enabled = true;
+  let bound: string | undefined;
+  let team: string | null = "team-a";
+  const puts: string[] = [];
+  const revoked: string[] = [];
+  const share = new TeamShare({
+    request: async (_path, init) => {
+      if (init?.method === "PUT") puts.push(String(init.body));
+      return new Response(JSON.stringify({ shared: init?.method === "PUT" || team === "team-a", memberAccountIds: ["ada", "bo", "cy"], teamId: team }), { status: 200 });
+    },
+    enabled: () => enabled,
+    devices: () => devices,
+    revoke: (id) => { revoked.push(id); },
+    disable: () => { enabled = false; },
+    boundTeam: () => bound,
+    bind: (id) => { bound = id; },
+  });
+  await share.publish();
+  assert.equal(bound, "team-a");
+  team = "team-b";
+  await share.check();
+  assert.equal(enabled, false, "the switch turned itself off");
+  assert.deepEqual(puts, [JSON.stringify({ shared: true })], "it didn't share itself into the new team");
+  assert.deepEqual(revoked, ["bo-phone", "cy-laptop"]);
+}
+
 console.log("team-share: all tests passed");

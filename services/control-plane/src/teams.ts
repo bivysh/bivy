@@ -273,6 +273,7 @@ export class PostgresTeams implements TeamRepository {
 
   async deleteTeam(teamId: string): Promise<void> {
     await this.query(`DELETE FROM team_invites WHERE team_id = $1`, [teamId]);
+    await this.query(`DELETE FROM team_shared_nodes WHERE node_id IN (SELECT n.id FROM nodes n JOIN team_members m ON m.account_id = n.account_id WHERE m.team_id = $1)`, [teamId]);
     await this.query(`DELETE FROM team_members WHERE team_id = $1`, [teamId]);
     await this.query(`DELETE FROM teams WHERE id = $1`, [teamId]);
   }
@@ -318,6 +319,9 @@ export class PostgresTeams implements TeamRepository {
     }
     if (current === "admin" && [...roles.values()].filter((r) => r === "admin").length === 1) throw teamError("last-admin");
     await this.departures?.memberLeft(teamId, accountId);
+    // A machine is shared with one team: the one its owner was in when they
+    // turned sharing on. Leaving ends that, so it can't carry into a next team.
+    await this.query(`DELETE FROM team_shared_nodes WHERE node_id IN (SELECT id FROM nodes WHERE account_id = $1)`, [accountId]);
     await this.query(`DELETE FROM team_members WHERE team_id = $1 AND account_id = $2`, [teamId, accountId]);
     return { teamDeleted: false };
   }

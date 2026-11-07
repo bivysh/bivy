@@ -103,6 +103,10 @@ sleeping cloud computer.
   stops issuing them pair grants and relay tickets for the machine at once.
   Within a minute, the machine removes their devices and rotates its room key,
   as when you remove a device by hand.
+- **Sharing is for one team.** The switch is for the team you were in when you
+  turned it on. If you leave that team, or your machine finds you in a
+  different one, sharing ends and the switch turns off. It never carries over
+  into your next team.
 - **Sign-ins stay with the machine.** If a teammate signs in to Claude,
   ChatGPT or another provider while connected to your shared machine, that
   sign-in is stored on your machine, and you and the rest of the team can use

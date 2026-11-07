@@ -13,6 +13,10 @@ import type { LinkedDevice } from "./device-registry.js";
  * Each check asks the control plane who is in the team now and removes any
  * teammate device that no longer belongs, rotating the room key as a manual
  * removal does. Turning sharing off removes every teammate device.
+ *
+ * The switch is for the team the owner was in when they turned it on. When the
+ * owner leaves that team (or joins another), it turns itself off rather than
+ * share the machine with people they never chose.
  */
 
 export interface TeamShareDeps {
@@ -24,7 +28,14 @@ export interface TeamShareDeps {
   revoke(deviceId: string): void;
   /** Turn the machine's own switch off (the team no longer allows sharing). */
   disable?(): void;
+  /** The team the switch was turned on for, and recording it. */
+  boundTeam?(): string | undefined;
+  bind?(teamId: string): void;
 }
+
+/** What the control plane reports. `teamId` is the owner's team now; older
+ *  control planes leave it out. */
+interface RemoteShare { shared: boolean; memberAccountIds: string[]; teamId?: string | null }
 
 /** The control plane refused because of a team policy. */
 export class TeamPolicyError extends Error {}
@@ -58,8 +69,11 @@ export class TeamShare {
       const message = data.error || `Could not change sharing (${res.status})`;
       throw data.code === "team-policy" ? new TeamPolicyError(message) : new Error(message);
     }
-    if (res?.ok) this.reconcile((await res.json()) as { shared: boolean; memberAccountIds: string[] });
-    else this.reconcile({ shared: this.deps.enabled(), memberAccountIds: [] });
+    if (res?.ok) {
+      const remote = (await res.json()) as RemoteShare;
+      if (remote.shared && remote.teamId) this.deps.bind?.(remote.teamId);
+      this.reconcile(remote);
+    } else this.reconcile({ shared: this.deps.enabled(), memberAccountIds: [] });
   }
 
   /** Periodic check: the control plane may have dropped sharing (the owner
@@ -71,7 +85,16 @@ export class TeamShare {
       if (!this.deps.enabled()) this.reconcile({ shared: false, memberAccountIds: [] });
       return;
     }
-    const remote = (await res.json()) as { shared: boolean; memberAccountIds: string[] };
+    const remote = (await res.json()) as RemoteShare;
+    if (this.deps.enabled() && remote.teamId !== undefined) {
+      const bound = this.deps.boundTeam?.();
+      if (remote.teamId === null || (bound && bound !== remote.teamId)) {
+        this.deps.disable?.();
+        return this.reconcile({ shared: false, memberAccountIds: [] });
+      }
+      // Turned on before the switch remembered its team: this one.
+      if (!bound) this.deps.bind?.(remote.teamId);
+    }
     // The control plane forgets the flag when a machine re-enrolls; restate it.
     if (this.deps.enabled() && !remote.shared && remote.memberAccountIds.length) {
       try {

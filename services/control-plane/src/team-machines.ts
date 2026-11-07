@@ -138,14 +138,19 @@ export class PostgresTeamMachines {
 
   /** What a machine needs to police its teammates' devices: whether it is
    * shared, and which accounts are in its owner's team right now. */
-  async shareState(nodeId: string): Promise<{ shared: boolean; memberAccountIds: string[] }> {
+  async shareState(nodeId: string): Promise<{ shared: boolean; memberAccountIds: string[]; teamId: string | null }> {
     const { rows } = await this.query(
-      `SELECT m.account_id FROM nodes n
+      `SELECT m.account_id, m.team_id FROM nodes n
          JOIN team_members mine ON mine.account_id = n.account_id
          JOIN team_members m ON m.team_id = mine.team_id
        WHERE n.id = $1`,
       [nodeId],
     );
-    return { shared: await this.isShared(nodeId), memberAccountIds: rows.map((row) => String(row.account_id)) };
+    return {
+      shared: await this.isShared(nodeId),
+      memberAccountIds: rows.map((row) => String(row.account_id)),
+      // The owner's team now, so the machine can tell when it changed.
+      teamId: rows[0] ? String(rows[0].team_id) : null,
+    };
   }
 }

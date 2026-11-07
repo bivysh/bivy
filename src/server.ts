@@ -2021,9 +2021,13 @@ async function applyNodeSettings(patch: Record<string, unknown>): Promise<NodeSe
   if (typeof patch.teamShare === "boolean" && patch.teamShare !== (settings.teamShare === true)) {
     const before = settings.teamShare === true;
     settings.teamShare = patch.teamShare;
+    // A new switch is for the team the control plane names now (publish binds it).
+    delete settings.teamShareTeam;
     writeSettings(settings);
     try {
       await teamShare.publish();
+      const bound = readSettings().teamShareTeam;
+      if (typeof bound === "string") settings.teamShareTeam = bound;
     } catch (error) {
       // The control plane refused (e.g. not in a team): keep the switch as it was.
       settings.teamShare = before;
@@ -4619,11 +4623,19 @@ const teamVault = new TeamVaultSync({
 const teamShare = new TeamShare({
   request: modelAuthFetch,
   enabled: () => readSettings().teamShare === true,
+  boundTeam: () => (typeof readSettings().teamShareTeam === "string" ? readSettings().teamShareTeam as string : undefined),
+  bind: (teamId) => {
+    const settings = readSettings();
+    if (settings.teamShare !== true || settings.teamShareTeam === teamId) return;
+    settings.teamShareTeam = teamId;
+    writeSettings(settings);
+  },
   devices: () => pairingStore.listDevices(),
   revoke: (deviceId) => { linkedDevices.revoke(deviceId); },
   disable: () => {
     const settings = readSettings();
     settings.teamShare = false;
+    delete settings.teamShareTeam;
     writeSettings(settings);
     broadcast({ type: "node.settings", settings: nodeSettingsSnapshot() });
   },
