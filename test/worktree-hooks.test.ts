@@ -131,6 +131,15 @@ test("machine setup runs once per recipe version on machines Bivy runs, before t
     await worktreeSetupGate(second.path)?.result;
     assert.equal(fs.readFileSync(path.join(counter, "machine.log"), "utf8"), "v1\n", "the same recipe doesn't run again on this machine");
 
+    // A recipe with no worktree setup beside it still runs.
+    const alone = repo({ ".bivy/environment.yaml": "version: 1\nmachine:\n  setup:\n    run: scripts/machine.sh\n", "scripts/machine.sh": `echo alone >> ${counter}/machine.log\n` });
+    const only = await createWorktree({ repoDir: alone, id: "alone" });
+    assert.equal((await worktreeSetupGate(only.path)?.result)?.ok, true, "a machine recipe alone starts setup");
+    await removeWorktree(only.repoRoot, only.path);
+    fs.rmSync(alone, { recursive: true, force: true });
+    assert.equal(fs.readFileSync(path.join(counter, "machine.log"), "utf8"), "v1\nalone\n");
+    fs.writeFileSync(path.join(counter, "machine.log"), "v1\n");
+
     fs.writeFileSync(path.join(second.path, "scripts/machine.sh"), `echo v2 >> ${counter}/machine.log\n`);
     await runMachineSetupOnce({ worktreePath: second.path });
     assert.equal(fs.readFileSync(path.join(counter, "machine.log"), "utf8"), "v1\nv2\n", "a changed recipe runs again");

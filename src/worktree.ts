@@ -7,7 +7,7 @@ import path from "node:path";
 
 import { gitNonInteractiveEnv } from "./git-auth.js";
 import { cowProvisionDeps, provisionDepsByInstall } from "./worktree-provision.js";
-import { WORKTREE_INCLUDE_FILE, copyWorktreeIncludes, describeWorktreeHook, forgetWorktreeSetup, runWorktreeHook, startWorktreeSetup, worktreeHook, type AllowHook } from "./worktree-hooks.js";
+import { WORKTREE_INCLUDE_FILE, copyWorktreeIncludes, describeWorktreeHook, forgetWorktreeSetup, runWorktreeHook, startWorktreeSetup, type AllowHook } from "./worktree-hooks.js";
 
 const exec = promisify(execFile);
 
@@ -194,10 +194,9 @@ export async function createWorktree(opts: {
   // best-effort. `planInstallProvision` skips any dir a CoW clone already filled.
   // The repository's own setup hook (.bivy/environment.yaml worktree.setup)
   // replaces the generic install: it knows what this repository needs.
-  const setup = worktreeHook(wtPath, "setup");
-  if (setup.step || setup.error) {
-    startWorktreeSetup({ worktreePath: wtPath, sourcePath: sourceRoot, allowHook: opts.allowHook });
-  } else if (cow.cloned.length === 0) {
+  // A machine recipe alone counts too: it prepares the machine for this repository.
+  const started = startWorktreeSetup({ worktreePath: wtPath, sourcePath: sourceRoot, allowHook: opts.allowHook });
+  if (!started && cow.cloned.length === 0) {
     void provisionDepsByInstall({ worktreePath: wtPath, log: (m) => console.log(m) })
       .catch((error) => console.log(`[worktree] auto-provision error: ${error instanceof Error ? error.message : String(error)}`));
   }
