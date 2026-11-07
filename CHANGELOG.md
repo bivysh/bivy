@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Machine sharing ends when you leave the team.** A machine shared with your team stopped being reachable by that team once you left, but stayed marked as shared, so it could reappear for a team you joined later. Leaving a team or deleting it now ends sharing, and the machine's switch remembers its team and turns itself off when your team changes.
+- **A session guest's replies stay theirs.** Request ids from a teammate invited into one session now run in that guest's own namespace on the machine, so a guest gets the replies to its own requests and never the reply to a request another client made with the same id.
 - **Account-only settings links open Settings on a machine without an account.** A link to Settings → Team or Link a device, opened on a node you reach directly, now lands on Settings instead of a Create team form that could only fail.
 - **Approval cards show the whole edit.** An edit or new-file approval now shows the change as a diff, for every agent, scrolling inside the card. Before, its Find and Replace text was cut off after 420 characters, so a long edit could only be checked through the raw tool input.
 - **Worktree setup follows the session's approval mode.** A repository's `machine.setup` and `worktree.setup` hooks now run only where the session's agent could run the same command without asking. In a read-only session, or with "always ask" approvals, the session says the setup didn't run, and the agent can run it with your approval.

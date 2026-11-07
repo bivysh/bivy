@@ -256,7 +256,7 @@ import {
 import { MAX_TEAM_INSTRUCTIONS_BYTES, TeamVaultSync } from "./team-vault.js";
 import { teamKeyStore } from "./secrets.js";
 import { TeamShare, teammateByDevice } from "./team-share.js";
-import { INVITE_DURATIONS_MS, SessionInvites, guestEvent, guestMayRun } from "./session-invites.js";
+import { INVITE_DURATIONS_MS, SessionInvites, guestEvent, guestMayRun, guestRequestId } from "./session-invites.js";
 import { redactSecrets, registerSecretValue } from "./redact.js";
 import {
   getSttConfig,
@@ -3835,13 +3835,9 @@ const relayCtx: CommandCtx = { reply: (event) => relay?.sendEvent(event), broadc
 const RELAY_CLIENT_ID = "relay";
 
 // Teammates invited into one session (src/session-invites.ts). A guest's
-// request ids are remembered so their replies reach only them.
+// request ids run in the guest's own namespace (guestRequestId), so their
+// replies reach only them and they can't claim another client's reply.
 const sessionInvites = new SessionInvites(appDir);
-const guestRequests = new Map<string, string>();
-function rememberGuestRequest(requestId: string, inviteId: string) {
-  guestRequests.set(requestId, inviteId);
-  if (guestRequests.size > 500) guestRequests.delete(guestRequests.keys().next().value!);
-}
 function guestCommandSession(command: Record<string, unknown>): string | undefined {
   if (typeof command.sessionId === "string") return command.sessionId;
   if (command.kind === "approval") return approvals.list().find((a) => a.id === String(command.id ?? ""))?.sessionId;
@@ -3852,7 +3848,7 @@ const relayGuests = {
   forAccount: (accountId: string) => sessionInvites.forAccount(accountId),
   eventFor: (inviteId: string, event: unknown) => {
     const invite = sessionInvites.get(inviteId);
-    return invite ? guestEvent(invite, event, (requestId) => guestRequests.get(requestId) === inviteId) : null;
+    return invite ? guestEvent(invite, event) : null;
   },
 };
 
@@ -3865,11 +3861,12 @@ async function publishSessionInvites(): Promise<void> {
   if (Array.isArray(invites)) sessionInvites.keepRouted(invites);
 }
 
-async function handleRelayMessage(msg: ClientMessage, guest?: { inviteId: string }) {
+async function handleRelayMessage(message: ClientMessage, guest?: { inviteId: string }) {
+  let msg = message;
   if (guest) {
     const invite = sessionInvites.get(guest.inviteId);
     if (!invite) return;
-    if (typeof msg.requestId === "string") rememberGuestRequest(msg.requestId, invite.id);
+    if (typeof msg.requestId === "string") msg = { ...msg, requestId: guestRequestId(invite.id, msg.requestId) };
     const allowed = guestMayRun(invite, msg, guestCommandSession);
     if (!allowed.ok) {
       relay?.sendEvent({ type: "session.error", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined, sessionId: invite.sessionId, error: allowed.reason });

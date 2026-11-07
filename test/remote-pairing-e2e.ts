@@ -180,7 +180,7 @@ async function main() {
     forAccount: (accountId: string) => invites.forAccount(accountId),
     eventFor: (inviteId: string, event: unknown) => {
       const invite = invites.get(inviteId);
-      return invite ? guestEvent(invite, event, () => false) : null;
+      return invite ? guestEvent(invite, event) : null;
     },
   };
   const connector = new RelayConnector(config, (msg, guest) => { received.push(msg); guestFrames.push({ msg, inviteId: guest?.inviteId }); }, { pairing: store, teamShared: () => teamShared, guests });
