@@ -2,6 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { useEffect, useRef, useState } from "react";
 import { formatApproval, type ApprovalRequest } from "@bivy/core";
+import { DiffView } from "./DiffView.js";
 
 // How long the "pending" state is given before it's treated as stalled and a
 // retry affordance appears. There's no protocol-level ack/timeout for a
@@ -89,6 +90,8 @@ function ApprovalCard({
           ))}
         </div>
       )}
+      {/* The whole change, not a clipped Find/Replace: this is what's approved. */}
+      {f.diffs.length > 0 && <DiffView hunks={f.diffs} />}
       <button type="button" className="approval-raw-toggle" onClick={() => setShowRaw((v) => !v)}>
         {showRaw ? "Hide" : "Show"} raw tool input
       </button>

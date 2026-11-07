@@ -13,6 +13,7 @@
 // "remember this choice" / always-allow option when severity !== "critical" —
 // a destructive action (rm -rf, drop table, shutdown, …) always requires a
 // fresh, explicit approval. Keep that gate wired to this same function.
+import { formatTool, type DiffHunk } from "./tool-format.js";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -119,7 +120,16 @@ export function approvalCommand(approval: any): string {
   return "";
 }
 
-export function approvalFields(approval: any): Array<[string, string]> {
+/** The change an edit or write approval would make, as diff hunks, through the
+ *  same tool formatter the chat uses, so every agent's edit tools render alike. */
+export function approvalDiffs(approval: any): DiffHunk[] {
+  const name = approvalToolName(approval);
+  if (BIVY_REQUESTS[name]) return [];
+  return formatTool(name, approvalToolInput(approval)).diffs;
+}
+
+/** `withDiff`: the change renders as a diff, so its text isn't repeated as fields. */
+export function approvalFields(approval: any, withDiff = false): Array<[string, string]> {
   const input = approvalToolInput(approval) as any;
   const name = approvalToolName(approval);
   const fields: Array<[string, string]> = [];
@@ -136,6 +146,7 @@ export function approvalFields(approval: any): Array<[string, string]> {
   // "Edit …/totals.ts?", "Allow mcp__x?"), so the tool name isn't repeated.
   add("File", input.path || input.file || input.filePath || input.file_path || input.pathname);
   add("Command", name.includes("bash") || name.includes("shell") ? "" : input.command);
+  if (withDiff) return fields;
   add("Find", input.oldText || input.old_string || input.search || input.find);
   add("Replace", input.newText || input.new_string || input.replace);
   add("Text", input.content || input.text);
@@ -148,6 +159,8 @@ export interface FormattedApproval {
   consequence: string;
   command: string;
   fields: Array<[string, string]>;
+  /** The edit or write as diff hunks; empty for other tools. */
+  diffs: DiffHunk[];
   rawInput: string;
   /** Legacy only offers "remember this choice" / always-allow when this is
    *  true — never for a critical (destructive/irreversible) action. */
@@ -163,12 +176,14 @@ export function formatApproval(approval: any): FormattedApproval {
   } catch {
     rawInput = String(input);
   }
+  const diffs = approvalDiffs(approval);
   return {
     severity,
     title: approvalTitle(approval),
     consequence: approvalConsequence(approval, severity),
     command: approvalCommand(approval),
-    fields: approvalFields(approval),
+    fields: approvalFields(approval, diffs.length > 0),
+    diffs,
     rawInput,
     canRemember: severity !== "critical",
   };
