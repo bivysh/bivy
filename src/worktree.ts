@@ -7,7 +7,7 @@ import path from "node:path";
 
 import { gitNonInteractiveEnv } from "./git-auth.js";
 import { cowProvisionDeps, provisionDepsByInstall } from "./worktree-provision.js";
-import { WORKTREE_INCLUDE_FILE, copyWorktreeIncludes, describeWorktreeHook, forgetWorktreeSetup, runWorktreeHook, startWorktreeSetup, worktreeHook } from "./worktree-hooks.js";
+import { WORKTREE_INCLUDE_FILE, copyWorktreeIncludes, describeWorktreeHook, forgetWorktreeSetup, runWorktreeHook, startWorktreeSetup, worktreeHook, type AllowHook } from "./worktree-hooks.js";
 
 const exec = promisify(execFile);
 
@@ -121,6 +121,8 @@ export async function createWorktree(opts: {
   branch?: string;
   base?: string;
   root?: string;
+  /** The session's say over the repository's setup hooks (see worktree-hooks.ts). */
+  allowHook?: AllowHook;
 }): Promise<Worktree> {
   const sourceRoot = await gitRepoRoot(opts.repoDir);
   if (!sourceRoot) throw new Error(`Not a git repository: ${opts.repoDir}`);
@@ -194,7 +196,7 @@ export async function createWorktree(opts: {
   // replaces the generic install: it knows what this repository needs.
   const setup = worktreeHook(wtPath, "setup");
   if (setup.step || setup.error) {
-    startWorktreeSetup({ worktreePath: wtPath, sourcePath: sourceRoot });
+    startWorktreeSetup({ worktreePath: wtPath, sourcePath: sourceRoot, allowHook: opts.allowHook });
   } else if (cow.cloned.length === 0) {
     void provisionDepsByInstall({ worktreePath: wtPath, log: (m) => console.log(m) })
       .catch((error) => console.log(`[worktree] auto-provision error: ${error instanceof Error ? error.message : String(error)}`));

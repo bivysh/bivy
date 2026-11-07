@@ -234,6 +234,10 @@ machine:
   anywhere.
 
 Hooks run as the node's OS user, like the repository's own install scripts.
+A session's setup hooks run only where its agent could run the same command
+without asking: not in a read-only session, and not in "always ask" approval
+mode. The session then says the setup didn't run, and the agent can run it
+with your approval.
 Set `BIVY_WORKTREE_HOOKS=off` to turn them off on a machine; copying
 `.worktreeinclude` files stays on.
 

@@ -19,6 +19,9 @@
  *   What it installs on the machine's disk stays across sleeps.
  *
  * Hooks run as the node's OS user, like the repository's own install scripts.
+ * A session may pass `allowHook`: the hook's command line then runs only if
+ * the session would let its agent run that command without asking (its
+ * approval mode and sandbox), and is reported as not run otherwise.
  * `BIVY_WORKTREE_HOOKS=off` turns them off on a machine; include copying stays.
  */
 import { createHash } from "node:crypto";
@@ -201,7 +204,12 @@ export interface WorktreeHookResult {
   /** The last few KB of combined output. */
   output: string;
   error?: string;
+  /** Not run: the session asks before it runs commands (`allowHook`). */
+  skipped?: boolean;
 }
+
+/** Whether a session would let this hook command line run without asking. */
+export type AllowHook = (commandLine: string) => boolean;
 
 export function worktreeHooksEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return !/^(0|off|false|no)$/i.test(env.BIVY_WORKTREE_HOOKS?.trim() ?? "");
@@ -243,7 +251,7 @@ function recipeHash(worktreePath: string, step: ProjectEnvironmentHookStep): str
  * undefined when there is nothing to do.
  */
 export async function runMachineSetupOnce(
-  opts: { worktreePath: string; env?: NodeJS.ProcessEnv; dataDir?: string },
+  opts: { worktreePath: string; env?: NodeJS.ProcessEnv; dataDir?: string; allowHook?: AllowHook },
 ): Promise<WorktreeHookResult | undefined> {
   const env = opts.env ?? process.env;
   if (!worktreeHooksEnabled(env) || !machineSetupEnabled(env)) return undefined;
@@ -253,7 +261,7 @@ export async function runMachineSetupOnce(
   if (fs.existsSync(marker)) return undefined;
   const running = machineSetups.get(marker);
   if (running) return running;
-  const run = runWorktreeHook("machine-setup", { worktreePath: opts.worktreePath, env }).then((result) => {
+  const run = runWorktreeHook("machine-setup", { worktreePath: opts.worktreePath, env, allowHook: opts.allowHook }).then((result) => {
     if (result?.ok) {
       fs.mkdirSync(path.dirname(marker), { recursive: true });
       fs.writeFileSync(marker, `${new Date().toISOString()}\n`);
@@ -282,7 +290,7 @@ function hookCommand(worktreePath: string, step: ProjectEnvironmentHookStep): { 
  */
 export async function runWorktreeHook(
   kind: WorktreeHookKind,
-  opts: { worktreePath: string; sourcePath?: string; env?: NodeJS.ProcessEnv },
+  opts: { worktreePath: string; sourcePath?: string; env?: NodeJS.ProcessEnv; allowHook?: AllowHook },
 ): Promise<WorktreeHookResult | undefined> {
   const env = opts.env ?? process.env;
   if (!worktreeHooksEnabled(env)) return undefined;
@@ -291,6 +299,9 @@ export async function runWorktreeHook(
   if (!step) return undefined;
   const resolved = hookCommand(opts.worktreePath, step);
   if ("error" in resolved) return { kind, command: step.run ?? step.script ?? "", ok: false, durationMs: 0, output: "", error: resolved.error };
+  if (opts.allowHook && !opts.allowHook(step.run ? `bash ${step.run}` : resolved.label)) {
+    return { kind, command: resolved.label, ok: false, skipped: true, durationMs: 0, output: "" };
+  }
 
   const timeoutMs = (step.timeoutMinutes ?? DEFAULT_HOOK_TIMEOUT_MINUTES) * 60_000;
   const startedAt = Date.now();
@@ -332,6 +343,7 @@ export async function runWorktreeHook(
 /** One line a person can read in the session, e.g. "Worktree setup (scripts/setup.sh) finished in 12s." */
 export function describeWorktreeHook(result: WorktreeHookResult): string {
   const name = result.kind === "machine-setup" ? "Machine setup" : result.kind === "setup" ? "Worktree setup" : "Worktree teardown";
+  if (result.skipped) return `${name} (${result.command}) didn't run: this session asks before it runs commands. Ask the agent to run it.`;
   const secs = Math.max(1, Math.round(result.durationMs / 1000));
   if (result.ok) return `${name} (${result.command}) finished in ${secs}s.`;
   const why = result.error ?? `exited with code ${result.exitCode}`;
@@ -344,7 +356,7 @@ export function describeWorktreeHook(result: WorktreeHookResult): string {
 interface PendingSetup { promise: Promise<WorktreeHookResult | undefined>; settled: boolean; reported: boolean }
 const pendingSetups = new Map<string, PendingSetup>();
 
-export function startWorktreeSetup(opts: { worktreePath: string; sourcePath?: string; env?: NodeJS.ProcessEnv }): void {
+export function startWorktreeSetup(opts: { worktreePath: string; sourcePath?: string; env?: NodeJS.ProcessEnv; allowHook?: AllowHook }): void {
   if (!worktreeHooksEnabled(opts.env ?? process.env)) return;
   const declared = worktreeHook(opts.worktreePath, "setup");
   const machine = machineSetupEnabled(opts.env ?? process.env) ? worktreeHook(opts.worktreePath, "machine-setup") : {};
