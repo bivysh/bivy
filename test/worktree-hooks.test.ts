@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { createWorktree, removeWorktree } from "../src/worktree.js";
-import { worktreeSetupGate } from "../src/worktree-hooks.js";
+import { describeWorktreeHook, worktreeSetupGate } from "../src/worktree-hooks.js";
 
 function repo(files: Record<string, string>, ignored: Record<string, string> = {}): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-wt-hooks-"));
@@ -83,6 +83,23 @@ test("a failing setup is reported with its exit code and output", async () => {
     assert.equal(result?.ok, false);
     assert.equal(result?.exitCode, 3);
     assert.equal(result?.output, "missing dependency");
+    await removeWorktree(wt.repoRoot, wt.path);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("setup doesn't run in a session that would ask before running that command", async () => {
+  const dir = repo({
+    ".bivy/environment.yaml": "version: 1\nworktree:\n  setup: { run: scripts/setup.sh }\n",
+    "scripts/setup.sh": "echo ran > setup-ran.txt\n",
+  });
+  try {
+    const asked: string[] = [];
+    const wt = await createWorktree({ repoDir: dir, id: "asks", allowHook: (command) => { asked.push(command); return false; } });
+    const result = await worktreeSetupGate(wt.path)!.result;
+    assert.deepEqual(asked, ["bash scripts/setup.sh"]);
+    assert.equal(result?.skipped, true);
+    assert.ok(!fs.existsSync(path.join(wt.path, "setup-ran.txt")), "the repository's script did not run");
+    assert.match(describeWorktreeHook(result!), /didn't run: this session asks before it runs commands/);
     await removeWorktree(wt.repoRoot, wt.path);
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

@@ -9313,6 +9313,12 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // Optional git-worktree isolation (fresh sessions only). The agent then runs in
   // the worktree, and the A1 boundary confines writes there.
   let worktree: Worktree | undefined = restoredWorktree;
+  // The repository's setup hooks run without a turn, so they get the answer
+  // this session would give its agent for the same command: none in a
+  // read-only session, and none where it would ask first.
+  const hookPolicy = new PolicyEngine({ mode: sessionSafety.approval, unrestricted: sessionSandbox === "danger-full-access" });
+  const allowHook = (commandLine: string) => sessionSandbox !== "read-only"
+    && hookPolicy.decideToolCall(policyWorkspace, "bash", { command: commandLine }).decision === "allow";
   let runtimeWorkspace = requestedSessionFile ? (restoredWorktree?.path ?? storedMeta?.workspace ?? workspace) : workspace;
   if (opts.worktree && !requestedSessionFile) {
     // Admission control: refuse to provision a NEW worktree when the disk is
@@ -9326,7 +9332,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
     // millisecond would otherwise resolve to the same slug → same worktree path
     // and branch, and `createWorktree` would ADOPT the first's worktree, dropping
     // the second session into a directory another session already owns.
-    worktree = await createWorktree({ repoDir: workspace, id: wtOpts.branch ?? `session-${randomBytes(6).toString("hex")}`, branch: wtOpts.branch, base: wtOpts.base });
+    worktree = await createWorktree({ repoDir: workspace, id: wtOpts.branch ?? `session-${randomBytes(6).toString("hex")}`, branch: wtOpts.branch, base: wtOpts.base, allowHook });
     runtimeWorkspace = worktree.path;
   }
 
@@ -9349,7 +9355,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
         // Clear any stale registration left by a dir that was rm'd out from under
         // git, so re-adding the branch's worktree doesn't hit "already checked out".
         runGit(["worktree", "prune"], repoDir);
-        const reprovisioned = await createWorktree({ repoDir, id: reapedBranch, branch: reapedBranch });
+        const reprovisioned = await createWorktree({ repoDir, id: reapedBranch, branch: reapedBranch, allowHook });
         worktree = reprovisioned;
         runtimeWorkspace = reprovisioned.path;
       } catch (error) {
