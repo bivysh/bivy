@@ -198,6 +198,20 @@ async function oneMachinePerAccountUnderLoad() {
   expect(provider.machines.size === 1, "but only one machine is ever created");
 }
 
+async function poolKeyReachesNewMachines() {
+  const { poolPublicKey, POOL_KEY_PATH } = await import("../src/pool-key.js");
+  const { store, provider, computers } = fleet();
+  await computers.acquire({ accountId: ACCOUNT, purpose: "interactive", requestId: "r1" });
+  const carries = (id: string) => provider.machines.get(id)!.spec.files.some((f) => f.guest_path === POOL_KEY_PATH);
+  expect(!carries([...provider.machines.keys()][0]!), "without the account's say-so, a machine carries no pool key");
+  const publicKey = await poolPublicKey(store, "acc-2");
+  expect(publicKey === await poolPublicKey(store, "acc-2") && Buffer.from(publicKey, "base64url").length === 32, "an account gets one X25519 pool key, made on first ask");
+  await computers.acquire({ accountId: "acc-2", purpose: "interactive", requestId: "r2" });
+  const second = [...provider.machines.values()].find((m) => m.spec.files.some((f) => f.guest_path === POOL_KEY_PATH));
+  const file = JSON.parse(Buffer.from(second!.spec.files.find((f) => f.guest_path === POOL_KEY_PATH)!.raw_value, "base64").toString());
+  expect(file.publicKey === publicKey && typeof file.privateKey === "string", "and its new machines boot with the keypair, so they can open the vault wrap");
+}
+
 await run(
   createsAndReuses,
   wakesWithTheCurrentImage,
@@ -212,4 +226,5 @@ await run(
   sizePreferenceFallsBack,
   refusalIsPassedOn,
   oneMachinePerAccountUnderLoad,
+  poolKeyReachesNewMachines,
 );

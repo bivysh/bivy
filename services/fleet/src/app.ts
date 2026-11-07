@@ -4,6 +4,7 @@
 // The fleet's HTTP surface: the compute questions the control plane asks, on a
 // private network behind one shared bearer token. Nothing here is reachable
 // from the public internet in any supported deployment.
+import { poolPublicKey } from "./pool-key.js";
 import { createHash, timingSafeEqual } from "node:crypto";
 import express, { type NextFunction, type Request, type Response } from "express";
 import type { CloudComputers } from "./computers.js";
@@ -60,6 +61,18 @@ export function createApp(deps: AppDeps) {
   app.post("/v1/compute/wake", asyncRoute(async (req, res) => {
     if (!deps.computers) return void res.status(404).json({ error: "This fleet is not running cloud computers" });
     res.json(await deps.computers.wake(accountOf(req), requiredString(req.body?.nodeId, "nodeId"), optionalString(req.body?.reason) ?? "connect"));
+  }));
+
+  // Core: the account let this fleet's machines start with its sign-ins
+  // (pool-key.ts). Answers the public half only, made on first ask.
+  app.post("/v1/compute/pool-key", asyncRoute(async (req, res) => {
+    res.json({ publicKey: await poolPublicKey(deps.store, accountOf(req)) });
+  }));
+
+  // Core: the account turned it off. Machines started from now on carry no key.
+  app.post("/v1/compute/pool-key/delete", asyncRoute(async (req, res) => {
+    await deps.store.deletePoolKey(accountOf(req));
+    res.json({ deleted: true });
   }));
 
   // Core: a cloud machine's node is going to sleep.

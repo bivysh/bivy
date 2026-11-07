@@ -268,6 +268,21 @@ export class DeploymentExtension {
     return result.stopped === true;
   }
 
+  /** The deployment's public pool key for the account: its machines boot with
+   * the private half, so they can open the vault wrap made for it. */
+  async computePoolKey(accountId: string): Promise<string> {
+    if (!this.computeUrl) throw new Error("No deployment compute is configured");
+    const result = await this.computeRequest("/v1/compute/pool-key", { subject: { accountId } }) as { publicKey?: unknown };
+    if (typeof result.publicKey !== "string" || !result.publicKey) throw new Error("Deployment returned no pool key");
+    return result.publicKey;
+  }
+
+  /** Forget the account's pool key: machines started from now on carry none. */
+  async computePoolKeyDelete(accountId: string): Promise<void> {
+    if (!this.computeUrl) return;
+    await this.computeRequest("/v1/compute/pool-key/delete", { subject: { accountId } });
+  }
+
   /** Destroy the account's cloud computer and its disk. */
   async computeRelease(accountId: string, nodeId: string): Promise<boolean> {
     if (!this.computeUrl) return false;

@@ -64,6 +64,9 @@ import {
   fetchEphemeralConfigs,
   fetchQueueRouting,
   setQueueRouting as apiSetQueueRouting,
+  fetchCloudSignIns,
+  setCloudSignIns as apiSetCloudSignIns,
+  type CloudSignIns,
   setHostedProvisioning as apiSetHostedProvisioning,
   fetchHostedMachines,
   destroyHostedMachine as apiDestroyHostedMachine,
@@ -3766,6 +3769,13 @@ export class AppController {
   }
   setQueueRouting(routing: QueueRouting): Promise<QueueRouting> {
     return apiSetQueueRouting(this.local, routing);
+  }
+  /** Whether cloud machines may start with the account's sign-ins. */
+  getCloudSignIns(): Promise<CloudSignIns> {
+    return fetchCloudSignIns(this.local);
+  }
+  setCloudSignIns(enabled: boolean): Promise<boolean> {
+    return apiSetCloudSignIns(this.local, enabled);
   }
   setHostedProvisioning(patch: HostedProvisioningPatch): Promise<HostedProvisioningStatus> {
     return apiSetHostedProvisioning(this.local, patch);

@@ -42,4 +42,13 @@ assert.equal(await handOutModelAuthKey({
   put: async () => { throw new Error("must not answer"); },
 }, device), 0);
 
+// A deployment's pool key (made by the fleet) opens a wrap one of the
+// account's machines made for it, with the node's own key exchange.
+{
+  const { newPoolKey } = await import("../services/fleet/src/pool-key.js");
+  const pool = newPoolKey();
+  const wrapped = seal(deriveWrapKey(machineA.privateKeyB64, pool.publicKey, "model-auth-vault"), vaultKeyB64);
+  assert.equal(open(deriveWrapKey(pool.privateKey, machineA.publicKeyB64, "model-auth-vault"), wrapped), vaultKeyB64);
+}
+
 console.log("model-auth-handout: all tests passed");
