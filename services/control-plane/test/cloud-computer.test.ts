@@ -284,6 +284,9 @@ async function main() {
   const runnerStart = Buffer.from(runnerBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/start.sh").raw_value, "base64").toString("utf8");
   expect(/BIVY_WORK_OWN_LABEL_ONLY=1/.test(runnerStart) && /BIVY_OAUTH_REFRESH=0/.test(runnerStart), "it works only its own label and doesn't refresh sign-ins on its own");
   expect(/BIVY_EPHEMERAL_SLEEP=1/.test(runnerStart) && !/BIVY_TEARDOWN_ON_FINISH=1/.test(runnerStart), "it sleeps when the work is done instead of disappearing");
+  const refreshBoot = await req(port, "POST", "/internal/compute/runner-bootstrap", { accountId, runnerId: "refresh-sign-ins", awakeCapMinutes: 180 }, EXTENSION_TOKEN);
+  const refreshStart = Buffer.from(refreshBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/start.sh").raw_value, "base64").toString("utf8");
+  expect(/BIVY_REFRESH_SIGN_INS=1/.test(refreshStart) && !/BIVY_EPHEMERAL_SLEEP=1/.test(refreshStart) && !/BIVY_GITHUB_HOSTED_TASKS=1/.test(refreshStart), "the refresh-only runner boots to refresh sign-ins, takes no work and doesn't stay");
   expect(JSON.parse(Buffer.from(runnerBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/relay.json").raw_value, "base64").toString("utf8")).nodeId === runnerId, "a runner answers to its enrolled id");
   const runnerRelay = JSON.parse(Buffer.from(runnerBoot.json.files.find((f: { guest_path: string }) => f.guest_path === "/etc/bivy/relay.json").raw_value, "base64").toString("utf8"));
   // A new machine asks for the vault key with none of the account's other

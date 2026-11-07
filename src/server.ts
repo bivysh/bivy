@@ -87,6 +87,7 @@ import { createTranscriptPersistence } from "./session/transcript-persistence.js
 import { createRunTerminals } from "./session/run-terminal.js";
 import { createRunLogStore } from "./session/run-log-store.js";
 import { isNativeOAuthProvider, loginModelOAuth, refreshModelOAuthState, type AuthEvent, type AuthPrompt } from "./runtime/oauth/model-oauth.js";
+import { refreshSyncedSignIns } from "./runtime/oauth/sign-in-refresh.js";
 import { decideOAuthLoginSweep } from "./runtime/oauth/oauth-login-sweep.js";
 import { listCodexSessions, loadCodexTranscript, discoverCodexSessionForCwd } from "./runtime/codex-sessions.js";
 import { discoverGrokSessionForCwd } from "./runtime/grok-sessions.js";
@@ -8128,6 +8129,24 @@ async function signalSleepingToControlPlane(): Promise<void> {
   }).catch(() => {});
 }
 
+/** A refresh-only cloud machine (BIVY_REFRESH_SIGN_INS=1): get the vault, refresh
+ *  every synced sign-in, report settled (the deployment deletes the machine),
+ *  and exit. Bounded: it gives up on the vault after three minutes. */
+async function refreshSignInsThenSettle(): Promise<void> {
+  const deadline = Date.now() + 3 * 60_000;
+  while (!readLocalModelAuthVaultKey() && Date.now() < deadline) {
+    await syncModelAuthFromControlPlane();
+    if (!readLocalModelAuthVaultKey()) await new Promise((resolve) => setTimeout(resolve, 5_000));
+  }
+  if (!readLocalModelAuthVaultKey()) console.warn("[sign-ins] no vault key arrived; nothing refreshed");
+  else {
+    const { refreshed, failed } = await refreshSyncedSignIns(credsDir);
+    console.log(`[sign-ins] refreshed ${refreshed.length}${failed.length ? `, failed ${failed.join(", ")}` : ""}`);
+  }
+  await signalSettledToControlPlane();
+  process.exit(0);
+}
+
 async function signalSettledToControlPlane(): Promise<void> {
   if (!sessionAdvertiseTarget) return;
   await fetch(`${sessionAdvertiseTarget.controlPlaneUrl.replace(/\/$/, "")}/node/settled`, {
@@ -12904,6 +12923,7 @@ const server = app.listen(port, host, async () => {
     if (!restored) console.error(`[restore] ${sessionId} was requested but could not be restored; queue startup will continue and surface the targeted item as unavailable`);
   }
   startModelAuthWatcher();
+  if (process.env.BIVY_REFRESH_SIGN_INS === "1") void refreshSignInsThenSettle();
   startOAuthLoginSweeper();
   startGithubAppSyncWatcher();
   startTeamVaultWatcher();

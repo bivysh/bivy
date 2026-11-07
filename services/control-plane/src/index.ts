@@ -25,8 +25,9 @@ import { countActiveAccountSessions } from "./session-count.js";
 import { DeploymentCompute, deploymentCompute, managedComputeEnabled, setDeploymentCompute } from "./deployment-compute.js";
 import { bootCloudComputer, cloudComputerNodeId, cloudComputerReadiness, cloudRouteSourceLabel, isCloudComputerNode, isCloudComputerPresence, isEphemeralMilestone, nodeMayTakeWork, restorableSnapshot, routeWorkToCloudComputer } from "./cloud-computer.js";
 import { deletionNoticeEmail, deletionNoticePush } from "./deletion-notice.js";
-import { bootRunner, isRunnerNode, runnerLabel, runnerNodeId, sessionRunnerId } from "./runners.js";
+import { bootRunner, isRunnerNode, runnerLabel, runnerNodeId, sessionRunnerId, SIGN_IN_REFRESH_RUNNER } from "./runners.js";
 import { placeCloudWork } from "./placement.js";
+import { signInRefreshDue } from "./sign-in-refresh.js";
 import { createStore } from "./store-factory.js";
 import { createOwnerAuthRouter } from "./owner-auth.js";
 import { configureProxyTrust } from "./proxy-trust.js";
@@ -465,6 +466,27 @@ async function pruneExpiredAuthTokens() {
 }
 void pruneExpiredAuthTokens();
 setInterval(pruneExpiredAuthTokens, 60 * 60_000).unref();
+
+// Synced sign-ins rotate their refresh token on every refresh, and one left
+// unused long enough can expire. For an account whose cloud machines may start
+// with its sign-ins, start a short refresh-only runner when none of its
+// machines has been seen for a while: it opens the vault through the pool key,
+// refreshes each synced sign-in under the refresh lease, publishes, and is
+// deleted. No machine is kept running for it.
+const SIGN_IN_IDLE_DAYS = Number(process.env.SIGN_IN_REFRESH_IDLE_DAYS || 5);
+async function refreshSignInsIfIdle(now = Date.now()): Promise<void> {
+  if (!managedComputeEnabled()) return;
+  const idleMs = SIGN_IN_IDLE_DAYS * 86_400_000;
+  for (const { accountId, lastRefreshRunAt } of await store.listModelAuthPoolAccounts()) {
+    if (!signInRefreshDue({ now, idleMs, lastRefreshRunAt, nodes: await store.listNodes(accountId) })) continue;
+    if (!(await runnersMode(accountId))) continue;
+    await store.markModelAuthPoolRefreshRun(accountId, new Date(now).toISOString());
+    const launched = await deploymentExtension.runnerLaunch(accountId, { runnerId: SIGN_IN_REFRESH_RUNNER, requestId: `refresh-sign-ins:${new Date(now).toISOString().slice(0, 10)}` })
+      .catch((error) => { console.warn(`[sign-ins] refresh run for ${accountId} failed:`, error instanceof Error ? error.message : error); return undefined; });
+    if (launched && !launched.allowed) console.warn(`[sign-ins] refresh run for ${accountId} refused: ${launched.decision.code ?? launched.decision.reason ?? "denied"}`);
+  }
+}
+setInterval(() => void refreshSignInsIfIdle().catch((error) => console.warn("[sign-ins] refresh sweep failed:", error)), 60 * 60_000).unref();
 
 function securityHeaders(_req: Request, res: Response, next: NextFunction) {
   res.setHeader("X-Content-Type-Options", "nosniff");

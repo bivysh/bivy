@@ -25,6 +25,9 @@ export interface BootstrapOpts {
    *  src/control-plane-tasks.ts. Lets the machine serve queue items with no
    *  persistent node required (issue #532). */
   hostedTasks?: boolean;
+  /** Boot only to refresh the account's synced sign-ins, then report settled:
+   *  keeps them alive while none of the account's machines runs. */
+  refreshSignIns?: boolean;
   /** The routing-label suffix this node should additionally serve, e.g.
    *  "ab12cd34" so it also polls `bivy/ab12cd34` (see `BIVY_NODE_LABEL` in
    *  src/control-plane-tasks.ts). Lets a queue item be targeted at THIS

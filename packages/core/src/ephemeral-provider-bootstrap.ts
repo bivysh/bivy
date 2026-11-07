@@ -35,6 +35,7 @@ function bivyBootstrapExports(opts: BootstrapOpts): string[] {
     persistent ? `export HOME=${PERSISTENT_ROOT}/home` : "",
     opts.repo ? `export BIVY_REPO=${shq(opts.repo)}` : "",
     opts.hostedTasks ? `export BIVY_GITHUB_HOSTED_TASKS=1` : "",
+    opts.refreshSignIns ? "export BIVY_REFRESH_SIGN_INS=1" : "",
     opts.nodeLabel ? `export BIVY_NODE_LABEL=${shq(opts.nodeLabel)}` : "",
     opts.githubToken ? `export BIVY_GITHUB_TOKEN=${shq(opts.githubToken)}` : "",
     opts.hostedMint ? `export BIVY_HOSTED_MINT=1` : "",

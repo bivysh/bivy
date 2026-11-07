@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Sign-ins stay alive while nothing runs.** If cloud machines may start with your sign-ins and none of your machines has run for five days, Bivy starts a short cloud machine that only refreshes your synced Claude, ChatGPT and other sign-ins, then deletes itself, so they don't expire while you're away. See [credential-sync.md](docs/credential-sync.md).
+
 - **Cloud runs can start with your sign-ins while you're away.** Turn on "Cloud machines can start with my sign-ins" under Automations → Runs on, and cloud runs get your Claude, ChatGPT and other sign-ins even when none of your machines or devices is online, with no machine kept running for it. The deployment's fleet holds a key for your account that only its machines boot with; the control plane stores your vault key wrapped to it and can't open it. Off by default; turning it off re-keys your vault. See [credential-sync.md](docs/credential-sync.md).
 
 ## [0.22.10] - 2026-11-07
