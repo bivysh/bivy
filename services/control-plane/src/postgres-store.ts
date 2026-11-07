@@ -477,6 +477,7 @@ export class PostgresStore implements ControlPlaneStore {
         wrapped_by_public_key  TEXT,
         updated_at             TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      ALTER TABLE model_auth_pool_keys ADD COLUMN IF NOT EXISTS last_refresh_run_at TIMESTAMPTZ;
 
       CREATE TABLE IF NOT EXISTS model_auth_key_requests (
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -2149,6 +2150,15 @@ export class PostgresStore implements ControlPlaneStore {
     const removed = await this.query(`DELETE FROM model_auth_pool_keys WHERE account_id = $1 RETURNING wrapped_key`, [accountId]);
     // The deployment could open that wrap: re-key so it can't open what's synced next.
     if (removed.rows[0]?.wrapped_key) await this.query(`UPDATE model_auth_vaults SET needs_rotation = true WHERE account_id = $1`, [accountId]);
+  }
+
+  async listModelAuthPoolAccounts(): Promise<Array<{ accountId: string; lastRefreshRunAt?: string }>> {
+    const { rows } = await this.query(`SELECT account_id, last_refresh_run_at FROM model_auth_pool_keys WHERE wrapped_key IS NOT NULL`);
+    return rows.map((row) => ({ accountId: String(row.account_id), ...(row.last_refresh_run_at ? { lastRefreshRunAt: new Date(row.last_refresh_run_at).toISOString() } : {}) }));
+  }
+
+  async markModelAuthPoolRefreshRun(accountId: string, at: string): Promise<void> {
+    await this.query(`UPDATE model_auth_pool_keys SET last_refresh_run_at = $2 WHERE account_id = $1`, [accountId, at]);
   }
 
   async listModelAuthDevicesMissingKey(accountId: string): Promise<string[]> {

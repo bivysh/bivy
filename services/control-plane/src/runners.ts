@@ -54,6 +54,11 @@ export interface RunnerBootInput {
 
 /** Enroll a runner's node and build its Fly boot payload. Like the cloud
  * computer's, it carries no room key: the runner mints its own on its disk. */
+/** The runner that only refreshes an account's synced sign-ins while none of
+ * its machines runs (see refreshSignInsIfIdle in index.ts). It does no work,
+ * keeps nothing, and is deleted as soon as it reports settled. */
+export const SIGN_IN_REFRESH_RUNNER = "refresh-sign-ins";
+
 export async function bootRunner(
   store: Pick<NodeRepository, "enrollNode"> & Pick<HostedMachineRepository, "getHostedProvisioning"> & Pick<CentralGithubAppRepository, "listCentralGithubInstallations">,
   input: RunnerBootInput,
@@ -61,18 +66,19 @@ export async function bootRunner(
   const nodeId = runnerNodeId(input.accountId, input.runnerId);
   const label = runnerLabel(nodeId);
   const { enrollmentToken } = await store.enrollNode(input.accountId, nodeId, label);
+  const refreshOnly = input.runnerId === SIGN_IN_REFRESH_RUNNER;
   const bootstrap: BootstrapOpts = {
     relayUrl: input.relayUrl,
     controlPlaneUrl: input.controlPlaneUrl,
     enrollmentToken,
     nodeId,
-    ttlMinutes: input.awakeCapMinutes,
+    ttlMinutes: refreshOnly ? Math.min(15, input.awakeCapMinutes) : input.awakeCapMinutes,
     provider: "fly",
     runner: true,
     // Every runner sleeps once idle and keeps its disk: the session it ran
-    // stays there to open, continue or delete.
-    sleepOnIdle: true,
-    hostedTasks: true,
+    // stays there to open, continue or delete. The refresh runner keeps
+    // nothing: it reports settled when done and is deleted.
+    ...(refreshOnly ? { refreshSignIns: true } : { sleepOnIdle: true, hostedTasks: true }),
     restoreSessionId: input.restoreSessionId,
     nodeLabel: label,
     ...await githubBootIdentity(store, input.accountId),

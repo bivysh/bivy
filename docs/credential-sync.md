@@ -84,6 +84,14 @@ Current model:
   wrap and can't open it; whoever runs the fleet can, and they already run
   the machines that use your credentials. Turning it off deletes the keypair
   and re-keys the vault. Off by default.
+- **Sign-ins stay alive while nothing runs.** With that on, if none of your
+  machines (your own, your cloud computer, your runners) has been seen for
+  five days (`SIGN_IN_REFRESH_IDLE_DAYS` on the control plane), the control
+  plane starts a short refresh-only runner. It opens the vault through the
+  pool key, refreshes each account-synced sign-in under the refresh lease,
+  publishes, reports settled and is deleted. At most one run per window; a
+  machine that runs in between refreshes what it uses, so a used account
+  never gets one.
 
 If you lose every node and device that can unwrap the vault, the stored
 ciphertext can no longer be decrypted — sign in to each provider again on a new

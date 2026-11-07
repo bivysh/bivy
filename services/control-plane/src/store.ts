@@ -1365,6 +1365,10 @@ export interface VaultRepository {
   setModelAuthPoolWrap(accountId: string, publicKey: string, wrappedByPublicKey: string, wrappedKey: string): Promise<boolean>;
   /** Turn it off: forget the pool key and, if a wrap existed, require a re-key. */
   deleteModelAuthPoolKey(accountId: string): Promise<void>;
+  /** Accounts whose cloud machines may start with their sign-ins (a wrap
+   * exists), and when a sign-in refresh run last started for each. */
+  listModelAuthPoolAccounts(): Promise<Array<{ accountId: string; lastRefreshRunAt?: string }>>;
+  markModelAuthPoolRefreshRun(accountId: string, at: string): Promise<void>;
 
   // Device→device provider-token vault (P2 / Gap A) — recipients are paired devices.
   getDeviceVault(accountId: string): Promise<DeviceVault | undefined>;

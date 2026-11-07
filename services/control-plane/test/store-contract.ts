@@ -275,6 +275,15 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.deepEqual(await store.listModelAuthDevicesMissingKey(acct.id), ["laptop-pub"], "and the remaining devices are wrapped for again");
   });
 
+  await test("model auth pool keys: only accounts with a wrap are listed, with their last refresh run", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-pool@example.com");
+    await store.setModelAuthPoolKey(acct.id, "pool-pub");
+    assert.deepEqual((await store.listModelAuthPoolAccounts()).filter((a) => a.accountId === acct.id), [], "no wrap yet: nothing to keep alive");
+    await store.setModelAuthPoolWrap(acct.id, "pool-pub", "laptop-pub", "wrapped");
+    await store.markModelAuthPoolRefreshRun(acct.id, "2026-11-20T12:00:00.000Z");
+    assert.deepEqual((await store.listModelAuthPoolAccounts()).filter((a) => a.accountId === acct.id), [{ accountId: acct.id, lastRefreshRunAt: "2026-11-20T12:00:00.000Z" }]);
+  });
+
   await test("model auth key requests: repeated requests are idempotent", async (store) => {
     const acct = await store.findOrCreateAccount("contract-model-auth-request@example.com");
     const { node } = await store.enrollNode(acct.id, "node-mar-request", "Requester");

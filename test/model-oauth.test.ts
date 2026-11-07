@@ -10,6 +10,7 @@ import os from "node:os";
 import path from "node:path";
 import { createCredentialVault } from "../src/runtime/credential-store.js";
 import { setRefreshCoordinator } from "../src/runtime/oauth/refresh-policy.js";
+import { refreshSyncedSignIns } from "../src/runtime/oauth/sign-in-refresh.js";
 import { exportSyncableRecords } from "../src/credentials/api.js";
 import {
   extractAuthCode,
@@ -362,6 +363,21 @@ await check("a second machine takes the sign-in the first one refreshed instead 
   }
   assert.equal(exchanges, 1, "the rotated refresh token was spent once, by one machine");
   assert.equal((await createCredentialVault(machines[1]).read("anthropic"))?.refresh, "rt-2");
+});
+
+await check("a refresh-only machine refreshes every synced sign-in now, and leaves machine-only ones alone", async () => {
+  const dir = tmpDir();
+  const store = createCredentialVault(dir);
+  const valid = { type: "oauth" as const, access: "still-valid", refresh: "rt", expires: Date.now() + 3600_000 };
+  await store.modifyRecord("anthropic", "default", async () => valid, "account");
+  await store.modifyRecord("openai-codex", "default", async () => valid, "node");
+  const exchanged: string[] = [];
+  stubFetch((call) => { exchanged.push(call.url); return { json: { access_token: "rotated", refresh_token: "rt-2", expires_in: 3600 } }; });
+  const result = await refreshSyncedSignIns(dir);
+  assert.deepEqual(result, { refreshed: ["anthropic:default"], failed: [] });
+  assert.equal(exchanged.length, 1, "only the account-synced sign-in was refreshed, though it hadn't expired");
+  assert.equal((await store.read("anthropic"))?.refresh, "rt-2");
+  assert.equal((await createCredentialVault(dir).readRecord("openai-codex", "default"))?.source.kind === "stored" && ((await createCredentialVault(dir).readRecord("openai-codex", "default"))!.source as { cred: { refresh: string } }).cred.refresh, "rt");
 });
 
 await check("a token that would expire within the asked window is refreshed ahead of time", async () => {
