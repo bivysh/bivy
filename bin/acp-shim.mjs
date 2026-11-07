@@ -558,8 +558,47 @@ function reportUsage() {
   bivy({ type: "usage", usage: { ...(sawTokens ? { tokens } : {}), ...(sessionCostUsd !== undefined ? { costUsd: sessionCostUsd } : {}) } });
 }
 
-// --- ACP → bivy: agent→client requests (permission, fs) ---------------------
+// ACP has no standard "ask the user" request yet, so agents ship their own as an
+// extension method. Each row names one: how to read its questions and how to
+// answer it from Bivy's question card. The questions are raised as an
+// AskUserQuestion, which Bivy answers on its card for every agent. Adding an
+// agent's ask request is adding a row. Answers are keyed by question text.
+const QUESTION_REQUESTS = {
+  // Grok (`grok agent stdio`): its ask_user_question tool waits on this.
+  "_x.ai/ask_user_question": {
+    questions: (params) => params?.questions,
+    toolCallId: (params) => params?.toolCallId,
+    reply: (decision) => {
+      if (decision.questionOutcome === "replied") return { outcome: "chat_about_this" };
+      if (decision.questionOutcome !== "completed" || !decision.answers) return { outcome: "cancelled" };
+      return { outcome: "accepted", answers: decision.answers };
+    },
+  },
+};
+
+/** An agent's question items as AskUserQuestion input: every card needs a
+ *  header, which agents other than Claude don't always send. */
+function cardQuestions(questions) {
+  return (Array.isArray(questions) ? questions : []).filter((q) => typeof q?.question === "string").map((q) => ({
+    question: q.question,
+    header: String(q.header || "Question").slice(0, 40),
+    options: (Array.isArray(q.options) ? q.options : []).map((o) => ({ label: String(o?.label ?? ""), ...(o?.description ? { description: String(o.description) } : {}) })),
+    ...(q.multiSelect === true ? { multiSelect: true } : {}),
+  }));
+}
+
+// --- ACP → bivy: agent→client requests (permission, fs, questions) ----------
 async function onAgentRequest(id, method, params) {
+  const ask = QUESTION_REQUESTS[method];
+  if (ask) {
+    const questions = cardQuestions(ask.questions(params));
+    if (!questions.length) { agentReply(id, ask.reply({})); return; }
+    const toolCallId = String(ask.toolCallId(params) || `ask-${id}`);
+    permissionRequests.set(toolCallId, { kind: "question", requestId: id, reply: ask.reply });
+    const parentCall = childRoute(params?.sessionId);
+    bivy({ type: "tool.call", toolCallId, name: "AskUserQuestion", input: { questions }, ...(parentCall ? { parentToolCallId: parentCall } : {}) });
+    return;
+  }
   switch (method) {
     case "session/request_permission": {
       // Turn the ACP permission prompt into a bivy tool.call the daemon gates via
@@ -757,6 +796,7 @@ async function onBivyCommand(msg) {
         const entry = permissionRequests.get(msg.toolCallId);
         if (entry) {
           permissionRequests.delete(msg.toolCallId);
+          if (entry.kind === "question") { agentReply(entry.requestId, entry.reply(msg)); return; }
           const allow = msg.decision !== "deny";
           if (entry.kind === "fs-write") {
             // The write card is the shim's own call, so the shim closes it too —

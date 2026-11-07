@@ -23,7 +23,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { WebSocket } from "ws";
-import { countCardBlocks, scoreAgentUx, type AgentUxCheck, type AgentUxTask } from "../src/certification/agent-ux.js";
+import { countCardBlocks, scoreAgentUx, shownFiles, type AgentUxCheck, type AgentUxTask } from "../src/certification/agent-ux.js";
 
 const argv = process.argv.slice(2);
 const opt = (name: string, fallback?: string) => { const i = argv.indexOf(`--${name}`); return i >= 0 ? argv[i + 1] : fallback; };
@@ -69,11 +69,16 @@ function jsonl(file: string): Array<Record<string, unknown>> {
 
 interface HistoryEvent { isStreaming?: boolean; messages?: Array<{ role: string; content: unknown }> }
 
+/** The text of the agent's last message that has any (a turn can end on a
+ *  text-less message, such as a message boundary). */
 function lastReply(messages: HistoryEvent["messages"] = []): string {
-  const last = [...messages].reverse().find((m) => m.role === "assistant");
-  if (!last) return "";
-  if (typeof last.content === "string") return last.content;
-  return (Array.isArray(last.content) ? last.content : []).map((b) => (b as { type?: string; text?: string }).type === "text" ? (b as { text: string }).text : "").join("");
+  const textOf = (content: unknown) => typeof content === "string" ? content
+    : (Array.isArray(content) ? content : []).map((b) => (b as { type?: string; text?: string }).type === "text" ? (b as { text: string }).text : "").join("");
+  for (const m of [...messages].reverse()) {
+    const text = m.role === "assistant" ? textOf(m.content) : "";
+    if (text.trim()) return text;
+  }
+  return "";
 }
 
 async function runTask(agent: string, task: AgentUxTask, machine: string) {
@@ -115,6 +120,7 @@ async function runTask(agent: string, task: AgentUxTask, machine: string) {
     asked,
     approvals: approvalsSeen,
     reply: lastReply(history.messages),
+    shown: shownFiles(history.messages),
     files: listFiles(dir),
   }, { machine });
   const bivyCalls = jsonl(path.join(dataDir, "audit", "audit.jsonl")).filter((e) => e.kind === "agent.call" && e.session === session.id).length;

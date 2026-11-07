@@ -178,6 +178,10 @@ export interface ToolCallDecision {
    *  answer), for agents whose protocol takes structured answers rather than a
    *  result text (Codex's request_user_input). */
   answers?: Record<string, string>;
+  /** With `handled`, for an AskUserQuestion: how it settled, for agents whose
+   *  protocol tells "answered" from "dismissed" and "replied in the chat"
+   *  (Grok's `_x.ai/ask_user_question` outcome). */
+  questionOutcome?: UserQuestionAnswer["behavior"];
   /** With `handled`, for an ELICITATION_TOOL call: the result to hand back to
    *  the MCP server (see src/elicitation.ts). */
   elicitation?: ElicitationResult;

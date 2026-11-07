@@ -405,6 +405,44 @@ await check("acp: forwards image blocks to the agent", async () => {
   }
 });
 
+await check("acp: an agent's own ask request becomes Bivy's question card, and the answer goes back", async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-acp-ask-"));
+  const dump = path.join(tmp, "ask.json");
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_ASK = "1";
+  process.env.BIVY_TEST_ASK_DUMP = dump;
+  try {
+    const cases = [
+      { decision: { handled: true, result: "answered", questionOutcome: "completed" as const, answers: { "Python or Bash?": "Bash" } }, expected: { outcome: "accepted", answers: { "Python or Bash?": "Bash" } } },
+      { decision: { handled: true, result: "replied", questionOutcome: "replied" as const }, expected: { outcome: "chat_about_this" } },
+    ];
+    for (const { decision, expected } of cases) {
+      fs.rmSync(dump, { force: true });
+      const seen: Array<{ toolName: string; input: unknown }> = [];
+      const runtime = makeRuntime({ runtime: "acp", credsDir: tmp, piDir: tmp, sessionsDir: tmp });
+      const { session } = await runtime.createSession({ workspace: tmp, toolInterceptor: async (ctx) => { seen.push(ctx as { toolName: string; input: unknown }); return decision; } });
+      const events: RuntimeEvent[] = [];
+      session.subscribe((event) => events.push(event));
+      try {
+        await session.prompt("ask me");
+        await waitFor(events, (event) => event.type === "agent_end");
+        assert.equal(seen[0]?.toolName, "AskUserQuestion");
+        assert.deepEqual(seen[0]?.input, { questions: [{ question: "Python or Bash?", header: "Question", options: [{ label: "Python" }, { label: "Bash", description: "a shell script" }] }] });
+        assert.deepEqual(JSON.parse(fs.readFileSync(dump, "utf8")), expected);
+      } finally {
+        session.dispose();
+      }
+    }
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_ASK;
+    delete process.env.BIVY_TEST_ASK_DUMP;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 await check("acp: confines and approval-gates filesystem writes", async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-acp-fs-"));
   const resultDump = path.join(tmp, "result.json");
