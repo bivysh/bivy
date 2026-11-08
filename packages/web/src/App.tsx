@@ -40,6 +40,7 @@ import { usePreviewLanding } from "./usePreviewLanding.js";
 import { ForkProgressDialog } from "./components/ForkProgressDialog.js";
 import { ArtifactsSheet } from "./components/ArtifactsSheet.js";
 import { FilesSheet } from "./components/FilesSheet.js";
+import type { FileRef } from "./filePaths.js";
 import { AppsSheet } from "./components/AppsSheet.js";
 import { ForkSheet } from "./components/ForkSheet.js";
 import { useSessionApps } from "./useSessionApps.js";
@@ -158,6 +159,16 @@ export function App() {
   // On a wide screen these surfaces dock beside the chat instead (see
   // useSidePane); every way of opening one goes through `sidePane.show`.
   const sidePane = useSidePane();
+  // A file the agent named in the chat, to show in this session's Files viewer.
+  const [filesAt, setFilesAt] = useState<{ sessionId: string; path: string; line?: number; nonce: number } | null>(null);
+  const openFilesRef = useRef<() => void>(() => {});
+  const activeSessionIdRef = useRef<string | null>(null);
+  const openFileAt = useCallback((ref: FileRef) => {
+    const sessionId = activeSessionIdRef.current;
+    if (!sessionId) return;
+    setFilesAt({ sessionId, ...ref, nonce: Date.now() });
+    openFilesRef.current();
+  }, []);
   const [sidebarWidth, setSidebarWidth] = usePanelWidth(SIDEBAR_SIZE);
   const [paneWidth, setPaneWidth] = usePanelWidth(SIDE_PANE_SIZE);
   const showInSidePane = sidePane.show;
@@ -881,6 +892,9 @@ export function App() {
   };
   const openArtifacts = () => { if (!sidePane.show("artifacts")) setArtifactsSheetOpen(true); };
   const openFiles = () => { if (!sidePane.show("files")) setFilesSheetOpen(true); };
+  openFilesRef.current = openFiles;
+  activeSessionIdRef.current = activeSession && !needsNode ? activeSession.sessionId : null;
+  const filesOpenAt = filesAt && filesAt.sessionId === activeSession?.sessionId ? filesAt : undefined;
   const openPanel = (key: string) => { if (!sidePane.show(`panel:${key}`)) setPanelSheet(key); };
 
   return (
@@ -1217,6 +1231,7 @@ export function App() {
               sessionKey={state.activeSession.activeSessionId}
               onAction={runCommand}
               authAction={authAction}
+              onOpenFile={activeSession && !needsNode ? openFileAt : undefined}
               header={activeSession?.launchProgress ? <SessionLaunchProgressView
                 progress={activeSession.launchProgress}
                 onChooseModel={model => controller.chooseLaunchModel(activeSession.sessionId, model)}
@@ -1263,7 +1278,7 @@ export function App() {
             )}
 
             {filesSheetOpen && !sidePane.wide && activeSession && (
-              <FilesSheet sessionId={activeSession.sessionId} refreshKey={state.activeSession.changesHistory.length} onClose={() => setFilesSheetOpen(false)} />
+              <FilesSheet sessionId={activeSession.sessionId} openFile={filesOpenAt} refreshKey={state.activeSession.changesHistory.length} onClose={() => setFilesSheetOpen(false)} />
             )}
 
             {artifactsSheetOpen && !sidePane.wide && (
@@ -1409,7 +1424,7 @@ export function App() {
             />
           )}
           {paneTab === "files" && (
-            <FilesSheet docked key={activeSession.sessionId} sessionId={activeSession.sessionId} refreshKey={state.activeSession.changesHistory.length} onClose={() => sidePane.setTab(null)} />
+            <FilesSheet docked key={activeSession.sessionId} sessionId={activeSession.sessionId} openFile={filesOpenAt} refreshKey={state.activeSession.changesHistory.length} onClose={() => sidePane.setTab(null)} />
           )}
           {paneTab === "apps" && (() => {
             const request = appsSheet?.sessionId === activeSession.sessionId ? appsSheet : { sessionId: activeSession.sessionId };

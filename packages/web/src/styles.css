@@ -441,7 +441,11 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 }
 .files-code pre { margin: 0; padding: var(--space-2) 0; background: none; border: 0; font: inherit; white-space: pre; }
 .files-code .files-gutter { flex: none; position: sticky; left: 0; padding-inline: var(--space-2); text-align: right; color: var(--muted); background: var(--surface-2); border-right: 1px solid var(--line); user-select: none; }
-.files-code .files-source { flex: 1; padding-inline: var(--space-3); }
+.files-code .files-source { position: relative; flex: 1; padding-inline: var(--space-3); }
+/* The line a chat path asked for (`src/x.ts:12`): a band behind its text.
+   Positioned first, so the gutter and source (both positioned) paint over it. */
+.files-code { position: relative; }
+.files-line-mark { position: absolute; inset-inline: 0; top: calc(var(--space-2) + (var(--line) - 1) * var(--lh-xs)); height: var(--lh-xs); background: var(--signal-soft); pointer-events: none; }
 .files-source code { display: block; background: none; padding: 0; color: var(--ink); }
 /* Markdown files open rendered (the chat's .msg.assistant typography). */
 .files-view-toggle { margin-left: auto; }
@@ -756,6 +760,9 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .code-copy-btn.copied { color: var(--ok); opacity: 1; }
 @media (hover: none) { .code-copy-btn { opacity: 0.6; } }
 .msg.assistant code { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0 4px; font-size: 0.9em; }
+/* A file path the agent named: opens it in Files (filePaths.ts). */
+.msg.assistant code.md-file-link { cursor: pointer; text-decoration: underline dotted var(--line-strong); text-underline-offset: 3px; }
+.msg.assistant code.md-file-link:hover { border-color: var(--line-strong); text-decoration-color: var(--accent); }
 .msg.assistant pre code { background: none; border: 0; padding: 0; font-size: inherit; }
 /* A link to a file on the agent's machine (markdown.ts mdPath): a file name, not
    a dead link. Full path on hover. */

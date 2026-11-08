@@ -95,3 +95,20 @@ test("browse the session's workspace and read a file the agent added", async ({ 
   const kinds = await page.evaluate(() => (window as any).commands.map((c: any) => `${c.kind}:${c.path}`));
   expect(kinds).toContain("files.read:src/coupon.ts");
 });
+
+// A path the agent names in its reply opens that file in Files, at its line.
+test("a file path in the agent's reply opens the file at that line", async ({ page }, testInfo) => {
+  await page.evaluate(() => (window as any).c.store.apply({ type: "session.history", sessionId: "s", runtimeId: "claude", messages: [
+    { role: "user", content: "Reject expired coupons." },
+    { role: "assistant", content: "The check is in `src/coupon.ts:2`; call `res.json()` as before." },
+  ] }));
+  await expect(page.getByRole("button", { name: "Open res.json() in Files" })).toHaveCount(0);
+  const link = page.getByRole("button", { name: "Open src/coupon.ts at line 2 in Files" });
+  await link.focus();
+  await page.keyboard.press("Enter");
+  const wide = (page.viewportSize()?.width ?? 0) >= 1200;
+  const files = page.getByRole(wide ? "tabpanel" : "dialog");
+  await expect(files.getByLabel("Contents of src/coupon.ts")).toContainText("isExpired");
+  await expect(files.locator(".files-line-mark")).toBeInViewport();
+  await page.screenshot({ path: testInfo.outputPath("files-from-chat.png") });
+});
