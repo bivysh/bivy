@@ -379,6 +379,32 @@ await check("acp: forwards BIVY_ACP_MCP_SERVERS to the agent on session/new", as
   }
 });
 
+await check("acp: advertises this session's Bivy tools server on session/new", async () => {
+  const dump = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bivy-acp-tools-")), "servers.json");
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.BIVY_TEST_MCP_DUMP = dump;
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: __dirname, piDir: __dirname, sessionsDir: __dirname });
+    const { session } = await runtime.createSession({ workspace: __dirname, toolInterceptor: async () => undefined });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((e) => events.push(e));
+    await session.prompt("hello acp");
+    await waitFor(events, (e) => e.type === "agent_end");
+    for (let i = 0; i < 300 && !fs.existsSync(dump); i++) await new Promise((r) => setTimeout(r, 10));
+    const [server, ...rest] = JSON.parse(fs.readFileSync(dump, "utf8"));
+    assert.equal(rest.length, 0);
+    assert.equal(server.name, "bivy");
+    assert.deepEqual(server.args.slice(-1), ["mcp-serve"]);
+    assert.ok(server.env.some((e: { name: string; value: string }) => e.name === "BIVY_SESSION_ID" && e.value === session.id), "the server speaks for this session");
+    session.dispose();
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.BIVY_TEST_MCP_DUMP;
+  }
+});
+
 await check("acp: forwards image blocks to the agent", async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-acp-images-"));
   const dump = path.join(tmp, "prompt.json");

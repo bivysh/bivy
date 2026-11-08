@@ -40,6 +40,7 @@
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import { exitWithParent } from "./shim-lifecycle.mjs";
+import { codexBivyToolsArgs } from "./bivy-tools-server.mjs";
 
 const CODEX_BIN = process.env.BIVY_CODEX_BIN || "codex";
 // Force Codex to ask before every model-proposed action so Bivy governs each one.
@@ -55,7 +56,12 @@ function bivy(obj) {
 // workspace-write has no network by default, loopback included, so the agent's
 // own `bivy` commands (app publish, attach, ask) could not reach this node.
 // Same override as CODEX_WORKSPACE_NETWORK in src/harness/sandbox.ts.
-const AS_ARGS = SANDBOX_MODE === "workspace-write" ? ["app-server", "-c", "sandbox_workspace_write.network_access=true"] : ["app-server"];
+// Bivy's own tools for this session (ask_user, notify_user, …) as an MCP server.
+const AS_ARGS = [
+  "app-server",
+  ...(SANDBOX_MODE === "workspace-write" ? ["-c", "sandbox_workspace_write.network_access=true"] : []),
+  ...codexBivyToolsArgs(),
+];
 const as = spawn(CODEX_BIN, AS_ARGS, { stdio: ["pipe", "pipe", "pipe"] });
 let asNextId = 1;
 const asPending = new Map(); // jsonrpc id -> {resolve, reject}

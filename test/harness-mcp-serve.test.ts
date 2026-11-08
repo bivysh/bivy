@@ -14,6 +14,8 @@ import path from "node:path";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { createBivyMcpServer, runAttachToChat, type RunBivy } from "../src/harness/mcp-serve-cli.js";
+import { BivyCliTools } from "../src/harness/bivy-cli-tools.js";
+import { setSessionTokenSigner } from "../src/runtime/session-env.js";
 
 let failures = 0;
 async function check(name: string, fn: () => void | Promise<void>) {
@@ -149,10 +151,38 @@ await check("plugin tools are listed beside Bivy's own, cannot shadow them, and 
   await client.connect(clientT);
   assert.deepEqual((await client.listTools()).tools.map((t) => t.name), ["attach_to_chat", "notify_user", "ci_status"]);
   const res: any = await client.callTool({ name: "ci_status", arguments: { branch: "main" } });
-  assert.equal(res.isError, undefined);
+  assert.equal(res.isError, false);
   assert.deepEqual(res.structuredContent, { green: true });
   assert.deepEqual(calls.at(-1), ["tools", "run", "ci_status", "--input", '{"branch":"main"}', "--json"]);
   await client.close();
+});
+
+// Agents with in-process tools (Claude, Pi) get the same table through a ToolProvider.
+await check("the daemon's ToolProvider offers the same tools and runs them as this session on this node", async () => {
+  const runs: Array<{ env: Record<string, string | undefined>; args: string[] }> = [];
+  const tools = new BivyCliTools("http://127.0.0.1:4391", (env) => {
+    const cli = fakeCli([]);
+    return async (args) => { runs.push({ env, args }); return cli(args); };
+  });
+  setSessionTokenSigner((id) => `token-for-${id}`);
+  try {
+    await tools.ready();
+    let sessionId: string | undefined;
+    const provider = tools.provider(() => sessionId);
+    assert.deepEqual(provider.list().map((t) => t.name), ["notify_user"]);
+    assert.equal((await provider.invoke("notify_user", "c0", {})).isError, true, "no session id yet: refused, not run as nobody");
+    sessionId = "sess-7";
+    const res = await provider.invoke("notify_user", "c1", { message: "Done" });
+    assert.equal(res.isError, undefined);
+    assert.match(res.content?.[0]?.text ?? "", /"push":"sent"/);
+    const call = runs.at(-1)!;
+    assert.deepEqual(call.args, ["tool", "notify_user", '{"message":"Done"}']);
+    assert.equal(call.env.BIVY_NODE_URL, "http://127.0.0.1:4391");
+    assert.equal(call.env.BIVY_SESSION_ID, "sess-7");
+    assert.equal(call.env.BIVY_SESSION_TOKEN, "token-for-sess-7");
+  } finally {
+    setSessionTokenSigner(undefined);
+  }
 });
 
 await check("the real CLI supplies the tools and serves the guides as resources", async () => {

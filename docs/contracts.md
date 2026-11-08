@@ -15,7 +15,7 @@ says which contract it was written against.
 | App manifest (`bivy.app.json`) | `version: 1` | `src/apps/types.ts` | [Apps](apps.md) |
 | Automations (`.bivy/automations.yaml`) | `version: 1` | `src/automation-config.ts` | [Automations as code](automations-as-code.md) |
 | `bivy` commands, `--json` output and exit codes | the command table | `bin/cli-commands.mjs` | [CLI reference](cli-reference.md) |
-| MCP tools and resources (`bivy mcp-serve`) | the command table's `tools`, plugin tools, guides | `src/harness/mcp-serve-cli.ts` | [CLI reference](cli-reference.md) |
+| MCP tools and resources (`bivy mcp-serve`) | the command table's `tools`, plugin tools, guides | `src/harness/mcp-serve-cli.ts`, `src/harness/bivy-cli-tools.ts` | [CLI reference](cli-reference.md) |
 
 ## How they change
 

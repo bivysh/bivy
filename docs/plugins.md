@@ -104,8 +104,9 @@ the process gets `BIVY_SESSION_ID`, `BIVY_PLUGIN_ROOT` and `BIVY_TOOL`.
 | `widgets` | `true` lets chat widgets call it (`bivy.call`). Off by default: a widget is agent-written code, so a tool is offered to widgets only on purpose. |
 
 Agents call tools with `bivy tools run <name> key=value` or `--input '<json>'`.
-Every plugin tool is also served by `bivy mcp-serve`, so it appears in the tool
-list of every agent Bivy injects that server into. A plugin cannot shadow
+Every plugin tool is also in every agent's tool list, beside Bivy's own (see
+[`bivy mcp-serve`](cli-reference.md#bivy-mcp-serve)). Claude and Pi see a tool
+installed mid-session from their next session on. A plugin cannot shadow
 Bivy's own tools.
 
 ### Themes

@@ -151,6 +151,8 @@ import { checkDiskAdmission } from "./harness/disk-admission.js";
 import { sandboxTier, setConfiguredSandboxTier, normalizeSandboxTier, type SandboxTier } from "./harness/sandbox.js";
 import { setConfiguredAutoAttachToolImages } from "./harness/tool-image-attachments.js";
 import { injectMcpProxyForSession, injectBivyToolsForSession } from "./harness/mcp-inject.js";
+import { BivyCliTools, combineToolProviders } from "./harness/bivy-cli-tools.js";
+import type { ToolProvider } from "./runtime/types.js";
 import { parseRepo, isGitHubSlugPart, inferGitHubRepoFromWorkspace, isSharedCloneRoot, resolveGitHubToken, ghCliInstalled, cloneOrUpdateRepo, resolveDefaultBaseRef, resolveBranchBaseRef, resolveAdoptBaseRef, resolveForkBaseRef, originBranchPresent, fetchOrigin, type ParsedRepo } from "./repo-workspace.js";
 import { configureGitAuth, writeGitCredentialEndpoint } from "./git-auth.js";
 import {
@@ -950,6 +952,21 @@ setInterval(() => {
 // facilities; advertising Runs here caused routine work to create noisy,
 // top-level Sessions in the UI.
 const integrations = new IntegrationManager(appDir, undefined, attachToChatForSession);
+// This node's own URL, for the `bivy` CLI that agent tools run: a node on any
+// port (or a second node on this machine) must get its own sessions' calls.
+// Always this node's: one started from inside another node's session inherits
+// that node's BIVY_MCP_ENDPOINT, and its agents' tools would reach the parent.
+const selfNodeUrl = `http://${host === "0.0.0.0" || host === "::" ? "127.0.0.1" : host.includes(":") ? `[${host}]` : host}:${port}`;
+process.env.BIVY_MCP_ENDPOINT = selfNodeUrl;
+// Bivy's own agent tools (ask_user, notify_user, …), from the command table.
+// Agents that read an MCP config get them from `bivy mcp-serve`; agents with
+// in-process tools (Claude, Pi) get them through the session's ToolProvider.
+const bivyCliTools = new BivyCliTools(selfNodeUrl);
+/** A session's tools: its connected integrations and attach_to_chat, then Bivy's own. */
+async function sessionToolProvider(sessionIdRef: SessionIdRef): Promise<ToolProvider> {
+  await bivyCliTools.ready().catch(() => undefined);
+  return combineToolProviders(integrations.toolProvider(sessionIdRef), bivyCliTools.provider(() => sessionIdRef.current));
+}
 // A terminal opened is someone using this machine, like an agent turn.
 const terminals = new TerminalManager({ onOpen: () => void reportEphemeralMilestone("firstUseAt") });
 // Per-session agents: a node holds one AgentRuntime instance *per agent id*,
@@ -9000,7 +9017,7 @@ async function refreshRecordAfterTui(record: SessionRecord) {
     const workspace = record.worktree?.path || oldSession.cwd || record.workspace;
     // Refreshing an EXISTING record: its id is already known, so attach_to_chat
     // (see toolProvider's SessionIdRef doc) can be wired live, not deferred.
-    const runtimeSessionOptions = { credentialLabels: record.credentialLabels, workspace, toolProvider: integrations.toolProvider({ current: record.id }), instructions: sessionInstructions(appDir), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
+    const runtimeSessionOptions = { credentialLabels: record.credentialLabels, workspace, toolProvider: await sessionToolProvider({ current: record.id }), instructions: sessionInstructions(appDir), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
     const { session, warning } = await runtimeHost.openSession(rt, { ...runtimeSessionOptions, sessionFile: record.sessionFile });
     record.session = session;
     record.sessionFile = session.sessionFile ?? record.sessionFile;
@@ -9242,7 +9259,7 @@ async function recoverRecordAfterAbort(record: SessionRecord): Promise<void> {
     const runtimeSessionOptions = {
       workspace,
       credentialLabels: record.credentialLabels,
-      toolProvider: integrations.toolProvider({ current: record.id }),
+      toolProvider: await sessionToolProvider({ current: record.id }),
       instructions: sessionInstructions(appDir),
       ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}),
     };
@@ -9451,7 +9468,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   const credentialLabels = opts.credentialLabels ?? storedMeta?.credentialLabels;
   // The user's account-wide instructions, as of this session's start.
   const instructions = sessionInstructions(appDir);
-  const runtimeSessionOptions = { credentialLabels, workspace: runtimeWorkspace, toolProvider: integrations.toolProvider(attachSessionIdRef), instructions, ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
+  const runtimeSessionOptions = { credentialLabels, workspace: runtimeWorkspace, toolProvider: await sessionToolProvider(attachSessionIdRef), instructions, ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
   // Stage 2/3: prefer re-attaching to a still-live remote session — routed to its
   // OWN agent service — over re-opening a fresh copy from disk. Falls back to
   // open/create when nothing live is there.
@@ -9566,16 +9583,17 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   // agents by adding a `bivy` server (run via `bivy mcp-serve`) to the agent's
   // config. Default-on (not gated on BIVY_MCP_PROXY) — it only ADDS a safe,
   // session-scoped, restored capability the agent already has via env, so the
-  // chat can receive files. Claude/Pi expose these natively (in-process SDK MCP
-  // server / integration ToolProvider), so the tool-interception runtimes are
-  // skipped to avoid a duplicate registration.
+  // chat can receive files. The tool-interception runtimes are skipped: Claude
+  // and Pi get these tools through the session's ToolProvider, and the protocol
+  // shims (ACP, Codex) hand their agent this session's server themselves
+  // (bin/bivy-tools-server.mjs).
   if (!rt.capabilities.toolInterception) {
     try {
       const res = injectBivyToolsForSession(rt.id, {
         workspace: sessionWorkspace,
         home: os.homedir(),
         sessionId,
-        endpoint: process.env.BIVY_MCP_ENDPOINT,
+        endpoint: selfNodeUrl,
         instructionsFile: instructions?.file,
       });
       if (res.injected.length) {
@@ -12944,9 +12962,6 @@ const server = app.listen(port, host, async () => {
     recordNetAttempt(event);
   });
   if (egress) console.log(`Egress broker: http://127.0.0.1:${egress.port} (agent traffic governed)`);
-  // Point `bivy mcp-proxy` subprocesses at this node's actual port (they inherit
-  // this env). Defaults to 4317 in the CLI, so only needed on a custom port.
-  if (!process.env.BIVY_MCP_ENDPOINT) process.env.BIVY_MCP_ENDPOINT = `http://127.0.0.1:${port}`;
 });
 
 // A failed bind is fatal and must be reported, not swallowed. `app.listen` emits

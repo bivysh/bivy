@@ -34,6 +34,7 @@ import { createInterface } from "node:readline";
 import fs from "node:fs";
 import path from "node:path";
 import { exitWithParent } from "./shim-lifecycle.mjs";
+import { acpBivyToolsServer } from "./bivy-tools-server.mjs";
 
 // --- arg parsing: --agent <cmd> [-- <args…>] --------------------------------
 const argv = process.argv.slice(2);
@@ -64,6 +65,10 @@ if (process.env.BIVY_ACP_MCP_SERVERS) {
     if (Array.isArray(parsed)) mcpServers = parsed;
   } catch { /* malformed → none */ }
 }
+// Plus Bivy's own tools for this session (ask_user, notify_user, …), unless a
+// configured server already uses the name.
+const bivyTools = acpBivyToolsServer();
+if (bivyTools && !mcpServers.some((server) => server?.name === bivyTools.name)) mcpServers.push(bivyTools);
 
 // --- bivy-agent-protocol output (our stdout) --------------------------------
 function bivy(obj) {

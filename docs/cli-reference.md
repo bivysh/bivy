@@ -1546,9 +1546,13 @@ hand.
 
 ### `bivy mcp-serve`
 
-Bivy's own MCP server for agents (stdio), injected into the MCP configuration
-of agents that don't run through an SDK. It serves the Bivy agent note as the
-MCP `instructions`, the guides as resources, and these tools:
+Bivy's own MCP server for agents (stdio). Every agent gets its tools, each
+through its own per-session channel: ACP agents (OpenCode, Grok, …) in
+`session/new`'s `mcpServers`, Codex as `-c mcp_servers.bivy.*` (the session
+token is forwarded by name, never on the command line), other CLI agents
+through their MCP config file. Claude and Pi get the same tools in-process from
+the node. It serves the Bivy agent note as the MCP `instructions`, the guides
+as resources, and these tools:
 
 | Tool | Runs |
 | --- | --- |

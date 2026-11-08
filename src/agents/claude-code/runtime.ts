@@ -238,17 +238,22 @@ function buildToolProviderMcpServer(sdk: any, provider: ToolProvider): unknown {
     const required = new Set(Array.isArray(object.required) ? object.required.filter((v): v is string => typeof v === "string") : []);
     const shape: Record<string, z.ZodTypeAny> = {};
     for (const [name, raw] of Object.entries(properties)) {
-      const field = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
-      let value: z.ZodTypeAny = field.type === "string" ? z.string()
-        : field.type === "integer" ? z.number().int()
-          : field.type === "number" ? z.number()
-            : field.type === "boolean" ? z.boolean()
-              : field.type === "object" ? z.object(toShape(field)).passthrough()
-                : z.unknown();
-      if (Array.isArray(field.enum) && field.enum.every((v) => typeof v === "string") && field.enum.length > 0) value = z.enum(field.enum as [string, ...string[]]);
+      const value = toZod(raw);
       shape[name] = required.has(name) ? value : value.optional();
     }
     return shape;
+  };
+  const toZod = (raw: unknown): z.ZodTypeAny => {
+    const field = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+    const value: z.ZodTypeAny = field.type === "string" ? z.string()
+      : field.type === "integer" ? z.number().int()
+        : field.type === "number" ? z.number()
+          : field.type === "boolean" ? z.boolean()
+            : field.type === "array" ? z.array(toZod(field.items))
+              : field.type === "object" ? z.object(toShape(field)).passthrough()
+                : z.unknown();
+    const described = typeof field.description === "string" ? value.describe(field.description) : value;
+    return Array.isArray(field.enum) && field.enum.every((v) => typeof v === "string") && field.enum.length > 0 ? z.enum(field.enum as [string, ...string[]]) : described;
   };
   const tools = provider.list().map((spec) => sdk.tool(spec.name, spec.description, toShape(spec.parameters), async (args: unknown) => {
     const result = await provider.invoke(spec.name, `claude-${randomUUID()}`, args);
