@@ -14,8 +14,10 @@
 // Tools installed plugins add are served too, run through `bivy tools run`.
 // The agent guides (`bivy guide`) are served as resources.
 //
-// Claude and Pi already get `attach_to_chat` natively (in-process SDK MCP server /
-// integration ToolProvider); this covers everyone else. The tool just POSTs to the
+// Claude and Pi get the same tools natively (in-process SDK MCP server / Pi
+// extension, fed by the daemon's ToolProvider: bivy-cli-tools.ts); this covers
+// everyone else. The tool table and its runner live in bivy-cli-tools.ts, shared
+// by both paths. `attach_to_chat` just POSTs to the
 // node's existing `POST /api/session/:id/attach` endpoint — the exact plumbing
 // `bivy attach` uses — so it reuses the same workspace confinement, storage, and
 // live broadcast. The session id and node URL arrive via env (BIVY_SESSION_ID /
@@ -26,13 +28,15 @@
 // not expose governed Runs here: agents should use their native sub-agent tools,
 // which stay inside the parent Session instead of cluttering the Session list.
 
-import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { CallToolRequestSchema, ListResourcesRequestSchema, ListToolsRequestSchema, ReadResourceRequestSchema } from "@modelcontextprotocol/sdk/types.js";
+import { bivyCliRunner, callCommandTool, callPluginTool, listCommandTools, listPluginTools, type BivyToolOutput, type CliTool, type RunBivy } from "./bivy-cli-tools.js";
+
+export type { CliResult, RunBivy } from "./bivy-cli-tools.js";
 
 const DEFAULT_ENDPOINT = "http://127.0.0.1:4317";
 
@@ -112,49 +116,6 @@ export async function runAttachToChat(
   return { isError: false, text: `Attached ${name} to the chat as ${body?.kind === "image" ? "an inline image" : "a downloadable file"}. The user can see it now.` };
 }
 
-/** One `bivy` CLI run: its exit code and output. */
-export interface CliResult { code: number; stdout: string; stderr: string }
-export type RunBivy = (args: string[]) => Promise<CliResult>;
-
-/** Run this install's `bivy` (bin/bivy.mjs, two levels up from src/ or dist/),
- *  against the node that injected this server. */
-function defaultRunBivy(sessionId: string, endpoint: string): RunBivy {
-  const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../bin/bivy.mjs");
-  return (args) => new Promise((resolve) => {
-    const child = spawn(process.execPath, [cli, ...args], { env: { ...process.env, BIVY_SESSION_ID: sessionId, BIVY_NODE_URL: endpoint, NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"] });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", (error) => resolve({ code: 1, stdout, stderr: stderr || error.message }));
-    child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
-  });
-}
-
-interface CliTool { name: string; description: string; inputSchema: Record<string, unknown> }
-
-/** The tools the command table offers, or none when the CLI can't be asked. */
-async function cliTools(runBivy: RunBivy): Promise<CliTool[]> {
-  const result = await runBivy(["help", "--json"]);
-  try {
-    const tools = (JSON.parse(result.stdout) as { tools?: CliTool[] }).tools ?? [];
-    return tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
-  } catch {
-    return [];
-  }
-}
-
-/** Tools installed plugins add (`bivy tools list`), or none when there are none. */
-async function pluginTools(runBivy: RunBivy): Promise<CliTool[]> {
-  const result = await runBivy(["tools", "list", "--json"]);
-  try {
-    const tools = (JSON.parse(result.stdout) as { tools?: CliTool[] }).tools ?? [];
-    return tools.map(({ name, description, inputSchema }) => ({ name, description, inputSchema }));
-  } catch {
-    return [];
-  }
-}
-
 export interface McpServeDeps {
   /** Runs `bivy` with these args; defaults to this install's CLI. */
   runBivy?: RunBivy;
@@ -176,6 +137,9 @@ function readInstructions(file: string | undefined): string | undefined {
   }
 }
 
+const asMcp = ({ isError, content, structuredContent }: BivyToolOutput) =>
+  ({ isError, content: content as never[], ...(structuredContent !== undefined ? { structuredContent } : {}) });
+
 /** Build the Bivy MCP `Server` with tools/list + tools/call handlers wired. */
 export function createBivyMcpServer(deps: McpServeDeps = {}): Server {
   const endpoint = deps.endpoint ?? process.env.BIVY_MCP_ENDPOINT ?? DEFAULT_ENDPOINT;
@@ -185,14 +149,14 @@ export function createBivyMcpServer(deps: McpServeDeps = {}): Server {
 
   const instructions = readInstructions(deps.instructionsFile ?? process.env.BIVY_AGENT_INSTRUCTIONS_FILE);
 
-  const runBivy = deps.runBivy ?? defaultRunBivy(sessionId, endpoint);
+  const runBivy = deps.runBivy ?? bivyCliRunner({ BIVY_SESSION_ID: sessionId, BIVY_NODE_URL: endpoint });
   let tools: Promise<CliTool[]> | undefined;
-  const generated = () => (tools ??= cliTools(runBivy));
+  const generated = () => (tools ??= listCommandTools(runBivy));
   // Plugin tools are listed fresh each time, so one installed mid-session
   // appears on the agent's next tools/list. A plugin cannot shadow Bivy's own.
   const fromPlugins = async () => {
     const own = new Set([...BIVY_MCP_TOOLS.map((tool) => tool.name as string), ...(await generated()).map((tool) => tool.name)]);
-    return (await pluginTools(runBivy)).filter((tool) => !own.has(tool.name));
+    return (await listPluginTools(runBivy)).filter((tool) => !own.has(tool.name));
   };
 
   const server = new Server({ name: "bivy", version: "1.0.0" }, { capabilities: { tools: {}, resources: {} }, ...(instructions ? { instructions } : {}) });
@@ -209,18 +173,9 @@ export function createBivyMcpServer(deps: McpServeDeps = {}): Server {
       if (!(await fromPlugins()).some((tool) => tool.name === req.params.name)) {
         return { isError: true, content: [{ type: "text", text: `Unknown tool: ${req.params.name}` }] };
       }
-      const result = await runBivy(["tools", "run", req.params.name, "--input", JSON.stringify(args), "--json"]);
-      try {
-        const body = JSON.parse(result.stdout) as { ok?: boolean; error?: string; content?: unknown[]; structuredContent?: unknown };
-        if (body.ok === false || result.code !== 0) return { isError: true, content: [{ type: "text", text: body.error ?? (result.stderr.trim() || "The tool failed.") }] };
-        return { content: (body.content ?? []) as never[], ...(body.structuredContent !== undefined ? { structuredContent: body.structuredContent as Record<string, unknown> } : {}) };
-      } catch {
-        return { isError: true, content: [{ type: "text", text: [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n") || "The tool failed." }] };
-      }
+      return asMcp(await callPluginTool(runBivy, req.params.name, args));
     }
-    const result = await runBivy(["tool", req.params.name, JSON.stringify(args)]);
-    const text = [result.stdout.trim(), result.stderr.trim()].filter(Boolean).join("\n") || (result.code === 0 ? "Done." : `bivy exited ${result.code}.`);
-    return { isError: result.code !== 0, content: [{ type: "text", text }] };
+    return asMcp(await callCommandTool(runBivy, req.params.name, args));
   });
 
   // The agent guides, one resource per topic.
