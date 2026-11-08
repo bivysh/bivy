@@ -19,6 +19,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { approvalModeFrom, type ApprovalMode } from "../guard.js";
 import { normalizeSandboxTier, type SandboxTier } from "../harness/sandbox.js";
 import { parseRepo } from "../repo-workspace.js";
 import { evaluateForkPrereqs, blockingForkPrereqs, missingForkPrereqs, type ForkPrereq, type ForkPrereqInput } from "../session/fork-prereqs.js";
@@ -71,7 +72,7 @@ export type StandUpForkOutcome<R> =
 
 /** Fork stand-up's entire coupling surface to the rest of the daemon. */
 export interface ForkStandUpDeps<R extends ForkStandUpSession> {
-  createSession(cwd: string, sessionFile: string | undefined, opts: { runtimeId: string; source?: string; sandbox?: SandboxTier; makeActive?: boolean; newSession?: boolean }): Promise<R>;
+  createSession(cwd: string, sessionFile: string | undefined, opts: { runtimeId: string; source?: string; sandbox?: SandboxTier; approvalMode?: ApprovalMode; makeActive?: boolean; newSession?: boolean }): Promise<R>;
   broadcast(payload: unknown): void;
   persistSessionMetadata(record: R): void;
   /** Show the source's rendered transcript in place of a text replay (see ForkDisplayLogEntry). */
@@ -154,6 +155,9 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
     // Carry the source's sandbox tier so a sandboxed session forks into a
     // sandboxed one, rather than defaulting to this node's tier (fork.ts).
     const forkSandbox = normalizeSandboxTier(bundle.record.sandbox);
+    // And its approval mode, so an "always ask" session doesn't fork into one
+    // that runs at this node's default.
+    const forkApproval = approvalModeFrom(bundle.record.approvalMode);
 
     // Credential-move: if the chosen model's provider isn't logged in on this node,
     // pull the account model-auth vault (a login done on another node carries over),
@@ -302,8 +306,8 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
     const targetModel = opts.model ?? (targetRuntimeId === bundle.record.runtimeId ? bundle.record.modelRef : undefined);
     const plan = await deps.materializeFork({ bundle, targetRuntime, ctx: { workspace, cwd, model: targetModel }, seed: { transcriptUrl: opts.transcriptUrl }, saveTranscript: deps.saveForkTranscript });
     const record = plan.kind === "resume"
-      ? await deps.createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false, newSession: true })
-      : await deps.createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, makeActive: false, newSession: true });
+      ? await deps.createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, approvalMode: forkApproval, makeActive: false, newSession: true })
+      : await deps.createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, approvalMode: forkApproval, makeActive: false, newSession: true });
     // A replayed or seeded destination resumes from a text rendering of the
     // conversation. Show the source's own transcript (tool cards, sub-agent
     // nesting) in its place; everything the fork does from now on follows it.

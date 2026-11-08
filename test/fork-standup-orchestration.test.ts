@@ -43,7 +43,7 @@ function bundle(over: any = {}) {
     sourceSessionId: "src-1",
     title: undefined,
   };
-  for (const k of ["repoSlug", "branch", "sourceSessionId", "title", "sandbox", "runtimeId", "modelRef", "source"]) {
+  for (const k of ["repoSlug", "branch", "sourceSessionId", "title", "sandbox", "approvalMode", "runtimeId", "modelRef", "source"]) {
     if (k in over) record[k] = over[k];
   }
   return { record, dirtyPatch: over.dirtyPatch } as any;
@@ -214,6 +214,13 @@ test("no in-flight notice when the source had nothing pending", async () => {
   await standUp.standUpFork(opts());
   const notice = calls.broadcast.find((p: any) => p.type === "session.notice" && /pending tool approval|unfinished turn/.test(p.message ?? ""));
   assert.equal(notice, undefined, "no spurious in-flight notice for a clean fork");
+});
+
+test("the fork keeps the source's sandbox tier and approval mode", async () => {
+  const { calls, standUp } = harness();
+  await standUp.standUpFork(opts({ bundle: bundle({ sandbox: "read-only", approvalMode: "always" }) }));
+  assert.equal(calls.createSession[0].opts.sandbox, "read-only");
+  assert.equal(calls.createSession[0].opts.approvalMode, "always");
 });
 
 test("resume plan creates from the transcript file; fresh plan creates blank", async () => {

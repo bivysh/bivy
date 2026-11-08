@@ -135,7 +135,7 @@ import { forceAbortTurn } from "./session/abort-recovery.js";
 import { runRequiredAutomationChecks } from "./automation-checks.js";
 import { configToLegacySettings, mergeLegacyIntoNodeConfig, readNodeConfig, writeNodeConfig, type NodeConfig } from "./node-config.js";
 import { childSafety, loadProjectPolicy, resolveProjectSafety } from "./project-policy.js";
-import type { ApprovalMode } from "./guard.js";
+import { approvalModeFrom, type ApprovalMode } from "./guard.js";
 import { PolicyEngine } from "./policy/policy-engine.js";
 import { SessionAllowRules } from "./policy/session-allow.js";
 import { TerminalManager } from "./terminal.js";
@@ -1634,10 +1634,6 @@ function attachToChatForSession(
   const record = openSessions.get(sessionId);
   if (!record) return { error: "Session not found" };
   return attachToChat(record, opts);
-}
-
-function approvalModeFrom(value: unknown): ApprovalMode | undefined {
-  return value === "never" || value === "risky" || value === "always" || value === "autonomous" ? value : undefined;
 }
 
 function assertProjectModel(workspace: string, model?: string): void {
@@ -7143,6 +7139,7 @@ function forkRecordFor(rec: SessionRecord): ForkRecord {
       ? { modelRef: { provider: String(currentModel.provider), id: String(currentModel.id) } }
       : {}),
     sandbox: rec.sandbox,
+    approvalMode: rec.approvalMode,
   };
 }
 

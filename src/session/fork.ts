@@ -58,6 +58,12 @@ export interface ForkRecord {
    * normalizes it back to a `SandboxTier` before use.
    */
   sandbox?: string;
+  /**
+   * The source session's approval mode (an `ApprovalMode` string), carried for
+   * the same reason: a fork of an "always ask" session must not run at the
+   * destination's default. Normalized by the server before use.
+   */
+  approvalMode?: string;
 }
 
 /** Uncommitted working-tree changes carried alongside the transcript. */
