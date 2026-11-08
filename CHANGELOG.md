@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A fork keeps its session's approval mode.** Forking a session that asks before every tool (or only for risky ones) now gives a fork that does the same. Before, the fork kept the sandbox tier but ran at the machine's default approval mode.
+
 - **The agent-UX eval scores what agents actually do.** It now takes the last message with text as the agent's reply (a turn can end on a text-less message), and a file shown with a `::view` line or markdown image counts as shown, not only an attachment card.
 
 - **Sign-ins stay alive while nothing runs.** If cloud machines may start with your sign-ins and none of your machines has run for five days, Bivy starts a short cloud machine that only refreshes your synced Claude, ChatGPT and other sign-ins, then deletes itself, so they don't expire while you're away. See [credential-sync.md](docs/credential-sync.md).

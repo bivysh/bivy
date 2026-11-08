@@ -24,6 +24,11 @@ import path from "node:path";
  */
 
 export type ApprovalMode = "never" | "risky" | "always" | "autonomous";
+
+/** An arbitrary value as an ApprovalMode, or undefined if it isn't one. */
+export function approvalModeFrom(value: unknown): ApprovalMode | undefined {
+  return value === "never" || value === "risky" || value === "always" || value === "autonomous" ? value : undefined;
+}
 export type GuardDecision = "allow" | "ask" | "deny";
 
 export function bashCommand(input: unknown): string {
