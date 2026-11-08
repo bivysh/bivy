@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.11] - 2026-11-08
+
 ### Added
 
 - **File paths in agent replies open the file.** When an agent names a file as inline code, like `src/server.ts` or `src/server.ts:120`, tap it to open that file in the session's Files viewer, scrolled to and marking that line. It works the same for every agent. Plain code like `res.json()` stays as it was.
