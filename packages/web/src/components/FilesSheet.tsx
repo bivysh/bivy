@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Panel } from "./Panel.js";
 import { Badge } from "./Badge.js";
 import { Spinner } from "./Spinner.js";
@@ -40,7 +40,7 @@ function StatusMark({ status }: { status: WorkspaceEntry["status"] }) {
   );
 }
 
-function FileViewer({ sessionId, path, reloadKey, onBack }: { sessionId: string; path: string; reloadKey: number; onBack: () => void }) {
+function FileViewer({ sessionId, path, line, reloadKey, onBack }: { sessionId: string; path: string; line?: number; reloadKey: number; onBack: () => void }) {
   const [file, setFile] = useState<WorkspaceFile | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -62,7 +62,10 @@ function FileViewer({ sessionId, path, reloadKey, onBack }: { sessionId: string;
   // Markdown opens rendered, the way the chat renders it; Source is the plain
   // file. Past the highlight cap it stays source only, like highlighting.
   const canRender = highlight && !!text && isMarkdownPath(path);
-  const [rendered, setRendered] = useState(true);
+  // Asked for a line: show the source, where lines exist.
+  const [rendered, setRendered] = useState(!line);
+  useEffect(() => { if (line) setRendered(false); }, [line]);
+  const lineRef = useRef<HTMLDivElement>(null);
   const showRendered = canRender && rendered;
   const html = useMemo(() => (canRender && text ? toHtml(text) : ""), [canRender, text]);
   useLayoutEffect(() => {
@@ -82,6 +85,8 @@ function FileViewer({ sessionId, path, reloadKey, onBack }: { sessionId: string;
   }, [html, showRendered]);
 
   const lines = useMemo(() => (text === null ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0)), [text]);
+  const markedLine = line && line <= lines && !showRendered ? line : undefined;
+  useLayoutEffect(() => { if (markedLine) lineRef.current?.scrollIntoView({ block: "center" }); }, [markedLine, text]);
   const imageUrl = file?.kind === "image" ? `data:${file.mimeType};base64,${file.data}` : null;
   const copyPath = async () => {
     if (!(await writeClipboard(path))) return;
@@ -168,6 +173,7 @@ function FileViewer({ sessionId, path, reloadKey, onBack }: { sessionId: string;
             </div>
           ) : (
             <div className="files-code" tabIndex={0} aria-label={`Contents of ${path}`}>
+              {markedLine && <div ref={lineRef} className="files-line-mark" style={{ "--line": markedLine } as CSSProperties} aria-hidden />}
               <pre className="files-gutter" aria-hidden>{Array.from({ length: lines }, (_, i) => i + 1).join("\n")}</pre>
               <pre className="files-source"><code ref={codeRef} className={lang ? `language-${lang}` : "nohighlight"} /></pre>
             </div>
@@ -230,8 +236,11 @@ function FolderRows({ path, depth, folders, expanded, changedOnly, onToggle, onO
   );
 }
 
-export function FilesSheet({ sessionId, onClose, docked, refreshKey = 0 }: {
+export function FilesSheet({ sessionId, onClose, docked, refreshKey = 0, openFile }: {
   sessionId: string;
+  /** A file to show now (a path the agent named in the chat); `nonce` changes
+   *  on every ask, so asking for the same file again reopens it. */
+  openFile?: { path: string; line?: number; nonce: number };
   onClose: () => void;
   docked?: boolean;
   /** Changes when the agent may have touched files (a turn ended): reload what is open. */
@@ -239,7 +248,13 @@ export function FilesSheet({ sessionId, onClose, docked, refreshKey = 0 }: {
 }) {
   const saved = remembered.get(sessionId);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(saved?.expanded ?? []));
-  const [open, setOpen] = useState<string | null>(saved?.open ?? null);
+  const [open, setOpen] = useState<string | null>(openFile?.path ?? saved?.open ?? null);
+  const [openLine, setOpenLine] = useState<number | undefined>(openFile?.line);
+  useEffect(() => {
+    if (!openFile) return;
+    setOpen(openFile.path);
+    setOpenLine(openFile.line);
+  }, [openFile]);
   const [changedOnly, setChangedOnly] = useState(saved?.changedOnly ?? false);
   const [folders, setFolders] = useState<Map<string, Folder>>(new Map());
   const [reload, setReload] = useState(0);
@@ -296,7 +311,7 @@ export function FilesSheet({ sessionId, onClose, docked, refreshKey = 0 }: {
       }
     >
       {open ? (
-        <FileViewer sessionId={sessionId} path={open} reloadKey={refreshKey + reload} onBack={() => setOpen(null)} />
+        <FileViewer key={`${open}:${openFile?.nonce ?? 0}`} sessionId={sessionId} path={open} line={openLine} reloadKey={refreshKey + reload} onBack={() => { setOpen(null); setOpenLine(undefined); }} />
       ) : (
         <div className="files-browser">
           {git && (
@@ -309,7 +324,7 @@ export function FilesSheet({ sessionId, onClose, docked, refreshKey = 0 }: {
             </div>
           )}
           <div className="files-tree" role="group" aria-label="Workspace files">
-            <FolderRows path="" depth={0} folders={folders} expanded={expanded} changedOnly={changedOnly} onToggle={toggle} onOpen={setOpen} />
+            <FolderRows path="" depth={0} folders={folders} expanded={expanded} changedOnly={changedOnly} onToggle={toggle} onOpen={(path) => { setOpen(path); setOpenLine(undefined); }} />
           </div>
         </div>
       )}

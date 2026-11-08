@@ -20,6 +20,7 @@ import { base64ToBlobUrl } from "../attachmentUrl.js";
 import { MessageComponent, placementOf } from "./MessageComponent.js";
 import { clearMessageJump, pendingJumpIndex } from "../messageJump.js";
 import { decorateCodeBlocks, highlightCode } from "../highlight.js";
+import { decorateFilePaths, fileRefFromEvent, type FileRef } from "../filePaths.js";
 import { renderMermaidDiagrams } from "../mermaid.js";
 import { writeClipboard } from "../clipboard.js";
 import { getSpeechPreferences, markdownToSpeech, readAloudSupported, speechSynthesisSupported, speechToneInstructions } from "../speech.js";
@@ -224,9 +225,13 @@ const EntryView = memo(function EntryView({
   onAction,
   authAction,
   sessionId,
+  onOpenFile,
 }: {
   entry: TranscriptEntry;
   onAction?: (action: string) => void;
+  /** Open a file the agent named in this session's Files viewer. Without it,
+   *  paths stay plain inline code. */
+  onOpenFile?: (ref: FileRef) => void;
   /** The session this transcript belongs to, for a component that has to ask
    *  the machine about something (an inline app preview). */
   sessionId?: string | null;
@@ -276,6 +281,7 @@ const EntryView = memo(function EntryView({
     renderMermaidDiagrams(bodyRef.current);
     highlightCode(bodyRef.current);
     decorateCodeBlocks(bodyRef.current);
+    if (onOpenFile) decorateFilePaths(bodyRef.current);
     const container = bodyRef.current;
     if (!container || !entry.imageRefs) return;
     const blobs = inlineBlobs.current;
@@ -304,11 +310,17 @@ const EntryView = memo(function EntryView({
         img.setAttribute("aria-label", `Open image: ${img.alt || ref.name}`);
       });
     });
-  }, [entry.role, html, entry.imageRefs]);
+  }, [entry.role, html, entry.imageRefs, onOpenFile]);
   // A hydrated inline image opens the same fullscreen gallery as an attachment,
   // paging through this message's images.
   const [gallery, setGallery] = useState<{ images: PromptAttachment[]; index: number } | null>(null);
   const openInlineImage = useCallback((event: ReactMouseEvent | ReactKeyboardEvent) => {
+    const file = onOpenFile && fileRefFromEvent(event);
+    if (file) {
+      event.preventDefault();
+      onOpenFile(file);
+      return;
+    }
     if ("key" in event && event.key !== "Enter" && event.key !== " ") return;
     if ("button" in event && (event.metaKey || event.ctrlKey || event.shiftKey || event.button !== 0)) return;
     const target = (event.target as Element).closest?.("img.md-image[src]");
@@ -326,7 +338,7 @@ const EntryView = memo(function EntryView({
     if (!images.length) return;
     event.preventDefault();
     setGallery({ images, index });
-  }, [entry.imageRefs]);
+  }, [entry.imageRefs, onOpenFile]);
   // Components the agent placed in this message (`::view{…}`, a ```bivy fence)
   // render as REAL React, portalled into the empty mount points the markdown
   // left behind — so a file renders as the same AttachmentChip the composer
@@ -596,6 +608,7 @@ export function ChatView({
   sessionKey,
   onAction,
   authAction,
+  onOpenFile,
   header,
   footer,
   greeting,
@@ -620,6 +633,8 @@ export function ChatView({
    *  ("fix-auth[:provider]"), offered on a credential-shaped error the node
    *  didn't already attach an action to. */
   authAction?: string;
+  /** Open a file an agent reply names (`src/x.ts:12`) in the Files viewer. */
+  onOpenFile?: (ref: FileRef) => void;
   /** Structured session startup state rendered before transcript entries. */
   header?: ReactNode;
   /** Rendered at the tail of the scroll area so approval/question cards flow
@@ -811,7 +826,7 @@ export function ChatView({
     ? <ToolGroup key={it.key} tools={it.tools} />
     : it.kind === "plan"
       ? plans.get(it.callId)?.length ? <PlanCard key={it.key} plan={plans.get(it.callId)!} /> : null
-      : <EntryView key={it.key} entry={it.entry} onAction={onAction} authAction={authAction} sessionId={sessionKey} />;
+      : <EntryView key={it.key} entry={it.entry} onAction={onAction} authAction={authAction} sessionId={sessionKey} onOpenFile={onOpenFile} />;
 
   return (
     <div className="chat-wrap">
