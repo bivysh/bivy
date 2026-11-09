@@ -963,9 +963,9 @@ process.env.BIVY_MCP_ENDPOINT = selfNodeUrl;
 // in-process tools (Claude, Pi) get them through the session's ToolProvider.
 const bivyCliTools = new BivyCliTools(selfNodeUrl);
 /** A session's tools: its connected integrations and attach_to_chat, then Bivy's own. */
-async function sessionToolProvider(sessionIdRef: SessionIdRef): Promise<ToolProvider> {
+async function sessionToolProvider(sessionIdRef: SessionIdRef, workspace: string): Promise<ToolProvider> {
   await bivyCliTools.ready().catch(() => undefined);
-  return combineToolProviders(integrations.toolProvider(sessionIdRef), bivyCliTools.provider(() => sessionIdRef.current));
+  return combineToolProviders(integrations.toolProvider(sessionIdRef), bivyCliTools.provider(() => sessionIdRef.current, workspace));
 }
 // A terminal opened is someone using this machine, like an agent turn.
 const terminals = new TerminalManager({ onOpen: () => void reportEphemeralMilestone("firstUseAt") });
@@ -9017,7 +9017,7 @@ async function refreshRecordAfterTui(record: SessionRecord) {
     const workspace = record.worktree?.path || oldSession.cwd || record.workspace;
     // Refreshing an EXISTING record: its id is already known, so attach_to_chat
     // (see toolProvider's SessionIdRef doc) can be wired live, not deferred.
-    const runtimeSessionOptions = { credentialLabels: record.credentialLabels, workspace, toolProvider: await sessionToolProvider({ current: record.id }), instructions: sessionInstructions(appDir), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
+    const runtimeSessionOptions = { credentialLabels: record.credentialLabels, workspace, toolProvider: await sessionToolProvider({ current: record.id }, workspace), instructions: sessionInstructions(appDir), ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
     const { session, warning } = await runtimeHost.openSession(rt, { ...runtimeSessionOptions, sessionFile: record.sessionFile });
     record.session = session;
     record.sessionFile = session.sessionFile ?? record.sessionFile;
@@ -9259,7 +9259,7 @@ async function recoverRecordAfterAbort(record: SessionRecord): Promise<void> {
     const runtimeSessionOptions = {
       workspace,
       credentialLabels: record.credentialLabels,
-      toolProvider: await sessionToolProvider({ current: record.id }),
+      toolProvider: await sessionToolProvider({ current: record.id }, workspace),
       instructions: sessionInstructions(appDir),
       ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}),
     };
@@ -9468,7 +9468,7 @@ async function createSession(workspace = defaultWorkspace, sessionFile?: string,
   const credentialLabels = opts.credentialLabels ?? storedMeta?.credentialLabels;
   // The user's account-wide instructions, as of this session's start.
   const instructions = sessionInstructions(appDir);
-  const runtimeSessionOptions = { credentialLabels, workspace: runtimeWorkspace, toolProvider: await sessionToolProvider(attachSessionIdRef), instructions, ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
+  const runtimeSessionOptions = { credentialLabels, workspace: runtimeWorkspace, toolProvider: await sessionToolProvider(attachSessionIdRef, runtimeWorkspace), instructions, ...(rt.capabilities.toolInterception ? { toolInterceptor: guardianInterceptor } : {}) };
   // Stage 2/3: prefer re-attaching to a still-live remote session — routed to its
   // OWN agent service — over re-opening a fresh copy from disk. Falls back to
   // open/create when nothing live is there.

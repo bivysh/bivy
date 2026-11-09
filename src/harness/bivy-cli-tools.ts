@@ -26,11 +26,12 @@ export type RunBivy = (args: string[], signal?: AbortSignal) => Promise<CliResul
 export interface CliTool { name: string; description: string; inputSchema: Record<string, unknown> }
 
 /** Run this install's `bivy` (bin/bivy.mjs, two levels up from src/harness or
- *  dist/harness) with `env` laid over the daemon's own. */
-export function bivyCliRunner(env: Record<string, string | undefined>): RunBivy {
+ *  dist/harness) with `env` laid over the daemon's own, in `cwd` (the session's
+ *  workspace, so relative paths and git context are the agent's, not the daemon's). */
+export function bivyCliRunner(env: Record<string, string | undefined>, cwd?: string): RunBivy {
   const cli = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../bin/bivy.mjs");
   return (args, signal) => new Promise((resolve) => {
-    const child = spawn(process.execPath, [cli, ...args], { env: { ...process.env, ...env, NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"], ...(signal ? { signal } : {}) });
+    const child = spawn(process.execPath, [cli, ...args], { env: { ...process.env, ...env, NO_COLOR: "1" }, stdio: ["ignore", "pipe", "pipe"], ...(cwd ? { cwd } : {}), ...(signal ? { signal } : {}) });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => { stdout += chunk; });
@@ -103,7 +104,7 @@ export class BivyCliTools {
   private loadedAt = 0;
 
   /** `endpoint`: this node's URL, so the CLI reaches this node and no other. */
-  constructor(private readonly endpoint: string, private readonly runnerFor: (env: Record<string, string | undefined>) => RunBivy = bivyCliRunner) {}
+  constructor(private readonly endpoint: string, private readonly runnerFor: (env: Record<string, string | undefined>, cwd?: string) => RunBivy = bivyCliRunner) {}
 
   private refresh(): Promise<void> {
     const run = this.runnerFor({ BIVY_NODE_URL: this.endpoint });
@@ -124,8 +125,10 @@ export class BivyCliTools {
   }
 
   /** The tools for one session; `sessionId()` is read at call time (a new
-   *  session's id may arrive after its tools are built). */
-  provider(sessionId: () => string | undefined): ToolProvider {
+   *  session's id may arrive after its tools are built). Each call runs in
+   *  `workspace`, where the agent itself runs, so `app_publish manifest.json`
+   *  or `automation_plan` resolve against the session's files. */
+  provider(sessionId: () => string | undefined, workspace?: string): ToolProvider {
     const { commands, plugins } = this;
     if (Date.now() - this.loadedAt > REFRESH_MS) void this.refresh().catch(() => undefined);
     const spec = (tool: CliTool): ToolSpec => ({ name: tool.name, description: tool.description, promptSnippet: tool.description, parameters: tool.inputSchema });
@@ -136,7 +139,7 @@ export class BivyCliTools {
       invoke: async (name, _toolCallId, params, signal) => {
         const id = sessionId();
         if (!id) return { content: [{ type: "text", text: `${name} failed: this session has no id yet.` }], isError: true };
-        const run = this.runnerFor({ ...bivySessionEnv(id), BIVY_NODE_URL: this.endpoint });
+        const run = this.runnerFor({ ...bivySessionEnv(id), BIVY_NODE_URL: this.endpoint }, workspace);
         if (isCommand.has(name)) return toToolResult(await callCommandTool(run, name, params, signal));
         if (isPlugin.has(name)) return toToolResult(await callPluginTool(run, name, params, signal));
         return { content: [{ type: "text", text: `Unknown tool: ${name}` }], isError: true };
