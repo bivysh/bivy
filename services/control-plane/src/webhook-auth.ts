@@ -13,6 +13,9 @@ export const DEFAULT_WEBHOOK_HEADER = "x-bivy-signature-256";
 /** Shared create/update validation. Secrets are write-only outside save responses. */
 export function resolveWebhookAuth(input: Record<string, unknown>, current: WebhookAuth = {}): WebhookAuth {
   if (input.requireSigning !== undefined && typeof input.requireSigning !== "boolean") throw new Error("requireSigning must be a boolean");
+  // Every webhook automation is authenticated: an unsigned URL lets anyone who
+  // learns it start runs and put instructions in front of the agent.
+  if (input.requireSigning === false) throw new Error("Webhook automations must be authenticated; use HMAC or a static header value");
   const mode = input.webhookAuthMode ?? current.webhookAuthMode ?? "hmac";
   if (mode !== "hmac" && mode !== "header") throw new Error("Webhook authentication must be hmac or header");
   const header = input.webhookHeader ?? current.webhookHeader ?? DEFAULT_WEBHOOK_HEADER;
@@ -24,16 +27,18 @@ export function resolveWebhookAuth(input: Record<string, unknown>, current: Webh
   if (secret !== undefined && (typeof secret !== "string" || secret.length < 32 || secret.length > 256 || /[^\x21-\x7e ]/.test(secret) || secret.trim() !== secret)) {
     throw new Error("Webhook secret must be 32–256 printable characters without leading or trailing spaces");
   }
-  const enabled = input.requireSigning ?? Boolean(current.webhookSecret);
+  // A definition saved before signing was mandatory gets its secret here, on
+  // its next save; the save response discloses it once.
   return {
     webhookAuthMode: mode,
     webhookHeader: header.toLowerCase(),
-    webhookSecret: enabled ? (secret as string | undefined) ?? current.webhookSecret ?? randomBytes(32).toString("base64url") : undefined,
+    webhookSecret: (secret as string | undefined) ?? current.webhookSecret ?? randomBytes(32).toString("base64url"),
   };
 }
 
+/** False without a secret: an unauthenticated webhook accepts nothing. */
 export function verifyWebhookAuth(auth: WebhookAuth, body: Buffer, header: string | string[] | undefined): boolean {
-  if (!auth.webhookSecret) return true;
+  if (!auth.webhookSecret) return false;
   if (typeof header !== "string") return false;
   if (auth.webhookAuthMode !== "header") return verifyAutomationSignature(auth.webhookSecret, body, header);
   const expected = Buffer.from(auth.webhookSecret);

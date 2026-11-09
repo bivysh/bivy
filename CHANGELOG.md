@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Webhook automations are always authenticated (HMAC signature or static header). `requireSigning: false` is rejected, and an existing webhook automation without a secret answers `401 signing_required` until it is saved again, which creates a secret and shows it once.
+
 ## [0.22.13] - 2026-11-09
 
 ### Changed
