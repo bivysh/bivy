@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.12] - 2026-11-09
+
 ### Added
 
 - **Skills in the `/` menu, for every agent.** Type `/` in the composer and the skills installed on the machine are listed by name, next to the agent's own commands. Picking one, for example `/release-notes for v2`, asks the agent to read that skill and then do the rest of the line. It works the same for Codex, Claude, Pi and any ACP agent. See [Skills](docs/plugins.md#skills).
