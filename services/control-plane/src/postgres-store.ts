@@ -1007,8 +1007,10 @@ export class PostgresStore implements ControlPlaneStore {
     );
   }
 
+  /** Stores only the address: the account is created when the link is used
+   *  (consumeLoginToken), so requesting a link for someone else's address
+   *  leaves no account behind. */
   async createLoginToken(email: string): Promise<string> {
-    await this.findOrCreateAccount(email);
     const token = `mlt_${randomBytes(24).toString("base64url")}`;
     await this.query(
       `INSERT INTO login_tokens (token_hash, email, expires_at) VALUES ($1, $2, $3)`,
