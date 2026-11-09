@@ -2072,7 +2072,7 @@ app.post("/node/sessions", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const sessions = sessionAdvertsFrom(req.body?.sessions);
   await store.replaceNodeSessions(node.accountId, node.id, sessions);
-  await deploymentExtension.publishSessions(node.accountId, sessions.map((session) => session.sessionId));
+  await deploymentExtension.publishSessions(node.accountId, sessions.map((session) => session.sessionId), node.id);
   // Reporting only: an older or unavailable extension must not fail the advert.
   await deploymentExtension.publishApps(node.accountId, appIdsFrom(req.body?.apps))
     .catch((error) => console.warn("publishing app IDs failed", error instanceof Error ? error.message : error));
@@ -2112,7 +2112,7 @@ app.put("/internal/nodes/:nodeId/sessions/:sessionId", requireNode, asyncHandler
   // by the periodic full advertise via POST /node/sessions.
   const advert = sessionAdvertsFrom([{ ...req.body, sessionId: req.params.sessionId }]);
   for (const s of advert) await store.upsertNodeSession(node.accountId, node.id, s);
-  await deploymentExtension.publishSessions(node.accountId, advert.map((session) => session.sessionId));
+  await deploymentExtension.publishSessions(node.accountId, advert.map((session) => session.sessionId), node.id);
   res.json({ ok: true, count: advert.length });
 }));
 

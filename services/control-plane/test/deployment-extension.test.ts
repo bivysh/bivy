@@ -59,6 +59,21 @@ test("published app IDs are forwarded only when there are any", async () => {
   assert.deepEqual(requests, [{ url: "https://policy.example/v1/apps/publish", body: { subject: { accountId: "a" }, appIds: ["app1"] } }]);
 });
 
+test("published sessions name the advertising node when known", async () => {
+  const requests: Array<{ url: string; body: unknown }> = [];
+  const extension = new DeploymentExtension("https://policy.example", "secret", async (url, init) => {
+    requests.push({ url: String(url), body: JSON.parse(String(init?.body)) });
+    return new Response(JSON.stringify({ ok: true }), { status: 200 });
+  });
+  await extension.publishSessions("a", [], "node-1");
+  await extension.publishSessions("a", ["s1"], "node-1");
+  await extension.publishSessions("a", ["s2"]);
+  assert.deepEqual(requests, [
+    { url: "https://policy.example/v1/policy/sessions/publish", body: { subject: { accountId: "a" }, sessionIds: ["s1"], nodeId: "node-1" } },
+    { url: "https://policy.example/v1/policy/sessions/publish", body: { subject: { accountId: "a" }, sessionIds: ["s2"] } },
+  ]);
+});
+
 test("account presentation remains opaque to Core", async () => {
   const extension = new DeploymentExtension("https://policy.example", "secret", async () => new Response(JSON.stringify({
     presentation: { title: "Managed account", facts: [{ id: "tier", label: "Tier", value: "Example" }], actions: [] },

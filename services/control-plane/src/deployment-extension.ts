@@ -145,9 +145,12 @@ export class DeploymentExtension {
     if (failed) throw failed.reason;
   }
 
-  async publishSessions(accountId: string, sessionIds: string[]): Promise<void> {
+  /** Reports the sessions a node advertises. `nodeId` names the advertising
+   * node so the extension can attribute sessions per machine; extensions that
+   * predate it ignore the extra field. */
+  async publishSessions(accountId: string, sessionIds: string[], nodeId?: string): Promise<void> {
     if (!this.url || sessionIds.length === 0) return;
-    await this.request("/v1/policy/sessions/publish", { subject: { accountId }, sessionIds });
+    await this.request("/v1/policy/sessions/publish", { subject: { accountId }, sessionIds, ...(nodeId ? { nodeId } : {}) });
   }
 
   /** Records the app IDs a node currently has published, for operator reporting. */
