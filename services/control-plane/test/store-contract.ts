@@ -33,6 +33,18 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal((await store.getAccount(a.id))?.email, "contract-a@example.com");
   });
 
+  await test("requesting a magic link creates no account until the link is used", async (store) => {
+    const accounts = async () => Number((await (store as unknown as { query(text: string): Promise<{ rows: Array<{ n: number }> }> })
+      .query(`SELECT count(*)::int AS n FROM accounts WHERE email = 'contract-unverified@example.com'`)).rows[0]?.n ?? 0);
+    const token = await store.createLoginToken("contract-unverified@example.com");
+    assert.equal(await accounts(), 0, "an unverified address has no account");
+    const account = await store.consumeLoginToken(token);
+    assert.equal(account?.email, "contract-unverified@example.com");
+    assert.equal(await accounts(), 1, "the account exists once the link is used");
+    const again = await store.consumeLoginToken(await store.createLoginToken("contract-unverified@example.com"));
+    assert.equal(again?.id, account?.id, "a later link signs in to the same account");
+  });
+
   await test("magic-link tokens resolve once, then are spent", async (store) => {
     const token = await store.createLoginToken("contract-login@example.com");
     assert.equal((await store.consumeLoginToken(token))?.email, "contract-login@example.com");
