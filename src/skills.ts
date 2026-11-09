@@ -101,6 +101,16 @@ export function renderSkill(skill: Skill): string {
   return `# Skill: ${skill.name}\n\nSkill folder: ${skill.dir}\nPaths in these instructions are relative to that folder.\n\n${body.trim()}\n`;
 }
 
+/** The skills as `/name` commands for the composer's menu, any agent. The
+ *  client turns one into a prompt to use that skill (core's skillPrompt). */
+export function skillCommands(skills: Skill[]): Array<{ name: string; description?: string; mode: "skill" }> {
+  return skills.slice(0, MAX_INDEXED_SKILLS).map((skill) => ({
+    name: `/${skill.name}`,
+    ...(skill.description ? { description: skill.description.length > MAX_INDEX_DESCRIPTION ? `${skill.description.slice(0, MAX_INDEX_DESCRIPTION - 1)}…` : skill.description } : {}),
+    mode: "skill",
+  }));
+}
+
 /** The short list every session gets, or "" when there are no skills. */
 export function skillsIndex(skills: Skill[]): string {
   if (!skills.length) return "";

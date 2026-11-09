@@ -103,6 +103,7 @@ import { exportProviderAuth, exportAccountApiKeys, exportAccountOAuthCredentials
 import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
 import { sessionLikeFields } from "./session/start-like.js";
+import { listSkills, skillCommands } from "./skills.js";
 import { BIVY_AGENT_NOTE, mergeSyncedAgentInstructions, readAgentInstructions, sessionInstructions, writeAgentInstructions, MAX_AGENT_INSTRUCTIONS_BYTES } from "./agent-instructions.js";
 import { ApprovalManager, type ApprovalRequest } from "./approval.js";
 import { QuestionManager, validQuestions, isAskUserQuestionTool, formatQuestionResult } from "./question.js";
@@ -1035,8 +1036,11 @@ function runtimeSummary(rt: AgentRuntime) {
 }
 
 function runtimeList(currentId?: string) {
+  const skills = machineSkillCommands();
   return listRuntimes(currentId).map((runtime) => ({
     ...runtime,
+    // A new session's composer (no session yet) reads these: skills included.
+    capabilities: { ...runtime.capabilities, commands: withSkillCommands(runtime.capabilities.commands, skills) },
     enforcementLevel: enforcementLevelFor({ toolInterception: runtime.capabilities.toolInterception === true }, runtime.id),
   }));
 }
@@ -1077,13 +1081,25 @@ function sanitizeAgentCommands(commands: unknown, session: RuntimeSession): Agen
 // set falls back to the base capabilities.
 function capabilitiesWithCommands(runtimeId: string, session: RuntimeSession): RuntimeCapabilities {
   const base = getRuntime(runtimeId).capabilities;
+  let agentCommands: AgentCommand[] = [];
   try {
-    const commands = sanitizeAgentCommands(session.getCommands?.(), session);
-    if (commands.length) return { ...base, commands };
+    agentCommands = sanitizeAgentCommands(session.getCommands?.(), session);
   } catch {
     // Best-effort enrichment; the composer simply shows no agent commands.
   }
-  return base;
+  const commands = withSkillCommands(agentCommands);
+  return commands.length ? { ...base, commands } : base;
+}
+
+/** An agent's commands plus this machine's skills as `/name` (mode "skill"),
+ *  so every agent's composer offers them. The agent's own command of the same
+ *  name wins. */
+function machineSkillCommands(): AgentCommand[] {
+  try { return skillCommands(listSkills(appDir)); } catch { return []; }
+}
+function withSkillCommands(commands: AgentCommand[] = [], skills = machineSkillCommands()): AgentCommand[] {
+  const taken = new Set(commands.map((command) => command.name.toLowerCase()));
+  return [...commands, ...skills.filter((skill) => !taken.has(skill.name.toLowerCase()))];
 }
 
 /** All version surfaces describe this process, not a newer install on disk. */

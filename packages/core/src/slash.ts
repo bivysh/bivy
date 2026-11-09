@@ -12,8 +12,9 @@
 //
 // Invoking an advertised command either forwards the raw "/name args" text to
 // the agent as a normal prompt (mode "prompt" — the default, used by Pi and
-// Claude whose prompt() interprets a leading slash) or issues a dedicated
-// `command.invoke` message (mode "protocol").
+// Claude whose prompt() interprets a leading slash), issues a dedicated
+// `command.invoke` message (mode "protocol"), or, for a skill installed on the
+// machine (mode "skill"), sends a prompt asking the agent to use that skill.
 
 export interface SlashCommand {
   /** Canonical command name including the leading slash, e.g. "/compact". */
@@ -27,8 +28,22 @@ export interface SlashCommand {
    * "prompt") forwards the raw "/name args" line as a normal prompt so the
    * agent's own parser runs it — Pi and Claude Code work this way. "protocol"
    * issues a dedicated `command.invoke` message a shim answers out-of-band.
+   * "skill" is a skill installed on the machine (`bivy skill list`), offered
+   * for every agent: invoking it sends `skillPrompt(name, args)`.
    */
-  mode?: "prompt" | "protocol";
+  mode?: SlashCommandMode;
+}
+
+/** The invocation modes a command may carry; anything else means "prompt". */
+export const SLASH_COMMAND_MODES = ["prompt", "protocol", "skill"] as const;
+export type SlashCommandMode = (typeof SLASH_COMMAND_MODES)[number];
+
+/** The prompt a skill command sends: any agent can follow it, since every
+ *  session is told how to read a skill (`bivy skill show` / `bivy_skill`). */
+export function skillPrompt(command: SlashCommand, args: string): string {
+  const name = command.name.slice(1);
+  const ask = `Use the "${name}" skill. Read it first with \`bivy skill show ${name}\` (or the bivy_skill tool).`;
+  return args ? `${ask}\n\n${args}` : ask;
 }
 
 export interface ParsedSlash {
@@ -88,7 +103,9 @@ export type SlashResolution =
 
 export function resolveSlash(parsed: ParsedSlash, extra: SlashCommand[] = []): SlashResolution {
   const valid = extra.filter(isValidAgentCommand);
-  const hasCatalog = valid.length > 0;
+  // Skills are Bivy's, not the agent's: they don't make the agent's own
+  // catalog known, so other slashes still pass through when it has none.
+  const hasCatalog = valid.some((c) => c.mode !== "skill");
   const command = valid.find((c) => c.name.toLowerCase() === parsed.name.toLowerCase());
   if (command) return { kind: "agent", command, args: parsed.args };
   return { kind: "unknown", name: parsed.name, hasCatalog };

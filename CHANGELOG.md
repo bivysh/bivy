@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Skills in the `/` menu, for every agent.** Type `/` in the composer and the skills installed on the machine are listed by name, next to the agent's own commands. Picking one, for example `/release-notes for v2`, asks the agent to read that skill and then do the rest of the line. It works the same for Codex, Claude, Pi and any ACP agent. See [Skills](docs/plugins.md#skills).
+
 ### Fixed
 
 - **Every agent gets Bivy's tools.** Codex, OpenCode, Grok and other ACP agents had none of Bivy's own tools (`ask_user`, `notify_user`, `attach_to_chat`, `set_session_title`, `app_present`, plugin tools, …), and Claude and Pi had only `attach_to_chat`. Now all of them get the same set, from the one command table. Each agent receives them in its own per-session channel, so no shared config file is written. Pi, for example, now asks with a question card instead of a plain-text question. See [`bivy mcp-serve`](docs/cli-reference.md#bivy-mcp-serve).

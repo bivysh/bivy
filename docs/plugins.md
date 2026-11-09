@@ -144,6 +144,11 @@ and description, and the agent reads a skill when a task calls for it, with
 `bivy skill show <name>` or the `bivy_skill` MCP tool. That prints the
 instructions and the skill's folder. Only the short list rides on every turn.
 
+You can also pick a skill yourself: type `/` in the composer and each skill is
+listed as `/<name>`, whatever the agent. Sending `/release-notes for v2` asks
+the agent to read that skill first, then do the rest of the line. An agent's
+own command of the same name wins.
+
 You don't need a plugin for one skill: `bivy skill install <folder|github:owner/repo/path>`
 copies an existing skill folder into `<data-dir>/skills/<name>`, and a folder
 dropped there by hand works the same. A skill there wins over a plugin's skill

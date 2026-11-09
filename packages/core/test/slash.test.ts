@@ -7,6 +7,7 @@ import {
   matchSlashCommands,
   resolveSlash,
   isValidAgentCommand,
+  skillPrompt,
 } from "../src/slash.js";
 
 describe("isSlashInput", () => {
@@ -108,6 +109,17 @@ describe("resolveSlash", () => {
   it("rejects an unknown command as unknown-with-catalog when commands are advertised", () => {
     const res = resolveSlash(parseSlash("/nope now")!, agent);
     expect(res).toEqual({ kind: "unknown", name: "/nope", hasCatalog: true });
+  });
+
+  it("a machine skill resolves to a use-this-skill prompt, and skills alone don't make an agent catalog", () => {
+    const skills = [{ name: "/release-notes", description: "Write release notes", mode: "skill" as const }];
+    const res = resolveSlash(parseSlash("/release-notes for v2")!, skills);
+    expect(res.kind).toBe("agent");
+    if (res.kind === "agent") {
+      expect(skillPrompt(res.command, res.args)).toBe('Use the "release-notes" skill. Read it first with `bivy skill show release-notes` (or the bivy_skill tool).\n\nfor v2');
+    }
+    // An agent that advertises nothing still gets its own slashes forwarded.
+    expect(resolveSlash(parseSlash("/review")!, skills)).toEqual({ kind: "unknown", name: "/review", hasCatalog: false });
   });
 
   it("reports no catalog when the session advertised nothing (permissive forwarding)", () => {
