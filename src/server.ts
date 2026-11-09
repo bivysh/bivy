@@ -699,6 +699,14 @@ questionManager.onResolved((request) => {
  * requestId and approvals by id, so re-emitting an already-shown card is a
  * no-op rather than a duplicate.
  */
+/** Re-send a live session's capabilities (its slash commands) for a client
+ *  opening it: the session.created that carried them went out before that
+ *  client connected (a reload, a second device), and the composer only learns
+ *  a session's commands from these two events. */
+function replaySessionCapabilities(record: SessionRecord) {
+  broadcast({ type: "session.capabilities", sessionId: record.id, runtimeId: record.runtimeId, capabilities: capabilitiesWithCommands(record.runtimeId, record.session) });
+}
+
 function replayPendingInteractions(sessionId: string) {
   if (!sessionId) return;
   for (const q of questionManager.list()) {
@@ -3209,6 +3217,7 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     // A reconnecting/opening client missed the one-shot card broadcast; put
     // any still-pending question/approval back so it can be answered.
     replayPendingInteractions(record.id);
+    replaySessionCapabilities(record);
     // Manual resume mode: a turn this session was running when the node restarted
     // was left for the user to continue. Offer a one-tap Resume next to the
     // restored transcript (the marker is cleared once any turn completes).
@@ -11610,7 +11619,8 @@ app.post("/api/sessions/open", async (req, res, next) => {
       branch: session.worktree?.branch,
       prUrl: session.prUrl,
       bivySession: bivySessionEnvelope(session),
-      capabilities: getRuntime(session.runtimeId).capabilities,
+      // With the session's own commands, for the direct client's composer.
+      capabilities: capabilitiesWithCommands(session.runtimeId, session.session),
       warning: session.warning,
       costUsd: session.costUsd,
       usage: session.usage,

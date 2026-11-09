@@ -116,6 +116,21 @@ describe("DirectTransport", () => {
     expect(statuses).toContain("online");
   });
 
+  it("opening an already-live session hands the composer its slash commands", async () => {
+    const events: ServerEvent[] = [];
+    const capabilities = { commands: [{ name: "/compact" }] };
+    const transport = new DirectTransport({
+      origin: "http://node.local",
+      tokenStore: mem({ bivy_local_token: "token" }),
+      fetchImpl: (async () => ({ ok: true, json: async () => ({ id: "s1", runtimeId: "claude-code-sdk", messages: [], capabilities }) }) as unknown as Response) as typeof fetch,
+      webSocketImpl: FakeWS as unknown as typeof WebSocket,
+      handlers: { onEvent: (event) => events.push(event), onStatus: () => {} },
+    });
+    await transport.send({ kind: "session.open", sessionId: "s1" });
+    expect(events.map((e) => e.type)).toEqual(["session.history", "session.capabilities"]);
+    expect(events[1]).toMatchObject({ sessionId: "s1", runtimeId: "claude-code-sdk", capabilities });
+  });
+
   it("fetches setup readiness in direct mode and emits the result", async () => {
     const calls: string[] = [];
     const events: ServerEvent[] = [];
