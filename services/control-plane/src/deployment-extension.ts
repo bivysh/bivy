@@ -126,7 +126,17 @@ export class DeploymentExtension {
 
   async authorize(accountId: string, operation: DeploymentOperation, idempotencyKey?: string, context: DeploymentPolicyContext = {}): Promise<DeploymentDecision> {
     if (!this.url) return { allowed: true };
-    const response = await this.request("/v1/policy/check", { subject: { accountId }, operation, idempotencyKey, context: policyContext(context) });
+    let response: unknown;
+    try {
+      response = await this.request("/v1/policy/check", { subject: { accountId }, operation, idempotencyKey, context: policyContext(context) });
+    } catch (error) {
+      // The extension refusing the request itself (it doesn't know this
+      // operation) is a denial, not a server failure. Still fails closed.
+      if (error instanceof DeploymentExtensionRequestError) {
+        return { allowed: false, code: "feature_unavailable", reason: "This isn't available here." };
+      }
+      throw error;
+    }
     const decision = response as Partial<DeploymentDecision>;
     if (typeof decision.allowed !== "boolean") throw new Error("Deployment extension returned an invalid policy decision");
     return decision as DeploymentDecision;
@@ -181,8 +191,8 @@ export class DeploymentExtension {
   }
 
   async accountAction(accountId: string, email: string, action: string): Promise<AccountActionResult> {
-    if (!this.url) throw new Error("No deployment account extension is configured");
-    if (!/^[a-z0-9-]{1,64}$/.test(action)) throw new Error("Invalid account action");
+    if (!this.url) throw new DeploymentExtensionRequestError(404, "Account actions aren't available here");
+    if (!/^[a-z0-9-]{1,64}$/.test(action)) throw new DeploymentExtensionRequestError(400, "Invalid account action");
     const result = await this.request(`/v1/account/actions/${action}`, { subject: { accountId, email } }) as { url?: unknown; done?: unknown; message?: unknown };
     if (result.done === true) {
       const message = typeof result.message === "string" ? result.message.trim().slice(0, ACCOUNT_ACTION_MESSAGE_MAX) : "";
@@ -309,7 +319,25 @@ export class DeploymentExtension {
       signal: AbortSignal.timeout(timeoutMs),
     });
     const data = await response.json().catch(() => ({})) as { error?: string };
-    if (!response.ok && response.status !== 429) throw new Error(data.error || `Deployment extension failed (${response.status})`);
+    if (!response.ok && response.status !== 429) {
+      // The extension rejected the request (unknown action, bad input): pass
+      // that on as a client error. 401 means Core's own token is wrong, and
+      // 5xx is the extension failing; both stay server errors.
+      if (response.status >= 400 && response.status < 500 && response.status !== 401) {
+        const status = response.status === 403 || response.status === 404 || response.status === 409 ? response.status : 400;
+        throw new DeploymentExtensionRequestError(status, typeof data.error === "string" && data.error.trim() ? data.error.trim().slice(0, 300) : "Request not accepted");
+      }
+      throw new Error(data.error || `Deployment extension failed (${response.status})`);
+    }
     return data;
+  }
+}
+
+/** A client error from the extension, carrying the HTTP status Core answers
+ * with. Core's error handler returns 4xx messages as-is and logs no stack. */
+export class DeploymentExtensionRequestError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message);
+    this.name = "DeploymentExtensionRequestError";
   }
 }

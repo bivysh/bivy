@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DeploymentExtension } from "../src/deployment-extension.js";
+import { DeploymentExtension, DeploymentExtensionRequestError } from "../src/deployment-extension.js";
 
 test("deployment extension defaults to unrestricted with no service", async () => {
   const extension = new DeploymentExtension(undefined, undefined, async () => { throw new Error("must not fetch"); });
@@ -125,4 +125,29 @@ test("deployment compute is absent without a service and asks the configured one
   assert.deepEqual(requests.map((request) => request.body), [
     { subject: { accountId: "a" }, purpose: "interactive", runtimeId: "claude" },
   ]);
+});
+
+test("extension client errors become 4xx; its own failures stay server errors", async () => {
+  const reply = (status: number, body: unknown) => new DeploymentExtension("https://policy.example", "secret", async () =>
+    new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } }));
+  // A guessed account action: the extension's 404 reaches the caller as a 404.
+  await assert.rejects(reply(404, { error: "Unknown account action" }).accountAction("a", "a@example.com", "free-upgrade"),
+    (error: unknown) => error instanceof DeploymentExtensionRequestError && error.status === 404 && error.message === "Unknown account action");
+  await assert.rejects(reply(400, { error: "Unknown policy operation" }).accountAction("a", "a@example.com", "x"),
+    (error: unknown) => error instanceof DeploymentExtensionRequestError && error.status === 400);
+  await assert.rejects(reply(422, {}).accountAction("a", "a@example.com", "x"),
+    (error: unknown) => error instanceof DeploymentExtensionRequestError && error.status === 400 && error.message === "Request not accepted");
+  // An operation the extension doesn't know is a denial, so callers fail closed without a 500.
+  assert.deepEqual(await reply(400, { error: "Unknown policy operation" }).authorize("a", "team.create"),
+    { allowed: false, code: "feature_unavailable", reason: "This isn't available here." });
+  // Core's token being wrong, or the extension failing, is still a server error.
+  for (const status of [401, 500, 503]) {
+    await assert.rejects(reply(status, { error: "boom" }).authorize("a", "relay.connect"),
+      (error: unknown) => !(error instanceof DeploymentExtensionRequestError), `status ${status}`);
+  }
+  // Bad or missing configuration answers as a client error, not a stack trace.
+  await assert.rejects(new DeploymentExtension(undefined, undefined).accountAction("a", "a@example.com", "portal"),
+    (error: unknown) => error instanceof DeploymentExtensionRequestError && error.status === 404);
+  await assert.rejects(reply(200, {}).accountAction("a", "a@example.com", "Bad Action!"),
+    (error: unknown) => error instanceof DeploymentExtensionRequestError && error.status === 400);
 });
