@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ImageViewer } from "./ImageViewer.js";
 import type { AppState, PromptAttachment, SlashCommand } from "@bivy/core";
-import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash } from "@bivy/core";
+import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash, skillPrompt } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
 import { modelSelectionAvailable } from "../modelSelection.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker, ActionsPicker } from "./Pickers.js";
@@ -549,8 +549,11 @@ export function Composer({
   // through the dedicated command.invoke channel; a "prompt"-mode command (the
   // default, used by Pi/Claude) is forwarded as an ordinary prompt so the agent's
   // own parser runs it.
+  // A "skill" command (a skill installed on the machine) sends a prompt asking
+  // the agent to use it, which works the same for every agent.
   function invokeAgentCommand(cmd: SlashCommand, args: string): void {
     if (cmd.mode === "protocol") controller.invokeAgentCommand(cmd.name, args);
+    else if (cmd.mode === "skill") onSend(skillPrompt(cmd, args));
     else onSend(args ? `${cmd.name} ${args}` : cmd.name);
   }
 

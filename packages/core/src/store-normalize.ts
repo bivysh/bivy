@@ -4,7 +4,7 @@
 // store.ts so the reducer keeps only state-folding logic. These coerce untrusted
 // wire payloads into the clean shapes the reducer stores; they hold no state.
 
-import { isValidAgentCommand, type SlashCommand } from "./slash.js";
+import { isValidAgentCommand, SLASH_COMMAND_MODES, type SlashCommand } from "./slash.js";
 import type { MachineCapabilities } from "./capabilities.js";
 import type {
   ApprovalRequest,
@@ -41,7 +41,7 @@ export function normalizeAgentCommands(raw: unknown): SlashCommand[] {
     seen.add(c.name);
     const cmd: SlashCommand = { name: c.name };
     if (typeof c.description === "string" && c.description) cmd.description = c.description;
-    if (c.mode === "protocol" || c.mode === "prompt") cmd.mode = c.mode;
+    if (c.mode && (SLASH_COMMAND_MODES as readonly string[]).includes(c.mode)) cmd.mode = c.mode;
     out.push(cmd);
   }
   return out;

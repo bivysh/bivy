@@ -667,8 +667,10 @@ export interface AgentCommand {
    * raw slash line as a prompt; "protocol" issues a `command.invoke` message the
    * shim answers. Only advertise "protocol" when there is real transport behind
    * it (RuntimeSession.invokeCommand) — never flip it without a handler.
+   * "skill" marks a skill installed on the machine (src/skills.ts), added by
+   * the node for every agent; agents never advertise it themselves.
    */
-  mode?: "prompt" | "protocol";
+  mode?: "prompt" | "protocol" | "skill";
 }
 
 /** One option the user can pick for a UserQuestionItem. */

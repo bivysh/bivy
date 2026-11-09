@@ -403,7 +403,8 @@ bivy skill remove pdf
 `install` copies a skill folder into `<data-dir>/skills/<name>`; dropping a
 folder there by hand works too. Plugins add skills with `contributes.skills`.
 Every session gets a short list of names and descriptions, and agents read a
-skill with `show` or the `bivy_skill` MCP tool. See [Plugins](plugins.md#skills).
+skill with `show` or the `bivy_skill` MCP tool. In the app, each skill is also
+a `/<name>` entry in the composer's `/` menu. See [Plugins](plugins.md#skills).
 
 ### `bivy theme <list|set|clear>`
 
