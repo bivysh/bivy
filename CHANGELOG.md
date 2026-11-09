@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.13] - 2026-11-09
+
+### Changed
+- Control plane: session publishing to a deployment extension now includes the ID of the node advertising the sessions, so an extension can tell which machine they run on. Extensions that ignore the field are unaffected.
+
 ## [0.22.12] - 2026-11-09
 
 ### Added
