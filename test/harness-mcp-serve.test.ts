@@ -158,17 +158,17 @@ await check("plugin tools are listed beside Bivy's own, cannot shadow them, and 
 });
 
 // Agents with in-process tools (Claude, Pi) get the same table through a ToolProvider.
-await check("the daemon's ToolProvider offers the same tools and runs them as this session on this node", async () => {
-  const runs: Array<{ env: Record<string, string | undefined>; args: string[] }> = [];
-  const tools = new BivyCliTools("http://127.0.0.1:4391", (env) => {
+await check("the daemon's ToolProvider offers the same tools and runs them as this session on this node, in its workspace", async () => {
+  const runs: Array<{ env: Record<string, string | undefined>; cwd?: string; args: string[] }> = [];
+  const tools = new BivyCliTools("http://127.0.0.1:4391", (env, cwd) => {
     const cli = fakeCli([]);
-    return async (args) => { runs.push({ env, args }); return cli(args); };
+    return async (args) => { runs.push({ env, cwd, args }); return cli(args); };
   });
   setSessionTokenSigner((id) => `token-for-${id}`);
   try {
     await tools.ready();
     let sessionId: string | undefined;
-    const provider = tools.provider(() => sessionId);
+    const provider = tools.provider(() => sessionId, "/work/sess-7");
     assert.deepEqual(provider.list().map((t) => t.name), ["notify_user"]);
     assert.equal((await provider.invoke("notify_user", "c0", {})).isError, true, "no session id yet: refused, not run as nobody");
     sessionId = "sess-7";
@@ -180,6 +180,7 @@ await check("the daemon's ToolProvider offers the same tools and runs them as th
     assert.equal(call.env.BIVY_NODE_URL, "http://127.0.0.1:4391");
     assert.equal(call.env.BIVY_SESSION_ID, "sess-7");
     assert.equal(call.env.BIVY_SESSION_TOKEN, "token-for-sess-7");
+    assert.equal(call.cwd, "/work/sess-7", "relative paths (app_publish manifest.json) resolve in the session's workspace");
   } finally {
     setSessionTokenSigner(undefined);
   }
