@@ -14,8 +14,9 @@ In the Bivy app, open **Automations** → **New automation** (or a webhook templ
 
 ### Custom authentication
 
-Generated credentials remain the default. Under **Require webhook authentication**,
-choose **HMAC-SHA256 signature** (recommended) or **Static secret header**. You can
+Every webhook automation is authenticated; there is no unsigned mode. Choose
+**HMAC-SHA256 signature** (recommended) or **Static secret header**, the latter for
+senders that can only add a fixed header. You can
 set the **Header name** and optionally supply your own 32–256-character secret.
 Leave the secret blank to generate one on create or keep the current one on edit.
 Saving a replacement invalidates the old value immediately; **Rotate secret**
@@ -26,6 +27,10 @@ generates a new value while preserving the chosen header and method.
 - **Static header:** send the exact secret as the configured header's value,
   e.g. `Authorization: Bearer <your-secret>` if that entire value was saved.
   Use HTTPS. Unlike HMAC, a static credential does not authenticate the body.
+
+A webhook automation saved without a secret by an older version rejects every
+request (`401 signing_required`) until it is saved again, which creates a secret
+and shows it once.
 
 These options apply to webhook-triggered automations, not GitHub/Linear/Slack's
 provider-defined signature headers.

@@ -1998,11 +1998,9 @@ function AutomationEditor({
         enabled: existing?.enabled ?? true,
         trigger: d.trigger,
         ...(d.trigger === "webhook" ? {
-          requireSigning: d.requireSigning,
-          ...(d.requireSigning ? {
-            webhookHeader: d.webhookHeader,
-            webhookAuthMode: d.webhookAuthMode,
-          } : {}),
+          requireSigning: true,
+          webhookHeader: d.webhookHeader,
+          webhookAuthMode: d.webhookAuthMode,
         } : {}),
         repo: repo || (d.id ? "" : undefined),
         ...(d.trigger === "github" || d.trigger === "linear" ? {
@@ -2037,7 +2035,7 @@ function AutomationEditor({
 
       // Only the authenticated save request receives the write-only secret,
       // never simulation/preflight payloads.
-      const secretInput = d.trigger === "webhook" && d.requireSigning && customWebhookSecret
+      const secretInput = d.trigger === "webhook" && customWebhookSecret
         ? { webhookSecret: customWebhookSecret } : {};
       if (d.id) {
         const result = await updateAutomation(controller.local, d.id, { ...input, ...secretInput });
@@ -2288,15 +2286,10 @@ function AutomationEditor({
                         </div>
                       </div>
                     )}
-                    <label className="settings-toggle-row webhook-signing-toggle">
-                      <span className="settings-toggle-text">
-                        <strong className="settings-toggle-title">Require webhook authentication</strong>
-                        <small className="muted">Recommended for authenticating webhook requests.</small>
-                      </span>
-                      <input className="sr-only" type="checkbox" checked={d.requireSigning} onChange={(event) => set("requireSigning", event.target.checked)} />
-                      <span className={`settings-toggle${d.requireSigning ? " on" : ""}`} aria-hidden="true"><span className="settings-toggle-knob" /></span>
-                    </label>
-                    {d.requireSigning ? <WebhookAuthFields
+                    {existing && !existing.requireSigning && (
+                      <p className="settings-hint">This webhook has no secret, so it no longer accepts requests. Save to create one, then add it to the sender.</p>
+                    )}
+                    <WebhookAuthFields
                       mode={d.webhookAuthMode}
                       header={d.webhookHeader}
                       secret={customWebhookSecret}
@@ -2304,7 +2297,7 @@ function AutomationEditor({
                       onMode={(mode) => set("webhookAuthMode", mode)}
                       onHeader={(header) => set("webhookHeader", header)}
                       onSecret={setCustomWebhookSecret}
-                    /> : <p className="settings-hint">Anyone with this URL can start a run without authentication.</p>}
+                    />
                     <WebhookFilterFields value={d.filter} error={webhookFilter.error} onChange={(filter) => set("filter", filter)} />
                   </div>
                 )}

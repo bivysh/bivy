@@ -4416,6 +4416,8 @@ app.post("/webhooks/automation/run/:definitionId", asyncHandler(async (req, res)
   if (!def || def.trigger !== "webhook") return res.status(404).json({ code: "not_found" });
   if (def.enabled === false) return res.status(410).json({ code: "disabled" });
   const raw: Buffer = Buffer.isBuffer(req.body) ? req.body : Buffer.from("");
+  // Saved before signing was mandatory: the owner re-saves it to get a secret.
+  if (!def.webhookSecret) return res.status(401).json({ code: "signing_required" });
   if (!verifyWebhookAuth(def, raw, req.headers[def.webhookHeader || DEFAULT_WEBHOOK_HEADER])) {
     return res.status(401).json({ code: "invalid_signature" });
   }

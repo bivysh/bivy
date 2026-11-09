@@ -1190,10 +1190,11 @@ export interface AccountAutomation {
   /** Present for a webhook-triggered automation: the signed endpoint to POST
    *  events to. The signing secret is returned only once (create/rotate). */
   webhookUrl?: string;
-  /** Webhook trigger only. Whether authentication is required (a secret exists).
-   *  The legacy name also covers static header authentication. Set `false` for
-   *  unauthenticated delivery; `true` on an unsigned endpoint generates a secret
-   *  unless webhookSecret is supplied, returned once in the save response. */
+  /** Webhook trigger only. Whether a secret exists (the legacy name also covers
+   *  static header authentication). Always required: `false` is rejected, and
+   *  saving a definition that has no secret generates one unless webhookSecret
+   *  is supplied, returned once in the save response. A definition without a
+   *  secret rejects every delivery with 401 signing_required. */
   requireSigning?: boolean;
   /** Default: x-bivy-signature-256. */
   webhookHeader?: string;
