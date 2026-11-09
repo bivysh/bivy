@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.14] - 2026-11-09
+
 ### Security
 - Webhook automations are always authenticated (HMAC signature or static header). `requireSigning: false` is rejected, and an existing webhook automation without a secret answers `401 signing_required` until it is saved again, which creates a secret and shows it once.
+
+### Fixed
+- Sign-in: requesting a magic link or a CLI device login no longer creates an account for the address; the account is created when the link or code is redeemed.
+- Control plane: requests a deployment extension rejects (unknown account action or team ID, malformed input) now return 400/403/404/409 instead of a 500 with a stack trace. Unknown operations still fail closed.
 
 ## [0.22.13] - 2026-11-09
 
