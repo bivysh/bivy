@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Slash commands survive a reload.** Opening a session that was already running, after reloading the app or from a second device, left its composer without the agent's commands: typing `/` said "This agent has no slash commands" even for Claude's `/compact`. The node now sends a session's commands to every client that opens it.
+
 - **Every agent gets Bivy's tools.** Codex, OpenCode, Grok and other ACP agents had none of Bivy's own tools (`ask_user`, `notify_user`, `attach_to_chat`, `set_session_title`, `app_present`, plugin tools, …), and Claude and Pi had only `attach_to_chat`. Now all of them get the same set, from the one command table. Each agent receives them in its own per-session channel, so no shared config file is written. Pi, for example, now asks with a question card instead of a plain-text question. See [`bivy mcp-serve`](docs/cli-reference.md#bivy-mcp-serve).
 
 - **Claude's and Pi's Bivy tools run in the session's workspace.** Their `app_publish`, `automation_plan`, `widget_shot` and `bivy_context` calls ran in the node's own working directory, so a relative path like `manifest.json` or `.bivy/automations.yaml` was not found and the reported git branch was the node's. They now resolve against the session's workspace, as the same tools already did for Codex and ACP agents.

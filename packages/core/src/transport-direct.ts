@@ -314,6 +314,9 @@ export class DirectTransport implements Transport {
             branch: p.branch,
             prUrl: p.prUrl,
           });
+          // The session's slash commands: a session already live before this
+          // client connected never sends it a session.created.
+          if (p.capabilities) this.emit({ type: "session.capabilities", sessionId: p.id, runtimeId: p.runtimeId, capabilities: p.capabilities });
           break;
         }
         case "session.new": {
