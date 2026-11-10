@@ -278,6 +278,9 @@ export class PostgresStore implements ControlPlaneStore {
         account_id  TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
         expires_at  TIMESTAMPTZ NOT NULL
       );
+      -- The paired device key a session minted pair grants for, so signing that
+      -- device out (removePairedDevice) also revokes its account session.
+      ALTER TABLE sessions ADD COLUMN IF NOT EXISTS device_pub TEXT;
 
       CREATE TABLE IF NOT EXISTS link_grants (
         token_hash  TEXT PRIMARY KEY,
@@ -1054,6 +1057,11 @@ export class PostgresStore implements ControlPlaneStore {
     await this.query(`DELETE FROM sessions WHERE token_hash = $1`, [hashToken(token)]);
   }
 
+  async bindSessionDevice(token: string, devicePublicKeyB64: string): Promise<void> {
+    if (!token || !devicePublicKeyB64) return;
+    await this.query(`UPDATE sessions SET device_pub = $2 WHERE token_hash = $1`, [hashToken(token), devicePublicKeyB64]);
+  }
+
   async createOAuthState(input: { deviceId?: string; returnPath?: string }, ttlMs = 10 * 60_000): Promise<string> {
     const state = randomBytes(24).toString("base64url");
     await this.query(
@@ -1242,6 +1250,9 @@ export class PostgresStore implements ControlPlaneStore {
         `DELETE FROM paired_devices WHERE account_id = $1 AND public_key_b64 = $2`,
         [accountId, publicKeyB64],
       );
+      // Signing a device out ends its account sessions too, not just the
+      // pairing record; otherwise it stays signed in until the session expires.
+      await client.query(`DELETE FROM sessions WHERE account_id = $1 AND device_pub = $2`, [accountId, publicKeyB64]);
       if ((result.rowCount ?? 0) > 0) {
         // The revoked device's old wrap must never be copied forward. Advancing
         // the epoch asks any surviving holder to generate a new vault key and

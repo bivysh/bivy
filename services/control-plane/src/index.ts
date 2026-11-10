@@ -5208,6 +5208,8 @@ app.post("/client/pair-grant", requireUser, asyncHandler(async (req, res) => {
   // Your own machines, or one a teammate shares with your team.
   if (!(await store.teamMachines.access(account.id, nodeId))) return res.status(404).json({ error: "Unknown node" });
   const grant = await store.createPairGrant(account.id, nodeId, devicePublicKeyB64);
+  // Signing this device out (DELETE /devices/:id) then revokes this session.
+  await store.bindSessionDevice(bearer(req) ?? "", devicePublicKeyB64);
   res.json({ ok: true, grant, nodeId, relayUrl: relayUrlForNode(nodeId) });
 }));
 

@@ -70,6 +70,19 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal(await store.accountFromSession(token), undefined);
   });
 
+  await test("signing out a paired device revokes the sessions bound to it", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-signout@example.com");
+    const phone = await store.createSession(acct.id);
+    const laptop = await store.createSession(acct.id);
+    await store.bindSessionDevice(phone, "phone-pub");
+    await store.bindSessionDevice(laptop, "laptop-pub");
+    await store.registerPairedDevice(acct.id, "phone-pub", "Phone");
+    await store.registerPairedDevice(acct.id, "laptop-pub", "Laptop");
+    assert.equal(await store.removePairedDevice(acct.id, "phone-pub"), true);
+    assert.equal(await store.accountFromSession(phone), undefined, "the removed device is signed out");
+    assert.equal((await store.accountFromSession(laptop))?.id, acct.id, "other devices stay signed in");
+  });
+
   await test("device login: pending → proposed → approved mints a session at poll time", async (store) => {
     const acct = await store.findOrCreateAccount("contract-device@example.com");
     const { deviceId, deviceSecret } = await store.createDeviceLogin();

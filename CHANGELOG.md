@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Signing a device out under Settings → Account now also revokes its control-plane session, not just its pairing record. A session is tied to the device key it pairs a machine with, so a device that paired before this change is only tied once it pairs again.
+
 ### Fixed
 - Import session's provider and repository filters are two compact selects instead of one row per value, so on a machine with many repositories the sessions no longer start screens below the fold.
 
