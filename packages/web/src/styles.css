@@ -1629,6 +1629,8 @@ button.sheet-action:last-child { border-bottom: 0; }
 /* ---- Import session sheet (issue #156: discover/adopt provider-native sessions) ---- */
 /* A live external process was detected — read-only badge, no adopt action
    (Bivy has no safe way to take over a process it doesn't own). */
+.import-session-filters { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.import-session-filters > * { flex: 1 1 200px; min-width: 0; }
 .import-session-action { white-space: nowrap; }
 /* The "follow/read-only" affordance for a live-elsewhere session: the badge
    plus the exact command to attach to it themselves, in their own terminal. */

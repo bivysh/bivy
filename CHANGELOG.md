@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Import session's provider and repository filters are two compact selects instead of one row per value, so on a machine with many repositories the sessions no longer start screens below the fold.
+
 ### Changed
 - Claude Agent SDK 0.3.321 (Claude Code 2.1.321). The model picker's placeholder list, shown before a session starts, now offers Claude Fable 5.2, the new default Fable model, in place of Fable 5.1.
 
