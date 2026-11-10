@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Agents now know about the vault. Every session's Bivy note says that credentials saved for agents are there, names the keys saved right now (personal and team, names only, never values), and shows how to use one with `bivy secrets exec`. Agents look there before asking for a credential, so you no longer have to tell them it exists.
+
 ## [0.22.15] - 2026-11-10
 
 ### Security
