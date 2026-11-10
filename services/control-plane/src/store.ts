@@ -1173,6 +1173,9 @@ export interface AccountAuthRepository {
   // Records which paired device key a session acts for (it minted a pair grant
   // for it), so removePairedDevice can revoke that device's sessions.
   bindSessionDevice(token: string, devicePublicKeyB64: string): Promise<void>;
+  // Revokes every session of the account except `keepToken` (sign out other
+  // devices). Returns how many were revoked.
+  revokeOtherSessions(accountId: string, keepToken: string): Promise<number>;
 
   // Fleet-wide auth coordination. OAuth state must survive a callback landing
   // on another replica; auth throttles must not reset when traffic moves between

@@ -83,6 +83,20 @@ export async function runStoreContract(label: string, makeStore: StoreFactory): 
     assert.equal((await store.accountFromSession(laptop))?.id, acct.id, "other devices stay signed in");
   });
 
+  await test("revoking other sessions keeps only the caller's", async (store) => {
+    const acct = await store.findOrCreateAccount("contract-others@example.com");
+    const other = await store.findOrCreateAccount("contract-others-2@example.com");
+    const mine = await store.createSession(acct.id);
+    const phone = await store.createSession(acct.id);
+    const cli = await store.createSession(acct.id);
+    const stranger = await store.createSession(other.id);
+    assert.equal(await store.revokeOtherSessions(acct.id, mine), 2);
+    assert.equal((await store.accountFromSession(mine))?.id, acct.id);
+    assert.equal(await store.accountFromSession(phone), undefined);
+    assert.equal(await store.accountFromSession(cli), undefined);
+    assert.equal((await store.accountFromSession(stranger))?.id, other.id, "other accounts are untouched");
+  });
+
   await test("device login: pending → proposed → approved mints a session at poll time", async (store) => {
     const acct = await store.findOrCreateAccount("contract-device@example.com");
     const { deviceId, deviceSecret } = await store.createDeviceLogin();

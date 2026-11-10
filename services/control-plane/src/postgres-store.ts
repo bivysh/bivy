@@ -1062,6 +1062,14 @@ export class PostgresStore implements ControlPlaneStore {
     await this.query(`UPDATE sessions SET device_pub = $2 WHERE token_hash = $1`, [hashToken(token), devicePublicKeyB64]);
   }
 
+  async revokeOtherSessions(accountId: string, keepToken: string): Promise<number> {
+    const result = await this.query(
+      `DELETE FROM sessions WHERE account_id = $1 AND token_hash <> $2`,
+      [accountId, hashToken(keepToken)],
+    );
+    return result.rowCount ?? 0;
+  }
+
   async createOAuthState(input: { deviceId?: string; returnPath?: string }, ttlMs = 10 * 60_000): Promise<string> {
     const state = randomBytes(24).toString("base64url");
     await this.query(
