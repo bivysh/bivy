@@ -100,3 +100,21 @@ test("a profile's env template receives the composed file, without clobbering an
   assert.equal(operatorSet.env.OPENCODE_CONFIG_CONTENT, "{}");
   assert.equal(withSessionInstructions(options, undefined), options);
 });
+
+test("the note names the vault keys agents can use, never their values or the node's own entries", async () => {
+  const { SecretVault, teamKeyStore } = await import("../src/secrets.js");
+  const dir = tempDir();
+  assert.ok(!sessionInstructions(dir)?.text.includes("Credentials in the vault now"), "empty vault: no list");
+
+  const vault = new SecretVault(dir);
+  vault.setLocal("TRIPLETEX_TOKEN", "s3cret-value");
+  vault.setLocal("model.anthropic", "node-key");
+  teamKeyStore(vault).set("SHARED_API_KEY", "team-value");
+  const text = sessionInstructions(dir)!.text;
+  assert.match(text, /Credentials in the vault now: `SHARED_API_KEY`, `TRIPLETEX_TOKEN`\./);
+  assert.ok(!/s3cret-value|team-value|model\.anthropic/.test(text));
+
+  // With the Bivy note off, the list goes with it.
+  writeAgentInstructions(dir, "Use pnpm.", 1_000, false);
+  assert.ok(!sessionInstructions(dir)!.text.includes("TRIPLETEX_TOKEN"));
+});

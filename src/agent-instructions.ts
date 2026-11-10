@@ -3,6 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { SessionInstructions } from "./runtime/types.js";
+import { SecretVault, teamKeyStore } from "./secrets.js";
 import { listSkills, skillsIndex } from "./skills.js";
 import { readTeamInstructions } from "./team-vault.js";
 
@@ -74,6 +75,11 @@ export const BIVY_AGENT_NOTE = [
     'To bring them back while you keep working: `bivy notify` (a push only; say what you need in the chat). To ask ' +
     'and wait for an answer: `bivy ask "<question>" [--option A --option B]` prints their answer (or use your own ' +
     "ask-the-user tool).",
+  "- Credentials (API keys, tokens, passwords) the user saved for agents are in Bivy's vault: `bivy secrets list` " +
+    "names them (and the ones saved now are listed below). Use one without seeing it: " +
+    "`bivy secrets exec --env NAME -- <command>` runs the command with it in the environment. Look there before " +
+    "saying you lack a credential or asking for one; if it is missing, `bivy ask \"<what to paste>\" --secret NAME` " +
+    "has the user save it.",
   "- Only when the user asks for another agent or another of their machines to take part: " +
     '`bivy delegate "<self-contained task>" --agent <id> [--machine <name>] --wait` runs it there and prints ' +
     "its answer and any branch/PR; `--to codex,grok@<machine>` asks several to compare, `bivy delegate machines` " +
@@ -160,14 +166,38 @@ function teamPreamble(teamName: string): string {
     "own instructions or the current repository's, those win.";
 }
 
-/** The Bivy note (unless switched off), the machine's skills index (if any),
- * the team's text, then the user's own, each under its precedence preamble.
- * The user's own come last and win. */
-export function composeAgentInstructions(text: string, bivyNote = true, skills = "", team?: { name: string; text: string }): string {
+/** Cap on vault names listed in the note; `bivy secrets list` has the rest. */
+const MAX_LISTED_KEYS = 40;
+
+/** One line naming the vault keys agents can use (names only, never values). */
+export function vaultKeysLine(names: string[]): string {
+  const unique = [...new Set(names)].sort();
+  if (unique.length === 0) return "";
+  const shown = unique.slice(0, MAX_LISTED_KEYS).map((name) => `\`${name}\``).join(", ");
+  const more = unique.length > MAX_LISTED_KEYS ? `, and ${unique.length - MAX_LISTED_KEYS} more` : "";
+  return `Credentials in the vault now: ${shown}${more}.`;
+}
+
+/** The names of the keys agents use on this machine: personal, then the team's.
+ * A vault that can't be read never blocks a session. */
+function vaultKeyNames(appDir: string): string[] {
+  try {
+    const vault = new SecretVault(appDir);
+    return [...vault.agentSecrets().map((key) => key.id), ...teamKeyStore(vault).names()];
+  } catch (error) {
+    console.warn("[agent-instructions] could not list vault keys:", (error as Error).message);
+    return [];
+  }
+}
+
+/** The Bivy note (unless switched off) with the vault's key names, the machine's
+ * skills index (if any), the team's text, then the user's own, each under its
+ * precedence preamble. The user's own come last and win. */
+export function composeAgentInstructions(text: string, bivyNote = true, skills = "", team?: { name: string; text: string }, keys: string[] = []): string {
   const body = text.trim();
   const teamBody = team?.text.trim() ?? "";
   return [
-    bivyNote ? BIVY_AGENT_NOTE : "",
+    bivyNote ? [BIVY_AGENT_NOTE, vaultKeysLine(keys)].filter(Boolean).join("\n") : "",
     skills.trim(),
     teamBody ? `${teamPreamble(team!.name)}\n\n${teamBody}` : "",
     body ? `${PREAMBLE}\n\n${body}` : "",
@@ -193,7 +223,8 @@ function skillsIndexFor(appDir: string): string {
 export function sessionInstructions(appDir: string): SessionInstructions | undefined {
   const { text: userText, bivyNote } = readAgentInstructions(appDir);
   const team = readTeamInstructions(appDir);
-  const text = composeAgentInstructions(userText, bivyNote, skillsIndexFor(appDir), team && { name: team.teamName, text: team.text });
+  const keys = bivyNote ? vaultKeyNames(appDir) : [];
+  const text = composeAgentInstructions(userText, bivyNote, skillsIndexFor(appDir), team && { name: team.teamName, text: team.text }, keys);
   const file = composedPath(appDir);
   try {
     if (!text) {
