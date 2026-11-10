@@ -24,6 +24,8 @@ function fakeTerminals(over: any = {}) {
     write: (id: string, data: string) => calls.write.push({ id, data }),
     close: (id: string) => calls.close.push(id),
     lastInput: () => null,
+    reportsStatus: over.reportsStatus ?? (() => false),
+    programStatus: () => undefined,
     dropClientSize: () => {},
   } as any;
 }
@@ -197,6 +199,26 @@ test("a quiet run pinned to a session notifies as that session, so a tap opens i
   assert.equal(hints.length, 1);
   assert.equal(hints[0].kind, "agent_waiting");
   assert.equal(hints[0].targetSessionId, "sess-1");
+});
+
+test("a run whose program reports its status pushes what it needs, and the quiet-timer guess stands down", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const hints: any[] = [];
+  const terminals = fakeTerminals({ meta: () => ({ kind: "run", agent: "codex", name: "Fix login", sessionId: "sess-1" }), reportsStatus: () => true });
+  const { rt, emit, broadcasts } = harness({ terminals, sendNotificationHint: (hint: unknown) => hints.push(hint) });
+  await rt.openRunTerminal({ command: "codex", args: [], agent: "codex", sessionId: "sess-1" }, emit);
+  const opened = terminals.calls.open[0];
+  opened.onStatus({ state: "working", app: "codex" });
+  opened.onData("thinking…");
+  opened.onStatus({ state: "blocked", kind: "permission", app: "codex" });
+  t.mock.timers.tick(30_000);
+  assert.deepEqual(hints.map((h) => [h.kind, h.targetSessionId]), [["approval_requested", "sess-1"]], "one approval push, no quiet-timer guess");
+  assert.match(hints[0].body, /Fix login/);
+  assert.deepEqual(broadcasts.filter((b) => b.type === "terminal.status").map((b) => b.status.state), ["working", "blocked"]);
+  // Codex ends a turn with idle, not done: idle right after working is a finish.
+  opened.onStatus({ state: "working", app: "codex" });
+  opened.onStatus({ state: "idle", app: "codex" });
+  assert.equal(hints.at(-1).kind, "session_done");
 });
 
 test("takeover retries a lazily persisted Pi session", async () => {

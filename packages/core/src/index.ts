@@ -131,6 +131,7 @@ export {
   type TerminalEventData,
   type TerminalFoldResult,
   type TerminalIndexValue,
+  type TerminalProgramStatus,
 } from "./terminal-event-fold.js";
 export {
   foldCatalogSettingsEvent,

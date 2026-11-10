@@ -52,6 +52,7 @@ async function main() {
     await customCommandCheck();
     await runTerminalMetaCheck();
     await bellAndInputCheck();
+    await programStatusCheck();
     await closeWhileStartingCheck();
     missingCommandCheck();
     // Every terminal is closed, so the process should exit now. If a PTY or
@@ -138,6 +139,41 @@ async function bellAndInputCheck() {
   assert.equal(mgr2.lastInput("term-does-not-exist"), null, "lastInput is null for an unknown id");
   await mgr2.disposeAllAndWait();
   console.log("terminal: ok (bell hook + input tracking)");
+}
+
+/**
+ * The node is the terminal for its PTYs: a program that asks whether status
+ * reports are shown (OSC 7501 `?`, as Claude Code, Grok and Pi do) gets the
+ * answer on stdin, and its report surfaces through onStatus and list().
+ */
+async function programStatusCheck() {
+  const mgr = new TerminalManager();
+  const child = [
+    "process.stdin.setRawMode(true);",
+    "process.stdin.once('data', (d) => {",
+    "  if (!String(d).startsWith('\\x1b]7501;?')) process.exit(3);",
+    "  process.stdout.write('\\x1b]7501;state=blocked:kind=question:app=probe\\x1b\\\\');",
+    "  setTimeout(() => process.exit(0), 2000);",
+    "});",
+    "process.stdout.write('\\x1b]7501;?\\x1b\\\\');",
+  ].join("");
+  let id = "";
+  const status = await new Promise<unknown>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("timed out waiting for a program status")), 10000);
+    id = mgr.open({
+      workspace: os.tmpdir(),
+      command: process.execPath,
+      args: ["-e", child],
+      onData: () => {},
+      onStatus: (s) => { clearTimeout(timeout); resolve(s); },
+      onExit: (code) => { if (code === 3) reject(new Error("the child never got the 7501 reply")); },
+    });
+  });
+  assert.deepEqual(status, { state: "blocked", kind: "question", app: "probe" });
+  assert.deepEqual(mgr.list()[0]?.programStatus, status, "list() carries the current status");
+  mgr.close(id);
+  await mgr.disposeAllAndWait();
+  console.log("terminal: ok (program status query + report)");
 }
 
 /**

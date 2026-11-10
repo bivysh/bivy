@@ -416,8 +416,8 @@ Two caveats worth knowing:
 | `BIVY_TURN_TIMEOUT_MS` | integer ms | `3600000` (60 min) | Supported — daemon-side watchdog for every agent turn. Stops the runtime, marks the session timed out, and releases ephemeral/queue progress. `0` explicitly disables it; values above 24 h are capped |
 | `BIVY_AUTOMATION_CHECKS` | JSON array or comma list of package-script names | `test,lint,typecheck` | Supported | Deterministic checks run after unattended issue work when those scripts exist. Only name/hash/status/exit are reported; command text/output stay on the node |
 | `BIVY_AUTOMATION_CHECK_TIMEOUT_MS` | integer ms | `600000` (10 min) | Supported | Per-check timeout, clamped to 1 s–30 min |
-| `BIVY_RUN_IDLE_NOTIFY_MS` | integer ms | `30000` | Internal / test tuning |
-| `BIVY_TERM_BELL_QUIET_MS` | integer ms | `8000` | Internal / test tuning — how long since your last keystroke before a terminal bell counts as "you stepped away" |
+| `BIVY_RUN_IDLE_NOTIFY_MS` | integer ms | `30000` | Internal / test tuning — how quiet a `bivy run` agent that doesn't report its state (OSC 7501) must be before it counts as waiting |
+| `BIVY_TERM_BELL_QUIET_MS` | integer ms | `8000` | Internal / test tuning — how long since your last keystroke before a terminal bell, notification or reported agent state counts as "you stepped away" |
 | `BIVY_TERM_BELL_COOLDOWN_MS` | integer ms | `45000` | Internal / test tuning — collapses a bell storm into one notification |
 | `BIVY_MCP_ENDPOINT` | URL | `http://127.0.0.1:4317` | Internal — the daemon sets it to its real port for `bivy mcp-proxy` children |
 | `BIVY_MCP_SESSION` | session id | `""` | Internal — set by Bivy when spawning the MCP proxy |

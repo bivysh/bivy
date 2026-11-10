@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { resolveExecutable } from "./executable.js";
 import { createRequire } from "node:module";
 import { depCacheEnv } from "./harness/dep-cache.js";
+import { ProgramStatusBoard, TerminalSignalReader, sameProgramStatus, type ProgramStatus } from "./terminal-signals.js";
 
 // @lydell/node-pty is node-pty with one prebuilt binary package per platform,
 // so installs never compile a native addon or need build tools.
@@ -119,14 +120,24 @@ export interface TerminalOpenOptions {
    *  fires, so this is the caller's only chance to keep a log of the run. */
   onExit: (code: number, signal?: number, scrollback?: string) => void;
   /**
-   * Fired when the PTY emits an ASCII BEL (`\x07`) — a program rang the terminal
-   * bell (a finished build, `echo -e '\a'`, a shell that wants attention). The
+   * Fired when the PTY emits an ASCII BEL (`\x07`) outside an escape sequence —
+   * a program rang the terminal bell (a finished build, `echo -e '\a'`, a shell
+   * that wants attention); the BEL that ends a window-title OSC is not one. The
    * caller decides whether to escalate it to a push notification so a user who
    * stepped away from the mobile/PWA terminal gets called back. Coalesced to at
    * most one call per output batch so a bell-storm doesn't fan out. Gating (are
    * they actively typing? cooldown) is the caller's job, using `lastInput()`.
    */
   onBell?: () => void;
+  /**
+   * Fired when the program's reported status changes (OSC 7501, or OSC 9;4
+   * progress from a program that doesn't speak 7501): working, blocked on the
+   * person (permission / question / sign-in), done, error, idle. `undefined`
+   * once the program clears it. Progress ticks alone don't fire.
+   */
+  onStatus?: (status: ProgramStatus | undefined) => void;
+  /** Fired when a program posts a desktop notification (OSC 9 / 777 / 99). */
+  onNotify?: (notification: { title?: string; body: string }) => void;
 }
 
 /** A listable summary of a live terminal (for `terminal.list` / GET /api/terminals). */
@@ -141,6 +152,8 @@ export interface TerminalSummary {
    */
   lastActivityAt: number;
   meta: TerminalMeta;
+  /** What the program says it is doing, when it reports (see terminal-signals.ts). */
+  programStatus?: ProgramStatus;
 }
 
 interface TerminalEntry {
@@ -183,6 +196,10 @@ interface TerminalEntry {
   onData: (data: string) => void;
   /** Others following the raw output as it arrives (see tap()). */
   taps: Set<(data: string) => void>;
+  /** Reads status/notification/bell signals out of the raw output. */
+  signals: TerminalSignalReader;
+  /** The program's status records; `current()` is what clients show. */
+  status: ProgramStatusBoard;
   /** Settles when node-pty reports the child has exited. Used by tests and shutdown paths that need to prove no PTY handle is left live. */
   exitPromise: Promise<void>;
   resolveExit: () => void;
@@ -311,6 +328,8 @@ export class TerminalManager {
       closed: false,
       onData: options.onData,
       taps: new Set(),
+      signals: new TerminalSignalReader(),
+      status: new ProgramStatusBoard(),
       exitPromise,
       resolveExit,
     };
@@ -346,16 +365,7 @@ export class TerminalManager {
       for (const tap of entry.taps) {
         try { tap(data); } catch { /* a follower must never break output delivery */ }
       }
-      // A BEL in the raw stream means a program rang the terminal bell. Notify the
-      // caller once per chunk (a bell-storm within one node-pty chunk collapses to
-      // one signal); finer gating is the caller's responsibility.
-      if (options.onBell && data.includes("\x07")) {
-        try {
-          options.onBell();
-        } catch {
-          /* a bell handler must never break output delivery */
-        }
-      }
+      this.readSignals(entry, data, options);
       // Coalesce delivery: accumulate and flush on a short timer instead of
       // emitting a frame per chunk.
       entry.pending += data;
@@ -383,6 +393,31 @@ export class TerminalManager {
 
     this.hooks.onOpen?.();
     return id;
+  }
+
+  /**
+   * The node is this PTY's terminal: answer status-protocol queries and turn
+   * signals into callbacks. Handlers must never break output delivery.
+   */
+  private readSignals(entry: TerminalEntry, data: string, options: TerminalOpenOptions): void {
+    const { signals, replies } = entry.signals.read(data);
+    for (const reply of replies) {
+      try { entry.proc.write(reply); } catch { /* a dying pty */ }
+    }
+    if (!signals.length) return;
+    const before = entry.status.current();
+    let changed = false;
+    for (const signal of signals) {
+      try {
+        if (signal.type === "bell") options.onBell?.();
+        else if (signal.type === "notify") options.onNotify?.({ title: signal.title, body: signal.body });
+        else changed = entry.status.apply(signal) || changed;
+      } catch { /* a signal handler must never break output delivery */ }
+    }
+    const after = entry.status.current();
+    if (changed && !sameProgramStatus(before, after)) {
+      try { options.onStatus?.(after); } catch { /* best-effort */ }
+    }
   }
 
   write(id: string, data: string): boolean {
@@ -521,6 +556,16 @@ export class TerminalManager {
     return entry ? entry.lastActivityAt : null;
   }
 
+  /** The program's current reported status, or undefined (none, or unknown id). */
+  programStatus(id: string): ProgramStatus | undefined {
+    return this.terminals.get(id)?.status.current();
+  }
+
+  /** True when the program in this terminal reports OSC 7501 status itself. */
+  reportsStatus(id: string): boolean {
+    return Boolean(this.terminals.get(id)?.status.reportsStatus);
+  }
+
   /** Epoch ms of the last client input to a live terminal, or null if unknown. */
   lastInput(id: string): number | null {
     const entry = this.terminals.get(id);
@@ -536,7 +581,8 @@ export class TerminalManager {
     const out: TerminalSummary[] = [];
     for (const [id, entry] of this.terminals) {
       if (filter && !filter(entry.meta)) continue;
-      out.push({ id, workspace: entry.workspace, createdAt: entry.createdAt, lastActivityAt: entry.lastActivityAt, meta: entry.meta });
+      const programStatus = entry.status.current();
+      out.push({ id, workspace: entry.workspace, createdAt: entry.createdAt, lastActivityAt: entry.lastActivityAt, meta: entry.meta, ...(programStatus ? { programStatus } : {}) });
     }
     return out.sort((a, b) => b.createdAt - a.createdAt);
   }

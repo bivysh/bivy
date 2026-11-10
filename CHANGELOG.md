@@ -7,7 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Terminal agents now tell Bivy when they need you. Claude Code, Codex, Grok and Pi report their state to the terminal (OSC 7501), and Bivy now answers the query that turns those reports on. A `bivy run` row in the sidebar shows whether the agent is working, waiting for your approval, a question or a sign-in, finished, or stopped with an error, and rows that need you sort first. Your phone is notified at those moments instead of after 30 seconds of quiet, which remains the fallback for agents that don't report. Terminals also understand OSC 9;4 progress and OSC 9/777/99 desktop notifications.
+
+### Fixed
+- A terminal's window-title updates no longer count as a terminal bell. The BEL that ends an escape sequence used to send "rang the terminal bell" notifications.
+
 ### Changed
+- Claude Agent SDK 0.3.322 (Claude Code 2.1.322), Codex 0.167.1 and Pi 1.5.2.
 - Agents now know about the vault. Every session's Bivy note says that credentials saved for agents are there, names the keys saved right now (personal and team, names only, never values), and shows how to use one with `bivy secrets exec`. Agents look there before asking for a credential, so you no longer have to tell them it exists.
 
 ## [0.22.15] - 2026-11-10

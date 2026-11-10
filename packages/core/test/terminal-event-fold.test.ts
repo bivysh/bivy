@@ -25,6 +25,11 @@ describe("foldTerminalEvent", () => {
     const active = foldTerminalEvent(initial, { type: "terminal.activity", termId: "one" }, 42);
     expect(active.handled && active.value.runTerminals[0]?.lastActivityAt).toBe(42);
 
+    const blocked = foldTerminalEvent(initial, { type: "terminal.status", termId: "one", status: { state: "blocked", kind: "permission", msg: "approve Bash" } }, 20);
+    expect(blocked.handled && blocked.value.runTerminals[0]?.status).toEqual({ state: "blocked", kind: "permission", msg: "approve Bash" });
+    const cleared = foldTerminalEvent(blocked.value, { type: "terminal.status", termId: "one", status: null }, 20);
+    expect(cleared.handled && cleared.value.runTerminals[0]).toEqual(initial.runTerminals[0]);
+
     const closed = foldTerminalEvent(initial, { type: "terminal.exit", termId: "one" }, 20);
     expect(closed.handled && closed.value.runTerminals).toEqual([]);
   });

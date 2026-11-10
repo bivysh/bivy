@@ -5,7 +5,7 @@ import type { LibraryView } from "../router.js";
 import { githubIssueRefFromSource, primaryPr, repoFromSource, type GithubQueueItem, type PrRef, type RunTerminalSummary } from "@bivy/core";
 import { useAppState } from "../store/useStore.js";
 import { controller } from "../store/useStore.js";
-import { attentionRank, statusDotState, statusLabel, type SessionDotState } from "../sessionStatus.js";
+import { attentionRank, statusDotState, statusLabel, terminalAttentionRank, terminalRowStatus, type SessionDotState } from "../sessionStatus.js";
 import { Badge } from "./Badge.js";
 import { classifySource, CLI_SOURCE, shortSourceLabel, type SourceInfo } from "../sessionSource.js";
 import { StatusDot } from "./StatusDot.js";
@@ -242,7 +242,9 @@ export function SessionList({ searchOpen = false, onSearchOpenChange, onPick, on
     if (nodeFilter) matched = matched.filter((t) => (t.nodeId || currentNodeId) === nodeFilter);
     const q = query.trim().toLowerCase();
     if (q) matched = matched.filter((t) => `${t.name ?? ""} ${t.label ?? ""} ${t.agent ?? ""} ${t.workspace ?? ""}`.toLowerCase().includes(q));
-    return [...matched].sort((a, b) => toMs(b.lastActivityAt ?? b.createdAt) - toMs(a.lastActivityAt ?? a.createdAt));
+    // What needs the person floats first, as with sessions; recency within a rank.
+    return [...matched].sort((a, b) => terminalAttentionRank(b.status) - terminalAttentionRank(a.status)
+      || toMs(b.lastActivityAt ?? b.createdAt) - toMs(a.lastActivityAt ?? a.createdAt));
   }, [runTerminals, query, repoFilter, nodeFilter, currentNodeId]);
 
   const filtered = useMemo(() => {
@@ -490,20 +492,27 @@ export function SessionList({ searchOpen = false, onSearchOpenChange, onPick, on
         {filteredRuns.map((t) => {
           const title = t.name || t.label || t.agent || "Terminal session";
           const meta = runMeta(t);
+          const row = terminalRowStatus(t.status);
           return (
             <li key={t.termId} className="session-row">
-              <button className="session-item" onClick={() => onPickTerminal(t.termId, t.nodeId)}>
+              <button className="session-item" onClick={() => onPickTerminal(t.termId, t.nodeId)} title={t.status?.msg || undefined}>
                 <span className="session-body">
                   <span className="session-title-row">
-                    <RowMark status="working" srLabel={`${CLI_SOURCE.label} · Running in terminal`} />
+                    <RowMark status={row.dot} srLabel={`${CLI_SOURCE.label} · ${row.label}`} />
                     <span className="session-name">{title}</span>
                     {relTime(t.lastActivityAt ?? t.createdAt) && (
-                      <span className="session-age" title="Running in terminal">
+                      <span className="session-age" title={row.label}>
                         {relTime(t.lastActivityAt ?? t.createdAt)}
                       </span>
                     )}
                   </span>
-                  {meta && <span className="session-meta">{meta}</span>}
+                  {(row.hint || meta) && (
+                    <span className="session-meta">
+                      {row.hint && <span className={`row-hint ${row.hint.tone}`}>{row.hint.text}</span>}
+                      {row.hint && meta ? " · " : ""}
+                      {meta}
+                    </span>
+                  )}
                 </span>
               </button>
             </li>

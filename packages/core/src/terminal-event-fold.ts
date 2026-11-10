@@ -1,9 +1,22 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
 
+/** What the program in a terminal reports about itself (OSC 7501 on the node). */
+export interface TerminalProgramStatus {
+  state: "idle" | "working" | "blocked" | "done" | "error";
+  /** What a blocked program waits on. */
+  kind?: "permission" | "question" | "auth";
+  app?: string;
+  /** One line from the program, for display. */
+  msg?: string;
+  title?: string;
+  progress?: number;
+}
+
 export interface RunTerminalValue {
   termId: string;
   lastActivityAt?: number;
+  status?: TerminalProgramStatus;
 }
 
 export interface TerminalIndexValue<TTerminal extends RunTerminalValue = RunTerminalValue> {
@@ -19,6 +32,7 @@ export interface TerminalEventData {
   sessionId?: unknown;
   active?: unknown;
   at?: unknown;
+  status?: unknown;
 }
 
 export type TerminalFoldResult<T> =
@@ -29,6 +43,20 @@ function terminalFrom(value: unknown): RunTerminalValue | undefined {
   if (!value || typeof value !== "object") return undefined;
   const terminal = value as Record<string, unknown>;
   return typeof terminal.termId === "string" ? terminal as unknown as RunTerminalValue : undefined;
+}
+
+const PROGRAM_STATES = new Set(["idle", "working", "blocked", "done", "error"]);
+const BLOCKED_KINDS = new Set(["permission", "question", "auth"]);
+
+function programStatusFrom(value: unknown): TerminalProgramStatus | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.state !== "string" || !PROGRAM_STATES.has(raw.state)) return undefined;
+  const status: TerminalProgramStatus = { state: raw.state as TerminalProgramStatus["state"] };
+  if (typeof raw.kind === "string" && BLOCKED_KINDS.has(raw.kind)) status.kind = raw.kind as TerminalProgramStatus["kind"];
+  for (const key of ["app", "msg", "title"] as const) if (typeof raw[key] === "string" && raw[key]) status[key] = raw[key] as string;
+  if (typeof raw.progress === "number") status.progress = raw.progress;
+  return status;
 }
 
 /** Pure projection of terminal inventory/activity and chat↔TUI ownership. */
@@ -65,6 +93,22 @@ export function foldTerminalEvent<TTerminal extends RunTerminalValue, TValue ext
         runTerminals: value.runTerminals.map((terminal) =>
           terminal.termId === termId ? { ...terminal, lastActivityAt: at } : terminal,
         ),
+      },
+    };
+  }
+  if (event.type === "terminal.status") {
+    const termId = String(event.termId || "");
+    if (!termId) return { handled: true, value };
+    const status = programStatusFrom(event.status);
+    return {
+      handled: true,
+      value: {
+        ...value,
+        runTerminals: value.runTerminals.map((terminal) => {
+          if (terminal.termId !== termId) return terminal;
+          const { status: _old, ...rest } = terminal;
+          return (status ? { ...rest, status } : rest) as TTerminal;
+        }),
       },
     };
   }

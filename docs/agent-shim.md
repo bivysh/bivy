@@ -18,8 +18,12 @@ whether to install the shim for the agent you pick (default: no). It is never
 installed without your yes; without a terminal to answer from, setup only
 prints the command.
 
-When the agent goes quiet or rings the terminal bell, your phone gets a
-notification. If the run is pinned to a session, tapping the notification opens it.
+Agents that report their state to the terminal (OSC 7501: Claude Code, Codex,
+Grok and Pi do) tell Bivy exactly when they need you. Your phone gets a
+notification when one waits for an approval, a question or a sign-in, finishes,
+or stops with an error, and the sidebar row shows that state. For an agent that
+doesn't report, Bivy notifies you when it has gone quiet for a while. If the run
+is pinned to a session, tapping the notification opens it.
 
 ## What it does
 
