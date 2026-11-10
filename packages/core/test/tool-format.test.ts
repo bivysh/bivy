@@ -122,7 +122,7 @@ describe("formatTool", () => {
     ]);
     expect([list.added, list.removed]).toEqual([3, 1]);
     // A map keyed by path, with an unmarked whole file for an add.
-    const map = formatTool("apply_patch", { changes: { "README.md": { type: "add", unified_diff: "- a list item\n- another" } } }, detail);
+    const map = formatTool("apply_patch", { changes: { "README.md": { type: "add", unified_diff: "- a list item\n- another\n" } } }, detail);
     expect(map.diffs.map((d) => [d.oldText, d.newText])).toEqual([["", "- a list item\n- another"]]);
   });
 

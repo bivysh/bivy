@@ -265,7 +265,7 @@ function diffTextSides(e: any): { oldText: string; newText: string } | undefined
   const lines = text.replace(/\r?\n$/, "").split(/\r?\n/);
   // A whole file added or deleted: raw content, or every line marked +/-.
   const marked = (sign: string) => lines.every((l) => l === "" || l.startsWith(sign));
-  const strip = (sign: string) => (marked(sign) ? lines.map((l) => l.slice(1)).join("\n") : text);
+  const strip = (sign: string) => (marked(sign) ? lines.map((l) => l.slice(1)) : lines).join("\n");
   if (kind === "add") return { oldText: "", newText: strip("+") };
   if (kind === "delete") return { oldText: strip("-"), newText: "" };
   const header = /^(diff --git |index |--- |\+\+\+ )/;
