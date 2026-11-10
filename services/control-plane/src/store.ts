@@ -1170,6 +1170,9 @@ export interface AccountAuthRepository {
   createSession(accountId: string): Promise<string>; // returns raw session token
   accountFromSession(token: string | null): Promise<Account | undefined>;
   revokeSession(token: string): Promise<void>;
+  // Records which paired device key a session acts for (it minted a pair grant
+  // for it), so removePairedDevice can revoke that device's sessions.
+  bindSessionDevice(token: string, devicePublicKeyB64: string): Promise<void>;
 
   // Fleet-wide auth coordination. OAuth state must survive a callback landing
   // on another replica; auth throttles must not reset when traffic moves between
@@ -1202,7 +1205,8 @@ export interface AccountAuthRepository {
   countPairedDevices(accountId: string): Promise<number>;
   listPairedDevices(accountId: string): Promise<PairedDeviceInfo[]>;
   // Remove a paired device (by its public key) from the account, freeing a
-  // device slot. Returns true if a matching device was removed.
+  // device slot, and revoke the account sessions bound to it. Returns true if
+  // a matching device was removed.
   removePairedDevice(accountId: string, publicKeyB64: string): Promise<boolean>;
 
   // Single-use relay connection tickets. Minted directly (over TLS) by a node
