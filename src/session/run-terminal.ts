@@ -26,6 +26,7 @@ import { discoverPiSessionForCwd } from "../runtime/pi-session-discovery.js";
 import { bivySessionEnv } from "../runtime/session-env.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "../multiplexer.js";
 import type { TerminalManager } from "../terminal.js";
+import type { ProgramStatus } from "../terminal-signals.js";
 import type { WebSocket } from "ws";
 
 type TuiSpec = { command: string; args: string[]; env?: Record<string, string> };
@@ -198,6 +199,29 @@ const ACTIVITY_PING_INTERVAL = 2000;
 const IDLE_NOTIFY_INTERVAL = Number(process.env.BIVY_RUN_IDLE_NOTIFY_MS) || 30_000;
 const BELL_QUIET_INPUT_MS = Number(process.env.BIVY_TERM_BELL_QUIET_MS) || 8_000;
 const BELL_NOTIFY_COOLDOWN_MS = Number(process.env.BIVY_TERM_BELL_COOLDOWN_MS) || 45_000;
+
+/**
+ * The push a program's reported status (OSC 7501) earns, keyed by state, or
+ * `blocked:<kind>`. `idle` straight after `working` is a finished turn too
+ * (Codex reports idle, not done). Bodies name the session, never the
+ * program's own text: hints leave the machine.
+ */
+const STATUS_PUSHES: Record<string, { kind: string; title: (who: string) => string; body: (who: string) => string }> = {
+  "blocked:permission": { kind: "approval_requested", title: () => "Approval needed", body: (who) => `${who} wants to run something — tap to approve or deny.` },
+  "blocked:question": { kind: "question_asked", title: () => "Bivy needs your input", body: (who) => `${who} is asking a question — tap to answer.` },
+  "blocked:auth": { kind: "agent_waiting", title: (who) => `${who} needs you to sign in`, body: (who) => `${who} is waiting for a sign-in — tap to open it.` },
+  blocked: { kind: "agent_waiting", title: (who) => `${who} is waiting`, body: (who) => `${who} is waiting for you — tap to open it.` },
+  done: { kind: "session_done", title: () => "Session finished", body: (who) => `${who} finished — tap to review the result.` },
+  error: { kind: "session_error", title: () => "Session hit an error", body: (who) => `${who} stopped with an error — tap to see what went wrong.` },
+};
+
+function statusPushKey(previous: ProgramStatus | undefined, next: ProgramStatus | undefined): string | undefined {
+  if (!next) return undefined;
+  if (next.state === "blocked") return next.kind ? `blocked:${next.kind}` : "blocked";
+  if (next.state === "idle") return previous?.state === "working" ? "done" : undefined;
+  return next.state === "working" ? undefined : next.state;
+}
+
 const TAKEOVER_DISCOVERY_ATTEMPTS = 10;
 const TAKEOVER_DISCOVERY_DELAY_MS = 200;
 
@@ -222,6 +246,7 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
   const lastActivityPing = new Map<string, number>();
   const runIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const lastBellNotify = new Map<string, number>();
+  const lastProgramStatus = new Map<string, ProgramStatus | undefined>();
 
   function hasRunTerminal(id: string): boolean {
     return runTerminals.has(id);
@@ -296,7 +321,7 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
       const nativeName = native?.name?.trim();
       if (t.meta.autoName && nativeName && !deps.isEmptyUntitledTitle(nativeName)) t.meta.name = nativeName;
       const { autoName: _autoName, ...publicMeta } = t.meta;
-      out.push({ termId: t.id, workspace: t.workspace, createdAt: t.createdAt, lastActivityAt: t.lastActivityAt, pid: terminals.pid(t.id), ...publicMeta, takeoverReady: Boolean(sessionRef) });
+      out.push({ termId: t.id, workspace: t.workspace, createdAt: t.createdAt, lastActivityAt: t.lastActivityAt, pid: terminals.pid(t.id), ...publicMeta, ...(t.programStatus ? { status: t.programStatus } : {}), takeoverReady: Boolean(sessionRef) });
     }
     // Discovery/name lookup above is asynchronous. A takeover can close a PTY
     // while this list is being assembled; never let that older list resolve
@@ -327,14 +352,14 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
   }
 
   function maybeNotifyBell(id: string) {
+    if (terminals.programStatus(id)) return; // a program reporting status: its pushes cover this
     const now = Date.now();
     const lastInput = terminals.lastInput(id);
     if (lastInput != null && now - lastInput < BELL_QUIET_INPUT_MS) return;
     const lastNotify = lastBellNotify.get(id) ?? 0;
     if (now - lastNotify < BELL_NOTIFY_COOLDOWN_MS) return;
     lastBellNotify.set(id, now);
-    const meta = terminals.meta(id);
-    const who = meta?.name?.trim() || meta?.label?.trim() || "A terminal";
+    const who = terminalName(id, "A terminal");
     deps.sendNotificationHint({ kind: "terminal_bell", title: "Terminal bell", body: `${who} rang the terminal bell — it may be waiting for you.`, ...runTarget(id) });
   }
 
@@ -345,6 +370,42 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
 
   function clearBellNotify(id: string) {
     lastBellNotify.delete(id);
+    lastProgramStatus.delete(id);
+  }
+
+  function terminalName(id: string, fallback: string): string {
+    const meta = terminals.meta(id);
+    return meta?.name?.trim() || meta?.label?.trim() || fallback;
+  }
+
+  /** A program said what it's doing. Tell clients (run terminals), and call the
+   *  person back when it needs them or finished while they were away. */
+  function onProgramStatus(id: string, status: ProgramStatus | undefined) {
+    const previous = lastProgramStatus.get(id);
+    lastProgramStatus.set(id, status);
+    if (runTerminals.has(id)) {
+      // The program speaks for itself now; the quiet-timer guess stands down.
+      clearRunIdleNotify(id);
+      deps.broadcast({ type: "terminal.status", termId: id, status: status ?? null, at: Date.now() });
+    }
+    const push = STATUS_PUSHES[statusPushKey(previous, status) ?? ""];
+    if (!push) return;
+    const lastInput = terminals.lastInput(id);
+    if (lastInput != null && Date.now() - lastInput < BELL_QUIET_INPUT_MS) return; // they're at the keyboard
+    const who = terminalName(id, "An agent");
+    deps.sendNotificationHint({ kind: push.kind, title: push.title(who), body: push.body(who), ...runTarget(id) });
+  }
+
+  /** A program posted a desktop notification (OSC 9 / 777 / 99): same gate as the bell. */
+  function onProgramNotify(id: string) {
+    if (terminals.programStatus(id)) return; // its status pushes already speak for it
+    const now = Date.now();
+    const lastInput = terminals.lastInput(id);
+    if (lastInput != null && now - lastInput < BELL_QUIET_INPUT_MS) return;
+    if (now - (lastBellNotify.get(id) ?? 0) < BELL_NOTIFY_COOLDOWN_MS) return;
+    lastBellNotify.set(id, now);
+    const who = terminalName(id, "A terminal");
+    deps.sendNotificationHint({ kind: "terminal_bell", title: "Terminal notification", body: `${who} posted a notification — it may need you.`, ...runTarget(id) });
   }
 
   function addRunViewer(termId: string, socket: WebSocket) {
@@ -442,9 +503,11 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
             lastActivityPing.set(id, at);
             deps.broadcast({ type: "terminal.activity", termId: id, at });
           }
-          if (isSession) armRunIdleNotify(id, name);
+          if (isSession && !terminals.reportsStatus(id)) armRunIdleNotify(id, name);
         },
+        onStatus: isSession ? (status) => onProgramStatus(id, status) : undefined,
         onExit: (code, _signal, scrollback) => {
+          lastProgramStatus.delete(id);
           runTerminals.delete(id);
           runViewers.delete(id);
           lastActivityPing.delete(id);
@@ -648,6 +711,8 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
             clientId,
             onData: (data) => emit({ type: "terminal.output", termId: id, data }),
             onBell: () => maybeNotifyBell(id),
+            onStatus: (status) => onProgramStatus(id, status),
+            onNotify: () => onProgramNotify(id),
             onExit: (code) => { owned.delete(id); clearBellNotify(id); emit({ type: "terminal.exit", termId: id, code }); },
           });
           owned.add(id);

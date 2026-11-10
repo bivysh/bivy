@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
-import type { SessionStatus } from "@bivy/core";
+import type { SessionStatus, TerminalProgramStatus } from "@bivy/core";
 
 /** The subset of SessionSummary that status/seen derivation needs — kept
  *  narrow so callers (sidebar rows, the header pill) can pass either the full
@@ -81,4 +81,39 @@ export function statusLabel(s: SessionStatusInput): string {
   // resumed instantly. Both used to render as the same flat grey dot.
   if (s.status === "saved") return "Saved";
   return isUnseen(s) ? "Finished · new" : "Open";
+}
+
+/** A running terminal's row mark, label and (when it needs the person) hint,
+ *  from what its program reports (OSC 7501 — Claude Code, Codex, Grok, Pi).
+ *  A program that reports nothing is simply running. */
+export interface TerminalRowStatus {
+  dot: SessionDotState;
+  label: string;
+  hint?: { text: string; tone: "danger" | "warn" };
+}
+
+const TERMINAL_ROW: Record<TerminalProgramStatus["state"], TerminalRowStatus> = {
+  working: { dot: "working", label: "Working" },
+  blocked: { dot: "needs-action", label: "Waiting for you", hint: { text: "Waiting for you", tone: "danger" } },
+  error: { dot: "failed", label: "Stopped with an error", hint: { text: "Error", tone: "danger" } },
+  done: { dot: "unseen", label: "Finished" },
+  idle: { dot: "idle", label: "Ready for your next message" },
+};
+
+const BLOCKED_LABEL: Record<NonNullable<TerminalProgramStatus["kind"]>, string> = {
+  permission: "Needs your approval",
+  question: "Has a question for you",
+  auth: "Needs you to sign in",
+};
+
+/** Sidebar order for running terminals, matching attentionRank for sessions. */
+export function terminalAttentionRank(status: TerminalProgramStatus | undefined): number {
+  return status?.state === "blocked" ? 3 : status?.state === "error" ? 2 : status?.state === "done" ? 1 : 0;
+}
+
+export function terminalRowStatus(status: TerminalProgramStatus | undefined): TerminalRowStatus {
+  if (!status) return { dot: "working", label: "Running in terminal" };
+  const row = TERMINAL_ROW[status.state];
+  const label = status.state === "blocked" && status.kind ? BLOCKED_LABEL[status.kind] : row.label;
+  return row.hint ? { ...row, label, hint: { ...row.hint, text: label } } : { ...row, label };
 }

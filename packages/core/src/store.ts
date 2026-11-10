@@ -18,6 +18,7 @@ import type { AttachmentRef, ConnectionStatus, CredentialPresetsView, Credential
 import type { AccountNode, EphemeralNodeConfig } from "./account.js";
 import type { MachineCapabilities } from "./capabilities.js";
 import type { InboxAdvert } from "./inbox.js";
+import type { TerminalProgramStatus } from "./terminal-event-fold.js";
 import type { SessionContract } from "./session-contract.js";
 import {
   EMPTY_SESSION_DRAFT,
@@ -103,6 +104,8 @@ export interface RunTerminalSummary {
   workspace?: string;
   createdAt?: number;
   lastActivityAt?: number;
+  /** What the program reports about itself (OSC 7501), when it does. */
+  status?: TerminalProgramStatus;
   sessionId?: string;
   pid?: number;
   /** Relay/account mode: node that owns this terminal. Tagged by the

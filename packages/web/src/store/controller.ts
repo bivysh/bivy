@@ -670,7 +670,7 @@ export class AppController {
         // terminals from the sidebar (issue #99); terminalListeners still get
         // the raw event — they key off termId, not node.
         if (type.startsWith("terminal.") || type.startsWith("multiplexer.")) {
-          if (["terminal.list", "terminal.created", "terminal.activity", "terminal.closed", "terminal.exit"].includes(type)) {
+          if (["terminal.list", "terminal.created", "terminal.activity", "terminal.status", "terminal.closed", "terminal.exit"].includes(type)) {
             this.store.apply(this.eventWithNodeScope(event));
           } else if (type === "terminal.tui") {
             // Composer single-writer lock — keyed by (raw) session id, so no node
