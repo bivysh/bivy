@@ -244,23 +244,63 @@ function pick(input: any, keys: string[]): string | undefined {
 const OLD_KEYS = ["oldText", "oldString", "old_string", "old", "before"];
 const NEW_KEYS = ["newText", "newString", "new_string", "new", "after"];
 
-/** Normalize an Edit tool input (single pair or array) into diff hunks.
+const DIFF_KEYS = ["unified_diff", "unifiedDiff", "diff", "patch"];
+
+/** A change collection as a list: an array as is, or a map keyed by path
+ *  (`{ "src/x.ts": { unified_diff } }`) as entries carrying that path. */
+function changeList(changes: unknown): any[] | undefined {
+  if (Array.isArray(changes)) return changes;
+  if (!changes || typeof changes !== "object") return undefined;
+  return Object.entries(changes as Record<string, unknown>).map(([path, v]) => (v && typeof v === "object" ? { path, ...(v as object) } : { path }));
+}
+
+/** Old/new text from a change that carries diff text instead of a pair: a
+ *  unified diff (`@@`, `-`, `+`, ` ` lines; also the apply_patch body), or a
+ *  whole file for an add/delete. Any agent that sends such a field gets a
+ *  rendered diff; nothing here is specific to one agent. */
+function diffTextSides(e: any): { oldText: string; newText: string } | undefined {
+  const text = pick(e, DIFF_KEYS);
+  if (!text) return undefined;
+  const kind = String(e?.kind?.type ?? e?.kind ?? e?.type ?? "").toLowerCase();
+  const lines = text.replace(/\r?\n$/, "").split(/\r?\n/);
+  // A whole file added or deleted: raw content, or every line marked +/-.
+  const marked = (sign: string) => lines.every((l) => l === "" || l.startsWith(sign));
+  const strip = (sign: string) => (marked(sign) ? lines.map((l) => l.slice(1)) : lines).join("\n");
+  if (kind === "add") return { oldText: "", newText: strip("+") };
+  if (kind === "delete") return { oldText: strip("-"), newText: "" };
+  const header = /^(diff --git |index |--- |\+\+\+ )/;
+  if (!lines.every((l) => l === "" || /^[-+ @\\]/.test(l) || header.test(l))) return undefined;
+  const oldLines: string[] = [];
+  const newLines: string[] = [];
+  let inHunk = false;
+  for (const l of lines) {
+    if (l.startsWith("@@")) { inHunk = true; continue; }
+    if (!inHunk && header.test(l)) continue;
+    if (l.startsWith("\\")) continue; // "\ No newline at end of file"
+    if (l.startsWith("+")) newLines.push(l.slice(1));
+    else if (l.startsWith("-")) oldLines.push(l.slice(1));
+    else { oldLines.push(l.slice(1)); newLines.push(l.slice(1)); }
+  }
+  return { oldText: oldLines.join("\n"), newText: newLines.join("\n") };
+}
+
+/** Normalize an Edit tool input (single pair, array, or a change collection
+ *  carrying diff text) into diff hunks.
  *  Summary callers can skip line counting; added/removed then remain zero. */
 export function editHunks(input: any, diffStats = true): DiffHunk[] {
   const list: any[] = Array.isArray(input?.edits)
     ? input.edits
     : Array.isArray(input?.replacements)
       ? input.replacements
-      : Array.isArray(input?.changes)
-        ? input.changes
-        : [input];
+      : changeList(input?.changes) ?? [input];
   const hunks: DiffHunk[] = [];
   for (const e of list) {
-    const oldText = pick(e, OLD_KEYS) ?? "";
-    const newText = pick(e, NEW_KEYS) ?? "";
+    let oldText = pick(e, OLD_KEYS) ?? "";
+    let newText = pick(e, NEW_KEYS) ?? "";
+    if (!oldText && !newText) ({ oldText, newText } = diffTextSides(e) ?? { oldText, newText });
     if (!oldText && !newText) continue;
     const { added, removed } = diffStats ? countOps(diffOps(oldText, newText)) : { added: 0, removed: 0 };
-    hunks.push({ oldText, newText, added, removed });
+    hunks.push({ oldText, newText, added, removed, ...(list.length > 1 && pick(e, ["path", "file_path", "filePath"]) ? { label: pick(e, ["path", "file_path", "filePath"]) } : {}) });
   }
   return hunks;
 }
@@ -291,7 +331,7 @@ export function formatTool(name: string, input: unknown, detail?: ToolCallDetail
   if (writes) {
     const content = pick(inp, ["content", "text", "contents", "data", "file_text"]) ?? "";
     if (content) diffs = [{ oldText: "", newText: content, added: diffStats ? splitLines(content.replace(/\r?\n$/, "")).length : 0, removed: 0, label: "New file" }];
-  } else if (n.includes("edit")) {
+  } else if (n.includes("edit") || n.includes("patch") || detail?.kind === "edit") {
     const hunks = editHunks(inp, diffStats);
     diffs = hunks;
     if (hunks.length > 1) edits = hunks.length;

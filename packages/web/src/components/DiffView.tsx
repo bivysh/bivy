@@ -78,7 +78,7 @@ export const DiffView = memo(function DiffView({ hunks, single, mode = "unified"
             </div>,
           );
         }
-        const title = hunks.length > 1 ? `Hunk ${hi + 1}` : h.label || single || "Diff";
+        const title = h.label || (hunks.length > 1 ? `Hunk ${hi + 1}` : single || "Diff");
         return (
           <div className="diff-hunk" key={hi}>
             <div className="diff-hunk-title">
