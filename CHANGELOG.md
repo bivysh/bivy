@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.15] - 2026-11-10
+
 ### Security
 - Signing a device out under Settings → Account now also revokes its control-plane session, not just its pairing record. A session is tied to the device key it pairs a machine with, so a device that paired before this change is only tied once it pairs again.
 
