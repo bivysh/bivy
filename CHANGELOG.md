@@ -7,14 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- Edits that arrive as diff text now render as a diff, in approval cards and in the transcript: a change list or path-keyed map whose entries carry a unified diff (`diff`, `unified_diff`, `patch`, e.g. Codex's `apply_patch`), or a whole added or deleted file. Each file of a multi-file patch is titled with its path.
-
 ### Security
 - Signing a device out under Settings → Account now also revokes its control-plane session, not just its pairing record. A session is tied to the device key it pairs a machine with, so a device that paired before this change is only tied once it pairs again.
 
 ### Added
 - Settings → Account → **Sign out other devices** signs out every other browser, phone and CLI on the account and removes their paired devices (which re-keys the device vault for the rest). This device stays signed in.
+- Edits that arrive as diff text now render as a diff, in approval cards and in the transcript: a change list or path-keyed map whose entries carry a unified diff (`diff`, `unified_diff`, `patch`, e.g. Codex's `apply_patch`), or a whole added or deleted file. Each file of a multi-file patch is titled with its path.
 
 ### Fixed
 - Import session's provider and repository filters are two compact selects instead of one row per value, so on a machine with many repositories the sessions no longer start screens below the fold.
