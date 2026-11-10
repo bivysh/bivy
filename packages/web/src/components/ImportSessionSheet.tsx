@@ -26,6 +26,29 @@ function relTime(ms?: number): string {
 
 const ALL = "__all__";
 
+/** A filter as one compact select, so a machine with dozens of repos doesn't
+ *  push the sessions themselves far below the fold. */
+function FilterSelect({ id, label, all, options, value, onChange }: {
+  id: string;
+  label: string;
+  all: string;
+  options: string[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <div className="fork-select-field">
+      <label htmlFor={id}>{label}</label>
+      <select id={id} value={value} onChange={(e) => onChange(e.target.value)}>
+        <option value={ALL}>{all}</option>
+        {options.map((o) => (
+          <option key={o} value={o}>{o}</option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 /**
  * Discover and adopt provider-native sessions (issue #156) — a bare `claude` or
  * `codex` session started outside Bivy, on this node or another one. Purely
@@ -176,27 +199,14 @@ export function ImportSessionContent({ onDone }: { onDone: (sessionId: string) =
         </div>
       )}
 
-      {providers.length > 1 && (
-        <div className="picker-section">
-          <div className="picker-section-label">Provider</div>
-          <div className="picker-list">
-            <PickerItem active={providerFilter === ALL} title="All providers" onClick={() => setProviderFilter(ALL)} />
-            {providers.map((p) => (
-              <PickerItem key={p} active={providerFilter === p} title={p} onClick={() => setProviderFilter(p)} />
-            ))}
-          </div>
-        </div>
-      )}
-
-      {repos.length > 1 && (
-        <div className="picker-section">
-          <div className="picker-section-label">Repository</div>
-          <div className="picker-list">
-            <PickerItem active={repoFilter === ALL} title="All repositories" onClick={() => setRepoFilter(ALL)} />
-            {repos.map((r) => (
-              <PickerItem key={r} active={repoFilter === r} title={r} onClick={() => setRepoFilter(r)} />
-            ))}
-          </div>
+      {(providers.length > 1 || repos.length > 1) && (
+        <div className="import-session-filters">
+          {providers.length > 1 && (
+            <FilterSelect id="import-provider" label="Provider" all="All providers" options={providers} value={providerFilter} onChange={setProviderFilter} />
+          )}
+          {repos.length > 1 && (
+            <FilterSelect id="import-repo" label="Repository" all="All repositories" options={repos} value={repoFilter} onChange={setRepoFilter} />
+          )}
         </div>
       )}
 
