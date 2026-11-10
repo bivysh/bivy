@@ -83,6 +83,7 @@ import {
   removeAccountNode,
   fetchPairedDevices,
   removePairedDevice,
+  signOutOtherDevices as apiSignOutOtherDevices,
   logout,
   enablePushNotifications,
   disablePushNotifications,
@@ -1587,6 +1588,17 @@ export class AppController {
   /** True for the device this client itself is signed in on. */
   isCurrentDevice(deviceId: string): boolean {
     return Boolean(deviceId) && this.local.device()?.pub === deviceId;
+  }
+
+  /** Sign out every other session and paired device; keeps this one. */
+  async signOutOtherDevices(): Promise<{ sessions: number; devices: number }> {
+    let devicePub = this.local.device()?.pub;
+    try {
+      devicePub = (await deviceKeypair(this.local)).pub;
+    } catch {
+      /* without our key the server keeps every device; sessions still go */
+    }
+    return apiSignOutOtherDevices(this.local, devicePub);
   }
 
   /** Remove (sign out) a paired device, freeing its slot. */

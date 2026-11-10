@@ -1750,6 +1750,31 @@ function AccountPanel() {
             );
           })}
         </div>
+        <button
+          type="button"
+          className="btn block"
+          disabled={accountAction !== null}
+          onClick={() => setConfirm({
+            title: "Sign out other devices?",
+            message: "Every other browser, phone and CLI signed in to this account is signed out and has to sign in again. This device stays signed in.",
+            label: "Sign out others",
+            action: () => {
+              setErr(null);
+              setDone(null);
+              setAccountAction("sign-out-others");
+              controller.signOutOtherDevices()
+                .then(({ sessions }) => {
+                  setDone(sessions === 0 ? "No other devices were signed in." : `Signed out ${sessions} other ${sessions === 1 ? "session" : "sessions"}.`);
+                  reloadDevices();
+                  reloadMe();
+                })
+                .catch((e) => setErr(String(e?.message || e)))
+                .finally(() => setAccountAction(null));
+            },
+          })}
+        >
+          {accountAction === "sign-out-others" ? "Signing out…" : "Sign out other devices"}
+        </button>
       </div>
 
       <div className="settings-section">

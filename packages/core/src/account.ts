@@ -1673,6 +1673,22 @@ export async function logout(store: LocalStore, devicePublicKeyB64?: string, fet
   });
 }
 
+/**
+ * Sign out every other device: revokes the account's other sessions and drops
+ * every paired device except this one (`devicePublicKeyB64`). Returns how many
+ * sessions and devices were signed out.
+ */
+export async function signOutOtherDevices(store: LocalStore, devicePublicKeyB64?: string, fetchImpl: typeof fetch = fetch): Promise<{ sessions: number; devices: number }> {
+  const res = await fetchImpl(`${cpBase(store)}/auth/logout-others`, {
+    method: "POST",
+    headers: authHeaders(store),
+    body: JSON.stringify(devicePublicKeyB64 ? { devicePublicKeyB64 } : {}),
+  });
+  if (!res.ok) throw new Error(`sign out other devices failed: ${res.status}`);
+  const data = (await res.json().catch(() => ({}))) as { sessions?: unknown; devices?: unknown };
+  return { sessions: Number(data.sessions) || 0, devices: Number(data.devices) || 0 };
+}
+
 function b64ToBytes(b64: string): Uint8Array {
   const pad = "=".repeat((4 - (b64.length % 4)) % 4);
   const base = (b64 + pad).replace(/-/g, "+").replace(/_/g, "/");

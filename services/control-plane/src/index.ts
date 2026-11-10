@@ -1303,6 +1303,21 @@ app.post("/auth/logout", asyncHandler(async (req, res) => {
   res.json({ ok: true });
 }));
 
+// Sign out everywhere else: revoke every other session of the account (other
+// browsers, phones, CLIs) and drop every paired device except the caller's,
+// which re-keys the device vault for the devices that remain. The caller's
+// own session and device are kept.
+app.post("/auth/logout-others", requireUser, asyncHandler(async (req, res) => {
+  const account = (req as Request & { account: Account }).account;
+  const sessions = await store.revokeOtherSessions(account.id, bearer(req) ?? "");
+  const keep = String(req.body?.devicePublicKeyB64 ?? "").trim();
+  let devices = 0;
+  for (const device of await store.listPairedDevices(account.id)) {
+    if (device.id !== keep && await store.removePairedDevice(account.id, device.id)) devices += 1;
+  }
+  res.json({ ok: true, sessions, devices });
+}));
+
 // List the account's paired devices for the device manager. Each id is the
 // device's public key (base64url), which DELETE /devices/:id addresses.
 app.get("/devices", requireUser, asyncHandler(async (req, res) => {
