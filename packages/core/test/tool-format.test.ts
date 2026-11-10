@@ -109,6 +109,23 @@ describe("formatTool", () => {
     expect(f.removed).toBe(1);
   });
 
+  it("renders a change collection's diff text as hunks (unified diff, path-keyed map, whole added file)", () => {
+    const detail = { kind: "edit" as const, path: "src/a.ts" };
+    // A change list whose entries carry a unified diff (e.g. Codex apply_patch).
+    const list = formatTool("apply_patch", { changes: [
+      { path: "src/a.ts", kind: { type: "update" }, diff: "--- a/src/a.ts\n+++ b/src/a.ts\n@@ -1,3 +1,3 @@\n keep\n-old\n+new\n tail\n" },
+      { path: "src/b.ts", kind: { type: "add" }, diff: "+line one\n+line two" },
+    ] }, detail);
+    expect(list.diffs.map((d) => [d.label, d.oldText, d.newText])).toEqual([
+      ["src/a.ts", "keep\nold\ntail", "keep\nnew\ntail"],
+      ["src/b.ts", "", "line one\nline two"],
+    ]);
+    expect([list.added, list.removed]).toEqual([3, 1]);
+    // A map keyed by path, with an unmarked whole file for an add.
+    const map = formatTool("apply_patch", { changes: { "README.md": { type: "add", unified_diff: "- a list item\n- another" } } }, detail);
+    expect(map.diffs.map((d) => [d.oldText, d.newText])).toEqual([["", "- a list item\n- another"]]);
+  });
+
   it("renders a shell detail as a command even when input lacks a known key", () => {
     const f = formatTool("local_shell", { argv_hidden: true }, { kind: "shell", command: "git status" });
     expect(f.verb).toBe("Ran");

@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Edits that arrive as diff text now render as a diff, in approval cards and in the transcript: a change list or path-keyed map whose entries carry a unified diff (`diff`, `unified_diff`, `patch`, e.g. Codex's `apply_patch`), or a whole added or deleted file. Each file of a multi-file patch is titled with its path.
+
 ### Security
 - Signing a device out under Settings → Account now also revokes its control-plane session, not just its pairing record. A session is tied to the device key it pairs a machine with, so a device that paired before this change is only tied once it pairs again.
 
