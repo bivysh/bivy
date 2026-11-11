@@ -221,6 +221,23 @@ test("a run whose program reports its status pushes what it needs, and the quiet
   assert.equal(hints.at(-1).kind, "session_done");
 });
 
+test("status that flips back and forth pushes once per kind per cooldown", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+  const hints: any[] = [];
+  const terminals = fakeTerminals({ meta: () => ({ kind: "run", agent: "codex", name: "Fix login", sessionId: "sess-1" }), reportsStatus: () => true });
+  const { rt, emit } = harness({ terminals, sendNotificationHint: (hint: unknown) => hints.push(hint) });
+  await rt.openRunTerminal({ command: "codex", args: [], agent: "codex", sessionId: "sess-1" }, emit);
+  const opened = terminals.calls.open[0];
+  for (let i = 0; i < 50; i++) {
+    opened.onStatus({ state: "blocked", kind: "permission" });
+    opened.onStatus({ state: "working" });
+  }
+  assert.equal(hints.length, 1, "a flood of reports is one push");
+  t.mock.timers.tick(60_000);
+  opened.onStatus({ state: "blocked", kind: "permission" });
+  assert.equal(hints.length, 2, "after the cooldown it calls back again");
+});
+
 test("takeover retries a lazily persisted Pi session", async () => {
   const createdAt = Date.now();
   const terminals = fakeTerminals({
