@@ -752,15 +752,20 @@ export function AutomationsView({
     });
   }
 
+  // Throws on failure, so a caller drawn over the page (the editor) can show
+  // the error where the person is looking; `toggle` reports it on the page.
+  async function toggleOrThrow(item: AccountAutomation) {
+    await updateAutomation(controller.local, item.id, { enabled: !item.enabled });
+    await refresh();
+    setNotice({
+      tone: "ok",
+      title: item.enabled ? `Paused “${item.name}”` : `Resumed “${item.name}”`,
+      ...(item.configKey ? { body: `Until the next bivy automation apply, which sets it back to what .bivy/automations.yaml says.` } : {}),
+    });
+  }
+
   async function toggle(item: AccountAutomation) {
-    try {
-      await updateAutomation(controller.local, item.id, { enabled: !item.enabled });
-      await refresh();
-      setNotice({
-        tone: "ok",
-        title: item.enabled ? `Paused “${item.name}”` : `Resumed “${item.name}”`,
-      });
-    } catch (e) { setError(String((e as Error).message || e)); }
+    try { await toggleOrThrow(item); } catch (e) { setError(String((e as Error).message || e)); }
   }
 
   async function moveSourceAutomation(item: AccountAutomation, direction: -1 | 1) {
@@ -1209,7 +1214,7 @@ export function AutomationsView({
           existing={draft.id ? items.find((item) => item.id === draft.id) : undefined}
           onRunNow={runNow}
           runBusy={Boolean(dispatchingId)}
-          onToggle={toggle}
+          onToggle={toggleOrThrow}
           onDelete={async (item) => { if (await remove(item)) setDraft(null); }}
           onHistory={(id) => { setDraft(null); setHistoryAutomationId(id); }}
           onRotate={rotate}
@@ -1772,7 +1777,9 @@ function AutomationEditor({
   const [pickerOpen, setPickerOpen] = useState(false);
   const [nlError, setNlError] = useState("");
   const [error, setError] = useState("");
+  const [toggleNote, setToggleNote] = useState("");
   const [busy, setBusy] = useState(false);
+  const actionsRef = useRef<HTMLDetailsElement>(null);
   const [managedTarget, setManagedTarget] = useState<Awaited<ReturnType<typeof controller.managedAutomationTarget>> | null>(null);
   // Bivy Cloud holds its own key: before instructions can be sealed to it, the
   // machine is woken and this device pairs with it.
@@ -1788,6 +1795,18 @@ function AutomationEditor({
   useModalEscape(closeWithBack);
   useModalFocus(editorRef);
   const set = <K extends keyof Draft>(k: K, v: Draft[K]) => setD((prev) => ({ ...prev, [k]: v }));
+  // The page's own notice/error sit behind this modal, so report here.
+  async function toggleFromEditor(item: AccountAutomation) {
+    if (actionsRef.current) actionsRef.current.open = false;
+    setError("");
+    setToggleNote("");
+    try {
+      await onToggle?.(item);
+      setToggleNote(item.enabled
+        ? `Paused. It won't run until you resume it${item.configKey ? " or the next bivy automation apply" : ""}.`
+        : "Resumed.");
+    } catch (e) { setError(String((e as Error).message || e)); }
+  }
   const preflight = useAutomationPreflight(d.id || undefined);
 
   const tzList = useMemo(() => timezoneOptions(d.timezone), [d.timezone]);
@@ -2094,11 +2113,11 @@ function AutomationEditor({
           <button type="button" className="btn ghost icon" onClick={closeWithBack} aria-label={d.id ? "Back to automation" : "Back to new automation"}><ChevronLeftIcon /></button>
           <strong>{created ? "Webhook ready" : d.id ? "Edit automation" : "New automation"}</strong>
           {existing && !created && (
-            <details className="autom-editor-actions">
+            <details ref={actionsRef} className="autom-editor-actions">
               <summary className="btn sm" aria-label="Automation actions">Actions</summary>
               <div className="menu row-menu-pop" role="menu">
                 {onRunNow && <button type="button" className="menu-item" role="menuitem" disabled={runBusy} onClick={() => void onRunNow(existing)}>{runBusy ? "Queueing…" : existing.trigger === "webhook" ? "Test run" : "Run now"}</button>}
-                {onToggle && <button type="button" className="menu-item" role="menuitem" onClick={() => void onToggle(existing)}>{existing.enabled ? "Pause" : "Resume"}</button>}
+                {onToggle && <button type="button" className="menu-item" role="menuitem" onClick={() => void toggleFromEditor(existing)}>{existing.enabled ? "Pause" : "Resume"}</button>}
                 {onHistory && <button type="button" className="menu-item automation-history-btn" role="menuitem" onClick={() => onHistory(existing.id)}>History</button>}
                 {existing.webhookUrl && <button type="button" className="menu-item" role="menuitem" onClick={() => { void copyText(existing.webhookUrl!); }}>Copy URL</button>}
                 {existing.trigger === "webhook" && onRotate && <button type="button" className="menu-item" role="menuitem" onClick={() => void onRotate(existing)}>Rotate secret</button>}
@@ -2151,6 +2170,7 @@ function AutomationEditor({
         ) : (
           <>
             <div className="wizard-body">
+              {toggleNote && <div className="banner inline" data-tone="ok" role="status">{toggleNote}</div>}
               <div className="autom-name-row">
                 <span className="autom-name-icon" aria-hidden="true"><IconBolt /></span>
                 <input

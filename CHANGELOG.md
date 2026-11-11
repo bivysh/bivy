@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Pause and Resume now work on automations managed by `.bivy/automations.yaml`. The control plane refused the change and the error showed behind the editor, so the button seemed to do nothing. Pausing is allowed from the app; the next `bivy automation apply` sets it back to what the file says. The editor now shows the result, or the error, in place.
+
 ## [0.22.16] - 2026-11-11
 
 ### Added
