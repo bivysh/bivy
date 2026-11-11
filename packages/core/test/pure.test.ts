@@ -73,6 +73,11 @@ describe("markdown", () => {
     expect(toHtml("# Title")).toBe("<h1>Title</h1>");
     expect(inline("**bold** <script>")).toBe("<strong>bold</strong> &lt;script&gt;");
   });
+  it("shows a masked credential as a badge, and leaves it literal in code", () => {
+    const html = inline("token is ***REDACTED*** and `***REDACTED***`, **still bold**");
+    expect(html).toMatch(/^token is <span class="badge secret-hidden"[^>]*>secret hidden<\/span> and <code>\*\*\*REDACTED\*\*\*<\/code>, <strong>still bold<\/strong>$/);
+    expect(html).not.toContain("<em>");
+  });
   it("renders fenced code without interpreting markup", () => {
     expect(toHtml("```\n<b>&\n```")).toBe('<pre><code>&lt;b&gt;&amp;</code></pre>');
   });
