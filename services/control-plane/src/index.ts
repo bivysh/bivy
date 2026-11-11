@@ -3608,7 +3608,11 @@ app.put("/account/automations/:id", automationWriteRateLimit, asyncHandler(async
   if (!client) return res.status(401).json({ error: "Unauthorized" });
   const current = await store.getAutomationDefinition(client.accountId, String(req.params.id));
   if (!current) return res.status(404).json({ error: "Automation not found" });
-  if (current.configKey) return res.status(409).json({ error: `Automation is managed by .bivy/automations.yaml (${current.configKey})` });
+  // The file owns a managed automation's definition; pausing/resuming is
+  // operational state, so an `enabled`-only update is allowed. The next
+  // `bivy automation apply` sets it back to the file's value.
+  const pauseOnly = Object.keys(req.body ?? {}).every((key) => key === "enabled") && typeof req.body?.enabled === "boolean";
+  if (current.configKey && !pauseOnly) return res.status(409).json({ error: `Automation is managed by .bivy/automations.yaml (${current.configKey})` });
   const isScheduled = !current.trigger || current.trigger === "schedule";
   const enabled = typeof req.body?.enabled === "boolean" ? req.body.enabled : current.enabled;
   // Non-schedule automations have no cron; enabling/disabling just gates intake.

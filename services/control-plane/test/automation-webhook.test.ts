@@ -93,6 +93,8 @@ async function main() {
   expect(unauthorizedCliList.status === 401, "listing automations requires node authentication");
   const pwaEdit = await json(port, "PUT", `/account/automations/${managed.body.id}`, { name: "UI overwrite" }, token);
   expect(pwaEdit.status === 409, "the account/PWA API cannot overwrite a file-managed automation");
+  const pwaPause = await json(port, "PUT", `/account/automations/${managed.body.id}`, { enabled: false }, token);
+  expect(pwaPause.status === 200 && pwaPause.body.enabled === false && pwaPause.body.name === "Managed CI updated", "the PWA can pause a file-managed automation without touching its definition");
   const pwaDelete = await json(port, "DELETE", `/account/automations/${managed.body.id}`, undefined, token);
   expect(pwaDelete.status === 409, "the account/PWA API cannot delete a file-managed automation");
   const wrongNode = await json(port, "PUT", "/node/automation-config/wrong-node", { ...managedInput, configKey: "wrong-node", templateCiphertext: "bivy-room-v1:somebody-else:opaque" }, nodeToken);
