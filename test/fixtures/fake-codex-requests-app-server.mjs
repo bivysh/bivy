@@ -47,7 +47,9 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
       { id: "m-plain", displayName: "Plain model", hidden: false, supportedReasoningEfforts: [], defaultReasoningEffort: "medium" },
     ] });
     case "thread/start": return reply({ thread: { id: thread } });
-    case "thread/settings/update": return reply({});
+    // Answered late, like a busy app-server: a message sent right after a pick
+    // must not wait on this reply to carry the new settings.
+    case "thread/settings/update": { setTimeout(() => reply({}), 300); return; }
     case "turn/steer": reply({ turnId: message.params.expectedTurnId }); return finish();
     case "turn/start": {
       turns += 1;

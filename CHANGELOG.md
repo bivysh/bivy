@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - A credential Bivy masked before saving a conversation now shows as a "secret hidden" badge in the chat, instead of the bold-italic "REDACTED" that markdown made of `***REDACTED***`. Inside code it stays literal.
+- Codex: a message sent right after picking a reasoning effort or model now runs with that pick. The choice used to apply only once Codex confirmed the settings change, so a quick send could still go out with the old one.
 - A terminal's window-title updates no longer count as a terminal bell. The BEL that ends an escape sequence used to send "rang the terminal bell" notifications.
 
 ### Changed
