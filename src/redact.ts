@@ -11,6 +11,7 @@
 // based and structure-preserving: it only ever shortens string *values*, so the
 // surrounding JSON stays valid.
 
+// The chat renders this exact mark as a "secret hidden" badge (packages/core/src/markdown.ts).
 const REDACTED = "***REDACTED***";
 
 // GitHub tokens in all current shapes:

@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Terminal agents now tell Bivy when they need you. Claude Code, Codex, Grok and Pi report their state to the terminal (OSC 7501), and Bivy now answers the query that turns those reports on. A `bivy run` row in the sidebar shows whether the agent is working, waiting for your approval, a question or a sign-in, finished, or stopped with an error, and rows that need you sort first. Your phone is notified at those moments instead of after 30 seconds of quiet, which remains the fallback for agents that don't report. Each kind of notification goes out at most once per 45 seconds per terminal, so output that keeps flipping the reported state can't flood your phone. Terminals also understand OSC 9;4 progress and OSC 9/777/99 desktop notifications.
 
 ### Fixed
+- A credential Bivy masked before saving a conversation now shows as a "secret hidden" badge in the chat, instead of the bold-italic "REDACTED" that markdown made of `***REDACTED***`. Inside code it stays literal.
 - A terminal's window-title updates no longer count as a terminal bell. The BEL that ends an escape sequence used to send "rang the terminal bell" notifications.
 
 ### Changed
