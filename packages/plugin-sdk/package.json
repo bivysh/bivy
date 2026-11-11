@@ -29,7 +29,7 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "semver": "^7.7.2",
+    "semver": "^7.8.6",
     "yaml": "^2.9.1"
   },
   "devDependencies": {
