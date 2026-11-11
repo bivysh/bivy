@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Claude Agent SDK 0.3.322 (Claude Code 2.1.322), Codex 0.167.1 and Pi 1.5.2.
+- Dependency patch updates: eslint 10.14, vitest 5.1, @vitejs/plugin-react 6.2, fake-indexeddb 6.2.7, @types/node 26.6.6; control plane cron-parser 5.10.3 and express-rate-limit 8.7.3; relay ws 8.22.1; pnpm/action-setup 6.1.1 in the release workflow.
 - Agents now know about the vault. Every session's Bivy note says that credentials saved for agents are there, names the keys saved right now (personal and team, names only, never values), and shows how to use one with `bivy secrets exec`. Agents look there before asking for a credential, so you no longer have to tell them it exists.
 
 ## [0.22.15] - 2026-11-10
