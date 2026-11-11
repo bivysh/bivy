@@ -247,6 +247,8 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
   const runIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
   const lastBellNotify = new Map<string, number>();
   const lastProgramStatus = new Map<string, ProgramStatus | undefined>();
+  /** When each status push last went out, per terminal and push key. */
+  const lastStatusPush = new Map<string, Map<string, number>>();
 
   function hasRunTerminal(id: string): boolean {
     return runTerminals.has(id);
@@ -371,6 +373,7 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
   function clearBellNotify(id: string) {
     lastBellNotify.delete(id);
     lastProgramStatus.delete(id);
+    lastStatusPush.delete(id);
   }
 
   function terminalName(id: string, fallback: string): string {
@@ -388,10 +391,19 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
       clearRunIdleNotify(id);
       deps.broadcast({ type: "terminal.status", termId: id, status: status ?? null, at: Date.now() });
     }
-    const push = STATUS_PUSHES[statusPushKey(previous, status) ?? ""];
+    const key = statusPushKey(previous, status) ?? "";
+    const push = STATUS_PUSHES[key];
     if (!push) return;
+    const now = Date.now();
     const lastInput = terminals.lastInput(id);
-    if (lastInput != null && Date.now() - lastInput < BELL_QUIET_INPUT_MS) return; // they're at the keyboard
+    if (lastInput != null && now - lastInput < BELL_QUIET_INPUT_MS) return; // they're at the keyboard
+    // Anything the PTY prints can carry a status report (a file the agent cats,
+    // a test's output), so states that flip back and forth must not fan out
+    // into a push each time: one push per kind per cooldown, like the bell.
+    const sent = lastStatusPush.get(id) ?? new Map<string, number>();
+    if (now - (sent.get(key) ?? -Infinity) < BELL_NOTIFY_COOLDOWN_MS) return;
+    sent.set(key, now);
+    lastStatusPush.set(id, sent);
     const who = terminalName(id, "An agent");
     deps.sendNotificationHint({ kind: push.kind, title: push.title(who), body: push.body(who), ...runTarget(id) });
   }
@@ -508,6 +520,7 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
         onStatus: isSession ? (status) => onProgramStatus(id, status) : undefined,
         onExit: (code, _signal, scrollback) => {
           lastProgramStatus.delete(id);
+          lastStatusPush.delete(id);
           runTerminals.delete(id);
           runViewers.delete(id);
           lastActivityPing.delete(id);
