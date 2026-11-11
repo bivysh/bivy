@@ -780,9 +780,11 @@ async function onBivyCommand(msg) {
         }
         // An effort the new model doesn't offer falls back to its default.
         const keepEffort = selectedEffort && modelEfforts.get(model)?.levels.includes(selectedEffort);
-        if (threadId) await asRequest("thread/settings/update", { threadId, model, ...(keepEffort ? {} : { effort: null }) });
+        // Recorded before the update round-trips: a message sent right after the
+        // pick must start its turn with it (turn/start carries both).
         selectedModel = model;
         if (!keepEffort) selectedEffort = null;
+        if (threadId) await asRequest("thread/settings/update", { threadId, model, ...(keepEffort ? {} : { effort: null }) });
         bivy({ replyTo: id, ok: true, model });
         publishEfforts();
         return;
@@ -793,8 +795,10 @@ async function onBivyCommand(msg) {
           bivy({ replyTo: id, ok: false, error: "unknown reasoning effort: " + (level || "(empty)") });
           return;
         }
-        if (threadId) await asRequest("thread/settings/update", { threadId, effort: level });
+        // Fire-and-forget on Bivy's side, so record it first: the next turn/start
+        // must carry it even if it goes out before this update is answered.
         selectedEffort = level;
+        if (threadId) await asRequest("thread/settings/update", { threadId, effort: level });
         bivy({ replyTo: id, ok: true });
         return;
       }
