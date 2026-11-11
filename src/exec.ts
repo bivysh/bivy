@@ -44,44 +44,66 @@ One-shot headless turn: prints the final answer to stdout, progress to stderr.
       --json             Print {"sessionId","answer"} instead of plain text
       --timeout <sec>    Give up after this many seconds (default 600)
   -h, --help             Show this help
+      --                 Everything after this is prompt text, even if it starts with -
 `;
 
 const err = (s: string) => process.stderr.write(s);
 
-function parseArgs(argv: string[]): Args {
-  let url = process.env.BIVY_URL || `http://localhost:${process.env.PORT || "4317"}`;
-  let token = process.env.BIVY_DEVICE_TOKEN || undefined;
-  let agent: string | undefined;
-  let model: string | undefined;
-  let session: string | undefined;
-  let name: string | undefined;
-  let workspace: string | undefined;
-  let json = false;
-  let help = false;
-  let timeoutMs = Number(process.env.BIVY_EXEC_TIMEOUT_MS) || 10 * 60 * 1000;
+/** One row per option: its names, and whether it takes a value. */
+const OPTIONS: Array<{ key: string; names: string[]; value: boolean }> = [
+  { key: "url", names: ["--url"], value: true },
+  { key: "token", names: ["--token"], value: true },
+  { key: "agent", names: ["-a", "--agent"], value: true },
+  { key: "model", names: ["-m", "--model"], value: true },
+  { key: "session", names: ["--session"], value: true },
+  { key: "name", names: ["-n", "--name"], value: true },
+  { key: "workspace", names: ["-w", "--workspace"], value: true },
+  { key: "timeout", names: ["--timeout"], value: true },
+  { key: "json", names: ["--json"], value: false },
+  { key: "help", names: ["-h", "--help"], value: false },
+];
+
+/** Parse argv. An unknown flag, or a flag missing its value, is an error, so a
+ *  typo like `-s <id>` never becomes part of the prompt and starts a new session.
+ *  `-` (read stdin) and anything after `--` are prompt text. */
+function parseArgs(argv: string[]): Args | { error: string } {
+  const seen: Record<string, string | true> = {};
   const prompt: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
-    if (arg === "--url" && argv[i + 1]) url = argv[++i];
-    else if (arg.startsWith("--url=")) url = arg.slice("--url=".length);
-    else if (arg === "--token" && argv[i + 1]) token = argv[++i];
-    else if (arg.startsWith("--token=")) token = arg.slice("--token=".length);
-    else if ((arg === "-a" || arg === "--agent") && argv[i + 1]) agent = argv[++i];
-    else if (arg.startsWith("--agent=")) agent = arg.slice("--agent=".length);
-    else if ((arg === "-m" || arg === "--model") && argv[i + 1]) model = argv[++i];
-    else if (arg.startsWith("--model=")) model = arg.slice("--model=".length);
-    else if (arg === "--session" && argv[i + 1]) session = argv[++i];
-    else if (arg.startsWith("--session=")) session = arg.slice("--session=".length);
-    else if ((arg === "-n" || arg === "--name") && argv[i + 1]) name = argv[++i];
-    else if (arg.startsWith("--name=")) name = arg.slice("--name=".length);
-    else if ((arg === "-w" || arg === "--workspace") && argv[i + 1]) workspace = argv[++i];
-    else if (arg.startsWith("--workspace=")) workspace = arg.slice("--workspace=".length);
-    else if (arg === "--json") json = true;
-    else if (arg === "-h" || arg === "--help") help = true;
-    else if (arg === "--timeout" && argv[i + 1]) timeoutMs = Number(argv[++i]) * 1000;
-    else prompt.push(arg);
+    if (arg === "--") {
+      prompt.push(...argv.slice(i + 1));
+      break;
+    }
+    if (arg === "-" || !arg.startsWith("-")) {
+      prompt.push(arg);
+      continue;
+    }
+    const eq = arg.startsWith("--") ? arg.indexOf("=") : -1;
+    const flag = eq > 0 ? arg.slice(0, eq) : arg;
+    const option = OPTIONS.find((o) => o.names.includes(flag));
+    if (!option) return { error: `Unknown option ${flag}.` };
+    if (!option.value) seen[option.key] = true;
+    else if (eq > 0) seen[option.key] = arg.slice(eq + 1);
+    else if (i + 1 < argv.length) seen[option.key] = argv[++i];
+    else return { error: `${flag} needs a value.` };
   }
-  return { url: url.replace(/\/+$/, ""), token, agent, model, session, name, workspace, prompt: prompt.join(" "), json, timeoutMs, help };
+  const str = (key: string) => (typeof seen[key] === "string" ? (seen[key] as string) : undefined);
+  const url = str("url") || process.env.BIVY_URL || `http://localhost:${process.env.PORT || "4317"}`;
+  const timeout = str("timeout");
+  return {
+    url: url.replace(/\/+$/, ""),
+    token: str("token") || process.env.BIVY_DEVICE_TOKEN || undefined,
+    agent: str("agent"),
+    model: str("model"),
+    session: str("session"),
+    name: str("name"),
+    workspace: str("workspace"),
+    prompt: prompt.join(" "),
+    json: seen.json === true,
+    timeoutMs: timeout ? Number(timeout) * 1000 : Number(process.env.BIVY_EXEC_TIMEOUT_MS) || 10 * 60 * 1000,
+    help: seen.help === true,
+  };
 }
 
 function authHeaders(token?: string): Record<string, string> {
@@ -133,6 +155,10 @@ async function readStdin(): Promise<string> {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
+  if ("error" in args) {
+    err(`${args.error}\n\n${USAGE}`);
+    process.exit(2);
+  }
   if (args.help) {
     process.stdout.write(USAGE);
     return;

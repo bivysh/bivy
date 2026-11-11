@@ -234,6 +234,15 @@ await check("--model with --session switches the existing session's model", asyn
   });
 });
 
+await check("an unknown flag exits 2 without starting a session, instead of joining the prompt", async () => {
+  await withFakeDaemon("complete-normally", async (url, probe) => {
+    const { code, stderr } = await runExec(url, ["-s", "sess-fake-1"]);
+    assert.equal(code, 2);
+    assert.match(stderr, /Unknown option -s/);
+    assert.equal(probe.body, undefined, "no session may be created");
+  });
+});
+
 await check("a follow-up exec into the same session runs its turn instead of waiting forever", async () => {
   await withFakeDaemon("complete-normally", async (url) => {
     assert.equal((await runExec(url, ["--session", "sess-fake-1"])).code, 0);
