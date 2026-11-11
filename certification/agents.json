@@ -32,11 +32,11 @@
       "id": "codex-approvals",
       "name": "Codex (governed)",
       "status": "active",
-      "upstream": { "package": "@openai/codex", "pinnedVersion": "0.167.1", "supportedRange": ">=0.167.1 <=0.167.1" },
+      "upstream": { "package": "@openai/codex", "pinnedVersion": "0.167.2", "supportedRange": ">=0.167.2 <=0.167.2" },
       "platforms": ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"],
       "executionMode": "protocol",
       "probe": { "command": "codex", "args": ["--version"] },
-      "install": { "command": "npm", "args": ["install", "--global", "@openai/codex@0.167.1"] },
+      "install": { "command": "npm", "args": ["install", "--global", "@openai/codex@0.167.2"] },
       "auth": { "owner": "agent", "allowedEnvironment": ["OPENAI_API_KEY"] },
       "capabilities": ["toolInterception", "modelSelection", "resume", "attachments", "cancellation", "structuredStreaming", "tokenRefresh"]
     },
