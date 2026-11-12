@@ -289,6 +289,9 @@ export interface TranscriptEntry {
    *  attachmentsByText below), so this is populated from the client's own
    *  send-time cache, not from history data. */
   attachments?: PromptAttachment[];
+  /** When a user message was sent (epoch ms): the history message's own
+   *  timestamp, or the moment this client saw it live. */
+  sentAt?: number;
   /** These attachments are images a tool returned (a screenshot the agent read),
    *  shown beside its card — part of the tool's output, not files the agent sent. */
   toolOutput?: boolean;
@@ -2254,6 +2257,7 @@ export class SessionStore {
       role: "user",
       text,
       html: toHtml(text),
+      sentAt: Date.now(),
       ...(attachments && attachments.length ? { attachments } : {}),
     };
     if (clientMessageId) {
@@ -2526,7 +2530,7 @@ export class SessionStore {
           return;
         }
         const text = String(e.text || "");
-        this.pushEntry({ id: nextId(), role: "user", text, html: toHtml(text) });
+        this.pushEntry({ id: nextId(), role: "user", text, html: toHtml(text), sentAt: Date.now() });
         // A message from another client on this session is exactly as much
         // "the user wrote a message" as our own optimistic send already bumps
         // in addUserMessage — keep the sidebar ordering in sync for it too.

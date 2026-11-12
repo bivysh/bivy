@@ -663,6 +663,17 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
   box-shadow: inset 0 0 0 1px var(--line); padding: var(--space-2) var(--space-3); border-radius: var(--radius-xl); white-space: pre-wrap;
   max-width: min(85%, 42rem);
 }
+/* When a user message was sent: in the row gap under its bubble, shown on hover
+   (pointer) or after a tap (data-show-time), so it adds no height. line-height 1
+   keeps it inside the chat's 14px row gap. */
+.msg.user { position: relative; }
+.msg-time {
+  position: absolute; top: 100%; right: var(--space-3); padding-top: 1px;
+  white-space: nowrap; font-size: var(--text-xs); line-height: 1; color: var(--muted);
+  opacity: 0; transition: opacity var(--dur-fast) var(--ease-standard); pointer-events: none;
+}
+.msg.user[data-show-time] .msg-time { opacity: 1; }
+@media (hover: hover) { .msg.user:hover .msg-time { opacity: 1; } }
 /* A long sent message folds to ten wrapped lines behind "Show full". */
 .msg-fold[data-folded] { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 10; overflow: hidden; }
 .msg-fold-toggle { display: block; margin-top: var(--space-1); }

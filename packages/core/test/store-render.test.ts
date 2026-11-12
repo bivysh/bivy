@@ -185,3 +185,14 @@ describe("renderHistory entry ids", () => {
     expect(new Set(next).size).toBe(next.length);
   });
 });
+
+describe("renderHistory sent times", () => {
+  it("carries a user message's own time (epoch ms or ISO) and omits a missing one", () => {
+    const users = renderHistory([
+      { role: "user", content: "a", timestamp: 1793408803479 },
+      { role: "user", content: "b", timestamp: "2026-11-03T01:00:00.000Z" },
+      { role: "user", content: "c" },
+    ]).filter((e) => e.role === "user");
+    expect(users.map((e) => e.sentAt)).toEqual([1793408803479, Date.parse("2026-11-03T01:00:00.000Z"), undefined]);
+  });
+});
