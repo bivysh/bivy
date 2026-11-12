@@ -46,6 +46,17 @@ export function skillPrompt(command: SlashCommand, args: string): string {
   return args ? `${ask}\n\n${args}` : ask;
 }
 
+const SKILL_PROMPT = /^Use the "([^"\s]+)" skill\. Read it first with `bivy skill show \1` \(or the bivy_skill tool\)\.(?:\n\n([\s\S]*))?$/;
+
+/** The "/name args" line a `skillPrompt` was sent from, or null for any other
+ *  text. The transcript only holds what the agent received, so the chat uses
+ *  this to show the user's message the way they typed it. */
+export function skillInvocationOf(text: string): string | null {
+  const m = SKILL_PROMPT.exec(text);
+  if (!m) return null;
+  return m[2] ? `/${m[1]} ${m[2]}` : `/${m[1]}`;
+}
+
 export interface ParsedSlash {
   /** Command name (lower-cased), including the leading slash. */
   name: string;
