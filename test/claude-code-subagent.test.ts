@@ -152,4 +152,17 @@ async function newSession() {
   assert.deepEqual(events.find((e) => e.type === "agent_retry"), { type: "agent_retry", attempt: 2, maxAttempts: 10, delayMs: 1200, error: "overloaded (529)" });
 }
 
+// ── hooks: a hook heartbeat (tool_progress with a `hook-` id, SDK 0.3.323) and
+//    the hook lifecycle messages reach the client as agent_hook, never a tool card ──
+{
+  const { session, queries, events } = await newSession();
+  await session.prompt("hello");
+  await waitFor(() => queries.length === 1);
+  queries[0]!.emit({ type: "tool_progress", tool_use_id: "hook-1", tool_name: "PreToolUse", parent_tool_use_id: null, elapsed_time_seconds: 3, heartbeat: true });
+  queries[0]!.emit({ type: "system", subtype: "hook_response", hook_id: "h1", hook_name: "PreToolUse:Bash", hook_event: "PreToolUse", output: "", stdout: "", stderr: "", outcome: "success" });
+  await waitFor(() => events.filter((e) => e.type === "agent_hook").length === 2);
+  assert.deepEqual(events.filter((e) => e.type === "agent_hook"), [{ type: "agent_hook", hook: "PreToolUse" }, { type: "agent_hook", hook: "PreToolUse", done: true }]);
+  assert.ok(!events.some((e) => String(e.type).startsWith("tool_execution")), "a hook wait opens no tool card");
+}
+
 console.log("ok claude-code sub-agent nesting");

@@ -21,6 +21,8 @@
 //   "reconnect"      → an `error` with willRetry: true (Codex reconnecting on its
 //                      own), then the "ok" reply: the turn recovered and must
 //                      not end failed.
+//   "hook"           → hook/started + hook/completed for a preToolUse hook inside
+//                      the turn, and a sessionStart hook with no turnId, then "ok".
 //   "echo-developer-instructions" → the turn's reply is the developerInstructions
 //                      the thread was started/resumed with (empty when none).
 import readline from "node:readline";
@@ -80,6 +82,12 @@ rl.on("line", (line) => {
           turn: { id: "turn-1", status: "failed", error: { message: "You've hit your usage limit.", codexErrorInfo: "usageLimitExceeded" } },
         });
       } else {
+        if (MODE === "hook") {
+          const run = (eventName) => ({ id: `hook-${eventName}`, eventName, displayOrder: 0, entries: [], executionMode: "sync", handlerType: "command", scope: "turn", sourcePath: "/tmp/hooks.json", startedAt: 0, status: "running" });
+          notify("hook/started", { threadId: params?.threadId, turnId: null, run: run("sessionStart") });
+          notify("hook/started", { threadId: params?.threadId, turnId: "turn-1", run: run("preToolUse") });
+          notify("hook/completed", { threadId: params?.threadId, turnId: "turn-1", run: { ...run("preToolUse"), status: "completed" } });
+        }
         if (MODE === "reconnect") notify("error", { threadId: params?.threadId, turnId: "turn-1", willRetry: true, error: { message: "Reconnecting... 1/5 (stream disconnected before completion)" } });
         notify("item/agentMessage/delta", { itemId: "item-1", delta: MODE === "echo-input" ? JSON.stringify(params.input) : MODE === "echo-developer-instructions" ? developerInstructions || "(none)" : "BANANA" });
         notify("turn/completed", { threadId: params?.threadId });

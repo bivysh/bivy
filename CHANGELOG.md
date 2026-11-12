@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- While a turn waits on one of your hooks (a slow PreToolUse check, a Stop hook), the chat now says "Waiting on PreToolUse hook…" instead of looking stuck. This works for Claude Code and Codex. With Claude Agent SDK 0.3.323, a hook running longer than 30 seconds would also have opened a "PreToolUse" tool card that never finished.
+
+### Changed
+- Claude Agent SDK 0.3.323 (Claude Code 2.1.323).
+
 ## [0.22.17] - 2026-11-12
 
 ### Added

@@ -25,6 +25,7 @@ import type { RuntimeEvent, RuntimeMessage, UsageSnapshot } from "./types.js";
 import { mapToolCall, mapToolResult, type ToolCallMapContext } from "./tool-call-map.js";
 import { traceToolPayload } from "./tool-trace.js";
 import { agentRetryEvent } from "./retry.js";
+import { agentHookEvent } from "./hook.js";
 
 export interface CliParser {
   /** Feed one complete stdout line; return normalized events to emit. */
@@ -281,6 +282,8 @@ export function bivyProtocolParser(): CliParser {
         acc.addToolResult(String(msg.toolCallId ?? msg.tool_use_id ?? msg.id ?? ""), String(msg.name ?? "tool"), msg.result ?? msg.output ?? msg.content ?? msg.text, events);
       } else if (type === "session.retry") {
         events.push(agentRetryEvent(msg));
+      } else if (type === "session.hook") {
+        events.push(agentHookEvent(msg));
       } else if (type === "session.done") {
         acc.finish(events);
       } else if (type === "session.error") {

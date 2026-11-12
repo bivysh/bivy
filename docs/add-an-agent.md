@@ -97,6 +97,7 @@ agents:
 | `tool.result` | `toolCallId`, `result` | The tool card's output |
 | `usage` | `tokens` (`input_tokens`, `output_tokens`, …), `costUsd` | The session's usage |
 | `session.retry` | `error`, optional `attempt`, `maxAttempts`, `delayMs` | A "Retrying (2/5)…" status while the agent retries a failed model call itself |
+| `session.hook` | `hook` (the hook event, e.g. `PreToolUse`), optional `done: true` | A "Running PreToolUse hook…" status while the turn waits on one of the user's hooks |
 | `session.done` | | End of turn |
 | `session.error` | `error` | An error on the turn |
 
