@@ -246,6 +246,14 @@ export function embeddedAttachments(value: unknown): PromptAttachment[] {
  *  made opening a long session slow — deferring it to the visible window keeps
  *  the work proportional to what's on screen. (Live streaming still sets `html`
  *  as it drafts, so an in-flight turn paints without a per-entry render.) */
+/** A history message's time in epoch ms. Agents write `timestamp` (epoch ms
+ *  or ISO) or `ts`; Bivy's own sidecar entries write `createdAt`. */
+function messageTime(msg: any): number | undefined {
+  const raw = msg?.timestamp ?? msg?.ts ?? msg?.createdAt;
+  const ms = typeof raw === "number" ? raw : typeof raw === "string" ? Date.parse(raw) : NaN;
+  return Number.isFinite(ms) && ms > 0 ? ms : undefined;
+}
+
 export function renderHistory(messages: any[]): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
   const toolImages = new Set<string>();
@@ -276,7 +284,8 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
       // A tool_result's images are the tool's output (shown with its call
       // below), not something the user sent.
       const attachments = embeddedAttachments(Array.isArray(content) ? content.filter(block => !isToolResultBlock(block)) : content);
-      if ((text && !isMetaText(text)) || attachments.length) entries.push({ id: historyId(), role: "user", text, ...(attachments.length ? { attachments } : {}) });
+      const sentAt = messageTime(msg);
+      if ((text && !isMetaText(text)) || attachments.length) entries.push({ id: historyId(), role: "user", text, ...(attachments.length ? { attachments } : {}), ...(sentAt !== undefined ? { sentAt } : {}) });
     } else if (role === "system") {
       if (text && !isMetaText(text)) entries.push({ id: historyId(), role: "system", text });
     } else if (role === "toolresult" || role === "tool_result") {

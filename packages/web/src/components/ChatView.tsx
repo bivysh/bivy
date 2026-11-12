@@ -415,9 +415,10 @@ const EntryView = memo(function EntryView({
     // still sees that something was attached.
     const text = hasAttachments ? stripAttachmentPlaceholders(entry.text) : entry.text;
     return (
-      <div className="msg user" id={hasAttachments ? `msg-${entry.id}` : undefined}>
+      <div className="msg user" id={hasAttachments ? `msg-${entry.id}` : undefined} onClick={entry.sentAt ? toggleSentTime : undefined}>
         {hasAttachments && <MessageAttachments attachments={entry.attachments!} />}
         <FoldedPrompt id={entry.id} text={text} />
+        {entry.sentAt && <SentTime at={entry.sentAt} />}
       </div>
     );
   }
@@ -887,6 +888,28 @@ export function ChatView({
       )}
     </div>
   );
+}
+
+/** A tap on a sent message (not on a control inside it) shows when it was
+ *  sent; hover does the same with a pointer. */
+function toggleSentTime(event: ReactMouseEvent<HTMLDivElement>) {
+  if ((event.target as Element).closest("button, a, input, textarea, select, summary")) return;
+  if (window.getSelection()?.toString()) return;
+  const el = event.currentTarget;
+  if (el.hasAttribute("data-show-time")) el.removeAttribute("data-show-time");
+  else el.setAttribute("data-show-time", "");
+}
+
+/** When a user message was sent, beside its bubble: shown on hover or tap,
+ *  always in the accessibility tree. */
+function SentTime({ at }: { at: number }) {
+  const date = new Date(at);
+  const iso = date.toISOString();
+  const full = date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  // Within the last six days the weekday is unambiguous; older ones name the date.
+  const recent = Date.now() - at < 6 * 24 * 3600_000;
+  const label = recent ? formatLocalClock(iso) ?? full : date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return <time className="msg-time" dateTime={iso} title={full}>{label}</time>;
 }
 
 /**
