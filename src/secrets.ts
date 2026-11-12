@@ -6,6 +6,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { registerSecretValue } from "./redact.js";
 
 const exec = promisify(execFile);
 
@@ -216,6 +217,9 @@ export class SecretVault {
       ...encrypted,
     };
     writeJson(this.file, this.data);
+    // Whatever stores a local value (a secret card, a synced team key, a
+    // credential) also gets it masked in transcripts written from now on.
+    registerSecretValue(value);
   }
 
   set(id: string, valueOrRef: string, description?: string) {
