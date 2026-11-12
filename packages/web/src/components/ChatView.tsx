@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { applyPlanUpdate, formatLocalClock, handoffSeedOf, isRetryLabel, looksLikeAuthFailure, inline, looksLikeModelFailure, planUpdateOf, skillInvocationOf, stripAttachmentPlaceholders, toHtml, type PlanEntry, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
+import { applyPlanUpdate, formatLocalClock, handoffSeedOf, isOwnStatusLabel, looksLikeAuthFailure, inline, looksLikeModelFailure, planUpdateOf, skillInvocationOf, stripAttachmentPlaceholders, toHtml, type PlanEntry, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
 import { AppMessage } from "./AppMessage.js";
 import { ReviewCard } from "./ReviewCard.js";
@@ -798,8 +798,8 @@ export function ChatView({
   const tail = visible.at(-1);
   // Prose, streaming output, or a tool cluster already communicates progress;
   // reserve the generic dots for the gap before the agent emits anything — or
-  // for an agent retrying a failed model call, which nothing else shows.
-  const tailShowsProgress = Boolean(tail?.role === "assistant" || tail?.tool) && !isRetryLabel(workingLabel);
+  // for a status nothing else shows (a retry, a wait on the user's hook).
+  const tailShowsProgress = Boolean(tail?.role === "assistant" || tail?.tool) && !isOwnStatusLabel(workingLabel);
 
   const lastTurn = blocks.findLast((block) => block.kind === "turn");
   // One work line per turn between the prompt and the answer (see TurnWork).

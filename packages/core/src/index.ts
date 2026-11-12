@@ -163,7 +163,8 @@ export {
 export {
   foldTranscriptEvent,
   freshTranscriptDraft,
-  isRetryLabel,
+  isOwnStatusLabel,
+  hookLabel,
   retryLabel,
   type TranscriptDraftValue,
   type TranscriptFoldCommand,

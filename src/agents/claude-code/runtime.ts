@@ -44,6 +44,7 @@ import type {
 import { withExactCapabilitySurface } from "../../runtime/types.js";
 import { mapToolCall, mapToolResult } from "../../runtime/tool-call-map.js";
 import { agentRetryEvent } from "../../runtime/retry.js";
+import { agentHookEvent } from "../../runtime/hook.js";
 import { resolveExecutable } from "../../executable.js";
 import fs from "node:fs";
 import { depCacheEnv } from "../../harness/dep-cache.js";
@@ -1019,6 +1020,9 @@ class ClaudeSession implements RuntimeSession {
     const options: Record<string, unknown> = {
       cwd: this.cwd,
       includePartialMessages: true,
+      // hook_started / hook_response for every hook, so the chat can say the
+      // turn is waiting on one of the user's hooks and when it is done.
+      includeHookEvents: true,
       // Native exec sandbox: map the node's tier to the SDK permission mode.
       // "default" keeps canUseTool gating risky tools (and, for danger-full-
       // access, blanket-allowing them — see fullAccess above); "plan" makes a
@@ -1411,6 +1415,13 @@ class ClaudeSession implements RuntimeSession {
         // reported once, reliably, by the tool_result echo in `case "user"`
         // above — this case only ever means "still running".
         const toolUseId: string = message.tool_use_id;
+        // SDK 0.3.323+ also pings while the turn waits on a long-running hook:
+        // `tool_name` is the hook event and the id begins `hook-`. No tool runs
+        // and no tool_result will ever close it, so it is a status, not a card.
+        if (typeof toolUseId === "string" && toolUseId.startsWith("hook-")) {
+          this.emit(agentHookEvent({ hook: message.tool_name }));
+          break;
+        }
         const type: RuntimeEvent["type"] = this.runningTools.has(toolUseId) ? "tool_execution_update" : "tool_execution_start";
         this.runningTools.add(toolUseId);
         this.emit({ type, toolName: message.tool_name, toolUseId, input: { elapsedSeconds: message.elapsed_time_seconds } });
@@ -1479,6 +1490,12 @@ class ClaudeSession implements RuntimeSession {
           const reason = message.no_response ? "no response" : String(message.error ?? "").replace(/_/g, " ");
           const status = typeof message.error_status === "number" ? ` (${message.error_status})` : "";
           this.emit(agentRetryEvent({ attempt: message.attempt, maxAttempts: message.max_retries, delayMs: message.retry_delay_ms, error: reason && reason !== "unknown" ? `${reason}${status}` : status.trim() }));
+          break;
+        }
+        // A hook starting, writing output, or finishing (includeHookEvents):
+        // the same status the hook heartbeat in `tool_progress` gives.
+        if (message?.subtype === "hook_started" || message?.subtype === "hook_progress" || message?.subtype === "hook_response") {
+          this.emit(agentHookEvent({ hook: message.hook_event, done: message.subtype === "hook_response" }));
           break;
         }
         // The disk filled up (or hit its quota), so Claude Code lost transcript

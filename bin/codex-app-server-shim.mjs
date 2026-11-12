@@ -576,6 +576,15 @@ function onNotification(m) {
       maybeFinishCompletedTurn();
       return;
     }
+    // One of the user's hooks is running in this turn (a preToolUse check, a
+    // stop hook, …): a status, so the turn doesn't look stuck. Thread-scoped
+    // hooks (sessionStart) carry no turnId and run outside any turn.
+    case "hook/started":
+    case "hook/completed":
+      if (fromCurrentThread && params?.turnId && params?.run?.eventName) {
+        bivy({ type: "session.hook", hook: params.run.eventName, ...(method === "hook/completed" ? { done: true } : {}) });
+      }
+      return;
     case "thread/tokenUsage/updated":
       if (fromCurrentThread && params?.tokenUsage) bivy({ type: "usage", usage: params.tokenUsage.last ?? params.tokenUsage.total ?? params.tokenUsage });
       return;

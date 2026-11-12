@@ -35,6 +35,7 @@ import { extractTokenUsage } from "./cli-parsers.js";
 import { mapToolCall, mapToolResult } from "./tool-call-map.js";
 import { stripAnsi } from "./ansi.js";
 import { agentRetryEvent } from "./retry.js";
+import { agentHookEvent } from "./hook.js";
 
 /** A tool message's sub-agent parent (`parentToolCallId`), spread into the
  *  runtime event and persisted block so delegated work nests under its call. */
@@ -930,6 +931,10 @@ class ProtocolSession implements RuntimeSession {
     }
     if (type === "session.retry") {
       this.emit(agentRetryEvent(msg));
+      return;
+    }
+    if (type === "session.hook") {
+      this.emit(agentHookEvent(msg));
       return;
     }
     if (type === "session.status") {

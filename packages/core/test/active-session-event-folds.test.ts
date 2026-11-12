@@ -5,6 +5,7 @@ import {
   foldAttentionEvent,
   foldTranscriptEvent,
   freshTranscriptDraft,
+  isOwnStatusLabel,
   type TranscriptFoldValue,
 } from "../src/index.js";
 
@@ -73,6 +74,13 @@ describe("active-session pure event folds", () => {
     const retry = foldTranscriptEvent(transcriptValue(), { type: "agent_retry", attempt: 2, maxAttempts: 5, error: "Reconnecting... 2/5 (stream disconnected before completion)\nmore" }, 1);
     expect(retry.value).toMatchObject({ working: true, workingLabel: "Retrying (2/5): Reconnecting... 2/5 (stream disconnected before completion)…", transcript: [] });
     expect(foldTranscriptEvent(transcriptValue(), { type: "agent_retry" }, 1).value.workingLabel).toBe("Retrying…");
+  });
+
+  it("shows a wait on the user's hook as the working status until the hook ends", () => {
+    const running = foldTranscriptEvent(transcriptValue(), { type: "agent_hook", hook: "PreToolUse" }, 1).value;
+    expect(running).toMatchObject({ working: true, workingLabel: "Waiting on PreToolUse hook…", transcript: [] });
+    expect(isOwnStatusLabel(running.workingLabel)).toBe(true);
+    expect(foldTranscriptEvent(running, { type: "agent_hook", hook: "PreToolUse", done: true }, 2).value.workingLabel).toBe("Thinking…");
   });
 
   it("a mid-stream message_start keeps one bubble instead of orphaning + duplicating it", () => {

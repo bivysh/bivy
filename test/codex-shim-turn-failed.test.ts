@@ -40,7 +40,7 @@ function waitFor(events: RuntimeEvent[], pred: (event: RuntimeEvent) => boolean,
   });
 }
 
-function makeRuntime(mode: "ok" | "fail" | "usage-limit" | "reconnect" | "echo-input" | "echo-developer-instructions"): ProtocolRuntime {
+function makeRuntime(mode: "ok" | "fail" | "usage-limit" | "reconnect" | "hook" | "echo-input" | "echo-developer-instructions"): ProtocolRuntime {
   return new ProtocolRuntime({
     id: "codex-approvals",
     displayName: "Codex",
@@ -133,6 +133,20 @@ test("a Codex reconnect it recovers from shows as a retry, not a failed turn", a
     assert.deepEqual(retry, { type: "agent_retry", attempt: 1, maxAttempts: 5, error: "stream disconnected before completion" }, "the retry reaches the client as agent_retry");
     assert.ok(!events.some((event) => event.type === "session.error"), "a recovered turn emits no session.error");
     assert.equal((events.find((event) => event.type === "agent_end") as { error?: string }).error, undefined, "the turn ends clean");
+  } finally {
+    session.dispose();
+  }
+});
+
+test("a Codex hook in the turn shows as agent_hook; a thread-scoped hook does not", async () => {
+  const runtime = makeRuntime("hook");
+  const { session } = await runtime.createSession({ workspace: process.cwd(), toolInterceptor: async () => undefined });
+  const events: RuntimeEvent[] = [];
+  session.subscribe((event) => events.push(event));
+  try {
+    await session.prompt("say the word");
+    await waitFor(events, (event) => event.type === "agent_end");
+    assert.deepEqual(events.filter((event) => event.type === "agent_hook"), [{ type: "agent_hook", hook: "PreToolUse" }, { type: "agent_hook", hook: "PreToolUse", done: true }]);
   } finally {
     session.dispose();
   }
