@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { SecretVault, resolveSecret, defaultSecretsDir } from "../src/secrets.js";
+import { SecretVault, resolveSecret, defaultSecretsDir, teamKeyStore } from "../src/secrets.js";
+import { redactSecrets } from "../src/redact.js";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-secrets-"));
 const vault = new SecretVault(dir);
@@ -35,6 +36,14 @@ assert.equal(await vault.resolve("github.repo-token"), undefined);
   assert.throws(() => agentVault.deleteAgentSecret("github.repo-token"), /agents/);
   assert.equal(agentVault.deleteAgentSecret("STRIPE_API_KEY"), true);
   assert.equal(await agentVault.resolve("github.repo-token"), "ghp_node_token");
+}
+
+{
+  // A value stored after start (here a synced team key) is masked in what is
+  // persisted from then on, not only after the node restarts.
+  const teamDir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-secrets-team-"));
+  teamKeyStore(new SecretVault(teamDir)).set("OPENROUTER_KEY", "or-team-value-123456");
+  assert.equal(redactSecrets("token=or-team-value-123456"), "token=***REDACTED***");
 }
 
 // --- reliability: no silent data loss / regeneration on corruption ---

@@ -620,7 +620,11 @@ const agentQuestions = new AgentQuestions(questionManager, Date.now, (name, valu
   new SecretVault(appDir).setLocal(name, value, description);
   registerSecretValue(value);
 });
-try { for (const value of new SecretVault(appDir).localValues()) registerSecretValue(value); } catch {}
+const registerVaultValues = () => { try { for (const value of new SecretVault(appDir).localValues()) registerSecretValue(value); } catch {} };
+registerVaultValues();
+// Values another process stores (`bivy secrets set` in a terminal) are masked
+// too: re-read the vault when its file changes.
+fs.watchFile(new SecretVault(appDir).file, { interval: 5_000, persistent: false }, registerVaultValues);
 // `bivy automation apply` from an agent: an approval request like any other, so
 // the node's approval mode decides whether the user is asked ("never" applies
 // at once; autonomous asks, as for deploys). Either way the result lands in the
