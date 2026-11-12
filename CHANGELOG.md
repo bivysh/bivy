@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Pause and Resume now work on automations managed by `.bivy/automations.yaml`. The control plane refused the change and the error showed behind the editor, so the button seemed to do nothing. Pausing is allowed from the app; the next `bivy automation apply` sets it back to what the file says. The editor now shows the result, or the error, in place.
 - Settings → Keys for agents has its own lock icon, so it no longer looks like Providers & credentials in the menu.
+- A skill you run from the `/` menu now shows in the chat as you typed it (`/release-notes for v2`), not as the longer instruction Bivy sends the agent.
 - `bivy exec` now stops on an option it doesn't know, or one missing its value, and shows the usage. A typo like `-s <id>` used to become part of the prompt and start a new session instead of continuing the one you meant. Put `--` before a prompt that starts with `-`.
 
 ### Changed

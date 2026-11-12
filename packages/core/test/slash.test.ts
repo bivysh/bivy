@@ -8,6 +8,7 @@ import {
   resolveSlash,
   isValidAgentCommand,
   skillPrompt,
+  skillInvocationOf,
 } from "../src/slash.js";
 
 describe("isSlashInput", () => {
@@ -118,6 +119,10 @@ describe("resolveSlash", () => {
     if (res.kind === "agent") {
       expect(skillPrompt(res.command, res.args)).toBe('Use the "release-notes" skill. Read it first with `bivy skill show release-notes` (or the bivy_skill tool).\n\nfor v2');
     }
+    // The chat shows the sent prompt as the line the user typed.
+    if (res.kind === "agent") expect(skillInvocationOf(skillPrompt(res.command, res.args))).toBe("/release-notes for v2");
+    expect(skillInvocationOf(skillPrompt(skills[0], ""))).toBe("/release-notes");
+    expect(skillInvocationOf('Use the "x" skill. Read it first with `bivy skill show y` (or the bivy_skill tool).')).toBeNull();
     // An agent that advertises nothing still gets its own slashes forwarded.
     expect(resolveSlash(parseSlash("/review")!, skills)).toEqual({ kind: "unknown", name: "/review", hasCatalog: false });
   });

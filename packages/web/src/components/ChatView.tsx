@@ -2,7 +2,7 @@
 // Copyright (c) 2026 Petter André Sjulstad
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { applyPlanUpdate, formatLocalClock, handoffSeedOf, isRetryLabel, looksLikeAuthFailure, inline, looksLikeModelFailure, planUpdateOf, stripAttachmentPlaceholders, toHtml, type PlanEntry, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
+import { applyPlanUpdate, formatLocalClock, handoffSeedOf, isRetryLabel, looksLikeAuthFailure, inline, looksLikeModelFailure, planUpdateOf, skillInvocationOf, stripAttachmentPlaceholders, toHtml, type PlanEntry, type PromptAttachment, type TranscriptEntry } from "@bivy/core";
 import { Spinner } from "./Spinner.js";
 import { AppMessage } from "./AppMessage.js";
 import { ReviewCard } from "./ReviewCard.js";
@@ -413,7 +413,10 @@ const EntryView = memo(function EntryView({
     // bubble reads the same as the optimistic one shown at send time (which never
     // had them). Kept verbatim when no attachment was recovered, so the reader
     // still sees that something was attached.
-    const text = hasAttachments ? stripAttachmentPlaceholders(entry.text) : entry.text;
+    const sent = hasAttachments ? stripAttachmentPlaceholders(entry.text) : entry.text;
+    // A machine skill picked from the `/` menu reaches the agent as a longer
+    // "use this skill" prompt; show it as the line the user typed.
+    const text = skillInvocationOf(sent) ?? sent;
     return (
       <div className="msg user" id={hasAttachments ? `msg-${entry.id}` : undefined}>
         {hasAttachments && <MessageAttachments attachments={entry.attachments!} />}
