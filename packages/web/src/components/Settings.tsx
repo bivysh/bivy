@@ -65,6 +65,11 @@ const IconAppearance = () => (
 const IconKey = () => (
   <Glyph><circle cx="7.5" cy="15.5" r="4.5" /><path d="m11 12 8-8" /><path d="m16 5 3 3" /><path d="m13 8 3 3" /></Glyph>
 );
+// Keys for agents is the vault agents read from, so it gets the lock glyph and
+// Providers & credentials keeps the key; two rows no longer share one icon.
+const IconLock = () => (
+  <Glyph><rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" /><path d="M12 14.5v2" /></Glyph>
+);
 const IconDoc = () => (
   <Glyph><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /><path d="M9 13h6M9 17h4" /></Glyph>
 );
@@ -300,7 +305,7 @@ export function Settings({
       label: "Models & keys",
       items: [
         { id: "providers", label: "Providers & credentials", icon: <IconKey /> },
-        { id: "agent-keys", label: "Keys for agents", icon: <IconKey /> },
+        { id: "agent-keys", label: "Keys for agents", icon: <IconLock /> },
       ],
     },
     {
