@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.17] - 2026-11-12
+
 ### Added
 - Your messages in the chat show when you sent them: hover one, or tap it on a phone, and the time appears under the bubble (today's time, the weekday this week, or the date). Uses the time the agent saved with the message, so it works after a reload for any agent that records one.
 
