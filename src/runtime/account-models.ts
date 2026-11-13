@@ -16,7 +16,7 @@ interface AccountCredential { access?: unknown; accountId?: unknown }
 type Source = (credential: AccountCredential) => Promise<string[] | undefined>;
 
 /** The ChatGPT models endpoint Codex reads; `client_version` gates newer models. */
-const CHATGPT_CLIENT_VERSION = "0.167.2";
+const CHATGPT_CLIENT_VERSION = "0.169.0";
 
 const chatgptModels: Source = async (credential) => {
   if (typeof credential.access !== "string" || !credential.access) return undefined;

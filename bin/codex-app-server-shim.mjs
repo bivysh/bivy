@@ -201,6 +201,20 @@ function appendOutput(itemId, delta) {
   return output;
 }
 
+// The oldest running MCP item for this server and tool that no approval has
+// claimed yet (parallel calls of one tool are asked about in start order).
+const approvedMcpItems = new Set();
+function runningMcpItem(server, tool) {
+  for (const itemId of activeObservedItems) {
+    const input = itemInputs.get(itemId);
+    if (input?.server === server && input?.tool === tool && !approvedMcpItems.has(itemId)) {
+      approvedMcpItems.add(itemId);
+      return itemId;
+    }
+  }
+  return undefined;
+}
+
 function emitToolUpdate(itemId, name, input, parent = {}) {
   if (!itemId) return;
   bivy({ type: "tool.update", toolCallId: itemId, name, input, ...parent });
@@ -242,6 +256,7 @@ function finishCompletedTurn() {
   if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
   turnCompletionTimer = null;
   activeObservedItems.clear();
+  approvedMcpItems.clear();
   bivy({ type: "session.status", status: "idle" });
   if (sawError) { bivy({ type: "session.error", error: sawError }); sawError = null; }
   else bivy({ type: "session.done" });
@@ -474,7 +489,9 @@ function onServerRequest(m) {
     // call; the answer carries no form content, as in Codex's own TUI.
     const meta = params._meta && typeof params._meta === "object" ? params._meta : {};
     if (meta.codex_approval_kind || meta.codex_request_type === "approval_request") {
-      const itemId = `elicitation-${id}`;
+      // Codex starts the mcpToolCall item before it asks, so the approval is
+      // that item's: one governed card, not a second one with no result.
+      const itemId = runningMcpItem(params.serverName, meta.tool_name) ?? `elicitation-${id}`;
       approvalRequests.set(itemId, { id, reply: (msg) => ({ action: msg.decision === "deny" ? "decline" : "accept", content: null, _meta: null }) });
       const input = { server: params.serverName, message: params.message, ...(meta.tool_params ? { arguments: meta.tool_params } : {}) };
       bivy({ type: "tool.call", toolCallId: itemId, name: text(meta.tool_name || params.serverName || "mcp"), input });
@@ -573,6 +590,7 @@ function onNotification(m) {
     case "item/completed": {
       handleCompletedItem(params);
       activeObservedItems.delete(paramsItemId(params));
+      approvedMcpItems.delete(paramsItemId(params));
       maybeFinishCompletedTurn();
       return;
     }
@@ -638,6 +656,7 @@ function onNotification(m) {
       if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
       turnCompletionTimer = null;
       activeObservedItems.clear();
+      approvedMcpItems.clear();
       bivy({ type: "session.status", status: "idle" });
       bivy({ type: "session.error", error: message });
       sawError = null;

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- When Codex asks to run an MCP tool (Bivy's own tools included), the approval and the call are now one card in the chat. Before, the approval showed as a second card for the same tool that never finished.
+
+### Changed
+- Tested against Claude Agent SDK 0.3.325 (Claude Code 2.1.325) and Codex 0.169.0. A PreToolUse hook that times out or can't answer now shows Claude Code's warning in the chat.
+
 ### Security
 - `hono` 4.13.18 (used by the MCP SDK), fixing five advisories in routing, CSRF, form validation, `mount()` and the `css` helper. Bivy doesn't use those parts of Hono.
 
