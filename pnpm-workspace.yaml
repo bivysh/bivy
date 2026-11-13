@@ -27,7 +27,7 @@ overrides:
   # Patched query/body parsing and static-output traversal advisories.
   hono: 4.13.14
   qs: 6.16.1
-  "@hono/node-server": 2.1.5
+  "@hono/node-server": 2.1.7
   "@modelcontextprotocol/sdk": 1.32.2
   brace-expansion: 5.0.12
   # nanoid < 3.3.18 (via postcss → vite, a build-time dep): a custom generator
@@ -37,12 +37,12 @@ overrides:
   # Mermaid's Chevrotain dependencies pin vulnerable lodash-es exactly.
   # Fix GHSA-r5fr-rjxr-66jc and GHSA-f23m-r3pf-42rh across that subtree.
   lodash-es: 4.18.1
-  undici: 8.12.3
+  undici: 8.12.4
   # npm expresses these as a nested object under the parent package; pnpm uses a
   # `parent>child` selector. Same intent: pi-coding-agent ships an npm-shrinkwrap
   # pinning vulnerable copies below its own node_modules.
   "@earendil-works/pi-coding-agent>brace-expansion": 5.0.12
-  "@earendil-works/pi-coding-agent>undici": 8.12.3
+  "@earendil-works/pi-coding-agent>undici": 8.12.4
   # pi-coding-agent asks for its sibling packages with ^ ranges, but they are
   # released together and a newer sibling can drop exports it imports
   # (pi-codemode 1.4.0 removed MCP_TYPESCRIPT_PREAMBLE). Hold them at the

@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Claude Agent SDK 0.3.323 (Claude Code 2.1.323).
 
+### Security
+- `@hono/node-server` 2.1.7 (used by the MCP SDK), fixing two advisories: a backslash in the request path read as a path separator, and an unhandled connection reset during a WebSocket upgrade that could crash the process. Also updates node-pty, express-rate-limit, semver, typebox, undici and ws to their latest patch releases.
+
 ## [0.22.17] - 2026-11-12
 
 ### Added
