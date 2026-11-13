@@ -59,6 +59,8 @@ assert.deepEqual(asked[0].input.questions, [{ question: "Which one?", header: "P
 assert.deepEqual(answerTo(1000), { answers: { "q-pick": { answers: ["B"] } } }, "answers go back keyed by Codex's question id");
 assert.deepEqual(answerTo(1001), { permissions: {}, scope: "turn" }, "a denied permission request grants nothing");
 assert.deepEqual(answerTo(1002), { action: "accept", content: null, _meta: null }, "an allowed MCP tool approval is accepted");
+assert.deepEqual(events.filter((e) => e.type === "tool_call" && (e as any).toolName === "lookup").map((e) => (e as any).toolCallId), ["mcp-1"], "the MCP approval is the running item's card, not a second one");
+assert.ok(events.some((e) => e.type === "tool_result" && (e as any).toolCallId === "mcp-1"), "and that card closes with the item's result");
 assert.deepEqual(asked[3].input, { serverName: "docs", message: "Your name?", mode: "form", requestedSchema: { type: "object", properties: { name: { type: "string" } } } }, "the MCP form reaches the guardian as asked");
 assert.deepEqual(answerTo(1003), { action: "accept", content: { name: "Ada" }, _meta: null }, "the form's answer goes back to the server");
 assert.ok(asked[4].personRequired && !asked.slice(0, 4).some((a) => a.personRequired), "only the managed checkpoint is person-only");

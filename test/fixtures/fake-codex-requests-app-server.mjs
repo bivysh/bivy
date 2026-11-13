@@ -18,14 +18,18 @@ const requests = [
     { id: "q-secret", header: "Key", question: "Your API key?", isOther: false, isSecret: true, options: null },
   ] } },
   { method: "item/permissions/requestApproval", params: { threadId: thread, turnId: "turn-1", itemId: "perm-1", environmentId: null, startedAtMs: 0, cwd: "/tmp", reason: "needs the network", permissions: { network: { enabled: true }, fileSystem: null } } },
-  { method: "mcpServer/elicitation/request", params: { threadId: thread, turnId: "turn-1", serverName: "docs", mode: "form", message: "Allow lookup?", requestedSchema: { type: "object", properties: {} }, _meta: { codex_approval_kind: "mcp_tool_call", tool_name: "lookup", tool_params: { q: "x" } } } },
-  { method: "mcpServer/elicitation/request", params: { threadId: thread, turnId: "turn-1", serverName: "docs", mode: "form", message: "Your name?", requestedSchema: { type: "object", properties: { name: { type: "string" } } }, _meta: null } },
+  // Codex starts the MCP item, then asks to approve it.
+  { before: [{ method: "item/started", params: { threadId: thread, turnId: "turn-1", item: { type: "mcpToolCall", id: "mcp-1", server: "docs", tool: "lookup", arguments: { q: "x" }, status: "inProgress" } } }],
+    method: "mcpServer/elicitation/request", params: { threadId: thread, turnId: "turn-1", serverName: "docs", mode: "form", message: "Allow lookup?", requestedSchema: { type: "object", properties: {} }, _meta: { codex_approval_kind: "mcp_tool_call", tool_name: "lookup", tool_params: { q: "x" } } } },
+  { before: [{ method: "item/completed", params: { threadId: thread, turnId: "turn-1", item: { type: "mcpToolCall", id: "mcp-1", server: "docs", tool: "lookup", arguments: { q: "x" }, status: "completed", result: { content: [{ type: "text", text: "found" }] } } } }],
+    method: "mcpServer/elicitation/request", params: { threadId: thread, turnId: "turn-1", serverName: "docs", mode: "form", message: "Your name?", requestedSchema: { type: "object", properties: { name: { type: "string" } } }, _meta: null } },
   { method: "item/commandExecution/requestApproval", params: { threadId: thread, turnId: "turn-1", itemId: "call-1", approvalId: "ap-1", kind: "humanCommand", command: "git push", cwd: "/tmp", startedAtMs: 0 } },
 ];
 let next = 0;
 function ask() {
-  const request = requests[next];
-  if (!request) return finish();
+  const { before = [], ...request } = requests[next] ?? {};
+  if (!request.method) return finish();
+  for (const notification of before) send({ jsonrpc: "2.0", ...notification });
   send({ jsonrpc: "2.0", id: 1000 + next, ...request });
 }
 function finish() {
