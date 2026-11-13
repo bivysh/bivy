@@ -42,13 +42,19 @@ const wrap = (keyGeneration: number) => ({ wrappedKey: "sealed", wrappedByPublic
   await vault.requestKey(teamId, "bo-laptop", "pub-bo");
   await vault.requestKey(teamId, "eve-laptop", "pub-eve");
   assert.deepEqual((await vault.snapshot(teamId, "ada-laptop")).requests, [{ nodeId: "bo-laptop", publicKey: "pub-bo" }]);
-  await rejects(vault.putWrappedKey(teamId, "eve-laptop", wrap(1)), "not-a-team-machine");
-  await rejects(vault.putWrappedKey(teamId, "bo-laptop", wrap(0)), "stale-key");
-  await vault.putWrappedKey(teamId, "bo-laptop", wrap(1));
+  await rejects(vault.putWrappedKey(teamId, "ada-laptop", "eve-laptop", wrap(1)), "not-a-team-machine");
+  await rejects(vault.putWrappedKey(teamId, "ada-laptop", "bo-laptop", wrap(0)), "stale-key");
+  await vault.putWrappedKey(teamId, "ada-laptop", "bo-laptop", wrap(1));
   const bo = await vault.snapshot(teamId, "bo-laptop");
   assert.equal(bo.wrappedKey?.wrappedKey, "sealed");
   assert.equal(bo.vault?.ciphertext, "c1");
   assert.deepEqual((await vault.snapshot(teamId, "ada-laptop")).requests, [], "an answered request is cleared");
+  // Bo's machine holds a working copy and hasn't asked again: another
+  // machine can't replace it. Bo can still re-seal for itself.
+  await rejects(vault.putWrappedKey(teamId, "ada-laptop", "bo-laptop", { ...wrap(1), wrappedKey: "garbage" }), "not-requested");
+  assert.equal((await vault.snapshot(teamId, "bo-laptop")).wrappedKey?.wrappedKey, "sealed");
+  await vault.putWrappedKey(teamId, "bo-laptop", "bo-laptop", { ...wrap(1), wrappedKey: "resealed" });
+  assert.equal((await vault.snapshot(teamId, "bo-laptop")).wrappedKey?.wrappedKey, "resealed");
 }
 
 // A member who held the key leaving forces the next write onto a fresh key,
@@ -56,8 +62,8 @@ const wrap = (keyGeneration: number) => ({ wrappedKey: "sealed", wrappedByPublic
 {
   const { store, vault, teamId, bo } = await setup();
   await vault.write(teamId, "ada-laptop", { ciphertext: "c1", expectedGeneration: 0, freshKey: true });
-  await vault.putWrappedKey(teamId, "ada-laptop", wrap(1));
-  await vault.putWrappedKey(teamId, "bo-laptop", wrap(1));
+  await vault.putWrappedKey(teamId, "ada-laptop", "ada-laptop", wrap(1));
+  await vault.putWrappedKey(teamId, "bo-laptop", "bo-laptop", wrap(1));
   await store.teams.removeMember(teamId, bo.id);
   assert.equal((await vault.snapshot(teamId, "ada-laptop")).vault?.needsRotation, true);
   await rejects(vault.write(teamId, "ada-laptop", { ciphertext: "c2", expectedGeneration: 1, freshKey: false }), "rotation-required");
@@ -70,7 +76,7 @@ const wrap = (keyGeneration: number) => ({ wrappedKey: "sealed", wrappedByPublic
 {
   const { store, vault, teamId, bo } = await setup();
   await vault.write(teamId, "ada-laptop", { ciphertext: "c1", expectedGeneration: 0, freshKey: true });
-  await vault.putWrappedKey(teamId, "bo-laptop", wrap(1));
+  await vault.putWrappedKey(teamId, "bo-laptop", "bo-laptop", wrap(1));
   await store.removeNode(bo.id, "bo-laptop");
   assert.equal((await vault.snapshot(teamId, "ada-laptop")).vault?.needsRotation, true);
 }

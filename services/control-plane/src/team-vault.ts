@@ -173,10 +173,18 @@ export class PostgresTeamVault {
     );
   }
 
-  /** Seal the key for one team machine; answers (and clears) its request. */
-  async putWrappedKey(teamId: string, targetNodeId: string, input: { wrappedKey: string; wrappedByPublicKey: string; keyGeneration: number }): Promise<void> {
+  /**
+   * Seal the key for one team machine; answers (and clears) its request. A
+   * machine seals for itself, or for a machine that asked: an unasked copy
+   * would replace the one the target already opens.
+   */
+  async putWrappedKey(teamId: string, fromNodeId: string, targetNodeId: string, input: { wrappedKey: string; wrappedByPublicKey: string; keyGeneration: number }): Promise<void> {
     if (!input.wrappedKey || !input.wrappedByPublicKey) throw new TeamVaultError(400, "invalid-request", "Missing wrappedKey or wrappedByPublicKey");
     if (!(await this.isTeamNode(teamId, targetNodeId))) throw new TeamVaultError(403, "not-a-team-machine", "That machine isn't in this team");
+    if (targetNodeId !== fromNodeId) {
+      const { rows } = await this.query(`SELECT 1 FROM team_vault_key_requests WHERE team_id = $1 AND node_id = $2`, [teamId, targetNodeId]);
+      if (!rows.length) throw new TeamVaultError(409, "not-requested", "That machine hasn't asked for the key");
+    }
     const vault = await this.vault(teamId);
     if (vault && input.keyGeneration !== vault.keyGeneration) throw new TeamVaultError(409, "stale-key", "That key is no longer the team's key");
     await this.query(

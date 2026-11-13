@@ -251,7 +251,7 @@ export function registerTeamRoutes(app: Express, deps: TeamRouteDeps): void {
 
   app.put("/node/team-vault/key", requireNode, handle(async (req, res) => {
     const membership = await teamOfNode(req);
-    await deps.vault.putWrappedKey(membership.team.id, String(req.body?.targetNodeId ?? ""), {
+    await deps.vault.putWrappedKey(membership.team.id, nodeOf(req).id, String(req.body?.targetNodeId ?? ""), {
       wrappedKey: String(req.body?.wrappedKey ?? ""),
       wrappedByPublicKey: String(req.body?.wrappedByPublicKey ?? ""),
       keyGeneration: Number(req.body?.keyGeneration ?? 0),
