@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.18] - 2026-11-13
+
 ### Added
 - Agents know your time zone. Starting a session from the app tells your machine the device's time zone, and every agent session there is told it, so times, dates and schedules come out in your local time even when the machine runs on UTC. The last device you started a session from wins; turning off Bivy's system instructions turns this off too.
 
