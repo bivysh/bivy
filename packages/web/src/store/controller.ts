@@ -2392,6 +2392,8 @@ export class AppController {
       model,
       // Lets a machine shared with the team say which teammate started it.
       byDevice: this.devicePub ?? undefined,
+      // Agents use it for times and schedules (the machine may run on UTC).
+      timeZone: browserTimeZone(),
     };
   }
 
@@ -4120,3 +4122,12 @@ export class AppController {
 }
 
 export const controller = new AppController();
+
+/** This browser's IANA time zone, or undefined when it doesn't say. */
+function browserTimeZone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}

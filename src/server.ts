@@ -104,7 +104,7 @@ import { listProviders } from "./runtime/provider-catalog.js";
 import { exportLocalModels, importLocalModels } from "./runtime/local-model-store.js";
 import { sessionLikeFields } from "./session/start-like.js";
 import { listSkills, skillCommands } from "./skills.js";
-import { BIVY_AGENT_NOTE, mergeSyncedAgentInstructions, readAgentInstructions, sessionInstructions, writeAgentInstructions, MAX_AGENT_INSTRUCTIONS_BYTES } from "./agent-instructions.js";
+import { BIVY_AGENT_NOTE, mergeSyncedAgentInstructions, readAgentInstructions, recordUserTimeZone, sessionInstructions, writeAgentInstructions, MAX_AGENT_INSTRUCTIONS_BYTES } from "./agent-instructions.js";
 import { ApprovalManager, type ApprovalRequest } from "./approval.js";
 import { QuestionManager, validQuestions, isAskUserQuestionTool, formatQuestionResult } from "./question.js";
 import { isElicitationTool, elicitationQuestions, elicitationResult, type ElicitationRequest } from "./elicitation.js";
@@ -3774,6 +3774,8 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     const workspaceInput = typeof msg.workspace === "string" ? msg.workspace.trim() : "";
     const title = typeof msg.title === "string" ? msg.title : undefined;
     const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined;
+    // The device's time zone, for the Bivy note this and later sessions get.
+    recordUserTimeZone(appDir, msg.timeZone);
     // Prevent silent downgrade: for a "supported" (certified) agent whose live
     // protection would be degraded, require the client to have explicitly
     // acknowledged it (the picker's confirm-to-continue step) before this
@@ -11721,6 +11723,7 @@ app.post("/api/session", async (req, res, next) => {
     // verbatim, unlike `title` (a raw first message that only seeds auto-naming).
     const explicitName = typeof req.body?.name === "string" && req.body.name.trim() ? req.body.name.trim() : undefined;
     const requestId = typeof req.body?.requestId === "string" ? req.body.requestId : undefined;
+    recordUserTimeZone(appDir, req.body?.timeZone);
     // Validate the workspace before entering the dedupe path so a bad path still
     // returns a 400 (rather than being cached as a rejected creation).
     let workspace = defaultWorkspace;

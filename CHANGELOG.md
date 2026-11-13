@@ -7,9 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Agents know your time zone. Starting a session from the app tells your machine the device's time zone, and every agent session there is told it, so times, dates and schedules come out in your local time even when the machine runs on UTC. The last device you started a session from wins; turning off Bivy's system instructions turns this off too.
+
 ### Fixed
 - While a turn waits on one of your hooks (a slow PreToolUse check, a Stop hook), the chat now says "Waiting on PreToolUse hook…" instead of looking stuck. This works for Claude Code and Codex. With Claude Agent SDK 0.3.323, a hook running longer than 30 seconds would also have opened a "PreToolUse" tool card that never finished.
-
 - A team machine's copy of the team vault key can only be replaced by that machine, or when the machine has asked for the key. Before, any team member's machine could overwrite another's copy, which left that machine unable to read team instructions and keys until it asked again.
 
 ### Changed
