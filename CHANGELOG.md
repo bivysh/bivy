@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- `hono` 4.13.18 (used by the MCP SDK), fixing five advisories in routing, CSRF, form validation, `mount()` and the `css` helper. Bivy doesn't use those parts of Hono.
+
 ## [0.22.18] - 2026-11-13
 
 ### Added
