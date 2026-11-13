@@ -178,6 +178,50 @@ export function vaultKeysLine(names: string[]): string {
   return `Credentials in the vault now: ${shown}${more}.`;
 }
 
+/**
+ * The user's time zone, as the device they last started a session from reports
+ * it (`session.new` carries the browser's IANA zone). Machines often run on UTC
+ * while the user doesn't, so the Bivy note names it: agents then read and write
+ * times, dates and schedules in the user's zone. Last device wins.
+ */
+function userLocalePath(appDir: string): string {
+  return path.join(appDir, "user-locale.json");
+}
+
+export function isTimeZone(value: unknown): value is string {
+  if (typeof value !== "string" || !value || value.length > 64) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function readUserTimeZone(appDir: string): string {
+  try {
+    const { timeZone } = JSON.parse(fs.readFileSync(userLocalePath(appDir), "utf8")) as { timeZone?: unknown };
+    return isTimeZone(timeZone) ? timeZone : "";
+  } catch {
+    return "";
+  }
+}
+
+/** Remember the zone a client reported; anything that isn't an IANA zone is ignored. */
+export function recordUserTimeZone(appDir: string, timeZone: unknown): void {
+  if (!isTimeZone(timeZone) || readUserTimeZone(appDir) === timeZone) return;
+  try {
+    fs.mkdirSync(appDir, { recursive: true });
+    fs.writeFileSync(userLocalePath(appDir), `${JSON.stringify({ timeZone })}\n`);
+  } catch (error) {
+    console.warn("[agent-instructions] could not save the user's time zone:", (error as Error).message);
+  }
+}
+
+export function timeZoneLine(timeZone: string): string {
+  return timeZone ? `The user's time zone is ${timeZone}; use it for the times, dates and schedules you read or write.` : "";
+}
+
 /** The names of the keys agents use on this machine: personal, then the team's.
  * A vault that can't be read never blocks a session. */
 function vaultKeyNames(appDir: string): string[] {
@@ -193,11 +237,11 @@ function vaultKeyNames(appDir: string): string[] {
 /** The Bivy note (unless switched off) with the vault's key names, the machine's
  * skills index (if any), the team's text, then the user's own, each under its
  * precedence preamble. The user's own come last and win. */
-export function composeAgentInstructions(text: string, bivyNote = true, skills = "", team?: { name: string; text: string }, keys: string[] = []): string {
+export function composeAgentInstructions(text: string, bivyNote = true, skills = "", team?: { name: string; text: string }, keys: string[] = [], timeZone = ""): string {
   const body = text.trim();
   const teamBody = team?.text.trim() ?? "";
   return [
-    bivyNote ? [BIVY_AGENT_NOTE, vaultKeysLine(keys)].filter(Boolean).join("\n") : "",
+    bivyNote ? [BIVY_AGENT_NOTE, vaultKeysLine(keys), timeZoneLine(timeZone)].filter(Boolean).join("\n") : "",
     skills.trim(),
     teamBody ? `${teamPreamble(team!.name)}\n\n${teamBody}` : "",
     body ? `${PREAMBLE}\n\n${body}` : "",
@@ -224,7 +268,7 @@ export function sessionInstructions(appDir: string): SessionInstructions | undef
   const { text: userText, bivyNote } = readAgentInstructions(appDir);
   const team = readTeamInstructions(appDir);
   const keys = bivyNote ? vaultKeyNames(appDir) : [];
-  const text = composeAgentInstructions(userText, bivyNote, skillsIndexFor(appDir), team && { name: team.teamName, text: team.text }, keys);
+  const text = composeAgentInstructions(userText, bivyNote, skillsIndexFor(appDir), team && { name: team.teamName, text: team.text }, keys, bivyNote ? readUserTimeZone(appDir) : "");
   const file = composedPath(appDir);
   try {
     if (!text) {

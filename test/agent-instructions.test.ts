@@ -15,6 +15,7 @@ import {
   BIVY_AGENT_NOTE,
   mergeSyncedAgentInstructions,
   readAgentInstructions,
+  recordUserTimeZone,
   sessionInstructions,
   writeAgentInstructions,
   MAX_AGENT_INSTRUCTIONS_BYTES,
@@ -117,4 +118,18 @@ test("the note names the vault keys agents can use, never their values or the no
   // With the Bivy note off, the list goes with it.
   writeAgentInstructions(dir, "Use pnpm.", 1_000, false);
   assert.ok(!sessionInstructions(dir)!.text.includes("TRIPLETEX_TOKEN"));
+});
+
+test("the note names the time zone the user's device last reported; junk is ignored", () => {
+  const dir = tempDir();
+  assert.ok(!sessionInstructions(dir)!.text.includes("time zone"), "no zone reported: no line");
+  recordUserTimeZone(dir, "Europe/Oslo");
+  recordUserTimeZone(dir, "Not/AZone");
+  recordUserTimeZone(dir, "x".repeat(200));
+  assert.match(sessionInstructions(dir)!.text, /The user's time zone is Europe\/Oslo;/);
+  recordUserTimeZone(dir, "America/New_York");
+  assert.match(sessionInstructions(dir)!.text, /time zone is America\/New_York;/);
+
+  writeAgentInstructions(dir, "Use pnpm.", 1_000, false);
+  assert.ok(!sessionInstructions(dir)!.text.includes("time zone"), "goes with the Bivy note");
 });
