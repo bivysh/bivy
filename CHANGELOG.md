@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.19] - 2026-11-14
+
 ### Added
 - Settings → Keys for agents can add keys, not only list and remove the ones agents asked for. Paste lines from a `.env` file or `export NAME=value` lines into the name field to add several at once; Bivy shows which names it found before saving.
 
