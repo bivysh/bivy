@@ -79,9 +79,54 @@ function asReply(id, result) {
   as.stdin.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);
 }
 
+// --- failures ----------------------------------------------------------------
+// Codex's `codexErrorInfo` codes as Bivy's stable failure conditions, so the
+// daemon's recovery (retry at reset, reroute, sign-in sheet) needn't guess from
+// the English message. A code missing here falls back to that text match.
+// The code is a string, or an object keyed by it ({ httpConnectionFailed: {…} }).
+const FAILURE_CONDITIONS = {
+  contextWindowExceeded: "context_overflow",
+  usageLimitExceeded: "credits_exhausted",
+  sessionBudgetExceeded: "credits_exhausted",
+  rateLimitExceeded: "rate_limited",
+  serverOverloaded: "rate_limited",
+  unauthorized: "auth_failed",
+  // Refusals a retry can't fix: say so, so a "limit" in the text can't
+  // schedule a resume.
+  cyberPolicy: "unknown",
+  misalignmentPolicyViolation: "unknown",
+  inferenceHookDenied: "unknown",
+};
+
+// The HTTP variants ({ httpConnectionFailed: { httpStatusCode } }, a stream
+// that failed to connect or dropped) carry the provider's status, which says
+// more than the variant: a 401 arrives as httpConnectionFailed.
+const HTTP_STATUS_CONDITIONS = [
+  { test: (code) => code === 401 || code === 403, condition: "auth_failed" },
+  { test: (code) => code === 429, condition: "rate_limited" },
+  { test: (code) => code === undefined || code >= 500, condition: "transport_error" },
+];
+
+function failureCondition(info) {
+  if (typeof info === "string") return Object.hasOwn(FAILURE_CONDITIONS, info) ? FAILURE_CONDITIONS[info] : undefined;
+  if (!info || typeof info !== "object") return undefined;
+  const [code] = Object.keys(info);
+  if (Object.hasOwn(FAILURE_CONDITIONS, code)) return FAILURE_CONDITIONS[code];
+  const detail = info[code];
+  if (!detail || typeof detail !== "object" || !("httpStatusCode" in detail)) return undefined;
+  const status = detail.httpStatusCode ?? undefined;
+  return HTTP_STATUS_CONDITIONS.find((row) => row.test(status))?.condition;
+}
+
+function failurePayload(error, fallback = "Codex turn failed") {
+  const condition = failureCondition(error?.codexErrorInfo);
+  return { error: error?.message || fallback, ...(condition ? { condition } : {}) };
+}
+
 // --- session state ----------------------------------------------------------
 let threadId = null;
 let initialized = false;
+// The turn's failure as a session.error payload ({ error, condition? }).
 let sawError = null;
 let models = [];
 let selectedModel = null;
@@ -258,7 +303,7 @@ function finishCompletedTurn() {
   activeObservedItems.clear();
   approvedMcpItems.clear();
   bivy({ type: "session.status", status: "idle" });
-  if (sawError) { bivy({ type: "session.error", error: sawError }); sawError = null; }
+  if (sawError) { bivy({ type: "session.error", ...sawError }); sawError = null; }
   else bivy({ type: "session.done" });
 }
 
@@ -627,9 +672,9 @@ function onNotification(m) {
       // depending on a separate `error` notification landing first — otherwise a
       // completion that omits that notification seals as session.done and the
       // user sees a silent empty turn (fail loud, never swallow the error).
-      const turnError =
-        params?.turn?.error?.message ||
-        (params?.turn?.status === "failed" ? params?.error?.message || params?.message || "Codex turn failed" : undefined);
+      const turnError = params?.turn?.error?.message
+        ? failurePayload(params.turn.error)
+        : params?.turn?.status === "failed" ? failurePayload(params?.error, params?.message || "Codex turn failed") : undefined;
       if (turnError && !sawError) sawError = turnError;
       // Codex 0.147 can publish turn/completed just before the final
       // collabAgentToolCall item/completed notification. Sealing immediately
@@ -651,14 +696,14 @@ function onNotification(m) {
       // the stall watchdog force-recovered it minutes later (the "Codex gets stuck,
       // I have to prompt it again" symptom). session.error makes ProtocolRuntime
       // emit agent_end, settling the turn immediately.
-      const message = params?.error?.message || params?.message || "Codex turn failed";
+      const failure = failurePayload(params?.error ?? params?.turn?.error, params?.message || "Codex turn failed");
       pendingTurnCompletion = false;
       if (turnCompletionTimer) clearTimeout(turnCompletionTimer);
       turnCompletionTimer = null;
       activeObservedItems.clear();
       approvedMcpItems.clear();
       bivy({ type: "session.status", status: "idle" });
-      bivy({ type: "session.error", error: message });
+      bivy({ type: "session.error", ...failure });
       sawError = null;
       return;
     }
@@ -680,7 +725,7 @@ function onNotification(m) {
           : { type: "session.retry", error: message });
         return;
       }
-      sawError = params?.error?.message || params?.message || "Codex turn failed";
+      sawError = failurePayload(params?.error, params?.message || "Codex turn failed");
       return;
     default:
       return;

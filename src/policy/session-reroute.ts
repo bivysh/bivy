@@ -30,6 +30,7 @@
 // whether a resume is warranted and by when.
 
 import type { RunPolicy } from "./run-policy.js";
+import type { RuntimeCondition } from "./conditions.js";
 
 /** The minimal live-session surface the controller drives. */
 export interface SessionRerouteTarget {
@@ -101,13 +102,18 @@ export class SessionRerouteController {
    * `applyReroute`) or null (let the error surface as usual). Pure w.r.t. the
    * controller's counters — those advance only when the plan is applied.
    */
-  planReroute(rawError: unknown, currentModel: string | undefined): ReroutePlan | null {
+  planReroute(
+    rawError: unknown,
+    currentModel: string | undefined,
+    opts: { conditionHint?: RuntimeCondition } = {},
+  ): ReroutePlan | null {
     if (this.applying) return null;
     const decision = this.deps.policy.decide({
       routing: { model: currentModel },
       error: rawError,
       attempt: this.attempt,
       rerouteCount: this.rerouteCount,
+      conditionHint: opts.conditionHint,
     });
     if (decision.action !== "reroute") return null;
     return this.rerouteFrom(decision, currentModel);
@@ -126,7 +132,7 @@ export class SessionRerouteController {
   planResume(
     rawError: unknown,
     currentModel: string | undefined,
-    opts: { resetsAtHint?: string; now?: number } = {},
+    opts: { resetsAtHint?: string; conditionHint?: RuntimeCondition; now?: number } = {},
   ): ResumePlan | null {
     if (this.applying) return null;
     const now = opts.now ?? Date.now();
@@ -136,6 +142,7 @@ export class SessionRerouteController {
       attempt: this.attempt,
       rerouteCount: this.rerouteCount,
       resetsAtHint: opts.resetsAtHint,
+      conditionHint: opts.conditionHint,
     });
     if (decision.action !== "retry") return null;
     // Only defer for a concrete recovery window — a provider reset, or a delay

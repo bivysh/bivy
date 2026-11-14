@@ -25,6 +25,17 @@ export type RuntimeCondition =
   | "task_failed" // the agent ran but the work failed (tests red, no progress)
   | "unknown"; // unclassified — deliberately NOT auto-recovered
 
+/** Every condition, for validating a hint that arrives over the wire. */
+const RUNTIME_CONDITIONS: ReadonlySet<string> = new Set<RuntimeCondition>([
+  "rate_limited", "credits_exhausted", "context_overflow", "auth_failed",
+  "node_offline", "transport_error", "task_failed", "unknown",
+]);
+
+/** A wire value as a condition, or undefined when it isn't one. */
+export function asRuntimeCondition(value: unknown): RuntimeCondition | undefined {
+  return typeof value === "string" && RUNTIME_CONDITIONS.has(value) ? (value as RuntimeCondition) : undefined;
+}
+
 /** A raw failure resolved into a condition plus any recovery hints we parsed. */
 export interface ClassifiedFailure {
   condition: RuntimeCondition;
@@ -47,6 +58,10 @@ export interface ClassifyOptions {
    *  time-of-day, never which day, so the structured hint is the only reliable
    *  source for a multi-day window. Only used for the wait-and-retry conditions. */
   resetsAtHint?: string;
+  /** The condition the agent itself reported from a structured error code
+   *  (Claude's assistant `error`, Codex's `codexErrorInfo`). It wins over the
+   *  text match, which stays the fallback for agents that send only prose. */
+  conditionHint?: RuntimeCondition;
 }
 
 function rawText(error: unknown): string {
@@ -180,7 +195,7 @@ const CLASSIFIERS: { condition: RuntimeCondition; test: (raw: string) => boolean
  */
 export function classifyFailure(error: unknown, opts: ClassifyOptions = {}): ClassifiedFailure {
   const raw = rawText(error).slice(0, 2000);
-  const condition = CLASSIFIERS.find((c) => c.test(raw))?.condition ?? "unknown";
+  const condition = opts.conditionHint ?? CLASSIFIERS.find((c) => c.test(raw))?.condition ?? "unknown";
   const out: ClassifiedFailure = { condition, raw };
   // Recovery hints are only meaningful for the wait-and-retry conditions.
   if (condition === "rate_limited" || condition === "credits_exhausted") {

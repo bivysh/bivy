@@ -45,10 +45,10 @@ const RESET_GRACE_MS = 60_000;
  *  (see ClassifyOptions) and wins over anything scraped from the text. */
 export function detectSessionLimit(
   error: unknown,
-  opts: { now?: number; resetsAtHint?: string } = {},
+  opts: { now?: number; resetsAtHint?: string; conditionHint?: RuntimeCondition } = {},
 ): SessionLimit | undefined {
   const now = opts.now ?? Date.now();
-  const classified = classifyFailure(error, { now, resetsAtHint: opts.resetsAtHint });
+  const classified = classifyFailure(error, { now, resetsAtHint: opts.resetsAtHint, conditionHint: opts.conditionHint });
   if (!LIMIT_COPY[classified.condition]) return undefined;
   const raw = error instanceof Error ? error.message : String(error ?? "");
   if (PLAN_NOT_COVERED.test(raw)) return { condition: classified.condition, planNotCovered: true };

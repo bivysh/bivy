@@ -18,6 +18,8 @@
 //                      NO preceding standalone `error` notification — the shape a
 //                      real usage-limit turn takes (codex 0.154). The shim must
 //                      still surface it as session.error, never a silent empty turn.
+//   "http-401"       → like "usage-limit", but the error is the HTTP variant
+//                      Codex uses for a rejected credential.
 //   "reconnect"      → an `error` with willRetry: true (Codex reconnecting on its
 //                      own), then the "ok" reply: the turn recovered and must
 //                      not end failed.
@@ -76,6 +78,11 @@ rl.on("line", (line) => {
       notify("turn/started", { threadId: params?.threadId });
       if (MODE === "fail") {
         notify("turn/failed", { error: { message: "simulated codex failure" } });
+      } else if (MODE === "http-401") {
+        notify("turn/completed", {
+          threadId: params?.threadId,
+          turn: { id: "turn-1", status: "failed", error: { message: "unexpected status 401 Unauthorized", codexErrorInfo: { httpConnectionFailed: { httpStatusCode: 401 } } } },
+        });
       } else if (MODE === "usage-limit") {
         notify("turn/completed", {
           threadId: params?.threadId,

@@ -59,6 +59,7 @@ import { hasLiveProcessForCwd } from "../../runtime/native-process-scan.js";
 import { bivySessionEnv } from "../../runtime/session-env.js";
 import { ELICITATION_TOOL } from "../../elicitation.js";
 import { bridgeInstalled, enableBridgeResolution } from "../../agent-bridges.mjs";
+import type { RuntimeCondition } from "../../policy/conditions.js";
 
 /** Binary names a live Claude Code process could be running under (see
  *  native-process-scan.ts's best-effort cwd match). */
@@ -396,14 +397,36 @@ function isApiErrorMessage(message: any): boolean {
   return Boolean(message?.error) || message?.isApiErrorMessage === true;
 }
 
+/** The SDK's failure codes (assistant `error`, result `terminal_reason`) as
+ *  Bivy's stable conditions. Codes missing here fall back to the text match. */
+const FAILURE_CONDITIONS: Record<string, RuntimeCondition> = {
+  authentication_failed: "auth_failed",
+  oauth_org_not_allowed: "auth_failed",
+  cloud_credential_error: "auth_failed",
+  billing_error: "credits_exhausted",
+  rate_limit: "rate_limited",
+  overloaded: "rate_limited",
+  prompt_too_long: "context_overflow",
+};
+
+function failureCondition(code: unknown): { condition?: RuntimeCondition } {
+  const condition = typeof code === "string" ? FAILURE_CONDITIONS[code] : undefined;
+  return condition ? { condition } : {};
+}
+
 /** The failure an API-error assistant message stands for: the provider's own
- *  sentence, plus the reset instant when the message carried a quota (a plan
- *  limit's `quotaLimits.resetsAt` is a Unix epoch in SECONDS; the text alone
- *  states only a time of day, which can't say which day a weekly window clears). */
-function apiErrorDetail(message: any, error: string): { error: string; resetsAt?: string } {
+ *  sentence, its code as a condition, plus the reset instant when the message
+ *  carried a quota (a plan limit's `quotaLimits.resetsAt` is a Unix epoch in
+ *  SECONDS; the text alone states only a time of day, which can't say which
+ *  day a weekly window clears). */
+function apiErrorDetail(message: any, error: string): { error: string; resetsAt?: string; condition?: RuntimeCondition } {
   const quota = message?.quotaLimits ?? message?.message?.quotaLimits;
   const seconds = Number(quota?.resetsAt);
-  return Number.isFinite(seconds) && seconds > 0 ? { error, resetsAt: new Date(seconds * 1000).toISOString() } : { error };
+  const resetsAt = Number.isFinite(seconds) && seconds > 0 ? { resetsAt: new Date(seconds * 1000).toISOString() } : {};
+  // A plan window (5-hour, weekly) is also sent as `rate_limit`; its rejected
+  // quota marks it as a spent allowance, not a slow-down.
+  if (quota?.status === "rejected") return { error, ...resetsAt, condition: "credits_exhausted" };
+  return { error, ...resetsAt, ...failureCondition(message?.error) };
 }
 
 /** Why a `result` failed, or "" for a successful one. The error variant has no
@@ -859,7 +882,7 @@ class ClaudeSession implements RuntimeSession {
    *  with a successful `result`, so this carries the failure to agent_end, where
    *  the daemon offers the ways past it. Cleared when a real reply follows: the
    *  SDK retried and got through. */
-  private apiErrorThisTurn?: { error: string; resetsAt?: string };
+  private apiErrorThisTurn?: { error: string; resetsAt?: string; condition?: RuntimeCondition };
 
   /** tool_use id → tool name, learned as "assistant" turns emit tool_use blocks.
    *  Used only to label a passively-surfaced tool_image (see #292); never
@@ -1461,7 +1484,11 @@ class ClaudeSession implements RuntimeSession {
         this.emit({ type: "turn_end" });
         // Cost/token/plan-quota totals are read via getUsage() (backed by the
         // SDK's usage_EXPERIMENTAL... control request), not forwarded here.
-        this.emit({ type: "agent_end", subtype: message.subtype, ...(failure ? { error: failure } : apiError ?? {}) });
+        this.emit({
+          type: "agent_end",
+          subtype: message.subtype,
+          ...(failure ? { error: failure, ...failureCondition(message.terminal_reason) } : apiError ?? {}),
+        });
         break;
       }
 

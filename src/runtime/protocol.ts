@@ -36,6 +36,7 @@ import { mapToolCall, mapToolResult } from "./tool-call-map.js";
 import { stripAnsi } from "./ansi.js";
 import { agentRetryEvent } from "./retry.js";
 import { agentHookEvent } from "./hook.js";
+import { asRuntimeCondition } from "../policy/conditions.js";
 
 /** A tool message's sub-agent parent (`parentToolCallId`), spread into the
  *  runtime event and persisted block so delegated work nests under its call. */
@@ -1012,11 +1013,14 @@ class ProtocolSession implements RuntimeSession {
       // message_end drives the daemon's base-transcript snapshot (agent_end does
       // not), so the preserved content + error marker are durably persisted.
       this.emit({ type: "message_end", message: errored });
-      this.emit({ type: "session.error", error: errorText });
+      // `condition` is the agent's own failure code mapped by its shim (e.g.
+      // Codex's codexErrorInfo); the daemon trusts it over the error text.
+      const condition = asRuntimeCondition(msg.condition);
+      this.emit({ type: "session.error", error: errorText, ...(condition ? { condition } : {}) });
       // Carry the failure on agent_end too (Claude Code's shape), so the daemon's
       // turn-end recovery sees it: usage-limit offers (fork / retry at reset),
       // reroute, the failed state, and the error notification.
-      this.emit({ type: "agent_end", error: errorText });
+      this.emit({ type: "agent_end", error: errorText, ...(condition ? { condition } : {}) });
       return;
     }
     if (type === "tool.call" || type === "tool.observe") {

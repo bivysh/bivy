@@ -112,7 +112,17 @@ const cleanResult = { type: "result", subtype: "success", result: "", terminal_r
   const end = events.find((e) => e.type === "agent_end");
   assert.equal(end.error, "You've hit your session limit · resets 6:30pm (UTC)", "the limit is the turn's failure");
   assert.equal(end.resetsAt, new Date(1793606400 * 1000).toISOString(), "the reset comes from the quota, not the text");
+  assert.equal(end.condition, "credits_exhausted", "a rejected plan window is a spent allowance, though the SDK says rate_limit");
   assert.ok(!events.some((e) => e.type === "session.error"), "the message is already in the chat; no toast");
+}
+
+{
+  // The SDK's code wins over a message that names no condition.
+  const { query, events } = await start();
+  query.emit({ ...limitMessage, error: "authentication_failed", quotaLimits: undefined, message: { model: "<synthetic>", content: [{ type: "text", text: "Please run /login" }] } });
+  query.emit(cleanResult);
+  await waitFor(() => events.some((e) => e.type === "agent_end"));
+  assert.equal(events.find((e) => e.type === "agent_end").condition, "auth_failed");
 }
 
 {
