@@ -3597,6 +3597,12 @@ export class AppController {
     const reply = await this.awaitAck({ kind: "secrets.list" }, 15_000) as unknown as { secrets?: AgentSecretInfo[] };
     return Array.isArray(reply.secrets) ? reply.secrets : [];
   }
+
+  async setAgentSecrets(keys: { name: string; value: string }[]): Promise<AgentSecretInfo[]> {
+    const reply = await this.awaitAck({ kind: "secrets.set", keys }, 15_000) as unknown as { secrets?: AgentSecretInfo[] };
+    return Array.isArray(reply.secrets) ? reply.secrets : [];
+  }
+
   async removeAgentSecret(id: string): Promise<AgentSecretInfo[]> {
     const reply = await this.awaitAck({ kind: "secrets.remove", id }, 15_000) as unknown as { secrets?: AgentSecretInfo[] };
     return Array.isArray(reply.secrets) ? reply.secrets : [];

@@ -28,6 +28,10 @@ export const CLIENT_COMMAND_SCHEMAS: Readonly<Record<string, TSchema>> = {
   "widgets.tool": Type.Object({ ...request, ...session, name: Type.String({ minLength: 1, maxLength: 128 }), arguments: Type.Optional(Type.Record(Type.String(), Type.Unknown())) }),
   "access.get": Type.Object(request),
   "secrets.list": Type.Object(request),
+  "secrets.set": Type.Object({
+    ...request,
+    keys: Type.Array(Type.Object({ name: Type.String({ minLength: 1, maxLength: 64 }), value: Type.String({ minLength: 1, maxLength: 16_384 }) }), { minItems: 1, maxItems: 100 }),
+  }),
   "secrets.remove": Type.Object({ ...request, id: Type.String({ minLength: 1, maxLength: 64 }) }),
   "tailnet.machines": Type.Object(request),
   "session.fork.local": Type.Object({ ...request, ...session, model: Type.Optional(Type.Object({ provider: Type.Optional(Type.String({ maxLength: 200 })), id: Type.String({ maxLength: 200 }) })) }),

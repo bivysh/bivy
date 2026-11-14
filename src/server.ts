@@ -2768,6 +2768,15 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
   "secrets.list"(msg, ctx) {
     ctx.reply({ type: "secrets.list.ok", requestId: msg.requestId, secrets: new SecretVault(appDir).agentSecrets() });
   },
+  "secrets.set"(msg, ctx) {
+    try {
+      const vault = new SecretVault(appDir);
+      vault.setAgentSecrets(msg.keys as { name: string; value: string }[]);
+      ctx.reply({ type: "secrets.set.ok", requestId: msg.requestId, secrets: vault.agentSecrets() });
+    } catch (error) {
+      ctx.reply({ type: "secrets.set.error", requestId: msg.requestId, httpStatus: 400, error: (error as Error).message });
+    }
+  },
   "secrets.remove"(msg, ctx) {
     try {
       const vault = new SecretVault(appDir);

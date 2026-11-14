@@ -59,6 +59,7 @@ export interface Command extends CommandBase {
     | "session.rewind"
     | "session.checkpoints"
     | "secrets.list"
+    | "secrets.set"
     | "secrets.remove"
     | "session.question.answer"
     | "models.list"

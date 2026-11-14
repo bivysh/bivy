@@ -377,6 +377,7 @@ export class DirectTransport implements Transport {
         case "widgets.tool":
         case "access.get":
         case "secrets.list":
+        case "secrets.set":
         case "secrets.remove":
         case "tailnet.machines": {
           const requestId = String(obj.requestId ?? "");
