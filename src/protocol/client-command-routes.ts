@@ -17,7 +17,7 @@ export const CLIENT_COMMAND_ROUTES: readonly ClientCommandRoute[] = [
   ...["remove", "theme", "ui"].map((action) => ({ method: "post" as const, path: `/api/plugins/${action}`, kind: `plugins.${action}` })),
   // Direct transport maps `widgets.state.get` to `/api/widgets/state.get` (first dot only).
   ...["state.get", "state.set", "source", "shot", "tool"].map((action) => ({ method: "post" as const, path: `/api/widgets/${action}`, kind: `widgets.${action}` })),
-  ...["list", "remove"].map((action) => ({ method: "post" as const, path: `/api/secrets/${action}`, kind: `secrets.${action}` })),
+  ...["list", "set", "remove"].map((action) => ({ method: "post" as const, path: `/api/secrets/${action}`, kind: `secrets.${action}` })),
   { method: "post", path: "/api/tailnet/machines", kind: "tailnet.machines" },
   { method: "post", path: "/api/auth/credentials/native-preview", kind: "credentials.native.preview" },
   { method: "post", path: "/api/auth/credentials/native-import", kind: "credentials.native.import" },

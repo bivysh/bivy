@@ -36,6 +36,14 @@ assert.equal(await vault.resolve("github.repo-token"), undefined);
   assert.throws(() => agentVault.deleteAgentSecret("github.repo-token"), /agents/);
   assert.equal(agentVault.deleteAgentSecret("STRIPE_API_KEY"), true);
   assert.equal(await agentVault.resolve("github.repo-token"), "ghp_node_token");
+  // Settings → Keys for agents saves agent keys only, all or nothing: a node or team entry can't be overwritten.
+  assert.throws(() => agentVault.setAgentSecrets([{ name: "OK_KEY", value: "v1" }, { name: "github.repo-token", value: "x" }]), /isn't a key name/);
+  assert.throws(() => agentVault.setAgentSecrets([{ name: "team.OK_KEY", value: "x" }]), /isn't a key name/);
+  assert.equal(await agentVault.resolve("OK_KEY"), undefined);
+  assert.equal(await agentVault.resolve("github.repo-token"), "ghp_node_token");
+  agentVault.setAgentSecrets([{ name: "OK_KEY", value: "v1-value-123456" }]);
+  assert.equal(await agentVault.resolve("OK_KEY"), "v1-value-123456");
+  assert.equal(redactSecrets("x v1-value-123456"), "x ***REDACTED***");
 }
 
 {

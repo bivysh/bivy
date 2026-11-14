@@ -175,6 +175,7 @@ export {
 } from "./transcript-event-fold.js";
 export * from "./transcript-cache.js";
 export * from "./slash.js";
+export * from "./key-lines.js";
 export * from "./nl-cron.js";
 export * from "./artifacts.js";
 export * from "./apps.js";

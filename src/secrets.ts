@@ -135,6 +135,16 @@ export class SecretVault {
       .map(({ id, description, backend, updatedAt }) => ({ id, backend, updatedAt, ...(description ? { description } : {}) }));
   }
 
+  /** Saves keys agents use (Settings → Keys for agents). All or nothing; refuses the node's own entries. */
+  setAgentSecrets(keys: { name: string; value: string }[]) {
+    for (const key of keys) {
+      if (!AGENT_SECRET_NAME.test(String(key.name))) throw new Error(`${String(key.name).slice(0, 64)} isn't a key name agents can use.`);
+      if (!key.value) throw new Error(`${key.name} has no value.`);
+    }
+    this.reload();
+    for (const key of keys) this.setLocal(key.name, key.value);
+  }
+
   /** Removes an agent key. Refuses the node's own entries. */
   deleteAgentSecret(id: string): boolean {
     if (!AGENT_SECRET_NAME.test(String(id))) throw new Error("Only keys agents use can be removed here.");

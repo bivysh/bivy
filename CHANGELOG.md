@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Settings → Keys for agents can add keys, not only list and remove the ones agents asked for. Paste lines from a `.env` file or `export NAME=value` lines into the name field to add several at once; Bivy shows which names it found before saving.
+
 ### Fixed
 - When Codex asks to run an MCP tool (Bivy's own tools included), the approval and the call are now one card in the chat. Before, the approval showed as a second card for the same tool that never finished.
 - The "Reconnecting" and "Offline" notices show `bivy status` as a command instead of with literal backticks around it.
