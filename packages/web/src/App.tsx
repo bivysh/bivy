@@ -1362,8 +1362,8 @@ export function App() {
                   ? "You were invited to view this session"
                   : state.connection.status === "offline"
                   ? activeSessionNode?.name
-                    ? `${activeSessionNode.name} is offline — run \`bivy status\` there`
-                    : "Machine offline — run `bivy status` on it"
+                    ? `${activeSessionNode.name} is offline — run bivy status there`
+                    : "Machine offline — run bivy status on it"
                   : activeSessionNode?.name
                     ? `Connecting to ${activeSessionNode.name}…`
                     : "Connecting…"

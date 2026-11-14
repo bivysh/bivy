@@ -29,7 +29,7 @@ export function PwaLifecycleNotice({ status, hasCachedTranscript, machineName, c
       {showStatus && (
         <aside className="pwa-lifecycle" aria-label="App availability">
           <div className="pwa-lifecycle-copy" data-availability={availability.kind}>
-            <strong>{availability.label}</strong><span>{availability.detail}</span>
+            <strong>{availability.label}</strong><span>{withCode(availability.detail)}</span>
           </div>
         </aside>
       )}
@@ -57,4 +57,9 @@ export function PwaLifecycleNotice({ status, hasCachedTranscript, machineName, c
       )}
     </>
   );
+}
+
+/** The copy names commands in `backticks`; show them as code, not as literal backticks. */
+function withCode(text: string) {
+  return text.split("`").map((part, index) => (index % 2 === 1 ? <code key={index}>{part}</code> : part));
 }
