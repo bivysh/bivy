@@ -18,9 +18,10 @@ export function parseKeyLines(text: string): { keys: KeyLine[]; skipped: number[
   text.split(/\r?\n/).forEach((raw, index) => {
     const line = raw.trim();
     if (!line || line.startsWith("#")) return;
-    const match = /^(?:export\s+)?([^=\s]+)\s*=\s*(.*)$/.exec(line);
-    const name = match?.[1] ?? "";
-    const value = unquote(match?.[2] ?? "");
+    const assignment = /^export\s/.test(line) ? line.slice(7).trim() : line;
+    const eq = assignment.indexOf("=");
+    const name = eq > 0 ? assignment.slice(0, eq).trim() : "";
+    const value = eq > 0 ? unquote(assignment.slice(eq + 1).trim()) : "";
     if (!KEY_NAME.test(name) || !value) { skipped.push(index + 1); return; }
     keys.delete(name);
     keys.set(name, value);
@@ -32,5 +33,6 @@ function unquote(value: string): string {
   const quote = value[0];
   if ((quote === "\"" || quote === "'") && value.length > 1 && value.endsWith(quote)) return value.slice(1, -1);
   // Unquoted: a ` #` starts a comment, as in dotenv files.
-  return value.replace(/\s+#.*$/, "").trim();
+  const comment = value.search(/\s#/);
+  return (comment < 0 ? value : value.slice(0, comment)).trim();
 }
