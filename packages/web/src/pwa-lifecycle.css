@@ -13,6 +13,7 @@
 }
 .pwa-lifecycle-copy { display: flex; align-items: center; gap: 8px; }
 .pwa-lifecycle-copy strong { color: var(--text); white-space: nowrap; }
+.pwa-lifecycle-copy code { font-family: var(--font-mono); font-size: 0.9em; white-space: nowrap; }
 
 /* Keep the optional install offer away from the composer. It is a compact,
    dismissible card at the quiet top-right edge rather than a full-width banner
