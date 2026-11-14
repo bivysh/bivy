@@ -21,6 +21,7 @@ import { createRunPolicy, type RunPolicy } from "./policy/run-policy.js";
 import { DEFAULT_BACKOFF, type Ruleset } from "./policy/ruleset.js";
 import { SessionRerouteController, type ResumePlan } from "./policy/session-reroute.js";
 import { detectSessionLimit, limitResumePlan, sessionLimitNotice, type SessionLimit } from "./policy/session-limit.js";
+import { asRuntimeCondition, type RuntimeCondition } from "./policy/conditions.js";
 import { activeRulesetFor } from "./runtime/ruleset-store.js";
 import { createRulesetController } from "./controllers/rulesets.js";
 import { createAuditLog, readAuditEvents } from "./audit/index.js";
@@ -8761,9 +8762,9 @@ function terminalTurnError(event: Record<string, unknown>): string | undefined {
  * leaving a bare error bubble. Fires at most once per turn (reset on turn_start)
  * so a retry storm — e.g. Codex's repeated websocket 401s — raises the sheet once.
  */
-function maybeSignalAuthRequired(record: SessionRecord, errorText: string): void {
+function maybeSignalAuthRequired(record: SessionRecord, errorText: string, conditionHint?: RuntimeCondition): void {
   if (record.authRequiredSignaled) return;
-  if (!isModelAuthError(errorText)) return;
+  if (conditionHint ? conditionHint !== "auth_failed" : !isModelAuthError(errorText)) return;
   const provider = authProviderForSession(record.runtimeId, record.session.getCurrentModel()?.provider);
   if (!provider) return;
   record.authRequiredSignaled = true;
@@ -8910,7 +8911,8 @@ function attachSessionListeners(record: SessionRecord) {
       // A runtime-emitted auth failure (Codex's app-server websocket 401, or a
       // ProcessRuntime/ProtocolRuntime credential preflight) — raise the sign-in
       // sheet for the right provider alongside the inline error bubble.
-      maybeSignalAuthRequired(record, String((event as { error?: unknown }).error ?? ""));
+      const e = event as { error?: unknown; condition?: unknown };
+      maybeSignalAuthRequired(record, String(e.error ?? ""), asRuntimeCondition(e.condition));
     }
     if (event.type === "runtime.models") {
       // A protocol agent published its model/effort catalog late (with its
@@ -8949,13 +8951,16 @@ function attachSessionListeners(record: SessionRecord) {
         ? humanizeAgentError((event as Record<string, unknown>).error as string)
         : undefined;
       const turnError = messageError ?? (agentEndError?.trim() ? agentEndError : undefined);
+      // The agent's own failure code, mapped to a condition by its runtime;
+      // recovery trusts it over the text match.
+      const conditionHint = asRuntimeCondition((event as Record<string, unknown>).condition);
       // Before surfacing a turn error, see if the session's run policy can recover
       // it in place by swapping to a fallback model and retrying the same prompt.
       // planReroute is synchronous, so we can atomically suppress the error toast
       // here and drive the async swap + retry below.
       const reroutePlan =
         turnError && record.lastPrompt !== undefined
-          ? record.reroute?.planReroute(turnError, record.session.getCurrentModel()?.name) ?? null
+          ? record.reroute?.planReroute(turnError, record.session.getCurrentModel()?.name, { conditionHint }) ?? null
           : null;
       // If a reroute doesn't apply, a usage/rate limit that gave a reset time can
       // instead be waited out and resumed when the window clears (planResume is
@@ -8967,7 +8972,7 @@ function attachSessionListeners(record: SessionRecord) {
       const resetsAtHint = typeof eventResetsAt === "string" ? eventResetsAt : limitResetHint(record, Date.now());
       const resumePlan =
         !reroutePlan && turnError && record.lastPrompt !== undefined
-          ? record.reroute?.planResume(turnError, record.session.getCurrentModel()?.name, { resetsAtHint }) ?? null
+          ? record.reroute?.planResume(turnError, record.session.getCurrentModel()?.name, { resetsAtHint, conditionHint }) ?? null
           : null;
       // Did this turn end by scheduling another auto-resume? If not, the session
       // made forward progress (a user turn, a resume that cleared the limit, a
@@ -9002,11 +9007,11 @@ function attachSessionListeners(record: SessionRecord) {
         if (messageError) broadcast({ type: "session.error", sessionId: record.id, error: sessionAgentError(record, messageError) });
         // A usage/rate limit nothing recovered automatically: offer the ways past
         // it — fork to another agent now, or retry when the window resets.
-        record.limitHit = detectSessionLimit(turnError, { resetsAtHint });
+        record.limitHit = detectSessionLimit(turnError, { resetsAtHint, conditionHint });
         if (record.limitHit) broadcast(limitHitNotice(record, record.limitHit));
         // If the terminal error is an auth failure (expired key/token → 4xx),
         // also raise the sign-in sheet for the failing provider.
-        maybeSignalAuthRequired(record, turnError);
+        maybeSignalAuthRequired(record, turnError, conditionHint);
         void sendNotificationHint({
           kind: "session_error",
           sessionId: record.id,

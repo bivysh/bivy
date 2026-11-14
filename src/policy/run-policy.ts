@@ -43,6 +43,8 @@ export interface RunFailureContext {
    *  provider's structured usage snapshot), preferred over anything scraped from
    *  the error text. See ClassifyOptions.resetsAtHint. */
   resetsAtHint?: string;
+  /** The agent's own structured failure condition. See ClassifyOptions.conditionHint. */
+  conditionHint?: RuntimeCondition;
 }
 
 export type RunDecision =
@@ -113,7 +115,7 @@ export function createRunPolicy(deps: RunPolicyDeps = {}): RunPolicy {
 
   return {
     decide(ctx: RunFailureContext): RunDecision {
-      const classified = classifyFailure(ctx.error, { now: now(), resetsAtHint: ctx.resetsAtHint });
+      const classified = classifyFailure(ctx.error, { now: now(), resetsAtHint: ctx.resetsAtHint, conditionHint: ctx.conditionHint });
       const { condition } = classified;
       const rule = findRule(ruleset, condition, context);
       if (!rule) return { action: "give_up", condition };

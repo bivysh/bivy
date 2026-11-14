@@ -41,6 +41,13 @@ check("a non-limit failure is not a limit", () => {
   assert.equal(detectSessionLimit("tests failed: 3 assertions", { now: NOW }), undefined);
 });
 
+check("the agent's own condition wins over the text", () => {
+  // A policy refusal whose prose happens to mention a limit is not one…
+  assert.equal(detectSessionLimit("Blocked by your workspace's usage limit policy", { now: NOW, conditionHint: "unknown" }), undefined);
+  // …and a coded limit counts even when the prose names none.
+  assert.equal(detectSessionLimit("Request failed", { now: NOW, conditionHint: "credits_exhausted" })?.condition, "credits_exhausted");
+});
+
 check("a Claude plan refused outside Claude Code points to Claude Code, not a reset", () => {
   const limit = detectSessionLimit("Third-party apps now draw from your extra usage, not your plan limits. Add more at claude.ai/settings/usage and keep going.", { now: NOW })!;
   assert.equal(limit.planNotCovered, true);

@@ -40,7 +40,7 @@ function waitFor(events: RuntimeEvent[], pred: (event: RuntimeEvent) => boolean,
   });
 }
 
-function makeRuntime(mode: "ok" | "fail" | "usage-limit" | "reconnect" | "hook" | "echo-input" | "echo-developer-instructions"): ProtocolRuntime {
+function makeRuntime(mode: "ok" | "fail" | "usage-limit" | "http-401" | "reconnect" | "hook" | "echo-input" | "echo-developer-instructions"): ProtocolRuntime {
   return new ProtocolRuntime({
     id: "codex-approvals",
     displayName: "Codex",
@@ -95,9 +95,29 @@ test("a turn/completed with status 'failed' surfaces the error, not a silent emp
   const error = events.find((event) => event.type === "session.error") as { error?: string } | undefined;
   assert.ok(error, "a failed turn/completed surfaces a session.error");
   assert.match(String(error?.error ?? ""), /usage limit/i, "the terminal turn error message reaches the transcript");
+  // codexErrorInfo rides along as a stable condition, so recovery needn't
+  // parse the English message.
+  const end = events.find((event) => event.type === "agent_end") as { condition?: string } | undefined;
+  assert.equal(end?.condition, "credits_exhausted", "the turn's codexErrorInfo reaches agent_end as a condition");
   assert.equal(session.isStreaming, false, "isStreaming is cleared after a failed turn/completed");
 
   session.dispose();
+});
+
+test("a Codex HTTP failure is classified by its status code, not its variant", async () => {
+  // Codex sends a rejected key as httpConnectionFailed { httpStatusCode: 401 }:
+  // that's a sign-in problem, not a flaky network.
+  const runtime = makeRuntime("http-401");
+  const { session } = await runtime.createSession({ workspace: process.cwd(), toolInterceptor: async () => undefined });
+  const events: RuntimeEvent[] = [];
+  session.subscribe((event) => events.push(event));
+  try {
+    await session.prompt("trigger a 401");
+    const end = await waitFor(events, (event) => event.type === "agent_end") as { condition?: string };
+    assert.equal(end.condition, "auth_failed");
+  } finally {
+    session.dispose();
+  }
 });
 
 test("a normal Codex turn still completes cleanly (agent_end, reply, no error)", async () => {
