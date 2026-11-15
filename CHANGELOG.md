@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.20] - 2026-11-15
+
 ### Added
 - Agent replies show when they arrived, next to Copy and Read aloud: on hover or focus with a mouse, always on phones. Works for every agent: the time comes from the agent's own history, or the moment the reply finished live.
 
