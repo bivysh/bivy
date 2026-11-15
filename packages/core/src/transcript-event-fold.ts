@@ -26,7 +26,7 @@ export interface TranscriptFoldEntry {
   delegation?: DelegationCard;
   id: string; role: "user" | "assistant" | "system" | "thinking" | "error"; text: string;
   html?: string; tool?: TranscriptFoldTool; streaming?: boolean; attachments?: PromptAttachment[];
-  toolOutput?: boolean; imageRefs?: Record<string, unknown>;
+  toolOutput?: boolean; imageRefs?: Record<string, unknown>; sentAt?: number;
 }
 export interface TranscriptDraftValue {
   assistantId: string | null; thinkingId: string | null; finalized: boolean;
@@ -77,16 +77,18 @@ function remove(value: TranscriptFoldValue, id: string): void {
 }
 function setWorking(value: TranscriptFoldValue, label: string): void { value.working = true; value.workingLabel = label; }
 
-function upsertDraft(value: TranscriptFoldValue, which: "assistant" | "thinking", text: string, finalize: boolean): void {
+/** `at` stamps a sealed reply with when it arrived (shown like a sent time). */
+function upsertDraft(value: TranscriptFoldValue, which: "assistant" | "thinking", text: string, finalize: boolean, at?: number): void {
   const role = which === "assistant" ? "assistant" : "thinking";
   const field = which === "assistant" ? "assistantId" : "thinkingId";
   const html = role === "assistant" && finalize ? toHtml(text) : undefined;
+  const sentAt = role === "assistant" && finalize && at !== undefined ? { sentAt: at } : {};
   let id = value.draft[field];
   if (!id) {
-    const entry = append(value, { role, text, html, streaming: !finalize });
+    const entry = append(value, { role, text, html, streaming: !finalize, ...sentAt });
     id = entry.id;
     value.draft[field] = id;
-  } else replace(value, id, { text, html, streaming: !finalize });
+  } else replace(value, id, { text, html, streaming: !finalize, ...sentAt });
   if (finalize) value.draft[field] = null;
 }
 function finishDrafts(value: TranscriptFoldValue): void {
@@ -105,14 +107,14 @@ function commitThinking(value: TranscriptFoldValue): void {
 function proseTail(draft: TranscriptDraftValue): string {
   return (draft.pendingText.startsWith(draft.committedText) ? draft.pendingText.slice(draft.committedText.length) : draft.pendingText).trim();
 }
-function commitProse(value: TranscriptFoldValue): void {
+function commitProse(value: TranscriptFoldValue, at: number): void {
   const tail = proseTail(value.draft);
   if (!tail) return;
   value.draft.committedText = value.draft.pendingText;
   if (looksLikeAgentError(tail)) {
     if (value.draft.assistantId) { remove(value, value.draft.assistantId); value.draft.assistantId = null; }
     append(value, { role: "error", text: humanizeError(tail) });
-  } else upsertDraft(value, "assistant", tail, true);
+  } else upsertDraft(value, "assistant", tail, true, at);
 }
 function previewProse(value: TranscriptFoldValue): void {
   const tail = proseTail(value.draft); if (tail) upsertDraft(value, "assistant", tail, false);
@@ -218,13 +220,13 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
       const entry: TranscriptFoldEntry = { id: `delegation-${delegation.id}`, role: "assistant", text: "", delegation };
       const index = value.transcript.findIndex((e) => e.delegation?.id === delegation.id);
       if (index >= 0) value.transcript[index] = entry;
-      else { commitThinking(value); commitProse(value); value.transcript.push(entry); }
+      else { commitThinking(value); commitProse(value, now); value.transcript.push(entry); }
       break;
     }
     case "notice": {
       const notice = (event as any).notice;
       if (!isAgentNotice(notice) || value.transcript.some((entry) => entry.notice?.id === notice.id)) break;
-      commitThinking(value); commitProse(value);
+      commitThinking(value); commitProse(value, now);
       value.transcript.push({ id: notice.id, role: "assistant", text: "", notice });
       break;
     }
@@ -272,11 +274,11 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
       const text = contentToText(msg.content).trim(); if (text) value.draft.pendingText = text;
       const thinking = resolveThinking(event, contentThinking(msg.content).trim(), value.draft); if (thinking && !text) value.draft.sawThinking = true;
       const finalize = kind === "message_end" || kind === "message_boundary";
-      if (finalize) { commitThinking(value); commitProse(value); value.draft.finalized = true; }
+      if (finalize) { commitThinking(value); commitProse(value, now); value.draft.finalized = true; }
       else { const label = text ? "Drafting response…" : "Thinking…"; if (!value.working || value.workingLabel !== label) setWorking(value, label); previewProse(value); }
       for (const tool of toolEntriesFromContent(msg.content)) applyTool(value, tool as TranscriptFoldTool); break;
     }
-    case "start": commitThinking(value); commitProse(value); finishDrafts(value); applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: toolInput(event as any), status: "running", detail: toolDetail(event as any), ...(toolParentId(event as any) ? { parentToolUseId: toolParentId(event as any) } : {}) }); setWorking(value, toolLabel(event, value.transcript)); break;
+    case "start": commitThinking(value); commitProse(value, now); finishDrafts(value); applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: toolInput(event as any), status: "running", detail: toolDetail(event as any), ...(toolParentId(event as any) ? { parentToolUseId: toolParentId(event as any) } : {}) }); setWorking(value, toolLabel(event, value.transcript)); break;
     case "update": applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: toolInput(event as any), status: "running", detail: toolDetail(event as any), ...(toolParentId(event as any) ? { parentToolUseId: toolParentId(event as any) } : {}) }); setWorking(value, toolLabel(event, value.transcript)); break;
     case "result": applyTool(value, { callId: toolId(event, value.transcript), name: toolName(event as any), input: {}, status: "done", result: toolResultText((event as any).result), detail: toolDetail(event as any) }); break;
     case "turn_end": setWorking(value, "Planning next step…"); break;

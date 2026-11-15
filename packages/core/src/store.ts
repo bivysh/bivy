@@ -289,8 +289,8 @@ export interface TranscriptEntry {
    *  attachmentsByText below), so this is populated from the client's own
    *  send-time cache, not from history data. */
   attachments?: PromptAttachment[];
-  /** When a user message was sent (epoch ms): the history message's own
-   *  timestamp, or the moment this client saw it live. */
+  /** When a user message was sent, or an agent reply arrived (epoch ms): the
+   *  history message's own timestamp, or the moment this client saw it live. */
   sentAt?: number;
   /** These attachments are images a tool returned (a screenshot the agent read),
    *  shown beside its card — part of the tool's output, not files the agent sent. */

@@ -458,6 +458,7 @@ const EntryView = memo(function EntryView({
         <div className="msg-actions">
           <CopyButton text={entry.text} />
           {readAloudSupported() && <SpeakButton text={entry.text} />}
+          {entry.sentAt && <SentTime at={entry.sentAt} className="msg-actions-time" />}
         </div>
       )}
     </div>
@@ -903,16 +904,16 @@ function toggleSentTime(event: ReactMouseEvent<HTMLDivElement>) {
   else el.setAttribute("data-show-time", "");
 }
 
-/** When a user message was sent, beside its bubble: shown on hover or tap,
- *  always in the accessibility tree. */
-function SentTime({ at }: { at: number }) {
+/** When a user message was sent (beside its bubble) or an agent reply arrived
+ *  (in its action row): always in the accessibility tree. */
+function SentTime({ at, className = "msg-time" }: { at: number; className?: string }) {
   const date = new Date(at);
   const iso = date.toISOString();
   const full = date.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
   // Within the last six days the weekday is unambiguous; older ones name the date.
   const recent = Date.now() - at < 6 * 24 * 3600_000;
   const label = recent ? formatLocalClock(iso) ?? full : date.toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
-  return <time className="msg-time" dateTime={iso} title={full}>{label}</time>;
+  return <time className={className} dateTime={iso} title={full}>{label}</time>;
 }
 
 /**

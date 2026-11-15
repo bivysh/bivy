@@ -303,13 +303,14 @@ export function renderHistory(messages: any[]): TranscriptEntry[] {
       // "Done."). Flattening all text first and appending all tools both merged
       // the two prose segments into a single bubble AND hoisted the tool cards
       // above the text that preceded them.
+      const sentAt = messageTime(msg);
       const pushText = (t: string) => {
         const trimmed = t.trim();
         if (!trimmed) return;
         entries.push(
           looksLikeAgentError(trimmed)
             ? { id: historyId(), role: "error", text: humanizeError(trimmed) }
-            : { id: historyId(), role: "assistant", text: trimmed },
+            : { id: historyId(), role: "assistant", text: trimmed, ...(sentAt !== undefined ? { sentAt } : {}) },
         );
       };
       const pushThinking = (t: string) => {
