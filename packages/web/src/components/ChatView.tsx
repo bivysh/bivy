@@ -35,6 +35,7 @@ function actionLabel(action: string): string {
   if (action === "/new") return "New session";
   if (action === "/resume") return "Resume";
   if (action === "fork") return "Fork to another agent";
+  if (action === "continue-fresh") return "Continue in a fresh session";
   if (action === "cancel-resume") return "Cancel auto-retry";
   if (action === "fix-auth" || action.startsWith("fix-auth:")) return "Fix sign-in";
   if (action === "retry-auth") return "Refresh and retry";

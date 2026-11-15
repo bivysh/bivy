@@ -4,11 +4,12 @@
 // Session limit recovery — the user-driven counterpart to the policy's automatic
 // resume (session-reroute.ts planResume).
 //
-// When a turn ends because the agent hit a provider usage/rate limit and no
-// ruleset recovered it automatically, the session shouldn't just show a dead
-// error. This decides whether the failure IS such a limit, and what the user can
-// do about it: fork the work to another agent right away, or opt in to retrying
-// the same prompt automatically once the window resets. The caller (server.ts)
+// When a turn ends because the agent hit a provider usage/rate limit, or ran
+// out of context, and no ruleset recovered it automatically, the session
+// shouldn't just show a dead error. This decides whether the failure IS such a
+// limit, and what the user can do about it: fork the work to another agent
+// right away, opt in to retrying the same prompt automatically once the window
+// resets, or continue in a fresh session that starts from a summary. The caller (server.ts)
 // surfaces the offer as a notice with action buttons and, when the user accepts
 // the retry, schedules it through the same durable resume machinery the
 // automatic path uses.
@@ -29,11 +30,21 @@ export interface SessionLimit {
 /** Anthropic's answer when a Claude plan sign-in is used outside Claude Code. */
 const PLAN_NOT_COVERED = /third[\s-]party apps? (?:now )?draw from your extra usage/i;
 
-/** The conditions a user can route around (fork) or wait out (retry at reset),
- *  with how the notice describes each. Adding a limit-like condition is a row. */
-const LIMIT_COPY: Partial<Record<RuntimeCondition, string>> = {
-  credits_exhausted: "reached its usage limit",
-  rate_limited: "is being rate-limited",
+/** The limits the notice offers a way past: how it describes each, the way
+ *  out it offers, and whether waiting for a reset can help. Adding a condition
+ *  is a row. Action ids are the client's (`fork` opens the fork sheet,
+ *  `continue-fresh` forks into the same agent from the bounded hand-off). */
+const LIMITS: Partial<Record<RuntimeCondition, { what: string; offer: string; actions: string[]; waitable: boolean }>> = {
+  credits_exhausted: { what: "reached its usage limit", offer: "Fork to another agent to keep going", actions: ["fork"], waitable: true },
+  rate_limited: { what: "is being rate-limited", offer: "Fork to another agent to keep going", actions: ["fork"], waitable: true },
+  // The agent's own compaction has already run (or failed) by the time this
+  // surfaces, so the way on is a new conversation, not the same one again.
+  context_overflow: {
+    what: "ran out of context: this conversation no longer fits its context window",
+    offer: "A fresh session can pick up from a summary of it",
+    actions: ["continue-fresh"],
+    waitable: false,
+  },
 };
 
 /** Retry a little after the stated reset: providers round reset times and a
@@ -49,9 +60,11 @@ export function detectSessionLimit(
 ): SessionLimit | undefined {
   const now = opts.now ?? Date.now();
   const classified = classifyFailure(error, { now, resetsAtHint: opts.resetsAtHint, conditionHint: opts.conditionHint });
-  if (!LIMIT_COPY[classified.condition]) return undefined;
+  const limit = LIMITS[classified.condition];
+  if (!limit) return undefined;
   const raw = error instanceof Error ? error.message : String(error ?? "");
   if (PLAN_NOT_COVERED.test(raw)) return { condition: classified.condition, planNotCovered: true };
+  if (!limit.waitable) return { condition: classified.condition };
   const resetsAt = classified.resetsAt
     ?? (classified.retryAfterMs !== undefined ? new Date(now + classified.retryAfterMs).toISOString() : undefined);
   return { condition: classified.condition, ...(resetsAt ? { resetsAt } : {}) };
@@ -68,13 +81,14 @@ export function sessionLimitNotice(agentName: string, limit: SessionLimit): { me
       actions: ["fork"],
     };
   }
-  const what = `${agentName} ${LIMIT_COPY[limit.condition] ?? "hit a limit"}.`;
-  return limit.resetsAt
+  const row = LIMITS[limit.condition] ?? { what: "hit a limit", offer: "Fork to another agent to keep going", actions: ["fork"], waitable: true };
+  const what = `${agentName} ${row.what}.`;
+  return limit.resetsAt && row.waitable
     ? {
-      message: `${what} Fork to another agent to keep going, or retry automatically when the limit resets.`,
-      actions: ["fork", `retry-at-reset:${limit.resetsAt}`],
+      message: `${what} ${row.offer}, or retry automatically when the limit resets.`,
+      actions: [...row.actions, `retry-at-reset:${limit.resetsAt}`],
     }
-    : { message: `${what} Fork to another agent to keep going.`, actions: ["fork"] };
+    : { message: `${what} ${row.offer}.`, actions: row.actions };
 }
 
 /** A resume plan for a user who opted in to retrying at reset. Undefined when

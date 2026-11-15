@@ -99,7 +99,7 @@ agents:
 | `session.retry` | `error`, optional `attempt`, `maxAttempts`, `delayMs` | A "Retrying (2/5)…" status while the agent retries a failed model call itself |
 | `session.hook` | `hook` (the hook event, e.g. `PreToolUse`), optional `done: true` | A "Running PreToolUse hook…" status while the turn waits on one of the user's hooks |
 | `session.done` | | End of turn |
-| `session.error` | `error`, optional `condition` | An error on the turn. `condition` is the failure class when the agent reports a code for it: `rate_limited`, `credits_exhausted`, `context_overflow`, `auth_failed`, `transport_error` or `unknown` (a failure retrying won't fix). Bivy uses it over the error text to decide whether to retry at the limit's reset, switch models, or ask you to sign in again |
+| `session.error` | `error`, optional `condition` | An error on the turn. `condition` is the failure class when the agent reports a code for it: `rate_limited`, `credits_exhausted`, `context_overflow`, `auth_failed`, `transport_error` or `unknown` (a failure retrying won't fix). Bivy uses it over the error text to decide whether to retry at the limit's reset, switch models, or ask you to sign in again, or offer a fresh session when the context is full. ACP agents get this from the shim: ACP's `auth_required` code and the error class in `data.errorName` (OpenCode's shape) map to a condition |
 
 Lines that aren't JSON are ignored, so banners and logs on stdout are harmless.
 A non-zero exit without `session.done` ends the turn with stderr as the error.

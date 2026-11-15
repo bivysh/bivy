@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- When an agent runs out of context (the conversation no longer fits its context window, even after its own compaction), the chat offers **Continue in a fresh session**: a new session with the same agent that starts from a summary of the conversation, with the full transcript saved where the agent can read it. Works for every agent.
+
+### Fixed
+- Full context windows are now recognized for OpenCode (its `ContextOverflowError`), Pi (its own per-provider overflow detection), and the overflow wording of Gemini, xAI, Groq, Mistral, OpenRouter, llama.cpp and other providers. An ACP agent's `auth_required` error now raises the sign-in prompt.
+
 ## [0.22.20] - 2026-11-15
 
 ### Added

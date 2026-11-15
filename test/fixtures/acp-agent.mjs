@@ -77,6 +77,8 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     case "session/cancel":
       return; // notification
     case "session/prompt": {
+      // The prompt fails with this JSON-RPC error object (OpenCode's shape).
+      if (process.env.ACP_PROMPT_ERROR) { send({ jsonrpc: "2.0", id, error: JSON.parse(process.env.ACP_PROMPT_ERROR) }); return; }
       if (process.env.BIVY_TEST_PROMPT_DUMP) {
         try { fs.writeFileSync(process.env.BIVY_TEST_PROMPT_DUMP, JSON.stringify(params?.prompt ?? null)); } catch { /* ignore */ }
       }

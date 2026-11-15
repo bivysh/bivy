@@ -135,6 +135,7 @@ export function createForkCommands(deps: ForkCommandDeps): CommandEntries<ForkCo
           targetRuntimeId: deps.agentFrom(msg) ?? bundle.record.runtimeId,
           model: deps.modelFrom(msg),
           transcriptUrl: typeof msg.transcriptUrl === "string" ? msg.transcriptUrl : undefined,
+          ...(msg.seedOnly === true ? { seedOnly: true } : {}),
           // Cross-agent forks can use this import handler without changing
           // nodes. In that case the source branch is already checked out here,
           // so cut an independent fork branch instead of trying to adopt it.

@@ -12,6 +12,7 @@
 // quirk here and the whole policy layer understands it — no rule edits, no
 // regexes scattered through runtimes and the queue poller.
 
+import { getOverflowPatterns } from "@earendil-works/pi-ai/utils/overflow";
 import { isAnthropicAuthError } from "../runtime/anthropic-preflight.js";
 
 /** Stable, provider-agnostic failure classes a ruleset can match on. */
@@ -142,6 +143,8 @@ export function parseResetClock(raw: string, nowMs: number): string | undefined 
   return new Date(target).toISOString();
 }
 
+const OVERFLOW_PATTERNS = getOverflowPatterns();
+
 // Ordered classifiers: the FIRST match wins, so more-specific/actionable
 // conditions are tested before broader ones (auth 401 before generic HTTP
 // noise; explicit billing/quota before a bare rate-limit; context-window before
@@ -166,10 +169,12 @@ const CLASSIFIERS: { condition: RuntimeCondition; test: (raw: string) => boolean
   },
   {
     condition: "context_overflow",
+    // Plus pi-ai's table of every provider's overflow wording (Gemini, xAI,
+    // Groq, Mistral, llama.cpp…), kept current upstream.
     test: (r) =>
-      /context[\s_-]?(?:length|window|limit)|maximum context|prompt is too long|too many tokens|exceeds?\b[^.]*\btokens?\b/i.test(
+      /context[\s_-]?(?:length|window|limit)|maximum context|prompt is too long|too many tokens|exceeds?\b[^.]*\btokens?\b|context exceeds/i.test(
         r,
-      ),
+      ) || OVERFLOW_PATTERNS.some((pattern) => pattern.test(r)),
   },
   {
     condition: "node_offline",

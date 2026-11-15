@@ -37,6 +37,13 @@ check("a limit with no known reset offers only fork, and no resume plan", () => 
   assert.equal(limitResumePlan(limit, NOW), undefined);
 });
 
+check("a full context window offers a fresh session, never a wait", () => {
+  const limit = detectSessionLimit("Session too large to compact", { now: NOW, conditionHint: "context_overflow", resetsAtHint: "2026-09-26T12:00:00Z" })!;
+  assert.deepEqual(limit, { condition: "context_overflow" });
+  assert.deepEqual(sessionLimitNotice("OpenCode", limit).actions, ["continue-fresh"]);
+  assert.equal(limitResumePlan(limit, NOW), undefined);
+});
+
 check("a non-limit failure is not a limit", () => {
   assert.equal(detectSessionLimit("tests failed: 3 assertions", { now: NOW }), undefined);
 });

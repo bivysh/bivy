@@ -515,6 +515,13 @@ export function App() {
     switch (name) {
       case "/new": controller.newSession(); break;
       case "fork": setForkSheetOpen(true); break;
+      // The conversation no longer fits the agent's context window: carry it
+      // into a new session of the same agent as the bounded hand-off summary.
+      case "continue-fresh": {
+        const sessionId = controller.store.getState().activeSession.activeSessionId;
+        if (sessionId) void controller.forkSession(sessionId, { fresh: true }).catch(() => {});
+        break;
+      }
       case "cancel-resume": controller.setLimitRetry(false); break;
       case "/resume":
         // Manual resume: continue the turn a restart interrupted. Sent as a normal

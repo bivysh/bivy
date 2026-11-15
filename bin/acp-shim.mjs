@@ -75,6 +75,33 @@ function bivy(obj) {
   process.stdout.write(`${JSON.stringify(obj)}\n`);
 }
 
+// --- failures ----------------------------------------------------------------
+// An ACP agent's JSON-RPC error as one of Bivy's stable failure conditions, so
+// the daemon's recovery (sign-in sheet, the context-full notice) needn't guess
+// from the English message. ACP itself defines one code (auth_required); agents
+// name their own error classes in `data` (OpenCode: `data.errorName`). A failure
+// that matches no row falls back to the daemon's text match.
+const FAILURE_CODES = { [-32000]: "auth_failed" }; // ACP auth_required
+const FAILURE_ERROR_NAMES = {
+  ContextOverflowError: "context_overflow",
+  ProviderAuthError: "auth_failed",
+};
+
+/** A JSON-RPC error object as an Error that keeps its code and data. */
+function rpcError(error) {
+  const e = new Error(error?.message || "acp error");
+  e.code = error?.code;
+  e.data = error?.data;
+  return e;
+}
+
+function failurePayload(error) {
+  const name = error?.data && typeof error.data === "object" ? error.data.errorName : undefined;
+  const condition = (typeof name === "string" && Object.hasOwn(FAILURE_ERROR_NAMES, name) ? FAILURE_ERROR_NAMES[name] : undefined)
+    ?? (Object.hasOwn(FAILURE_CODES, error?.code) ? FAILURE_CODES[error.code] : undefined);
+  return { error: error instanceof Error ? error.message : String(error), ...(condition ? { condition } : {}) };
+}
+
 // --- ACP agent (child JSON-RPC over its stdio) ------------------------------
 const agent = spawn(agentCmd, agentArgs, { stdio: ["pipe", "pipe", "pipe"] });
 agent.stderr.on("data", (d) => process.stderr.write(`[acp-agent] ${d}`));
@@ -676,7 +703,7 @@ createInterface({ input: agent.stdout }).on("line", (line) => {
     const p = pending.get(msg.id);
     if (p) {
       pending.delete(msg.id);
-      if (msg.error) p.reject(new Error(msg.error.message || "acp error"));
+      if (msg.error) p.reject(rpcError(msg.error));
       else p.resolve(msg.result);
     }
     return;
@@ -793,7 +820,7 @@ async function onBivyCommand(msg) {
             clearTimeout(turnDrainTimer);
             turnDrainTimer = null;
             turnDraining = false;
-            bivy({ type: "session.error", error: e instanceof Error ? e.message : String(e) });
+            bivy({ type: "session.error", ...failurePayload(e) });
           });
         return;
       }

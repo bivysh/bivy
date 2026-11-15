@@ -25,6 +25,8 @@ const cases: [string, string][] = [
   ["Session limit reached; try later", "credits_exhausted"],
   ["This model's maximum context length is 200000 tokens", "context_overflow"],
   ["prompt is too long: 250000 tokens", "context_overflow"],
+  // Wording from pi-ai's per-provider table (xAI here), not Bivy's own regex.
+  ["maximum prompt length is 131072 but request contains 140000", "context_overflow"],
   ["unexpected status 401 Unauthorized", "auth_failed"],
   ["invalid x-api-key", "auth_failed"],
   ["connect ECONNREFUSED 10.0.0.4:22", "node_offline"],
