@@ -5,6 +5,8 @@ import {
   foldConnectionEvent,
   foldPresentationEvent,
   foldSessionIndexEvent,
+  foldTranscriptEvent,
+  freshTranscriptDraft,
 } from "../src/index.js";
 
 describe("pure app event folds", () => {
@@ -44,5 +46,16 @@ describe("pure app event folds", () => {
       handled: true,
       settings: { nodeSettings: { name: "Runner" } },
     });
+  });
+
+  it("stamps a sealed agent reply with when it arrived, not the streaming preview", () => {
+    const start = { transcript: [], draft: freshTranscriptDraft(false), working: true, workingLabel: "" };
+    const message = { role: "assistant", content: [{ type: "text", text: "Hi there" }] };
+    const streaming = foldTranscriptEvent(start, { type: "message_update", message } as any, 1000).value;
+    expect(streaming.transcript[0]).toMatchObject({ streaming: true });
+    expect(streaming.transcript[0]?.sentAt).toBeUndefined();
+    const sealed = foldTranscriptEvent(streaming, { type: "message_end", message } as any, 2000).value;
+    expect(sealed.transcript).toHaveLength(1);
+    expect(sealed.transcript[0]).toMatchObject({ role: "assistant", text: "Hi there", streaming: false, sentAt: 2000 });
   });
 });

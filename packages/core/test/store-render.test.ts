@@ -195,4 +195,11 @@ describe("renderHistory sent times", () => {
     ]).filter((e) => e.role === "user");
     expect(users.map((e) => e.sentAt)).toEqual([1793408803479, Date.parse("2026-11-03T01:00:00.000Z"), undefined]);
   });
+
+  it("carries an agent reply's own time onto each of its text bubbles", () => {
+    const replies = renderHistory([
+      { role: "assistant", timestamp: 1793408803479, content: [{ type: "text", text: "Looking." }, { type: "tool_use", id: "t1", name: "Read", input: {} }, { type: "text", text: "Done." }] },
+    ]).filter((e) => e.role === "assistant" && !e.tool);
+    expect(replies.map((e) => [e.text, e.sentAt])).toEqual([["Looking.", 1793408803479], ["Done.", 1793408803479]]);
+  });
 });

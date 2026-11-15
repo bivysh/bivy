@@ -865,6 +865,13 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
   100% { background: transparent; box-shadow: 0 0 0 var(--space-2) transparent; }
 }
 .msg-actions { display: flex; align-items: center; gap: 2px; margin-top: var(--space-1); margin-left: -6px; }
+/* When an agent reply arrived: after its actions, so it adds no height. With a
+   pointer it shows while the reply is hovered or focused; touch shows it. */
+.msg-actions-time { margin-left: var(--space-1); white-space: nowrap; font-size: var(--text-xs); color: var(--muted); }
+@media (hover: hover) {
+  .msg-actions-time { opacity: 0; transition: opacity var(--dur-fast) var(--ease-standard); }
+  .assistant-row:is(:hover, :focus-within) .msg-actions-time { opacity: 1; }
+}
 .msg-copy-btn, .msg-speak-btn {
   border: 0; background: transparent; color: var(--muted);
   display: inline-flex; align-items: center; justify-content: center;

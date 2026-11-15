@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Agent replies show when they arrived, next to Copy and Read aloud: on hover or focus with a mouse, always on phones. Works for every agent: the time comes from the agent's own history, or the moment the reply finished live.
+
 ### Fixed
 - Bivy now reads the error codes Claude Code and Codex send when a turn fails, instead of guessing from the error text. Usage limits, rate limits, rejected keys and full context windows are recognized even when the wording changes, so retry-at-reset and the sign-in prompt work as intended. A Codex request refused by policy (including the new workspace inference hooks) no longer counts as a usage limit. Other agents can send the same `condition` on `session.error`.
 
