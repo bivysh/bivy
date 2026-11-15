@@ -264,6 +264,10 @@ export interface MaterializeForkOptions {
    *  the path, or undefined when it couldn't be written. Seed path only. */
   /** Save the readable transcript where the agent can read it; returns its path. */
   saveTranscript?: (markdown: string, cwd: string) => string | undefined;
+  /** Skip the native import and the history replay: start a fresh session
+   *  from the bounded seed. For a conversation too long to carry whole (the
+   *  agent's context window is full). */
+  seedOnly?: boolean;
 }
 
 /**
@@ -286,7 +290,7 @@ export async function materializeFork(opts: MaterializeForkOptions): Promise<For
   // Native transport is the preferred same-runtime route, but never a single
   // point of failure. An adapter upgrade, stale native store, or malformed
   // payload degrades through the exact same portable path all agents share.
-  if (intended === "full" && bundle.native && targetRuntime.importForFork) {
+  if (!opts.seedOnly && intended === "full" && bundle.native && targetRuntime.importForFork) {
     try {
       const imported = await targetRuntime.importForFork(bundle.native, ctx);
       if (validImport(imported)) return { kind: "resume", fidelity: "full", ...imported };
@@ -299,6 +303,7 @@ export async function materializeFork(opts: MaterializeForkOptions): Promise<For
   // a native history serializer. This path also rescues a failed same-runtime
   // native import, so Pi/Claude/Codex all share one degradation ladder.
   const canReplay =
+    !opts.seedOnly &&
     !!targetRuntime.capabilities.forkHistoryImport &&
     typeof targetRuntime.importHistoryForFork === "function";
   if (canReplay) {

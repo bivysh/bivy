@@ -11,6 +11,9 @@ export interface SessionForkOptions {
   sourceAgentId?: string;
   model?: { provider: string; id: string };
   retireSource?: boolean;
+  /** Start the fork from the bounded hand-off summary, never the full history
+   *  (the conversation no longer fits the agent's context window). */
+  fresh?: boolean;
 }
 
 export interface SessionOrchestrationDependencies {
@@ -261,7 +264,7 @@ export class SessionOrchestrator {
     const targetAgentId = opts.agentId ?? sourceAgentId;
     const crossAgent = Boolean(targetAgentId && (!sourceAgentId || targetAgentId !== sourceAgentId));
 
-    if (!crossNode && !crossAgent) {
+    if (!crossNode && !crossAgent && !opts.fresh) {
       this.deps.reportForkProgress?.("Copying the conversation and working files…");
       const done = await this.request(
         { kind: "session.fork.local", sessionId: sourceSessionId, ...(opts.model ? { model: opts.model } : {}) },
@@ -313,6 +316,7 @@ export class SessionOrchestrator {
         bundle,
         transcriptUrl: sourceTranscriptUrl,
         sameNode: !crossNode,
+        ...(opts.fresh ? { seedOnly: true } : {}),
         ...(targetAgentId ? { agent: targetAgentId } : {}),
         ...(opts.model ? { model: opts.model } : {}),
       }, FORK_IMPORT_TIMEOUT_MS);

@@ -10,7 +10,7 @@
 import { accountModelLists, withinAccount } from "../../runtime/account-models.js";
 import fs from "node:fs";
 import path from "node:path";
-import type { AssistantMessage, UserMessage } from "@earendil-works/pi-ai";
+import { isContextOverflow, type AssistantMessage, type UserMessage } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
   AgentSessionRuntime,
@@ -297,7 +297,8 @@ class PiSession implements RuntimeSession {
       if (type === "agent_settled") {
         const end = runEnd ?? { type: "agent_end", messages: [] };
         runEnd = undefined;
-        listener({ ...end, willRetry: false, ...(event?.aborted ? { aborted: true } : {}) });
+        const condition = this.failureCondition(end.messages);
+        listener({ ...end, willRetry: false, ...(event?.aborted ? { aborted: true } : {}), ...(condition ? { condition } : {}) });
         return;
       }
       if (type === "auto_retry_start") {
@@ -325,6 +326,15 @@ class PiSession implements RuntimeSession {
       unsubscribeBackground();
       unsubscribeSession();
     };
+  }
+
+  /** The settled turn's failure as a stable condition. Pi knows every
+   *  provider's context-overflow wording (pi-ai isContextOverflow), which the
+   *  daemon's text match doesn't. */
+  private failureCondition(messages: unknown): "context_overflow" | undefined {
+    const last = Array.isArray(messages) ? [...messages].reverse().find((m) => m?.role === "assistant") : undefined;
+    if (last?.stopReason !== "error") return undefined;
+    return isContextOverflow(last as AssistantMessage, this.session.model?.contextWindow) ? "context_overflow" : undefined;
   }
 
   /**

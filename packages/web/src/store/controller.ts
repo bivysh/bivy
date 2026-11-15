@@ -1885,7 +1885,7 @@ export class AppController {
   /** Fork/copy/move orchestration is owned by SessionOrchestrator. */
   async forkSession(
     sourceSessionId: string,
-    opts: { destNodeId?: string; managedConfigId?: string; agentId?: string; sourceAgentId?: string; model?: { provider: string; id: string }; retireSource?: boolean } = {},
+    opts: { destNodeId?: string; managedConfigId?: string; agentId?: string; sourceAgentId?: string; model?: { provider: string; id: string }; retireSource?: boolean; fresh?: boolean } = {},
     beforeStart?: () => Promise<void>,
   ): Promise<{ sessionId: string; fidelity: string; missing: Array<{ label?: string; detail?: string }> }> {
     if (this.forkInFlight) throw new Error("A session fork is already in progress");
@@ -1921,7 +1921,9 @@ export class AppController {
       }
       await this.waitForForkReady(result.sessionId);
       navigate({ kind: "session", id: result.sessionId });
-      this.store.setNotice(`This session was forked from “${sourceName}” with ${sourceAgent} to ${targetAgent}.`);
+      this.store.setNotice(opts.fresh
+        ? `This session continues “${sourceName}” from a summary of it, so it starts with room in ${targetAgent}'s context window.`
+        : `This session was forked from “${sourceName}” with ${sourceAgent} to ${targetAgent}.`);
       this.store.setForkProgress(null);
       return result;
     } catch (error) {

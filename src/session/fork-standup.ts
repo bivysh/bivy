@@ -47,6 +47,8 @@ export interface StandUpForkOptions {
   model?: ModelRef;
   /** Full transcript URL, woven into a seeded (cross-runtime) continuation prompt. */
   transcriptUrl?: string;
+  /** Always start from the bounded seed (see MaterializeForkOptions.seedOnly). */
+  seedOnly?: boolean;
   /**
    * Worktree strategy for a repo-backed source:
    *   - "adopt" — check out the source's branch (cross-node import; the source
@@ -304,7 +306,7 @@ export function createForkStandUp<R extends ForkStandUpSession>(deps: ForkStandU
     // cross-agent fork must let the destination choose its own default unless the
     // caller explicitly supplied a model valid for that target.
     const targetModel = opts.model ?? (targetRuntimeId === bundle.record.runtimeId ? bundle.record.modelRef : undefined);
-    const plan = await deps.materializeFork({ bundle, targetRuntime, ctx: { workspace, cwd, model: targetModel }, seed: { transcriptUrl: opts.transcriptUrl }, saveTranscript: deps.saveForkTranscript });
+    const plan = await deps.materializeFork({ bundle, targetRuntime, ctx: { workspace, cwd, model: targetModel }, seed: { transcriptUrl: opts.transcriptUrl }, saveTranscript: deps.saveForkTranscript, ...(opts.seedOnly ? { seedOnly: true } : {}) });
     const record = plan.kind === "resume"
       ? await deps.createSession(cwd, plan.sessionFile, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, approvalMode: forkApproval, makeActive: false, newSession: true })
       : await deps.createSession(cwd, undefined, { runtimeId: targetRuntimeId, source: bundle.record.source, sandbox: forkSandbox, approvalMode: forkApproval, makeActive: false, newSession: true });

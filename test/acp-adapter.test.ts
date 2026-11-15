@@ -272,6 +272,29 @@ await check("acp: an agent's thought_level option drives the reasoning-effort pi
   }
 });
 
+await check("acp: a failed prompt's error class becomes the turn's condition", async () => {
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_PROMPT_ERROR = JSON.stringify({ code: -32603, message: "Internal error: Session too large to compact", data: { service: "session", errorName: "ContextOverflowError" } });
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: __dirname, piDir: __dirname, sessionsDir: __dirname });
+    const { session } = await runtime.createSession({ workspace: __dirname, toolInterceptor: async () => undefined });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      await session.prompt("hello");
+      const end = await waitFor(events, (event) => event.type === "agent_end");
+      assert.equal((end as { condition?: string }).condition, "context_overflow");
+    } finally {
+      session.dispose();
+    }
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_PROMPT_ERROR;
+  }
+});
+
 await check("acp: a retry the agent reports in an extension notification is agent_retry", async () => {
   process.env.BIVY_ACP_COMMAND = process.execPath;
   process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);

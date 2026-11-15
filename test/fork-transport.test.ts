@@ -283,6 +283,18 @@ async function run() {
     assert.equal(replayed, true, "the runtime-neutral history was used after native failure");
   });
 
+  await test("seedOnly skips the native import and the replay: a fresh session from the seed", async () => {
+    const bundle = buildForkBundle({ runtime: fakeRuntime("same", true), sessionFile: "x", record: record({ runtimeId: "same" }) });
+    const target: AgentRuntime = {
+      ...fakeRuntime("same", true, true),
+      importForFork: async () => { throw new Error("must not import natively"); },
+      importHistoryForFork: async () => { throw new Error("must not replay"); },
+    };
+    const plan = await materializeFork({ bundle, targetRuntime: target, ctx: { workspace: "/w", cwd: "/w" }, seedOnly: true });
+    assert.equal(plan.kind, "seed");
+    assert.ok((plan as { seedPrompt: string }).seedPrompt.includes("seed me"), "the recent conversation is in the seed");
+  });
+
   await test("invalid or failing history imports degrade to the universal seeded continuation", async () => {
     const source = fakeRuntime("source", false);
     const bundle = buildForkBundle({ runtime: source, sessionFile: "x", record: record({ runtimeId: source.id }) });
