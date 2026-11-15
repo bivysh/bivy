@@ -12,7 +12,6 @@
 // quirk here and the whole policy layer understands it — no rule edits, no
 // regexes scattered through runtimes and the queue poller.
 
-import { getOverflowPatterns } from "@earendil-works/pi-ai/utils/overflow";
 import { isAnthropicAuthError } from "../runtime/anthropic-preflight.js";
 
 /** Stable, provider-agnostic failure classes a ruleset can match on. */
@@ -143,7 +142,12 @@ export function parseResetClock(raw: string, nowMs: number): string | undefined 
   return new Date(target).toISOString();
 }
 
-const OVERFLOW_PATTERNS = getOverflowPatterns();
+// pi-ai's table of every provider's context-overflow wording, kept current
+// upstream. pi-ai is an optional dependency (the Pi agent's), so without it
+// the classifier falls back to its own pattern below.
+const OVERFLOW_PATTERNS: RegExp[] = await import("@earendil-works/pi-ai/utils/overflow")
+  .then((m) => m.getOverflowPatterns())
+  .catch(() => []);
 
 // Ordered classifiers: the FIRST match wins, so more-specific/actionable
 // conditions are tested before broader ones (auth 401 before generic HTTP
