@@ -31,6 +31,7 @@ const EXPECTED_PICKER = [
   // Second wave — the next-most-used CLIs, same data-driven ProcessRuntime path.
   "cursor",
   "copilot",
+  "kimi",
   "grok",
   "amp",
   "auggie",
@@ -86,7 +87,7 @@ assert.equal(listRuntimes().find((r) => r.id === "opencode")!.protectionLevel, "
 // per-tool approvals, or the PWA renders a control that silently no-ops.
 const CLI_ADAPTERS = [
   "opencode", "gemini", "qwen", "goose", "aider", "cline", "crush",
-  "cursor", "copilot", "grok", "amp", "auggie", "droid", "continue", "kilocode", "rovodev",
+  "cursor", "copilot", "kimi", "grok", "amp", "auggie", "droid", "continue", "kilocode", "rovodev",
 ];
 for (const id of CLI_ADAPTERS) {
   const info = listRuntimes().find((r) => r.id === id);
@@ -100,7 +101,7 @@ for (const id of CLI_ADAPTERS) {
 // cline --id) — wired as a spec.resume template (see AGENT_PROFILES in
 // src/agents/profiles.ts). Aider and Crush have no such upstream flag, so they stay
 // off until one exists (see the per-agent comments there).
-const RESUME_CAPABLE = ["opencode", "gemini", "qwen", "goose", "cline", "cursor", "amp", "kilocode", "rovodev", "grok"];
+const RESUME_CAPABLE = ["opencode", "gemini", "qwen", "goose", "cline", "cursor", "amp", "kilocode", "rovodev", "grok", "kimi"];
 const RESUME_INCAPABLE = ["aider", "crush", "copilot", "auggie", "droid", "continue"];
 for (const id of RESUME_CAPABLE) {
   const caps = listRuntimes().find((r) => r.id === id)!.capabilities as Record<string, unknown>;
@@ -115,7 +116,7 @@ for (const id of RESUME_INCAPABLE) {
 // agent's model (a launch flag + a selectable list) — and NOT where it can't, so
 // the picker never renders a model dropdown that no-ops.
 const MODEL_CAPABLE = ["gemini", "qwen", "aider", "opencode", "codex-approvals", "cursor", "copilot", "grok", "droid", "continue", "kilocode"];
-const MODEL_INCAPABLE = ["goose", "cline", "crush", "amp", "auggie", "rovodev"];
+const MODEL_INCAPABLE = ["goose", "cline", "crush", "amp", "auggie", "rovodev", "kimi"];
 for (const id of MODEL_CAPABLE) {
   const caps = listRuntimes().find((r) => r.id === id)!.capabilities as Record<string, unknown>;
   assert.equal(caps.modelSelection, true, `${id} should advertise modelSelection (it has a model flag + list)`);
@@ -129,7 +130,7 @@ for (const id of MODEL_INCAPABLE) {
 // extracts token usage (gemini-json / goose-stream-json). The dumb-pipe streamers
 // (opencode/aider/cline/crush) and OpenCode have no usage parser, so it stays off.
 const USAGE_CAPABLE = ["gemini", "qwen", "goose"];
-const USAGE_INCAPABLE = ["opencode", "aider", "cline", "crush", "cursor", "copilot", "grok", "amp", "auggie", "droid", "continue", "kilocode", "rovodev"];
+const USAGE_INCAPABLE = ["opencode", "aider", "cline", "crush", "cursor", "copilot", "kimi", "grok", "amp", "auggie", "droid", "continue", "kilocode", "rovodev"];
 for (const id of USAGE_CAPABLE) {
   const caps = listRuntimes().find((r) => r.id === id)!.capabilities as Record<string, unknown>;
   assert.equal(caps.usageReporting, true, `${id} should report usage (its JSON parser emits tokens)`);

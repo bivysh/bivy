@@ -37,6 +37,7 @@ export type AgentProfileId =
   // "hermes"): it has no verified non-TTY headless mode upstream yet.
   | "cursor"
   | "copilot"
+  | "kimi"
   | "grok"
   | "amp"
   | "auggie"
@@ -548,6 +549,31 @@ export const AGENT_PROFILES: Record<AgentProfileId, AgentProfile> = {
     acp: { args: ["--acp"] },
     promptMode: "argv",
     install: { kind: "npm", pkg: "@github/copilot" },
+  },
+  kimi: {
+    displayName: "Kimi Code",
+    command: "kimi",
+    packageName: "@moonshot-ai/kimi-code",
+    supportTier: "supported",
+    testedVersion: "2.6.2",
+    blurb: "Moonshot AI's terminal coding agent (Kimi Code CLI): Kimi plan, Moonshot API key or any OpenAI/Anthropic-compatible provider.",
+    // `kimi -p "<prompt>"` runs one non-interactive turn and prints the reply.
+    // It refuses --yolo/--auto alongside -p, so the pipe path runs at Kimi's
+    // own default policy. Prompt trails.
+    args: ["-p"],
+    promptMode: "argv",
+    // `kimi -S <id> -p "<prompt>"` continues a session by its id (the reply's
+    // own "To resume this session: kimi -r <id>" hint), per `kimi --help`.
+    resume: { template: ["-S", "{id}", "-p"] },
+    // `kimi acp` ("Run kimi-code as an Agent Client Protocol (ACP) server over
+    // stdio"): session/new + session/load + live model, thinking and mode
+    // options, and ACP auth_required when signed out. Validated against 2.6.2
+    // (a full turn against a local OpenAI-compatible provider), so it is ON by
+    // default, gated on `kimi --help` listing it. Older kimi-cli (the archived
+    // Python CLI) falls back to the pipe path. BIVY_KIMI_ACP=0 forces the pipe.
+    acp: { args: ["acp"], helpToken: "agent client protocol", preferred: true },
+    tui: { resume: ["-S", "{id}"] },
+    install: { kind: "npm", pkg: "@moonshot-ai/kimi-code" },
   },
   grok: {
     displayName: "Grok",
