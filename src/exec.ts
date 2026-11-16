@@ -41,7 +41,8 @@ One-shot headless turn: prints the final answer to stdout, progress to stderr.
   -n, --name <label>     Session name
   -w, --workspace <dir>  Workspace directory
       --session <ref>    Continue an existing session instead of starting one
-      --json             Print {"sessionId","answer"} instead of plain text
+      --json             Print {"sessionId","answer"} instead of plain text, plus
+                         "notices" when the turn posted a warning
       --timeout <sec>    Give up after this many seconds (default 600)
   -h, --help             Show this help
       --                 Everything after this is prompt text, even if it starts with -
@@ -232,6 +233,9 @@ async function main() {
   // assistant message marked stopReason "error" before a normal agent_end.
   let turnError = "";
   let aborted = false;
+  // Warnings the node posted in the chat during this turn (the model declined,
+  // the reply was cut off, a limit). Shown on stderr; --json carries them.
+  let notices: string[] = [];
   // Turn ends that belong to a turn already running when this prompt was sent:
   // an agent that can't steer runs the prompt after it (the node says `queued`).
   let openTurnEnds = 0;
@@ -244,7 +248,7 @@ async function main() {
     settled = true;
     try { socket.close(); } catch {}
     if (errorText) { err(`${errorText}\n`); process.exit(code); return; }
-    if (args.json) process.stdout.write(JSON.stringify({ sessionId, answer }) + "\n");
+    if (args.json) process.stdout.write(JSON.stringify({ sessionId, answer, ...(notices.length ? { notices } : {}) }) + "\n");
     else process.stdout.write(answer.replace(/\s+$/, "") + "\n");
     process.exit(code);
   };
@@ -311,6 +315,7 @@ async function main() {
         answer = "";
         turnError = "";
         aborted = false;
+        notices = [];
       } else if (ev.type === "agent_end") {
         clearTimeout(timer);
         // A turn can end without any assistant text because the agent FAILED
@@ -331,6 +336,9 @@ async function main() {
           finish(0);
         }
       }
+    } else if (type === "session.notice" && (msg.level === "warning" || msg.level === "warn" || msg.level === "error")) {
+      const text = typeof msg.message === "string" ? msg.message.trim() : "";
+      if (text) { notices.push(text); err(`\x1b[2m· ${text}\x1b[22m\n`); }
     } else if (type === "session.error") {
       clearTimeout(timer);
       finish(1, String(msg.error || "Session error"));

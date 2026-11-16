@@ -141,6 +141,25 @@ async function newSession() {
   assert.deepEqual(reloaded.filter((e) => e.role === "system").map((e) => e.text), ["PreToolUse hook blocked Edit: config is read-only"]);
 }
 
+// ── system/model_refusal_fallback: the model refused, Claude Code retracted that
+//    reply and retried on a fallback model. The retracted reply leaves the
+//    stored transcript (clients are told to re-read it), and a notice says why ──
+{
+  const { session, queries, events } = await newSession();
+  await session.prompt("scan the network");
+  await waitFor(() => queries.length === 1);
+  const q = queries[0]!;
+  q.emit({ type: "assistant", uuid: "refused-1", message: { model: "claude-opus-5-5", content: [{ type: "text", text: "Refused partial" }] } });
+  q.emit({ type: "system", subtype: "model_refusal_fallback", trigger: "refusal", direction: "retry", scope: "session", original_model: "claude-opus-5-5", fallback_model: "claude-opus-4-8", retracted_message_uuids: ["refused-1"], content: "long banner" });
+  q.emit({ type: "assistant", uuid: "retry-1", supersedes: ["refused-1"], message: { model: "claude-opus-4-8", content: [{ type: "text", text: "Fallback answer" }] } });
+  await waitFor(() => events.some((e) => e.type === "session.notice"));
+  assert.equal(events.filter((e) => e.type === "messages_retracted").length, 1, "one retraction; supersedes of an already-retracted uuid is a no-op");
+  assert.match(events.find((e) => e.type === "session.notice").message, /^Claude Opus 5\.5 declined this request, so Claude Code retried it on Claude Opus 4\.8, and this session now uses it\.$/);
+  const stored = JSON.stringify(session.getMessages());
+  assert.doesNotMatch(stored, /Refused partial/);
+  assert.match(stored, /Fallback answer/);
+}
+
 // ── system/api_retry: Claude Code retrying a failed API call reaches the client
 //    as the shared agent_retry event, not a bare system event ──
 {

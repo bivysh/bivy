@@ -463,12 +463,15 @@ stderr, so stdout is pipe-clean.
 | --- | --- | --- |
 | `-a`, `--agent <id>` | node default | Agent to run |
 | `--session <ref>` | — | Resume an existing session instead of creating one |
-| `--json` | off | Print `{"sessionId":…,"answer":…}` instead of raw text |
+| `--json` | off | Print `{"sessionId":…,"answer":…}` instead of raw text, plus `"notices"` when the turn posted a warning (the model declined, the reply was cut off) |
 | `--timeout <seconds>` | 600 | Give up after this long. Env: `BIVY_EXEC_TIMEOUT_MS` |
 | `--url <url>` | node URL | Node base URL. Env: `BIVY_URL` |
 | `--token <token>` | minted | Device token. Env: `BIVY_DEVICE_TOKEN` |
 
 A prompt of `-`, or no prompt with non-TTY stdin, reads the prompt from stdin.
+
+Warnings the turn posts in the chat (the model declined, the reply was cut off
+at the output limit) also print on stderr, so stdout stays just the answer.
 
 Exit codes: `0` on a completed turn, `1` on timeout/error/disconnect, `2` when
 no prompt was supplied.

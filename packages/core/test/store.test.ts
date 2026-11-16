@@ -639,6 +639,22 @@ describe("SessionStore", () => {
     expect(store.getState().activeSession.working).toBe(false);
   });
 
+  it("re-reads history once the turn settles after the agent retracted a shown message", () => {
+    const store = new SessionStore();
+    let freshRequested = 0;
+    store.requestFreshHistory = () => (freshRequested += 1);
+    store.apply({ type: "session.history", requestId: "r1", sessionId: "s1", count: 1, historyHash: "h1", messages: [{ role: "user", content: "hi" }] });
+    store.apply({ type: "message_start", message: { role: "assistant" } });
+    store.apply({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "refused partial" }] } });
+    store.apply({ type: "messages_retracted" });
+    expect(freshRequested).toBe(0); // not mid-turn: the live tail would be erased
+    store.apply({ type: "agent_end" });
+    expect(freshRequested).toBe(1);
+    store.apply({ type: "agent_start" });
+    store.apply({ type: "agent_end" });
+    expect(freshRequested).toBe(1); // one re-read per retraction
+  });
+
   it("applies the initial open snapshot even when a live delta flipped working first", () => {
     // Opening an *active* session: a live message_update for it commonly arrives
     // before the open history snapshot and flips `working` true. The open-paint

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **A reply the model refused or cut short now says so.** When an agent's model declines a request, hits its output limit, or the agent hits its request limit for the turn, the chat shows a notice instead of ending on a missing or half reply. Works for every ACP agent (Kimi, Grok, OpenCode, …) and Pi; `bivy exec` prints the notice on stderr and adds `notices` to `--json`.
+- **Claude's refusal fallback is shown.** When a Claude model refuses and Claude Code retries on a fallback model (switching the session to it), the chat says which model took over, and the refused reply is removed instead of staying as a duplicate.
+
+### Changed
+- Claude Agent SDK 0.3.326.
+
 ## [0.22.21] - 2026-11-16
 
 ### Added

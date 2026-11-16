@@ -318,6 +318,35 @@ await check("acp: a retry the agent reports in an extension notification is agen
   }
 });
 
+// A turn the model refused ends like a normal one over ACP; only the prompt
+// reply's stopReason says why the answer is missing. The chat must say so, live
+// and after a reload.
+await check("acp: a refused turn's stopReason becomes a notice that survives reload", async () => {
+  process.env.BIVY_ACP_COMMAND = process.execPath;
+  process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
+  process.env.ACP_STOP_REASON = "refusal";
+  try {
+    const runtime = makeRuntime({ runtime: "acp", credsDir: __dirname, piDir: __dirname, sessionsDir: __dirname });
+    const { session } = await runtime.createSession({ workspace: __dirname, toolInterceptor: async () => undefined });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      await session.prompt("hello");
+      await waitFor(events, (event) => event.type === "agent_end");
+      const notice = events.find((event) => event.type === "session.notice") as { level?: string; message?: string } | undefined;
+      assert.equal(notice?.level, "warning");
+      assert.match(String(notice?.message), /declined/);
+      assert.deepEqual(session.getMessages().filter((m) => m.role === "system").map((m) => m.content), [notice?.message]);
+    } finally {
+      session.dispose();
+    }
+  } finally {
+    delete process.env.BIVY_ACP_COMMAND;
+    delete process.env.BIVY_ACP_ARGS;
+    delete process.env.ACP_STOP_REASON;
+  }
+});
+
 await check("acp: a tool's output that streamed before the closing frame survives in the result", async () => {
   // Regression: opencode's execute tool streams stdout in an in_progress
   // tool_call_update and closes with an empty `completed` frame. The shim must

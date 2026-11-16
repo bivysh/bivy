@@ -200,7 +200,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       done.then((outcome) => {
         const granted = outcome?.outcome?.outcome === "selected" && outcome.outcome.optionId === "ok";
         notify("session/update", { sessionId, update: { sessionUpdate: "tool_call_update", toolCallId: "tc1", status: granted ? "completed" : "failed", content: { type: "text", text: granted ? "file.txt" : "denied" } } });
-        reply(id, { stopReason: "end_turn", ...(process.env.ACP_SESSION_INFO === "1" ? { usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120, cachedReadTokens: 40 } } : {}) });
+        reply(id, { stopReason: process.env.ACP_STOP_REASON || "end_turn", ...(process.env.ACP_SESSION_INFO === "1" ? { usage: { inputTokens: 100, outputTokens: 20, totalTokens: 120, cachedReadTokens: 40 } } : {}) });
         // Simulate the opencode ACP end_turn race (opencode#17505): the LAST
         // agent_message_chunk frames are emitted AFTER the session/prompt reply —
         // the reply resolves, and the tail lands a moment later. The shim must
