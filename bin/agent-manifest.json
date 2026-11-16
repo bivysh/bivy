@@ -185,6 +185,23 @@
       }
     },
     {
+      "id": "kimi",
+      "label": "Kimi Code",
+      "command": "kimi",
+      "hidden": false,
+      "supportTier": "supported",
+      "certification": "release-tested",
+      "testedVersion": "2.6.2",
+      "headlessFlags": [
+        "-p",
+        "-S"
+      ],
+      "install": {
+        "kind": "npm",
+        "pkg": "@moonshot-ai/kimi-code"
+      }
+    },
+    {
       "id": "grok",
       "label": "Grok",
       "command": "grok",

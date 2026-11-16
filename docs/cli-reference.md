@@ -196,7 +196,7 @@ agent's native TUI.
 
 Built-in runnable agent ids: `pi`, `claude`, `openclaw`, `codex`, `opencode`,
 `aider`, `hermes`, `goose`, `gemini`, `qwen`, `cline`, `crush`, `cursor`,
-`copilot`, `grok`, `amp`, `auggie`, `droid`, `continue`, `kilocode`, `rovodev`,
+`copilot`, `kimi`, `grok`, `amp`, `auggie`, `droid`, `continue`, `kilocode`, `rovodev`,
 and `codebuff`. Run `bivy agents` for the live list, installation status, and
 binary names; the web picker intentionally hides experimental agents that do not
 yet meet its headless-session requirements.

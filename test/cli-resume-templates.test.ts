@@ -143,6 +143,7 @@ delete process.env.BIVY_SANDBOX;
 const SECOND_WAVE = [
   { id: "cursor", bin: "cursor-agent", resumable: true, expect: ["--force", "--resume=SID", "-p"] },
   { id: "copilot", bin: "copilot", resumable: false, expect: ["--allow-all-tools", "-p"] },
+  { id: "kimi", bin: "kimi", resumable: true, expect: ["-S", "SID", "-p"] },
   { id: "grok", bin: "grok", resumable: true, expect: ["--resume", "SID", "-p"] },
   { id: "amp", bin: "amp", resumable: true, expect: ["threads", "continue", "SID", "--stream-json", "-x"] },
   { id: "auggie", bin: "auggie", resumable: false, expect: ["--quiet", "--print"] },

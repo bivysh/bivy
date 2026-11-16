@@ -1210,6 +1210,7 @@ const AGENT_HEADLESS_FLAGS = {
   cline: ["-y", "--yolo", "--no-interactive", "--json"],
   cursor: ["-p", "--print"],
   copilot: ["-p", "--prompt"],
+  kimi: ["-p", "--prompt"],
   grok: ["-p", "--prompt"],
   amp: ["-x", "--execute"],
   auggie: ["-p", "--print"],
