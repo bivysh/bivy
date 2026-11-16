@@ -250,6 +250,26 @@ test("app commands validate both transport inputs and session/view ownership", a
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+test("a publish whose commands the session wouldn't run without asking is refused; files-only apps still publish", async () => {
+  const dir = workspace();
+  try {
+    const service = new AppService(new AppRegistry(), undefined, { start: async () => "term", has: () => true, close: () => {} });
+    const asked: string[] = [];
+    const commands = new CommandRegistry(createAppCommands(service, () => dir, undefined, undefined, (_id, line) => { asked.push(line); return false; }), CLIENT_COMMAND_SCHEMAS);
+    const replies: any[] = [];
+    const ctx = { reply: (event: unknown) => replies.push(event), broadcast: () => {} };
+    const server: AppManifest = { version: 1, name: "Site", views: [{ kind: "web", name: "Dev", source: { kind: "service", port: 5173, start: { command: "pnpm", args: ["dev"] } } }] };
+    for (const manifest of [terminalManifest, server]) {
+      await commands.dispatch("apps.publish", { kind: "apps.publish", sessionId: "s", manifest }, ctx);
+      assert.equal(replies.at(-1).type, "apps.publish.error");
+    }
+    assert.deepEqual(asked, ["node -i", "pnpm dev"]);
+    assert.equal(service.list("s").apps.length, 0);
+    await commands.dispatch("apps.publish", { kind: "apps.publish", sessionId: "s", manifest: staticManifest }, ctx);
+    assert.equal(replies.at(-1).type, "apps.publish.ok");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("bivy app share picks a web view by app and view ID or name, like present", async () => {
   const dir = workspace();
   try {

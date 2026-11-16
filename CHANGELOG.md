@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When an agent runs out of context (the conversation no longer fits its context window, even after its own compaction), the chat offers **Continue in a fresh session**: a new session with the same agent that starts from a summary of the conversation, with the full transcript saved where the agent can read it. Works for every agent.
 
 ### Fixed
+- **App previews follow the session's sandbox and approval mode.** A published app whose views run a command (a server's `start`, a terminal, desktop or data view) is refused in a read-only session, or where the session would ask before running that command; Bivy runs those commands outside the agent's own sandbox. Preview a server you started yourself by publishing its port without `start`; static builds publish as before.
 - Full context windows are now recognized for OpenCode (its `ContextOverflowError`), Pi (its own per-provider overflow detection), and the overflow wording of Gemini, xAI, Groq, Mistral, OpenRouter, llama.cpp and other providers. An ACP agent's `auth_required` error now raises the sign-in prompt.
 
 ## [0.22.20] - 2026-11-15
