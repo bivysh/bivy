@@ -36,6 +36,7 @@ import { mapToolCall, mapToolResult } from "./tool-call-map.js";
 import { stripAnsi } from "./ansi.js";
 import { agentRetryEvent } from "./retry.js";
 import { agentHookEvent } from "./hook.js";
+import { stopReasonNotice } from "./stop-reason.js";
 import { asRuntimeCondition } from "../policy/conditions.js";
 
 /** A tool message's sub-agent parent (`parentToolCallId`), spread into the
@@ -965,6 +966,13 @@ class ProtocolSession implements RuntimeSession {
         this.snapshotAssistantTurn(this.assistantText);
       }
       this.emit({ type: "message_end", message });
+      // A turn the model refused or cut short ends like any other; say why,
+      // and keep the notice in the transcript so it survives a reload.
+      const stopNotice = stopReasonNotice(msg.stopReason);
+      if (stopNotice) {
+        this.messages.push({ role: "system", content: stopNotice.message, timestamp: Date.now() });
+        this.emit(stopNotice);
+      }
       this.streaming = false;
       // The sealed turn owns its message slot. Anything that streams after this
       // (a late tool or a turn the host never opened) must not overwrite it.

@@ -1183,6 +1183,8 @@ export class SessionStore {
   private historyRaw = new Map<string, { messages: any[]; count: number; historyHash: string }>();
   /** A history snapshot buffered because it arrived mid-turn (focus guard). */
   private deferredHistory: any | null = null;
+  /** The agent retracted shown messages this turn (see the history-stale fold command). */
+  private historyStale = false;
   /** True from beginOpen until the first canonical history for the just-opened
    *  session lands. The mid-turn deferral (focus guard) must NOT swallow this
    *  initial snapshot: opening an *active* session commonly races a live
@@ -1478,6 +1480,7 @@ export class SessionStore {
   beginOpen(sessionId: string): void {
     this.draft = freshDraft();
     this.deferredHistory = null;
+    this.historyStale = false;
     // The next canonical history for this session is the open-paint; let it
     // through the mid-turn focus guard even if a live delta flips `working`
     // first (see awaitingOpenHistory).
@@ -2953,7 +2956,12 @@ export class SessionStore {
         for (const command of folded.commands) {
           if (command.kind === "cache-inline-image") this.inlineImagesByRef.set(command.url, command.ref as AttachmentRef);
           else if (command.kind === "remember-agent-attachments") this.rememberAgentAttachments(this.state.activeSession.activeSessionId, this.state.activeSession.transcript);
+          else if (command.kind === "history-stale") this.historyStale = true;
           else if (command.kind === "turn-settled") {
+            // A retraction mid-turn leaves the live view ahead of the stored
+            // transcript; the settled turn's fresh history replaces it.
+            if (this.historyStale && !this.deferredHistory) this.requestFreshHistory?.();
+            this.historyStale = false;
             this.drainDeferredHistory();
             this.onSessionSettled?.();
           }

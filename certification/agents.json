@@ -20,7 +20,7 @@
       "id": "claude-code-sdk",
       "name": "Claude Code",
       "status": "active",
-      "upstream": { "package": "@anthropic-ai/claude-agent-sdk", "pinnedVersion": "0.3.325", "supportedRange": ">=0.3.325 <=0.3.325" },
+      "upstream": { "package": "@anthropic-ai/claude-agent-sdk", "pinnedVersion": "0.3.326", "supportedRange": ">=0.3.326 <=0.3.326" },
       "platforms": ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"],
       "executionMode": "protocol",
       "probe": { "command": "claude", "args": ["--version"] },

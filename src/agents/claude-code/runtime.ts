@@ -409,6 +409,23 @@ const FAILURE_CONDITIONS: Record<string, RuntimeCondition> = {
   prompt_too_long: "context_overflow",
 };
 
+/** A model id the live list doesn't name ("claude-opus-4-8"), named from the
+ *  id itself ("Claude Opus 4.8"); anything else stays as it is. */
+function claudeModelName(id: string): string {
+  const match = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:$|-)/.exec(id);
+  const family = match && CLAUDE_MODEL_FAMILIES.find((f) => f.toLowerCase() === match[1]);
+  return family ? `Claude ${family} ${match[2]}${match[3] ? `.${match[3]}` : ""}` : id;
+}
+
+/** Claude Code's own fallback banner is long product copy; say what happened.
+ *  Reads the live message (snake_case) and its transcript entry (camelCase). */
+function refusalFallbackNotice(message: any, label: (id: unknown) => string = (id) => claudeModelName(String(id ?? ""))): string {
+  const switched = message?.scope === "local" ? "" : ", and this session now uses it";
+  const explanation = message?.api_refusal_explanation ?? message?.apiRefusalExplanation;
+  const why = typeof explanation === "string" && explanation.trim() ? ` ${explanation.trim()}` : "";
+  return `${label(message?.original_model ?? message?.originalModel)} declined this request, so Claude Code retried it on ${label(message?.fallback_model ?? message?.fallbackModel)}${switched}.${why}`;
+}
+
 function failureCondition(code: unknown): { condition?: RuntimeCondition } {
   const condition = typeof code === "string" ? FAILURE_CONDITIONS[code] : undefined;
   return condition ? { condition } : {};
@@ -676,6 +693,12 @@ function loadClaudeTranscript(sessionId: string): RuntimeMessage[] {
       // injected reminders, compaction summaries). Flags ride the entry; the
       // text net catches the code paths that omit them. See DROP_META_TEXT.
       if (hasMetaFlag(entry)) continue;
+      // The refused reply itself is never written; keep the notice saying why
+      // the next one came from another model.
+      if (entry?.type === "system" && entry?.subtype === "model_refusal_fallback") {
+        messages.push({ role: "system", content: refusalFallbackNotice(entry), timestamp: new Date(entry?.timestamp ?? Date.now()).getTime() });
+        continue;
+      }
       const role = rawRole;
       if (role !== "user" && role !== "assistant") continue;
       const content = rawContent;
@@ -823,6 +846,8 @@ class ClaudeSession implements RuntimeSession {
   private input = new AsyncQueue<any>();
   private readonly emitter = new EventEmitter();
   private messages: RuntimeMessage[] = [];
+  /** Stored messages by the SDK's wire uuid, so a later message can retract them. */
+  private messagesByUuid = new Map<string, RuntimeMessage>();
   private streaming = false;
   private name?: string;
   /** Set by the runtime so a disposed session leaves its registry. */
@@ -1260,6 +1285,28 @@ class ClaudeSession implements RuntimeSession {
     return true;
   }
 
+  private storeMessage(uuid: unknown, message: RuntimeMessage): void {
+    this.messages.push(message);
+    if (typeof uuid === "string" && uuid) this.messagesByUuid.set(uuid, message);
+  }
+
+  /** Drop stored messages the SDK retracted, and tell clients the transcript
+   *  changed behind the live stream (they re-read it when the turn settles).
+   *  Unknown uuids are a no-op, so the same retraction twice is harmless. */
+  private retractMessages(uuids: unknown[]): void {
+    const gone = new Set(uuids.map((uuid) => this.messagesByUuid.get(String(uuid))).filter(Boolean));
+    if (!gone.size) return;
+    for (const uuid of uuids) this.messagesByUuid.delete(String(uuid));
+    this.messages = this.messages.filter((m) => !gone.has(m));
+    this.emit({ type: "messages_retracted" });
+  }
+
+  /** A model id as the picker names it. */
+  private modelLabel(id: unknown): string {
+    const text = String(id ?? "");
+    return [...this.models, ...FALLBACK_MODELS].find((m) => m.id === text)?.name ?? claudeModelName(text);
+  }
+
   private beginMessage(): void {
     if (this.startedMessage) return;
     this.startedMessage = true;
@@ -1326,6 +1373,9 @@ class ClaudeSession implements RuntimeSession {
         // Compaction summaries and other meta assistant turns are for the model,
         // not the human — never persist or surface them as chat.
         if (hasMetaFlag(message)) break;
+        // A retry that replaces earlier messages (after a refusal fallback, or a
+        // tool call that could not be parsed) names them; drop them first.
+        if (Array.isArray(message.supersedes)) this.retractMessages(message.supersedes);
         // Claude Code sometimes reports auth failures as an ordinary assistant
         // text message rather than throwing. Intercept it before it is persisted
         // or shown, refresh, and transparently continue the same prompt. Only a
@@ -1361,7 +1411,7 @@ class ClaudeSession implements RuntimeSession {
         // tool_use blocks with the tool_result messages below; otherwise the plain
         // text is enough. The live stream still surfaces text via message_end.
         if (content.length || text) {
-          this.messages.push({ role: "assistant", content: content.length ? content : text, timestamp: Date.now(), ...(parentToolUseId ? { parentToolUseId } : {}) });
+          this.storeMessage(message.uuid, { role: "assistant", content: content.length ? content : text, timestamp: Date.now(), ...(parentToolUseId ? { parentToolUseId } : {}) });
         }
         if (text) {
           this.beginMessage();
@@ -1383,7 +1433,7 @@ class ClaudeSession implements RuntimeSession {
         const userContent = message.message?.content;
         const toolResults = Array.isArray(userContent) ? userContent.filter((b: any) => b?.type === "tool_result") : [];
         if (toolResults.length) {
-          this.messages.push({ role: "user", content: userContent, timestamp: Date.now() });
+          this.storeMessage(message.uuid, { role: "user", content: userContent, timestamp: Date.now() });
           // Without this, a tool call's activity card in the transcript never
           // learns its call finished — nothing else translates this message
           // into a "result"-kind event, so `applyStreamEvent` (packages/core/
@@ -1523,6 +1573,16 @@ class ClaudeSession implements RuntimeSession {
         // the same status the hook heartbeat in `tool_progress` gives.
         if (message?.subtype === "hook_started" || message?.subtype === "hook_progress" || message?.subtype === "hook_response") {
           this.emit(agentHookEvent({ hook: message.hook_event, done: message.subtype === "hook_response" }));
+          break;
+        }
+        // The model refused, so Claude Code retracted that reply and retried it
+        // on a fallback model. Drop the retracted messages and say so; the
+        // fallback's own replies carry its model id, so the picker follows.
+        if (message?.subtype === "model_refusal_fallback") {
+          if (Array.isArray(message.retracted_message_uuids)) this.retractMessages(message.retracted_message_uuids);
+          const notice = refusalFallbackNotice(message, (id) => this.modelLabel(id));
+          this.messages.push({ role: "system", content: notice, timestamp: Date.now() });
+          this.emit({ type: "session.notice", level: "warning", message: notice });
           break;
         }
         // The disk filled up (or hit its quota), so Claude Code lost transcript

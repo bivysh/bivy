@@ -98,7 +98,7 @@ agents:
 | `usage` | `tokens` (`input_tokens`, `output_tokens`, …), `costUsd` | The session's usage |
 | `session.retry` | `error`, optional `attempt`, `maxAttempts`, `delayMs` | A "Retrying (2/5)…" status while the agent retries a failed model call itself |
 | `session.hook` | `hook` (the hook event, e.g. `PreToolUse`), optional `done: true` | A "Running PreToolUse hook…" status while the turn waits on one of the user's hooks |
-| `session.done` | | End of turn |
+| `session.done` | optional `stopReason` | End of turn. A `stopReason` of `refusal`, `max_tokens` (or `length`) or `max_turn_requests` adds a notice saying the model declined, the reply was cut off, or the agent hit its request limit; any other value ends the turn quietly. ACP agents get this from the shim (the `session/prompt` reply's `stopReason`) |
 | `session.error` | `error`, optional `condition` | An error on the turn. `condition` is the failure class when the agent reports a code for it: `rate_limited`, `credits_exhausted`, `context_overflow`, `auth_failed`, `transport_error` or `unknown` (a failure retrying won't fix). Bivy uses it over the error text to decide whether to retry at the limit's reset, switch models, or ask you to sign in again, or offer a fresh session when the context is full. ACP agents get this from the shim: ACP's `auth_required` code and the error class in `data.errorName` (OpenCode's shape) map to a condition |
 
 Lines that aren't JSON are ignored, so banners and logs on stdout are harmless.

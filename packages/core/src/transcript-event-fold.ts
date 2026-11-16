@@ -42,7 +42,9 @@ export interface TranscriptFoldValue {
 export type TranscriptFoldCommand =
   | { kind: "cache-inline-image"; url: string; ref: unknown }
   | { kind: "remember-agent-attachments" }
-  | { kind: "turn-settled" };
+  | { kind: "turn-settled" }
+  /** The agent withdrew messages already shown; re-read the stored transcript. */
+  | { kind: "history-stale" };
 export interface TranscriptFoldResult {
   handled: boolean;
   value: TranscriptFoldValue;
@@ -288,6 +290,7 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
       if (!(event as any).done) setWorking(value, hookLabel(event as any));
       else if (value.working && value.workingLabel.startsWith(HOOK_PREFIX)) setWorking(value, "Thinking…");
       break;
+    case "messages_retracted": commands.push({ kind: "history-stale" }); break;
     case "agent_end": finishDrafts(value); closeTools(value); Object.assign(value.draft, { pendingText: "", committedText: "", committedThinking: "" }); value.working = false; value.workingLabel = ""; commands.push({ kind: "turn-settled" }); break;
     default: return { handled: false, value: input, commands: [] };
   }

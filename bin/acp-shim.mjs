@@ -239,6 +239,9 @@ function workspacePath(requested, { write = false } = {}) {
 const TRAILING_DRAIN_MS = 250;
 let turnDrainTimer = null;
 let turnDraining = false;
+// The prompt reply's stopReason (refusal, max_tokens, ...), sent on session.done
+// so the daemon can say why a turn ended short.
+let turnStopReason;
 function scheduleTurnDone() {
   clearTimeout(turnDrainTimer);
   turnDrainTimer = setTimeout(finishTurnDone, TRAILING_DRAIN_MS);
@@ -251,7 +254,9 @@ function finishTurnDone() {
   childParent.clear();
   approvedCalls.clear();
   bivy({ type: "session.status", status: "idle" });
-  bivy({ type: "session.done" });
+  const stopReason = turnStopReason;
+  turnStopReason = undefined;
+  bivy({ type: "session.done", ...(typeof stopReason === "string" ? { stopReason } : {}) });
 }
 
 // ACP `plan` updates carry the agent's whole todo list with a status per entry.
@@ -813,6 +818,7 @@ async function onBivyCommand(msg) {
             // The prompt reply is NOT the end of the turn for opencode — the last
             // agent_message_chunk frames trail it (see the drain note above). Arm
             // the drain; session.done fires once the update stream goes quiet.
+            turnStopReason = result?.stopReason;
             turnDraining = true;
             scheduleTurnDone();
           })
@@ -885,6 +891,7 @@ async function onBivyCommand(msg) {
         clearTimeout(turnDrainTimer);
         turnDrainTimer = null;
         turnDraining = false;
+        turnStopReason = undefined;
         if (sessionId) agentNotify("session/cancel", { sessionId });
         if (id !== undefined) bivy({ replyTo: id, ok: true });
         return;

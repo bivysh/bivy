@@ -56,6 +56,7 @@ import type {
 import { PI_CAPABILITIES } from "./capabilities.js";
 import { mapToolCall, mapToolResult } from "../../runtime/tool-call-map.js";
 import { agentRetryEvent } from "../../runtime/retry.js";
+import { stopReasonNotice } from "../../runtime/stop-reason.js";
 import { BackgroundShellTracker, createBackgroundAwareBashOperations } from "./background-shell.js";
 
 /**
@@ -93,6 +94,11 @@ export function piSessionCommands(session: unknown): AgentCommand[] {
 }
 
 /** The operator's Pi command; Bivy never launches a bundled private TUI. */
+/** A run's last assistant message: the one whose stopReason ended the turn. */
+function lastAssistant(messages: unknown): any {
+  return Array.isArray(messages) ? [...messages].reverse().find((m) => m?.role === "assistant") : undefined;
+}
+
 function resolvePiCommand(): string {
   return process.env.BIVY_PI_COMMAND?.trim() || "pi";
 }
@@ -298,6 +304,8 @@ class PiSession implements RuntimeSession {
         const end = runEnd ?? { type: "agent_end", messages: [] };
         runEnd = undefined;
         const condition = this.failureCondition(end.messages);
+        const stopNotice = event?.aborted ? undefined : stopReasonNotice(lastAssistant(end.messages)?.stopReason);
+        if (stopNotice) listener(stopNotice);
         listener({ ...end, willRetry: false, ...(event?.aborted ? { aborted: true } : {}), ...(condition ? { condition } : {}) });
         return;
       }
@@ -332,7 +340,7 @@ class PiSession implements RuntimeSession {
    *  provider's context-overflow wording (pi-ai isContextOverflow), which the
    *  daemon's text match doesn't. */
   private failureCondition(messages: unknown): "context_overflow" | undefined {
-    const last = Array.isArray(messages) ? [...messages].reverse().find((m) => m?.role === "assistant") : undefined;
+    const last = lastAssistant(messages);
     if (last?.stopReason !== "error") return undefined;
     return isContextOverflow(last as AssistantMessage, this.session.model?.contextWindow) ? "context_overflow" : undefined;
   }
