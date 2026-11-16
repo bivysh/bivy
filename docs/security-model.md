@@ -466,6 +466,11 @@ with your filesystem permissions, governed only by Bivy's three effect channels:
    `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`, which sees and can deny outbound
    connections by host (`src/harness/net-proxy.ts`).
 
+Commands the node runs for a session rather than the agent (a repository's
+worktree setup hooks, an app preview's start, terminal, desktop or data
+command) follow the session's tier and approval mode: they run only where the
+agent could run the same command without asking, and never in `read-only`.
+
 See [`runtime-support-matrix.md`](runtime-support-matrix.md) for the per-agent
 column ("Native sandbox" vs "Effect-level (FS/MCP/net)" vs "Boundary only").
 

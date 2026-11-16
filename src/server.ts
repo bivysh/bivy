@@ -2725,6 +2725,14 @@ const RELAY_COMMANDS: CommandEntries<ClientMessage> = {
     const id = `app-${app.id}`;
     eventLog.appendAppPublication(record.id, { id, afterMessageCount: record.session.getMessages().length, app: ref });
     broadcast(stampSessionEvent({ type: "session.event", sessionId: record.id, event: { type: "app_published", id, app: ref } }));
+  }, undefined, (sessionId, commandLine) => {
+    // The node runs an app's commands outside the agent's sandbox: only what
+    // the session would let its agent run without asking.
+    const record = resolveSession(sessionId);
+    if (!record) return true;
+    if (record.sandbox === "read-only") return false;
+    const policy = new PolicyEngine({ mode: record.approvalMode ?? approvalMode, unrestricted: record.sandbox === "danger-full-access", isRemembered: (key) => sessionAllowRules.has(sessionId, key) });
+    return policy.decideToolCall(record.workspace, "bash", { command: commandLine }).decision === "allow";
   }),
   ping(msg, ctx) {
     ctx.reply({ type: "pong", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined });

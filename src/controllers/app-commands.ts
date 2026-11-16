@@ -6,8 +6,25 @@ import type { CommandEntries } from "../protocol/command-registry.js";
 import type { AppService } from "../apps/service.js";
 
 interface AppCommand { kind: string; requestId?: unknown; [key: string]: unknown }
-/** `machineRoot`: where servers are looked for before a session exists (the owner's home). */
-export function createAppCommands(service: AppService, workspaceFor: (sessionId: string) => string | undefined, published: (app: SessionApp) => void = () => {}, machineRoot: () => string = os.homedir): CommandEntries<AppCommand> {
+/** The command lines a manifest has this machine run: a managed server's
+ *  start, a terminal, desktop or data view's program, a logs command. */
+export function manifestCommandLines(manifest: unknown): string[] {
+  const line = (spec: unknown) => {
+    const { command, args } = (spec ?? {}) as { command?: unknown; args?: unknown };
+    return typeof command === "string" ? [command, ...(Array.isArray(args) ? args.filter((arg) => typeof arg === "string") : [])].join(" ") : undefined;
+  };
+  const views = (manifest as { views?: unknown } | undefined)?.views;
+  return Array.isArray(views)
+    ? views.flatMap((view: { source?: { start?: unknown } } | undefined) => { const run = line(view) ?? line(view?.source?.start) ?? line(view?.source); return run ? [run] : []; })
+    : [];
+}
+
+/** `machineRoot`: where servers are looked for before a session exists (the owner's home).
+ *  `allowCommand`: whether the session would let its agent run this command
+ *  line without asking. The node runs a manifest's commands outside the
+ *  agent's sandbox, so a publish that would have them run is refused when the
+ *  agent couldn't have run them itself. */
+export function createAppCommands(service: AppService, workspaceFor: (sessionId: string) => string | undefined, published: (app: SessionApp) => void = () => {}, machineRoot: () => string = os.homedir, allowCommand: (sessionId: string, commandLine: string) => boolean = () => true): CommandEntries<AppCommand> {
   const workspaceOf = (sessionId: string) => {
     const workspace = workspaceFor(sessionId);
     if (!workspace) throw new Error("Open the session on this machine before publishing an app.");
@@ -18,6 +35,8 @@ export function createAppCommands(service: AppService, workspaceFor: (sessionId:
     "apps.list": (msg) => service.list(typeof msg.sessionId === "string" ? msg.sessionId : undefined),
     "apps.publish": (msg) => {
       const sessionId = String(msg.sessionId);
+      const refused = manifestCommandLines(msg.manifest).find((line) => !allowCommand(sessionId, line));
+      if (refused !== undefined) throw new Error(`This session asks before it runs commands, so it can't publish an app that runs \`${refused.slice(0, 200)}\`. Start the server yourself and publish its port without a start command.`);
       const app = service.publish(sessionId, workspaceOf(sessionId), msg.manifest as AppManifest);
       published(app);
       return { app };
