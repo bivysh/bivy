@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.21] - 2026-11-16
+
 ### Added
 - **Kimi Code** (`kimi`, Moonshot AI's coding agent) is in the agent picker. Bivy drives it through its own ACP server (`kimi acp`): per-tool approvals, streaming, resume, and the model, thinking and mode lists from the live session; signed out, it raises the sign-in prompt. Install with `npm install -g @moonshot-ai/kimi-code`, sign in with `kimi login`. Tested against 2.6.2.
 - When an agent runs out of context (the conversation no longer fits its context window, even after its own compaction), the chat offers **Continue in a fresh session**: a new session with the same agent that starts from a summary of the conversation, with the full transcript saved where the agent can read it. Works for every agent.
