@@ -43,7 +43,7 @@ type View = SettingsView;
  *  `SettingsView` values only so stale `/settings/:view` deep links parse and can
  *  be redirected — they are never listed in the Settings nav. */
 /** Panels that need a Bivy account, so only signed-in (hosted) clients show them. */
-const HOSTED_ONLY: ReadonlySet<View> = new Set<View>(["team", "link"]);
+const HOSTED_ONLY: ReadonlySet<View> = new Set<View>(["team", "link", "account"]);
 type MovedView ="github" | "linear" | "slack" | "queue" | "webhooks" | "rulesets";
 const MOVED_TO_AUTOMATIONS: readonly MovedView[] = ["github", "linear", "slack", "queue", "webhooks", "rulesets"];
 function isMovedView(v: View | null): v is MovedView {
