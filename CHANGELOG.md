@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.22] - 2026-11-17
+
 ### Added
 - **Quote a reply in your next message.** Agent replies have a Quote button next to Copy: it puts the part of the reply you selected, or the whole reply, into the composer as a Markdown quote, with the cursor below it. Works for every agent.
 
