@@ -123,7 +123,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
-    "@playwright/test": "^1.64.1",
+    "@playwright/test": "^1.65.0",
     "@types/express": "^5.0.6",
     "@types/node": "^26.6.6",
     "@types/semver": "^7.7.1",
@@ -135,6 +135,6 @@
     "heroicons": "^2.2.0",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.72.1"
+    "typescript-eslint": "^8.72.2"
   }
 }
