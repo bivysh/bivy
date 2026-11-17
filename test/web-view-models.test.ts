@@ -18,6 +18,7 @@ import { githubInstallationSettings, githubMentionHandles, githubSourceStatus } 
 import { standbyCopyOf } from "../packages/web/src/standby.js";
 import { cloudComputerToWake, cloudDestinations, nodePresence, runnerDeletionNotice } from "../packages/web/src/cloudDestinations.js";
 import { orderConnectedModels } from "../packages/web/src/modelPickerCatalog.js";
+import { quoteForReply } from "../packages/web/src/quote.js";
 import { agentForProviders, signInMachineOnline, signInSync } from "../packages/web/src/onboarding.js";
 
 test("account routing follows project, active, default and ambiguity rules", () => {
@@ -223,4 +224,9 @@ test("the model picker lists each provider's newest models first, without dated 
     "Claude Opus 5.5", "Claude Sonnet 5", "Claude Opus 4.8", "Claude Haiku 4.5 (latest)",
     "GPT-6 Luna", "GPT-5.6 Luna",
   ]);
+});
+
+test("a quoted reply is one Markdown quote block with the cursor line below it", () => {
+  assert.equal(quoteForReply("  First line  \r\n\n```ts\nconst x = 1;\n```\n"), "> First line\n>\n> ```ts\n> const x = 1;\n> ```\n\n");
+  assert.equal(quoteForReply(" \n "), "");
 });
