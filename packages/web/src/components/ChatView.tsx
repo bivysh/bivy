@@ -23,6 +23,7 @@ import { decorateCodeBlocks, highlightCode } from "../highlight.js";
 import { decorateFilePaths, fileRefFromEvent, type FileRef } from "../filePaths.js";
 import { renderMermaidDiagrams } from "../mermaid.js";
 import { writeClipboard } from "../clipboard.js";
+import { quoteForReply, selectedTextWithin } from "../quote.js";
 import { getSpeechPreferences, markdownToSpeech, readAloudSupported, speechSynthesisSupported, speechToneInstructions } from "../speech.js";
 import { controller } from "../store/useStore.js";
 import { captureChatScroll, restoredChatScrollTop, type ChatScrollMemory } from "../chatScroll.js";
@@ -106,6 +107,45 @@ function CopyButton({ text }: { text: string }) {
       aria-label="Copy message"
     >
       {copied ? <CheckGlyph /> : <CopyGlyph />}
+    </button>
+  );
+}
+
+/** Quote glyph, stroked like CopyGlyph. */
+function QuoteGlyph() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M4 6h16" />
+      <path d="M9 12h11" />
+      <path d="M9 18h11" />
+      <path d="M4 11v8" />
+    </svg>
+  );
+}
+
+/** Quote this reply into the composer: the part selected inside it, or the
+ *  whole reply. The selection is read on press, before a tap can clear it. */
+function QuoteButton({ text, bodyRef }: { text: string; bodyRef: { current: HTMLElement | null } }) {
+  const selected = useRef("");
+  const capture = useCallback(() => {
+    selected.current = selectedTextWithin(bodyRef.current, window.getSelection());
+  }, [bodyRef]);
+  const onClick = useCallback(() => {
+    const quote = quoteForReply(selected.current || selectedTextWithin(bodyRef.current, window.getSelection()) || text);
+    selected.current = "";
+    if (quote) controller.prefillComposer(quote);
+  }, [bodyRef, text]);
+  return (
+    <button
+      type="button"
+      className="msg-copy-btn"
+      onPointerDown={capture}
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onClick}
+      title="Quote in your reply (the selected part, or all of it)"
+      aria-label="Quote in your reply"
+    >
+      <QuoteGlyph />
     </button>
   );
 }
@@ -458,6 +498,7 @@ const EntryView = memo(function EntryView({
       {entry.text && !captionOnly && (
         <div className="msg-actions">
           <CopyButton text={entry.text} />
+          <QuoteButton text={entry.text} bodyRef={bodyRef} />
           {readAloudSupported() && <SpeakButton text={entry.text} />}
           {entry.sentAt && <SentTime at={entry.sentAt} className="msg-actions-time" />}
         </div>

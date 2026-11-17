@@ -376,7 +376,9 @@ export function Composer({
       const clean = draft.trim();
       if (added.length) setAttachments((previous) => [...previous, ...added]);
       if (!clean && !added.length) return;
-      if (clean) setText((previous) => previous.trim() ? `${previous.trimEnd()}\n\n${clean}` : clean);
+      // A draft that ends on a blank line (a quote) leaves the cursor below it.
+      const below = draft.endsWith("\n\n") ? "\n\n" : "";
+      if (clean) setText((previous) => (previous.trim() ? `${previous.trimEnd()}\n\n${clean}` : clean) + below);
       setMenuDismissed(false);
       wantsFocusRef.current = true;
       requestAnimationFrame(() => {
