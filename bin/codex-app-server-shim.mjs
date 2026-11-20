@@ -31,6 +31,7 @@
 //                                               or a server's form/page on the question card
 //   • turn/steer {expectedTurnId}             → mid-turn message
 //   • thread/settings/update {model, effort}  → model / reasoning-effort picker
+//   • item/completed agentMessage moderation  → message.withdraw + stopReason (hidden/blocked answer)
 //   • turn/completed                          → turn done
 //
 // This is a first-class v1: governed sessions with shell/patch approvals and a
@@ -94,6 +95,7 @@ const FAILURE_CONDITIONS = {
   // Refusals a retry can't fix: say so, so a "limit" in the text can't
   // schedule a resume.
   cyberPolicy: "unknown",
+  bioPolicy: "unknown",
   misalignmentPolicyViolation: "unknown",
   inferenceHookDenied: "unknown",
 };
@@ -118,6 +120,20 @@ function failureCondition(info) {
   return HTTP_STATUS_CONDITIONS.find((row) => row.test(status))?.condition;
 }
 
+// --- moderation --------------------------------------------------------------
+// An agentMessage can carry the provider's display instruction for its answer
+// (`moderation.display`, version 1): show it, hide it behind a replacement, or
+// block it. Hidden and blocked answers are withdrawn (Bivy has no replacement
+// copy of its own) and the turn says why. An unknown version or mode shows the
+// answer, as Codex itself does with a display instruction it can't read.
+const WITHHELD_ANSWERS = { hide: "withheld", block: "refusal" };
+
+function withheldAnswer(item) {
+  const display = item?.moderation?.display;
+  if (!display || display.version !== 1) return undefined;
+  return Object.hasOwn(WITHHELD_ANSWERS, display.mode) ? WITHHELD_ANSWERS[display.mode] : undefined;
+}
+
 function failurePayload(error, fallback = "Codex turn failed") {
   const condition = failureCondition(error?.codexErrorInfo);
   return { error: error?.message || fallback, ...(condition ? { condition } : {}) };
@@ -128,6 +144,8 @@ let threadId = null;
 let initialized = false;
 // The turn's failure as a session.error payload ({ error, condition? }).
 let sawError = null;
+/** Why this turn's answer is missing (a withheld answer), for session.done. */
+let turnStopReason = null;
 let models = [];
 let selectedModel = null;
 // model id -> { levels, default } from model/list's supportedReasoningEfforts.
@@ -304,7 +322,8 @@ function finishCompletedTurn() {
   approvedMcpItems.clear();
   bivy({ type: "session.status", status: "idle" });
   if (sawError) { bivy({ type: "session.error", ...sawError }); sawError = null; }
-  else bivy({ type: "session.done" });
+  else bivy({ type: "session.done", ...(turnStopReason ? { stopReason: turnStopReason } : {}) });
+  turnStopReason = null;
 }
 
 // Codex may publish turn/completed before the final parent agentMessage starts
@@ -331,11 +350,16 @@ function handleCompletedItem(params) {
   if (!item || typeof item !== "object" || !itemId) return;
   const parent = childParent(params);
   switch (item.type) {
-    case "agentMessage":
+    case "agentMessage": {
       // Child-thread prose belongs to the delegated agent, not the parent's
       // answer stream. Its lifecycle is represented by the collaboration items.
       if (fromChildThread(params)) return;
-      if (!agentMessageItems.has(itemId) && item.text) {
+      const withheld = withheldAnswer(item);
+      if (withheld) {
+        turnStopReason = withheld;
+        if (agentMessageItems.has(itemId)) bivy({ type: "message.withdraw", itemId });
+        agentMessageItems.add(itemId);
+      } else if (!agentMessageItems.has(itemId) && item.text) {
         agentMessageItems.add(itemId);
         bivy({ type: "message.delta", text: String(item.text) });
       }
@@ -345,6 +369,7 @@ function handleCompletedItem(params) {
       // instead of one concatenated bubble followed by a single tool block.
       bivy({ type: "message.boundary", itemId });
       return;
+    }
     case "plan":
       if (!reasoningItems.has(itemId) && item.text) emitReasoning(itemId, item.text);
       return;
@@ -661,6 +686,7 @@ function onNotification(m) {
     case "turn/started":
       if (!fromCurrentThread) return;
       if (params?.turn?.id) activeTurnId = params.turn.id;
+      turnStopReason = null;
       bivy({ type: "session.status", status: "working" });
       return;
     case "turn/completed": {

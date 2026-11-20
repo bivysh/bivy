@@ -3,10 +3,10 @@
 export const CERTIFICATION_MATRIX = {
   schemaVersion: 1,
   agents: [
-    { id: "claude-code-sdk", status: "active", executionMode: "protocol", pinnedVersion: "0.3.326", capabilities: ["toolInterception","modelSelection","resume"] },
-    { id: "codex-approvals", status: "active", executionMode: "protocol", pinnedVersion: "0.169.0", capabilities: ["toolInterception","modelSelection","resume"] },
-    { id: "pi", status: "active", executionMode: "protocol", pinnedVersion: "1.5.2", capabilities: ["toolInterception","modelSelection","resume"] },
-    { id: "opencode", status: "active", executionMode: "protocol", pinnedVersion: "1.19.5", capabilities: ["toolInterception","modelSelection","resume"] },
-    { id: "grok", status: "active", executionMode: "protocol", pinnedVersion: "1.0.77", capabilities: ["toolInterception","modelSelection","resume"] },
+    { id: "claude-code-sdk", status: "active", executionMode: "protocol", pinnedVersion: "0.3.330", capabilities: ["toolInterception","modelSelection","resume"] },
+    { id: "codex-approvals", status: "active", executionMode: "protocol", pinnedVersion: "0.171.0", capabilities: ["toolInterception","modelSelection","resume"] },
+    { id: "pi", status: "active", executionMode: "protocol", pinnedVersion: "1.6.0", capabilities: ["toolInterception","modelSelection","resume"] },
+    { id: "opencode", status: "active", executionMode: "protocol", pinnedVersion: "1.19.6", capabilities: ["toolInterception","modelSelection","resume"] },
+    { id: "grok", status: "active", executionMode: "protocol", pinnedVersion: "1.0.92", capabilities: ["toolInterception","modelSelection","resume"] },
   ]
 } as const;

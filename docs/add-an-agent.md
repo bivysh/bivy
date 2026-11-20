@@ -92,13 +92,15 @@ agents:
 | --- | --- | --- |
 | `session.started` | `sessionId` | Nothing; Bivy passes it back as `{id}` in `resume.args` on the next turn |
 | `message.delta` | `text` | Answer text, appended |
+| `message.boundary` | none | Ends one answer item, so tool cards that follow land after it and the next text starts a new message |
+| `message.withdraw` | none | Takes back the answer text streamed since the last `message.boundary` (or since the turn began), when the agent's provider hid or blocked an answer it had already sent. Earlier text, tools and reasoning stay. Say why with `session.done`'s `stopReason` |
 | `message.reasoning` | `text` | A reasoning block |
 | `tool.call` | `toolCallId`, `name`, `input` | A tool card. `name` `bash` with `input.command`, or `edit`/`write` with `input.path`, get the rich shell and file cards. Optional `personRequired` (`true` or `{reason}`) says the agent's own rules want a person to decide: Bivy then asks in every approval mode and offers no "allow for this session" |
 | `tool.result` | `toolCallId`, `result` | The tool card's output |
 | `usage` | `tokens` (`input_tokens`, `output_tokens`, …), `costUsd` | The session's usage |
 | `session.retry` | `error`, optional `attempt`, `maxAttempts`, `delayMs` | A "Retrying (2/5)…" status while the agent retries a failed model call itself |
 | `session.hook` | `hook` (the hook event, e.g. `PreToolUse`), optional `done: true` | A "Running PreToolUse hook…" status while the turn waits on one of the user's hooks |
-| `session.done` | optional `stopReason` | End of turn. A `stopReason` of `refusal`, `max_tokens` (or `length`) or `max_turn_requests` adds a notice saying the model declined, the reply was cut off, or the agent hit its request limit; any other value ends the turn quietly. ACP agents get this from the shim (the `session/prompt` reply's `stopReason`) |
+| `session.done` | optional `stopReason` | End of turn. A `stopReason` of `refusal`, `withheld`, `max_tokens` (or `length`) or `max_turn_requests` adds a notice saying the model declined, the provider withheld the answer, the reply was cut off, or the agent hit its request limit; any other value ends the turn quietly. ACP agents get this from the shim (the `session/prompt` reply's `stopReason`) |
 | `session.error` | `error`, optional `condition` | An error on the turn. `condition` is the failure class when the agent reports a code for it: `rate_limited`, `credits_exhausted`, `context_overflow`, `auth_failed`, `transport_error` or `unknown` (a failure retrying won't fix). Bivy uses it over the error text to decide whether to retry at the limit's reset, switch models, or ask you to sign in again, or offer a fresh session when the context is full. ACP agents get this from the shim: ACP's `auth_required` code and the error class in `data.errorName` (OpenCode's shape) map to a condition |
 
 Lines that aren't JSON are ignored, so banners and logs on stdout are harmless.
