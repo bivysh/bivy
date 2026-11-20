@@ -40,13 +40,13 @@ function waitFor(events: RuntimeEvent[], pred: (event: RuntimeEvent) => boolean,
   });
 }
 
-function makeRuntime(mode: "ok" | "fail" | "usage-limit" | "http-401" | "reconnect" | "hook" | "echo-input" | "echo-developer-instructions"): ProtocolRuntime {
+function makeRuntime(mode: "ok" | "moderated" | "fail" | "usage-limit" | "http-401" | "reconnect" | "hook" | "echo-input" | "echo-developer-instructions", extraEnv: Record<string, string> = {}): ProtocolRuntime {
   return new ProtocolRuntime({
     id: "codex-approvals",
     displayName: "Codex",
     command: process.execPath,
     args: [shim],
-    env: { BIVY_CODEX_BIN: fakeAppServer, FAKE_CODEX_MODE: mode },
+    env: { BIVY_CODEX_BIN: fakeAppServer, FAKE_CODEX_MODE: mode, ...extraEnv },
     capabilities: { toolInterception: true },
     resumable: true,
   });
@@ -206,3 +206,22 @@ test("the user's account-wide instructions reach Codex as developerInstructions"
     assert.equal(String(reply.content), instructions.text);
   } finally { session.dispose(); }
 });
+
+for (const [display, notice] of [["block", /declined/], ["hide", /withheld/]] as const) {
+  test(`a Codex answer its moderation says to ${display} is taken back, and the turn says why`, async () => {
+    const runtime = makeRuntime("moderated", { FAKE_CODEX_DISPLAY: display });
+    const { session } = await runtime.createSession({ workspace: process.cwd(), toolInterceptor: async () => undefined });
+    const events: RuntimeEvent[] = [];
+    session.subscribe((event) => events.push(event));
+    try {
+      await session.prompt("ask something");
+      await waitFor(events, (event) => event.type === "agent_end");
+      assert.ok(events.some((event) => event.type === "messages_retracted"), "clients re-read the transcript");
+      const transcript = JSON.stringify(session.getMessages());
+      assert.match(transcript, /Looking\./, "the shown commentary stays");
+      assert.doesNotMatch(transcript, /WITHDRAWN/, "the withdrawn answer is not persisted");
+      const system = session.getMessages().filter((m) => m.role === "system").map((m) => String(m.content)).join("\n");
+      assert.match(system, notice);
+    } finally { session.dispose(); }
+  });
+}

@@ -76,7 +76,7 @@ Code** (`--experimental-acp` / newer `--acp`), **OpenCode** (`acp`), **Grok**
 **Cline** (`--acp`), and **GitHub Copilot** (`--acp`).
 
 **OpenCode and Grok are promoted by default** (`acp.preferred`), having been
-validated end-to-end against OpenCode 1.19.5 and Grok CLI 1.0.70 — that
+validated end-to-end against OpenCode 1.19.6 and Grok CLI 1.0.70 — that
 governed path is what earns their release-tested capability signal. The rest
 stay opt-in with `BIVY_<ID>_ACP=1` (or `BIVY_PREFER_ACP=1` for all at once)
 until they're validated the same way.

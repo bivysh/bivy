@@ -333,6 +333,10 @@ class ProtocolSession implements RuntimeSession {
    * `message.boundary`, separate the next item's text in the cumulative stream
    * instead of welding `"first." + "Second"` into `"first.Second"`. */
   private assistantItemBoundary = false;
+  /** Where the prose item now streaming starts, in `assistantText` and in
+   *  `turnContent`, so `message.withdraw` can take back just that item. */
+  private itemTextStart = 0;
+  private itemContentStart = 0;
   private reasoningText = "";
   /** The turnContent thinking block the current reasoning item grows. */
   private reasoningBlock?: Record<string, unknown>;
@@ -807,6 +811,22 @@ class ProtocolSession implements RuntimeSession {
     this.emit({ type: "message_end", message: { role: "assistant", content } });
   }
 
+  /** Take back the prose item streaming now (see `message.withdraw`): its
+   *  text leaves the live message and the turn's blocks, and clients re-read
+   *  the transcript when the turn settles, as for any retracted message. */
+  private withdrawCurrentItem(): void {
+    if (this.assistantItemBoundary || this.assistantText.length <= this.itemTextStart) return;
+    this.assistantText = this.assistantText.slice(0, this.itemTextStart);
+    if (this.turnTextFlushed.length > this.itemTextStart) this.turnTextFlushed = this.turnTextFlushed.slice(0, this.itemTextStart);
+    this.turnContent = this.turnContent.filter((block, index) => index < this.itemContentStart || block.type !== "text");
+    if (this.turnMessageIndex !== undefined) {
+      const hadTools = this.turnContent.some((b) => b.type !== "thinking") || this.turnToolResults.length > 0;
+      this.snapshotAssistantTurn(hadTools ? [...this.turnContent] : this.assistantText);
+    }
+    this.emit({ type: "message_update", message: { role: "assistant", content: this.assistantText } });
+    this.emit({ type: "messages_retracted" });
+  }
+
   private handleMessage(msg: Record<string, unknown>) {
     this.emitter.emit("protocol-message", msg);
     const replyTo = typeof msg.replyTo === "string" ? msg.replyTo : "";
@@ -865,6 +885,10 @@ class ProtocolSession implements RuntimeSession {
       if (!text) return;
       if (this.streaming) {
         if (!this.assistantText) this.emit({ type: "message_start", message: { role: "assistant", content: "" } });
+        if (!this.assistantText || this.assistantItemBoundary) {
+          this.itemTextStart = this.assistantText.length;
+          this.itemContentStart = this.turnContent.length;
+        }
         if (this.assistantItemBoundary && this.assistantText) {
           // If a tool already flushed the preceding item, advance the persisted
           // prefix over this display-only separator too; the next turnContent
@@ -906,6 +930,14 @@ class ProtocolSession implements RuntimeSession {
         this.emit({ type: "message_boundary", message: { role: "assistant", content: this.assistantText } });
         this.assistantItemBoundary = true;
       }
+      return;
+    }
+    if (type === "message.withdraw") {
+      // The agent took back the prose item it is streaming (its provider's
+      // moderation hid or blocked the answer). Drop that item's text from the
+      // live turn and from what will be persisted; earlier items, tools and
+      // reasoning stay. The shim says why with session.done's stopReason.
+      if (this.streaming) this.withdrawCurrentItem();
       return;
     }
     if (type === "message.reasoning" || type === "reasoning.delta") {

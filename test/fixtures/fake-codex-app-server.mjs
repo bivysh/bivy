@@ -25,6 +25,9 @@
 //                      not end failed.
 //   "hook"           → hook/started + hook/completed for a preToolUse hook inside
 //                      the turn, and a sessionStart hook with no turnId, then "ok".
+//   "moderated"      → a shown commentary item, then an answer item whose
+//                      item/completed carries moderation.display with the mode in
+//                      FAKE_CODEX_DISPLAY (hide | block): the answer is withdrawn.
 //   "echo-developer-instructions" → the turn's reply is the developerInstructions
 //                      the thread was started/resumed with (empty when none).
 import readline from "node:readline";
@@ -94,6 +97,18 @@ rl.on("line", (line) => {
           notify("hook/started", { threadId: params?.threadId, turnId: null, run: run("sessionStart") });
           notify("hook/started", { threadId: params?.threadId, turnId: "turn-1", run: run("preToolUse") });
           notify("hook/completed", { threadId: params?.threadId, turnId: "turn-1", run: { ...run("preToolUse"), status: "completed" } });
+        }
+        if (MODE === "moderated") {
+          const item = (id, text, moderation) => ({ threadId: params?.threadId, turnId: "turn-1", item: { type: "agentMessage", id, text, ...(moderation ? { moderation } : {}) } });
+          notify("item/agentMessage/delta", { threadId: params?.threadId, itemId: "item-0", delta: "Looking." });
+          notify("item/completed", item("item-0", "Looking."));
+          notify("item/agentMessage/delta", { threadId: params?.threadId, itemId: "item-1", delta: "WITHDRAWN" });
+          const mode = process.env.FAKE_CODEX_DISPLAY;
+          const display = mode === "hide" ? { version: 1, mode, replacement: { kind: "wellbeingPromptHelpline" } } : { version: 1, mode, reason: { kind: "cyber" } };
+          notify("item/completed", item("item-1", "WITHDRAWN", { moderated: true, display }));
+          notify("turn/completed", { threadId: params?.threadId });
+          reply(id, {});
+          return;
         }
         if (MODE === "reconnect") notify("error", { threadId: params?.threadId, turnId: "turn-1", willRetry: true, error: { message: "Reconnecting... 1/5 (stream disconnected before completion)" } });
         notify("item/agentMessage/delta", { itemId: "item-1", delta: MODE === "echo-input" ? JSON.stringify(params.input) : MODE === "echo-developer-instructions" ? developerInstructions || "(none)" : "BANANA" });

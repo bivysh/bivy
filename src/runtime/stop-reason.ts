@@ -8,13 +8,14 @@
  * cut-off reply. Every runtime reports its agent's raw stop reason here and
  * gets the same notice, whatever the agent calls it.
  */
-export type TurnStopReason = "refusal" | "max_tokens" | "max_turn_requests";
+export type TurnStopReason = "refusal" | "withheld" | "max_tokens" | "max_turn_requests";
 
 /** Raw stop reasons as agents and providers spell them. A plain end of turn,
  *  a tool call or a user cancel has no row: those need no notice. */
 const STOP_REASONS: Record<string, TurnStopReason> = {
   refusal: "refusal",                     // ACP, Anthropic
   content_filter: "refusal",              // OpenAI-compatible providers
+  withheld: "withheld",                   // the provider hid an answer it produced
   max_tokens: "max_tokens",               // ACP, Anthropic
   length: "max_tokens",                   // Pi, OpenAI-compatible providers
   max_turn_requests: "max_turn_requests", // ACP
@@ -22,6 +23,7 @@ const STOP_REASONS: Record<string, TurnStopReason> = {
 
 const NOTICES: Record<TurnStopReason, string> = {
   refusal: "The model declined to answer this request.",
+  withheld: "The provider withheld this answer.",
   max_tokens: "The reply was cut off at the model's output limit. Send \"continue\" to pick up where it stopped.",
   max_turn_requests: "The agent stopped at its limit of model requests for this turn. Send a message to keep going.",
 };
