@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **You can always pause an automation.** Pausing re-ran the save-time safety check, so an automation running autonomous with full access (for example one applied from `.bivy/automations.yaml`) answered "400" and could not be stopped from the app. Pausing now always works, and resuming a file-managed automation keeps the definition its file applied.
+
 ## [0.22.22] - 2026-11-17
 
 ### Added
