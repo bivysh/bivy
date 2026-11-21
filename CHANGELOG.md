@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - The installer check in CI retries its Ubuntu package index update when a mirror is mid-sync, instead of failing the run.
+- The control plane uses web-push 4 (ESM-only) for push notifications.
 - Agents tested against Claude Agent SDK 0.3.330, Codex 0.171.0, Pi 1.6.0, OpenCode 1.19.6 and Grok 1.0.92.
 
 ## [0.22.22] - 2026-11-17
