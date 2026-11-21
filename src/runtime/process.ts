@@ -29,6 +29,7 @@ import type {
   UsageSnapshot,
 } from "./types.js";
 import { withExactCapabilitySurface } from "./types.js";
+import { spawnFailure } from "./spawn-error.js";
 
 /**
  * Model selection for a CLI agent, the general (data-driven) way. A CLI picks its
@@ -599,7 +600,7 @@ class ProcessSession implements RuntimeSession {
       this.emit({ type: "tool_execution_update", toolName: "agent_output", toolCallId: "agent-output", input: { stream: "stderr", output: stripAnsi(stderr.slice(-4000)) } });
     });
     child.on("error", (error) => {
-      stderr += error.message;
+      stderr += spawnFailure(error, this.cwd).message;
     });
     child.on("close", (code, signal) => {
       this.child = undefined;

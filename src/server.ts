@@ -11708,7 +11708,18 @@ app.get("/api/session/history", async (req, res) => {
     let record = sid ? openSessions.get(sid) : active;
     if (!record && sid) {
       const summary = (await listAllSessions()).find((s) => s.id === sid);
-      if (summary?.path) record = await createSession(defaultWorkspace, summary.path, { runtimeId: summary.agent, makeActive: false });
+      if (summary?.path) {
+        try {
+          record = await createSession(defaultWorkspace, summary.path, { runtimeId: summary.agent, makeActive: false });
+        } catch (error) {
+          // The agent couldn't start (e.g. the session's folder was removed).
+          // Its transcript is still on disk: serve that, as the relay's history
+          // does, so the chat shows it instead of waiting forever.
+          const saved = fastHistoryEvent({ kind: "history", sessionId: sid, path: summary.path, have: typeof req.query.have === "string" ? Number(req.query.have) : undefined, haveToken: typeof req.query.haveToken === "string" ? req.query.haveToken : undefined });
+          if (saved) return res.json(saved);
+          throw error;
+        }
+      }
     }
     if (!record) return res.status(404).json({ error: "Session not found" });
     res.json(transcripts.buildHistoryEvent({

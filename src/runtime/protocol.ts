@@ -4,6 +4,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { buildAgentCredentialEnv } from "./credentials.js";
+import { spawnFailure } from "./spawn-error.js";
 import { withSessionCredentials, credentialEnvFallback } from "../credentials/session.js";
 import { bivySessionEnv, withSessionInstructions } from "./session-env.js";
 import { mergeAgentCommands, type SlashCommandProvider } from "./slash-commands.js";
@@ -595,7 +596,7 @@ class ProtocolSession implements RuntimeSession {
       // Spawn/pipe failure — the child never became usable. Forget it so the next
       // open()/prompt() respawns instead of writing to a dead pipe forever.
       if (this.child === child) this.markChildGone();
-      this.failAll(error);
+      this.failAll(spawnFailure(error, this.cwd));
     });
     child.on("close", (code, signal) => {
       this.streaming = false;
@@ -644,7 +645,10 @@ class ProtocolSession implements RuntimeSession {
         resolve();
       };
       this.emitter.on("protocol-message", onHello);
-      child.once("error", reject);
+      child.once("error", (error) => {
+        clearTimeout(timer);
+        reject(spawnFailure(error, this.cwd));
+      });
     });
   }
 
