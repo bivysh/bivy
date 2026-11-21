@@ -654,6 +654,8 @@ export interface Usage {
   costUsd?: number;
   tokens?: { input?: number; output?: number; total?: number; [k: string]: unknown };
   plan?: { subscriptionType?: string | null; windows?: UsageWindow[] };
+  /** How full the context window is now: tokens the next request carries, of the window. */
+  context?: { used: number; size: number };
   [k: string]: unknown;
 }
 

@@ -673,8 +673,15 @@ function onNotification(m) {
         bivy({ type: "session.hook", hook: params.run.eventName, ...(method === "hook/completed" ? { done: true } : {}) });
       }
       return;
+    // `total` is the session's running count; `last` is the latest request,
+    // which is what sits in the context window now (Codex's own "context left"
+    // reads the same pair).
     case "thread/tokenUsage/updated":
-      if (fromCurrentThread && params?.tokenUsage) bivy({ type: "usage", usage: params.tokenUsage.last ?? params.tokenUsage.total ?? params.tokenUsage });
+      if (fromCurrentThread && params?.tokenUsage) {
+        const { total, last, modelContextWindow } = params.tokenUsage;
+        const context = typeof last?.totalTokens === "number" && modelContextWindow > 0 ? { used: last.totalTokens, size: modelContextWindow } : undefined;
+        bivy({ type: "usage", usage: { ...(total ?? last ?? params.tokenUsage), ...(context ? { context } : {}) } });
+      }
       return;
     case "rawResponse/completed":
       if (params?.usage) bivy({ type: "usage", usage: params.usage });

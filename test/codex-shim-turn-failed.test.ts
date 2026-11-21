@@ -120,7 +120,7 @@ test("a Codex HTTP failure is classified by its status code, not its variant", a
   }
 });
 
-test("a normal Codex turn still completes cleanly (agent_end, reply, no error)", async () => {
+test("a normal Codex turn still completes cleanly (agent_end, reply, usage, no error)", async () => {
   const runtime = makeRuntime("ok");
   const { session } = await runtime.createSession({
     workspace: process.cwd(),
@@ -136,6 +136,9 @@ test("a normal Codex turn still completes cleanly (agent_end, reply, no error)",
   const reply = session.getMessages().map((m) => (typeof m.content === "string" ? m.content : JSON.stringify(m.content))).join("\n");
   assert.match(reply, /BANANA/, "the assistant reply is captured");
   assert.equal(session.isStreaming, false, "isStreaming is cleared after a completed turn");
+  const usage = await session.getUsage();
+  assert.equal(usage?.tokens?.total, 30000, "tokens are the session's running total, not the last request");
+  assert.deepEqual(usage?.context, { used: 12000, size: 272000 }, "the last request is what fills the context window");
 
   session.dispose();
 });

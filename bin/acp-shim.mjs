@@ -415,6 +415,7 @@ async function ensureInitialized() {
  * `runtime.models` event ProtocolRuntime folds into its picker.
  */
 function publishModels(result) {
+  noteModelWindows(result);
   const options = Array.isArray(result?.configOptions) ? result.configOptions : [];
   const modelOption = options.find((o) => String(o?.id ?? "") === "model" || String(o?.category ?? "") === "model");
   const choices = Array.isArray(modelOption?.options) ? modelOption.options : [];
@@ -439,6 +440,40 @@ function publishModels(result) {
   });
 }
 
+// Each model's context window, when the model list carries it in metadata
+// (Grok: `models.availableModels[]._meta.totalContextTokens`), and which model
+// is current. Lets a per-request usage report say how full the window is.
+const modelWindows = new Map();
+let currentModelId = "";
+function noteModelWindows(result) {
+  const list = result?.models;
+  for (const m of Array.isArray(list?.availableModels) ? list.availableModels : []) {
+    const size = m?._meta?.totalContextTokens ?? m?._meta?.contextWindow;
+    if (m?.modelId && typeof size === "number" && size > 0) modelWindows.set(String(m.modelId), size);
+  }
+  const options = Array.isArray(result?.configOptions) ? result.configOptions : [];
+  const current = options.find((o) => String(o?.id ?? "") === "model" || String(o?.category ?? "") === "model")?.currentValue ?? list?.currentModelId;
+  if (current) currentModelId = String(current);
+}
+function currentWindow() {
+  return modelWindows.get(currentModelId) ?? (modelWindows.size === 1 ? [...modelWindows.values()][0] : undefined);
+}
+
+/**
+ * The usage of the agent's latest model request (Grok: `response_completed`
+ * in `_x.ai/session_notification`): what it sent and got back is what sits in
+ * the context window now. ACP's standard `usage_update` says the same directly.
+ */
+function noteRequestUsage(usage) {
+  if (!usage || typeof usage !== "object") return;
+  const n = (...keys) => keys.reduce((sum, k) => sum + (typeof usage[k] === "number" && Number.isFinite(usage[k]) ? usage[k] : 0), 0);
+  const used = n("input_tokens", "inputTokens") + n("cache_read_input_tokens", "cachedReadTokens") + n("cache_creation_input_tokens", "cachedWriteTokens") + n("output_tokens", "outputTokens");
+  const size = currentWindow();
+  if (!used || !size) return;
+  sessionContext = { used, size };
+  reportUsage();
+}
+
 /**
  * ACP has no retry update yet. Agents report their own model-call retries as a
  * `retry_state` session update inside an extension notification (Grok:
@@ -460,7 +495,7 @@ function publishRetry(u) {
 // The session updates an agent may send inside a vendor extension notification
 // (`_<vendor>/…` with the same `{ sessionId, update }` params). Every other kind
 // in an extension notification stays the agent's own business.
-const EXTENSION_UPDATE_KINDS = new Set(["retry_state"]);
+const EXTENSION_UPDATE_KINDS = new Set(["retry_state", "response_completed"]);
 
 // --- ACP → bivy: streamed session/update notifications ----------------------
 function onSessionUpdate(params) {
@@ -560,12 +595,16 @@ function onSessionUpdate(params) {
     case "retry_state":
       if (!child) publishRetry(u);
       break;
-    // The session's running cost, when the agent knows it.
+    case "response_completed":
+      if (!child) noteRequestUsage(u.usage);
+      break;
+    // How full the context window is (`used` of `size` tokens), and the
+    // session's running cost when the agent knows it.
     case "usage_update":
-      if (!child && u.cost && typeof u.cost.amount === "number" && String(u.cost.currency || "").toUpperCase() === "USD") {
-        sessionCostUsd = u.cost.amount;
-        reportUsage();
-      }
+      if (child) break;
+      if (typeof u.used === "number" && typeof u.size === "number" && u.size > 0) sessionContext = { used: u.used, size: u.size };
+      if (u.cost && typeof u.cost.amount === "number" && String(u.cost.currency || "").toUpperCase() === "USD") sessionCostUsd = u.cost.amount;
+      reportUsage();
       break;
     default:
       break;
@@ -578,6 +617,7 @@ function onSessionUpdate(params) {
 const sessionTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 let sawTokens = false;
 let sessionCostUsd;
+let sessionContext;
 function addTurnUsage(usage) {
   if (!usage || typeof usage !== "object") return;
   const n = (v) => (typeof v === "number" && Number.isFinite(v) ? v : 0);
@@ -592,7 +632,7 @@ function addTurnUsage(usage) {
 function reportUsage() {
   const { input, output, cacheRead, cacheWrite, total } = sessionTokens;
   const tokens = { input, output, cache_read: cacheRead, cache_write: cacheWrite, total };
-  bivy({ type: "usage", usage: { ...(sawTokens ? { tokens } : {}), ...(sessionCostUsd !== undefined ? { costUsd: sessionCostUsd } : {}) } });
+  bivy({ type: "usage", usage: { ...(sawTokens ? { tokens } : {}), ...(sessionCostUsd !== undefined ? { costUsd: sessionCostUsd } : {}), ...(sessionContext ? { context: sessionContext } : {}) } });
 }
 
 // ACP has no standard "ask the user" request yet, so agents ship their own as an
@@ -739,6 +779,7 @@ async function setAgentModel(model) {
       throw primary;
     }
   }
+  currentModelId = model;
 }
 
 async function applyPendingModel() {

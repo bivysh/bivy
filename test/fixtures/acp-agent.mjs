@@ -50,7 +50,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       if (process.env.BIVY_TEST_MCP_DUMP) {
         try { fs.writeFileSync(process.env.BIVY_TEST_MCP_DUMP, JSON.stringify(params?.mcpServers ?? null)); } catch { /* ignore */ }
       }
-      reply(id, process.env.ACP_THOUGHT_LEVELS === "1" ? { sessionId, configOptions: configOptions() } : { sessionId });
+      // Grok lists its models with each one's context window in `_meta`.
+      reply(id, {
+        sessionId,
+        ...(process.env.ACP_THOUGHT_LEVELS === "1" ? { configOptions: configOptions() } : {}),
+        ...(process.env.ACP_REQUEST_USAGE === "1" ? { models: { currentModelId: "fixture-large", availableModels: [{ modelId: "fixture-small", _meta: { totalContextTokens: 128000 } }, { modelId: "fixture-large", _meta: { totalContextTokens: 256000 } }] } } : {}),
+      });
       return;
     case "session/set_config_option":
       configSets += 1;
@@ -144,6 +149,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       // A model-call retry reported in a vendor extension notification (Grok's shape).
       if (process.env.ACP_RETRY === "1") {
         notify("_x.ai/session_notification", { sessionId, update: { sessionUpdate: "retry_state", type: "retrying", attempt: 1, max_retries: 15, reason: "API error (status 429 Too Many Requests)", error_type: "rate_limited" } });
+      }
+      // The latest model request's usage, in a vendor extension notification (Grok's shape).
+      if (process.env.ACP_REQUEST_USAGE === "1") {
+        notify("_x.ai/session_notification", { sessionId, update: { sessionUpdate: "response_completed", usage: { input_tokens: 14296, output_tokens: 27, cache_read_input_tokens: 2176, cache_creation_input_tokens: 0, reasoning_tokens: 26 } } });
       }
       // Stream an assistant message chunk.
       notify("session/update", { sessionId, update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "Hello from ACP" } } });

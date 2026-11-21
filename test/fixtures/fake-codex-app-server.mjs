@@ -10,7 +10,8 @@
 // turn/interrupt, plus the turn-lifecycle notifications.
 //
 // FAKE_CODEX_MODE controls how a turn ends:
-//   "ok"   (default) → item/agentMessage/delta "BANANA" then turn/completed
+//   "ok"   (default) → item/agentMessage/delta "BANANA", thread/tokenUsage/updated,
+//                      then turn/completed
 //   "fail"           → turn/failed WITHOUT any following turn/completed, which is
 //                      exactly the terminal-failure shape that used to wedge the
 //                      Bivy session "working" forever (the shim now ends the turn).
@@ -112,6 +113,15 @@ rl.on("line", (line) => {
         }
         if (MODE === "reconnect") notify("error", { threadId: params?.threadId, turnId: "turn-1", willRetry: true, error: { message: "Reconnecting... 1/5 (stream disconnected before completion)" } });
         notify("item/agentMessage/delta", { itemId: "item-1", delta: MODE === "echo-input" ? JSON.stringify(params.input) : MODE === "echo-developer-instructions" ? developerInstructions || "(none)" : "BANANA" });
+        notify("thread/tokenUsage/updated", {
+          threadId: params?.threadId,
+          turnId: "turn-1",
+          tokenUsage: {
+            total: { totalTokens: 30000, inputTokens: 28000, cachedInputTokens: 20000, outputTokens: 2000, reasoningOutputTokens: 500 },
+            last: { totalTokens: 12000, inputTokens: 11000, cachedInputTokens: 9000, outputTokens: 1000, reasoningOutputTokens: 200 },
+            modelContextWindow: 272000,
+          },
+        });
         notify("turn/completed", { threadId: params?.threadId });
       }
       reply(id, {});

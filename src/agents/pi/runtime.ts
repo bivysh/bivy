@@ -57,6 +57,7 @@ import { PI_CAPABILITIES } from "./capabilities.js";
 import { mapToolCall, mapToolResult } from "../../runtime/tool-call-map.js";
 import { agentRetryEvent } from "../../runtime/retry.js";
 import { stopReasonNotice } from "../../runtime/stop-reason.js";
+import { contextUsage } from "../../runtime/context-usage.js";
 import { BackgroundShellTracker, createBackgroundAwareBashOperations } from "./background-shell.js";
 
 /**
@@ -503,7 +504,10 @@ class PiSession implements RuntimeSession {
   async getUsage(): Promise<UsageSnapshot | undefined> {
     try {
       const stats = this.session.getSessionStats();
+      const window = this.session.getContextUsage();
+      const context = contextUsage({ used: window?.tokens, size: window?.contextWindow });
       return {
+        ...(context ? { context } : {}),
         costUsd: stats.cost,
         tokens: {
           input: stats.tokens.input,
