@@ -8,7 +8,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import express, { type Request, type Response, type NextFunction } from "express";
 import { ipKeyGenerator, rateLimit } from "express-rate-limit";
-import webpush from "web-push";
+import * as webpush from "web-push";
 import { createApns } from "./apns.js";
 import { associatedApps } from "./associated-apps.js";
 import { resolveWebhookAuth, verifyWebhookAuth, DEFAULT_WEBHOOK_HEADER, type WebhookAuth } from "./webhook-auth.js";
