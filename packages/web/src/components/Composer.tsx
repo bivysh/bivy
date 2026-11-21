@@ -21,6 +21,7 @@ import { controller } from "../store/useStore.js";
 import { clearComposerDraft, composerDraftKey, holdComposerAttachments, restoreComposerDraft, writeComposerDraft, type PendingAttachmentMetadata } from "../composerDraft.js";
 import { setComposerLifecycle } from "../pwaLifecycle.js";
 import { isImeKey } from "../ime.js";
+import { longPasteName } from "../longPaste.js";
 
 /** "model-to-send": Send was pressed before a model was chosen. */
 type Picker = "repo" | "agent" | "model" | "model-to-send" | "sandbox" | "actions" | null;
@@ -469,7 +470,7 @@ export function Composer({
     ta.style.height = Math.min(ta.scrollHeight, 200) + "px";
   }
 
-  async function addFiles(files: FileList | null) {
+  async function addFiles(files: FileList | readonly File[] | null) {
     if (!files || !files.length) return;
     setReadingCount((n) => n + 1);
     try {
@@ -840,6 +841,14 @@ export function Composer({
               if (files && files.length && Array.from(files).some((f) => f.type.startsWith("image/"))) {
                 e.preventDefault();
                 void addFiles(files);
+                return;
+              }
+              // A very long text paste attaches as a Markdown file instead.
+              const pasted = e.clipboardData?.getData("text/plain") ?? "";
+              const name = longPasteName(pasted, attachments.map((attachment) => attachment.name ?? ""));
+              if (name) {
+                e.preventDefault();
+                void addFiles([new File([pasted], name, { type: "text/markdown" })]);
               }
             }}
             onChange={(e) => {
