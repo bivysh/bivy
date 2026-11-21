@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.23] - 2026-11-21
+
 ### Security
 - A teammate invited into one session can no longer open a different session on that machine by naming its file path; their commands now always act on the invited session.
 
