@@ -20,7 +20,13 @@ case "${1:-}" in
           "Acquire::http::Timeout \"30\";" \
           "Acquire::https::Timeout \"30\";" \
           "Acquire::ForceIPv4 \"true\";" > /etc/apt/apt.conf.d/80bivy-smoke-network
-        apt-get update -o APT::Update::Error-Mode=any
+        # A mirror mid-sync serves index files of the wrong size; that clears
+        # within seconds, so retry the whole update a few times before failing.
+        for attempt in 1 2 3; do
+          apt-get update -o APT::Update::Error-Mode=any && break
+          [ "$attempt" = 3 ] && exit 1
+          sleep 15
+        done
         apt-get install -y --no-install-recommends curl ca-certificates
         touch /tmp/curl-ready
         exec sleep infinity'
