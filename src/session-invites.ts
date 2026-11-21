@@ -160,6 +160,20 @@ export function guestMayRun(invite: Pick<SessionInvite, "sessionId" | "mode">, c
   return { ok: true };
 }
 
+/**
+ * A guest's frame as the machine runs it, or why it's refused. Its request id
+ * moves into the guest's namespace, and `path` is dropped: handlers resume an
+ * explicit path ahead of `sessionId`, and a guest only ever acts on its invited
+ * session, by id.
+ */
+export function guestCommand<T extends { kind?: unknown; requestId?: unknown; path?: unknown }>(invite: Pick<SessionInvite, "id" | "sessionId" | "mode">, command: T, sessionOf: (command: Record<string, unknown>) => string | undefined): { ok: true; command: Omit<T, "path"> } | { ok: false; reason: string; requestId?: string } {
+  const { path: _path, ...rest } = command;
+  const scoped = (typeof rest.requestId === "string" ? { ...rest, requestId: guestRequestId(invite.id, rest.requestId) } : rest) as Omit<T, "path">;
+  const allowed = guestMayRun(invite, scoped, sessionOf);
+  if (!allowed.ok) return { ok: false, reason: allowed.reason, requestId: typeof scoped.requestId === "string" ? scoped.requestId : undefined };
+  return { ok: true, command: scoped };
+}
+
 /** The session an event is about, if it names one. */
 export function eventSessionId(event: unknown): string | undefined {
   const e = event as Record<string, any> | null;

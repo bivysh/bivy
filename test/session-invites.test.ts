@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { SessionInvites, guestEvent, guestMayRun, guestRequestId } from "../src/session-invites.js";
+import { SessionInvites, guestCommand, guestEvent, guestMayRun, guestRequestId } from "../src/session-invites.js";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "invites-"));
 let now = Date.parse("2026-11-06T12:00:00Z");
@@ -24,6 +24,15 @@ for (const kind of ["session.new", "node.settings.set", "terminal.open.tui", "se
   assert.equal(guestMayRun(prompt, { kind, sessionId: "s1" }, sessionOf).ok, false, kind);
 }
 assert.equal(guestMayRun(view, { kind: "sessions.list" }, sessionOf).ok, true, "listing is allowed; the reply is cut");
+
+// A guest frame runs in the guest's request namespace and loses any `path`:
+// handlers resume an explicit path ahead of the id, which would open another
+// session while the id names the invited one.
+const framed = guestCommand(view, { kind: "session.open", sessionId: "s1", path: "/sessions/other.jsonl", requestId: "r1" }, sessionOf);
+assert.ok(framed.ok);
+assert.deepEqual(framed.command, { kind: "session.open", sessionId: "s1", requestId: guestRequestId("inv-1", "r1") });
+const refused = guestCommand(view, { kind: "prompt", sessionId: "s1", requestId: "r2" }, sessionOf);
+assert.ok(!refused.ok && refused.requestId === guestRequestId("inv-1", "r2"), "a refusal answers in the guest's namespace");
 
 // Events: their session, their replies, and a cut session list only.
 assert.ok(guestEvent(view, { type: "session.event", sessionId: "s1" }));

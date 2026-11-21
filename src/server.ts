@@ -261,7 +261,7 @@ import {
 import { MAX_TEAM_INSTRUCTIONS_BYTES, TeamVaultSync } from "./team-vault.js";
 import { teamKeyStore } from "./secrets.js";
 import { TeamShare, teammateByDevice } from "./team-share.js";
-import { INVITE_DURATIONS_MS, SessionInvites, guestEvent, guestMayRun, guestRequestId } from "./session-invites.js";
+import { INVITE_DURATIONS_MS, SessionInvites, guestCommand, guestEvent } from "./session-invites.js";
 import { redactSecrets, registerSecretValue } from "./redact.js";
 import {
   getSttConfig,
@@ -3930,12 +3930,12 @@ async function handleRelayMessage(message: ClientMessage, guest?: { inviteId: st
   if (guest) {
     const invite = sessionInvites.get(guest.inviteId);
     if (!invite) return;
-    if (typeof msg.requestId === "string") msg = { ...msg, requestId: guestRequestId(invite.id, msg.requestId) };
-    const allowed = guestMayRun(invite, msg, guestCommandSession);
+    const allowed = guestCommand(invite, msg, guestCommandSession);
     if (!allowed.ok) {
-      relay?.sendEvent({ type: "session.error", requestId: typeof msg.requestId === "string" ? msg.requestId : undefined, sessionId: invite.sessionId, error: allowed.reason });
+      relay?.sendEvent({ type: "session.error", requestId: allowed.requestId, sessionId: invite.sessionId, error: allowed.reason });
       return;
     }
+    msg = allowed.command as ClientMessage;
   }
   try {
     const requestId = typeof msg.requestId === "string" && msg.requestId.trim() ? msg.requestId : randomUUID();
