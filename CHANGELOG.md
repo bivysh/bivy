@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **See how full a session's context window is.** The session sheet now has a Context row, such as "62% full · 124K of 200K", and a "Nearly full" badge from 80%. That gives you a warning before the agent compacts or runs out of room. It works for Claude Code, Codex, Pi, OpenCode and Grok, and for any agent that sends ACP's `usage_update` or the protocol's `usage.context`.
+
+### Fixed
+- Codex sessions now count tokens for the whole session, not only the latest request.
+
 ## [0.22.23] - 2026-11-21
 
 ### Security

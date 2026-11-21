@@ -75,6 +75,9 @@ export function formatCount(n: number): string {
   return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(n);
 }
 
+/** From here the context row warns: the agent will soon compact or stop. */
+const CONTEXT_NEARLY_FULL_PCT = 80;
+
 const PR_STATE_LABEL: Record<PrRef["state"], string> = { open: "Open", merged: "Merged", closed: "Closed" };
 
 // The sheet's GitHub links (issue / PR / branch) — one row anatomy, each led by
@@ -210,7 +213,9 @@ export function RunPill({
   const planWindows = [...(usage?.plan?.windows ?? [])].sort(
     (a, b) => (b.utilizationPct ?? 0) - (a.utilizationPct ?? 0),
   );
-  const hasUsage = hasCost || tokenTotal > 0 || planWindows.length > 0;
+  const context = usage?.context;
+  const contextPct = context ? Math.min(100, Math.round((context.used / context.size) * 100)) : 0;
+  const hasUsage = hasCost || tokenTotal > 0 || planWindows.length > 0 || !!context;
 
   const filesLabel = filesEdited && filesEdited > 0
     ? `${filesEdited} file${filesEdited === 1 ? "" : "s"} edited`
@@ -317,6 +322,14 @@ export function RunPill({
               <div className="run-sheet-rows">
                 {hasCost && <Row k="Cost"><span title={`$${usage!.costUsd!.toFixed(4)}`}>{formatCost(usage!.costUsd!)}</span></Row>}
                 {tokenTotal > 0 && <Row k="Tokens"><span title={tokenTotal.toLocaleString()}>{formatCount(tokenTotal)}</span></Row>}
+                {context && (
+                  <Row k="Context">
+                    <span title={`${context.used.toLocaleString()} of ${context.size.toLocaleString()} tokens`}>
+                      {`${contextPct}% full · ${formatCount(context.used)} of ${formatCount(context.size)}`}
+                    </span>
+                    {contextPct >= CONTEXT_NEARLY_FULL_PCT && <> <Badge tone="warn">Nearly full</Badge></>}
+                  </Row>
+                )}
                 {planWindows.map((w) => (
                   <Row k={w.label} key={w.label}>
                     {typeof w.utilizationPct === "number" ? `${Math.round(w.utilizationPct)}% used` : "usage unknown"}

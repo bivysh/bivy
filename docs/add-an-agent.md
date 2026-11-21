@@ -97,7 +97,7 @@ agents:
 | `message.reasoning` | `text` | A reasoning block |
 | `tool.call` | `toolCallId`, `name`, `input` | A tool card. `name` `bash` with `input.command`, or `edit`/`write` with `input.path`, get the rich shell and file cards. Optional `personRequired` (`true` or `{reason}`) says the agent's own rules want a person to decide: Bivy then asks in every approval mode and offers no "allow for this session" |
 | `tool.result` | `toolCallId`, `result` | The tool card's output |
-| `usage` | `tokens` (`input_tokens`, `output_tokens`, …), `costUsd` | The session's usage |
+| `usage` | `tokens` (`input_tokens`, `output_tokens`, …), `costUsd`, `context` (`{ used, size }`) | The session's usage; `context` is how full the context window is now (tokens the next request carries, out of the window) |
 | `session.retry` | `error`, optional `attempt`, `maxAttempts`, `delayMs` | A "Retrying (2/5)…" status while the agent retries a failed model call itself |
 | `session.hook` | `hook` (the hook event, e.g. `PreToolUse`), optional `done: true` | A "Running PreToolUse hook…" status while the turn waits on one of the user's hooks |
 | `session.done` | optional `stopReason` | End of turn. A `stopReason` of `refusal`, `withheld`, `max_tokens` (or `length`) or `max_turn_requests` adds a notice saying the model declined, the provider withheld the answer, the reply was cut off, or the agent hit its request limit; any other value ends the turn quietly. ACP agents get this from the shim (the `session/prompt` reply's `stopReason`) |

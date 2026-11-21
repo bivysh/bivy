@@ -33,6 +33,7 @@ import type {
 } from "./types.js";
 import { withExactCapabilitySurface } from "./types.js";
 import { extractTokenUsage } from "./cli-parsers.js";
+import { contextUsage } from "./context-usage.js";
 import { mapToolCall, mapToolResult } from "./tool-call-map.js";
 import { stripAnsi } from "./ansi.js";
 import { agentRetryEvent } from "./retry.js";
@@ -61,6 +62,8 @@ function parseProtocolUsage(raw: unknown): UsageSnapshot | undefined {
   const tokenUsage = extractTokenUsage(o.tokens ?? o);
   const snapshot: UsageSnapshot = tokenUsage ? { ...tokenUsage } : {};
   if (typeof o.costUsd === "number") snapshot.costUsd = o.costUsd;
+  const context = contextUsage(o.context);
+  if (context) snapshot.context = context;
   return Object.keys(snapshot).length ? snapshot : undefined;
 }
 
@@ -964,7 +967,11 @@ class ProtocolSession implements RuntimeSession {
     }
     if (type === "usage") {
       // Best-effort token/cost snapshot the shim reports; surfaced via getUsage().
-      this.lastUsage = parseProtocolUsage(msg.usage ?? msg);
+      // A report without `context` keeps the last one known: agents send the
+      // window's fill on its own beat, apart from token counts.
+      const usage = parseProtocolUsage(msg.usage ?? msg);
+      const context = usage?.context ?? this.lastUsage?.context;
+      this.lastUsage = usage && context ? { ...usage, context } : usage;
       return;
     }
     if (type === "session.retry") {

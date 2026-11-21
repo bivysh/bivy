@@ -58,6 +58,7 @@ import { toModelInfo as sharedToModelInfo } from "../../runtime/normalize.js";
 import { hasLiveProcessForCwd } from "../../runtime/native-process-scan.js";
 import { bivySessionEnv } from "../../runtime/session-env.js";
 import { ELICITATION_TOOL } from "../../elicitation.js";
+import { contextUsage } from "../../runtime/context-usage.js";
 import { bridgeInstalled, enableBridgeResolution } from "../../agent-bridges.mjs";
 import type { RuntimeCondition } from "../../policy/conditions.js";
 
@@ -1750,7 +1751,19 @@ class ClaudeSession implements RuntimeSession {
     const fn = this.query?.usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET;
     if (typeof fn !== "function") return undefined;
     try {
-      return mapUsageResponse(await fn.call(this.query));
+      const [usage, context] = await Promise.all([fn.call(this.query), this.contextWindowUsage()]);
+      return { ...mapUsageResponse(usage), ...(context ? { context } : {}) };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** How full the context window is. `summary` answers from the last reply's
+   *  usage and local estimates, without the per-category token-count calls. */
+  private async contextWindowUsage(): Promise<UsageSnapshot["context"]> {
+    try {
+      const window = await this.query?.getContextUsage?.({ detail: "summary" });
+      return contextUsage({ used: window?.totalTokens, size: window?.maxTokens });
     } catch {
       return undefined;
     }

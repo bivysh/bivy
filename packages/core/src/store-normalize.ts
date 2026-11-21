@@ -194,7 +194,8 @@ export function normalizeUsage(usage: any): Usage | null {
   const hasCost = typeof usage.costUsd === "number";
   const hasTokens = usage.tokens && typeof usage.tokens.total === "number";
   const hasPlan = usage.plan && Array.isArray(usage.plan.windows) && usage.plan.windows.length;
-  if (!hasCost && !hasTokens && !hasPlan) return null;
+  const hasContext = typeof usage.context?.used === "number" && typeof usage.context?.size === "number" && usage.context.size > 0;
+  if (!hasCost && !hasTokens && !hasPlan && !hasContext) return null;
   return usage as Usage;
 }
 

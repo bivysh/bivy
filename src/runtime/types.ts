@@ -447,6 +447,13 @@ export interface UsageSnapshot {
   costUsd?: number;
   tokens?: { input?: number; output?: number; cacheRead?: number; cacheWrite?: number; total?: number };
   /**
+   * How full the model's context window is right now, in tokens: what the next
+   * request carries (`used`) out of the window (`size`). Unlike `tokens`, this
+   * is not a running total, and it drops after a compaction. Absent when the
+   * agent doesn't know (e.g. before its first reply).
+   */
+  context?: { used: number; size: number };
+  /**
    * Remaining quota on a metered OAuth/subscription plan (e.g. Claude Pro/Max),
    * as opposed to a pay-per-token API key — undefined when the runtime has no
    * such concept or the session isn't authenticated that way.
