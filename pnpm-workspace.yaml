@@ -29,7 +29,7 @@ overrides:
   qs: 6.16.1
   "@hono/node-server": 2.1.7
   "@modelcontextprotocol/sdk": 1.32.2
-  brace-expansion: 5.0.12
+  brace-expansion: 5.0.13
   # nanoid < 3.3.18 (via postcss → vite, a build-time dep): a custom generator
   # loops forever when size is 0 (GHSA-2v37-7h3g-55p8). Not reachable through our
   # usage, but pinned to clear the advisory. Kept in sync with package.json.
@@ -41,7 +41,7 @@ overrides:
   # npm expresses these as a nested object under the parent package; pnpm uses a
   # `parent>child` selector. Same intent: pi-coding-agent ships an npm-shrinkwrap
   # pinning vulnerable copies below its own node_modules.
-  "@earendil-works/pi-coding-agent>brace-expansion": 5.0.12
+  "@earendil-works/pi-coding-agent>brace-expansion": 5.0.13
   "@earendil-works/pi-coding-agent>undici": 8.12.4
   # pi-coding-agent asks for its sibling packages with ^ ranges, but they are
   # released together and a newer sibling can drop exports it imports
