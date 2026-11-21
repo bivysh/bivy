@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - A teammate invited into one session can no longer open a different session on that machine by naming its file path; their commands now always act on the invited session.
 
+### Added
+- **A very long paste attaches as a file.** Pasting more than 10,000 characters of text (a log, a doc, a transcript) into the composer adds it as `pasted-text.md` instead of filling the box, so the composer stays usable on a phone. The agent reads it from the session's workspace like any attached file, so it works for every agent. Remove the chip to drop it.
+
 ### Fixed
 - **A session whose folder was removed opens again.** If a session's worktree was deleted (for example to free disk) and can't be restored, the chat now shows its saved transcript instead of loading forever, and the error says the folder is gone instead of `spawn /usr/bin/node ENOENT`.
 - **An answer the provider hides or blocks no longer stays in the chat.** When Codex's provider moderation says to hide or block an answer it already streamed, Bivy takes that answer back and the turn says why ("The model declined to answer this request." or "The provider withheld this answer."). Earlier text and tool cards stay. Any agent can do the same through the new `message.withdraw` protocol event.
