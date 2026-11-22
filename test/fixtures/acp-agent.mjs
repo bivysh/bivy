@@ -146,9 +146,12 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         effort = "high";
         notify("session/update", { sessionId, update: { sessionUpdate: "config_option_update", configOptions: configOptions() } });
       }
-      // A model-call retry reported in a vendor extension notification (Grok's shape).
+      // A model-call retry and a compaction reported in vendor extension
+      // notifications (Grok's shapes, seen live on 1.0.92).
       if (process.env.ACP_RETRY === "1") {
         notify("_x.ai/session_notification", { sessionId, update: { sessionUpdate: "retry_state", type: "retrying", attempt: 1, max_retries: 15, reason: "API error (status 429 Too Many Requests)", error_type: "rate_limited" } });
+        notify("_x.ai/session_notification", { sessionId, update: { sessionUpdate: "auto_compact_started", tokens_used: 230000, context_window: 256000, percentage: 90 } });
+        notify("_x.ai/session_notification", { sessionId, update: { sessionUpdate: "auto_compact_completed", tokens_before: 230000, tokens_after: 18000, elapsed_ms: 4100, summary_preview: null } });
       }
       // The latest model request's usage, in a vendor extension notification (Grok's shape).
       if (process.env.ACP_REQUEST_USAGE === "1") {

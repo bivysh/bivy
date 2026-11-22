@@ -83,6 +83,13 @@ describe("active-session pure event folds", () => {
     expect(foldTranscriptEvent(running, { type: "agent_hook", hook: "PreToolUse", done: true }, 2).value.workingLabel).toBe("Thinking…");
   });
 
+  it("shows an agent's compaction as the working status until it ends", () => {
+    const running = foldTranscriptEvent(transcriptValue(), { type: "agent_compaction" }, 1).value;
+    expect(running).toMatchObject({ working: true, workingLabel: "Compacting the conversation…", transcript: [] });
+    expect(isOwnStatusLabel(running.workingLabel)).toBe(true);
+    expect(foldTranscriptEvent(running, { type: "agent_compaction", done: true }, 2).value.workingLabel).toBe("Thinking…");
+  });
+
   it("a mid-stream message_start keeps one bubble instead of orphaning + duplicating it", () => {
     // Regression: a message_start arriving before the open message sealed used
     // to wipe the draft — orphaning the "I've" preview bubble as a permanent

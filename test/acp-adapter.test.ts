@@ -318,7 +318,7 @@ await check("acp: a model request's usage in an extension notification fills the
   }
 });
 
-await check("acp: a retry the agent reports in an extension notification is agent_retry", async () => {
+await check("acp: a retry and a compaction the agent reports in extension notifications are agent_retry and agent_compaction", async () => {
   process.env.BIVY_ACP_COMMAND = process.execPath;
   process.env.BIVY_ACP_ARGS = JSON.stringify([acpAgent]);
   process.env.ACP_RETRY = "1";
@@ -331,6 +331,8 @@ await check("acp: a retry the agent reports in an extension notification is agen
       await session.prompt("hello");
       await waitFor(events, (event) => event.type === "agent_end");
       assert.deepEqual(events.find((event) => event.type === "agent_retry"), { type: "agent_retry", attempt: 1, maxAttempts: 15, error: "API error (status 429 Too Many Requests)" });
+      assert.deepEqual(events.filter((event) => event.type === "agent_compaction"), [{ type: "agent_compaction" }, { type: "agent_compaction", done: true }]);
+      assert.match(String(events.find((event) => event.type === "session.notice")?.message), /\(230k → 18k tokens\)/);
     } finally {
       session.dispose();
     }

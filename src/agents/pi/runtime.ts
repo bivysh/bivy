@@ -56,6 +56,7 @@ import type {
 import { PI_CAPABILITIES } from "./capabilities.js";
 import { mapToolCall, mapToolResult } from "../../runtime/tool-call-map.js";
 import { agentRetryEvent } from "../../runtime/retry.js";
+import { agentCompactionEvents } from "../../runtime/compaction.js";
 import { stopReasonNotice } from "../../runtime/stop-reason.js";
 import { contextUsage } from "../../runtime/context-usage.js";
 import { BackgroundShellTracker, createBackgroundAwareBashOperations } from "./background-shell.js";
@@ -312,6 +313,19 @@ class PiSession implements RuntimeSession {
       }
       if (type === "auto_retry_start") {
         listener(agentRetryEvent({ attempt: event.attempt, maxAttempts: event.maxAttempts, delayMs: event.delayMs, error: event.errorMessage }));
+        return;
+      }
+      // Pi's compaction_end has no result when it was aborted or failed.
+      if (type === "compaction_start" || type === "compaction_end") {
+        const end = type === "compaction_end";
+        for (const step of agentCompactionEvents({
+          done: end,
+          cancelled: end && event.aborted === true,
+          trigger: event.reason,
+          tokensBefore: event.result?.tokensBefore,
+          tokensAfter: event.result?.estimatedTokensAfter,
+          ...(end && !event.result ? { error: event.errorMessage || "the summary failed" } : {}),
+        })) listener(step);
         return;
       }
       const callId = String(event?.toolCallId ?? event?.toolUseId ?? event?.tool_use_id ?? event?.id ?? "");
