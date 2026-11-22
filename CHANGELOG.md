@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - Codex sessions now count tokens for the whole session, not only the latest request.
+- The agent catalog test no longer fails on a machine that has Kimi Code installed; it pins Kimi to its plain CLI path like OpenCode and Grok.
 
 ## [0.22.23] - 2026-11-21
 

@@ -4,7 +4,7 @@ import { PI_CAPABILITIES } from "../src/agents/pi/capabilities.js";
 import { LazyPiRuntime } from "../src/agents/pi/integration.js";
 import { listRegisteredAgents, listRuntimes } from "../src/runtime/index.js";
 
-// OpenCode and Grok are promoted to the governed ACP path by default, but only
+// OpenCode, Grok and Kimi are promoted to the governed ACP path by default, but only
 // when the binary on THIS machine evidences the ACP mode — so their advertised
 // capabilities would otherwise differ between a dev box with the CLI installed
 // and CI without it. Pin the pipe path for the effect-level assertions below
@@ -12,6 +12,7 @@ import { listRegisteredAgents, listRuntimes } from "../src/runtime/index.js";
 // path is asserted at the end of this file, and end-to-end in acp-adapter.test.ts.
 process.env.BIVY_OPENCODE_ACP = "0";
 process.env.BIVY_GROK_ACP = "0";
+process.env.BIVY_KIMI_ACP = "0";
 
 // The agent picker must offer exactly the most-used coding agents, all driven
 // through Bivy's general paths (native runtimes, the Codex app-server shim, and
