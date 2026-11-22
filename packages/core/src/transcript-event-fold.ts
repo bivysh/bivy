@@ -181,8 +181,10 @@ const HOOK_PREFIX = "Waiting on";
 export function hookLabel(event: { hook?: unknown }): string {
   return `${HOOK_PREFIX} ${typeof event.hook === "string" && event.hook ? `${event.hook} hook` : "a hook"}…`;
 }
-/** Statuses nothing else in the chat shows (a retry, a hook): shown even when the turn's work line is up. */
-const OWN_STATUS_PREFIXES = [RETRY_PREFIX, HOOK_PREFIX];
+/** "Compacting the conversation…" while the agent summarizes its history (`agent_compaction`, any runtime). */
+export const COMPACTING_LABEL = "Compacting the conversation…";
+/** Statuses nothing else in the chat shows (a retry, a hook, a compaction): shown even when the turn's work line is up. */
+const OWN_STATUS_PREFIXES = [RETRY_PREFIX, HOOK_PREFIX, COMPACTING_LABEL];
 export function isOwnStatusLabel(label: string | undefined): boolean { return OWN_STATUS_PREFIXES.some((prefix) => Boolean(label?.startsWith(prefix))); }
 function hasAttachment(entries: readonly TranscriptFoldEntry[], hash: string): boolean {
   return entries.some((entry) => entry.attachments?.some((item) => item.hash === hash));
@@ -289,6 +291,11 @@ export function foldTranscriptEvent(input: TranscriptFoldValue, event: ServerEve
     case "agent_hook":
       if (!(event as any).done) setWorking(value, hookLabel(event as any));
       else if (value.working && value.workingLabel.startsWith(HOOK_PREFIX)) setWorking(value, "Thinking…");
+      break;
+    // The notice that follows a finished compaction says what happened; the turn goes back to the agent.
+    case "agent_compaction":
+      if (!(event as any).done) setWorking(value, COMPACTING_LABEL);
+      else if (value.working && value.workingLabel === COMPACTING_LABEL) setWorking(value, "Thinking…");
       break;
     case "messages_retracted": commands.push({ kind: "history-stale" }); break;
     case "agent_end": finishDrafts(value); closeTools(value); Object.assign(value.draft, { pendingText: "", committedText: "", committedThinking: "" }); value.working = false; value.workingLabel = ""; commands.push({ kind: "turn-settled" }); break;

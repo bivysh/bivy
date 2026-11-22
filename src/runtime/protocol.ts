@@ -39,6 +39,7 @@ import { mapToolCall, mapToolResult } from "./tool-call-map.js";
 import { stripAnsi } from "./ansi.js";
 import { agentRetryEvent } from "./retry.js";
 import { agentHookEvent } from "./hook.js";
+import { agentCompactionEvents } from "./compaction.js";
 import { stopReasonNotice } from "./stop-reason.js";
 import { asRuntimeCondition } from "../policy/conditions.js";
 
@@ -983,6 +984,10 @@ class ProtocolSession implements RuntimeSession {
     }
     if (type === "session.hook") {
       this.emit(agentHookEvent(msg));
+      return;
+    }
+    if (type === "session.compaction") {
+      for (const event of agentCompactionEvents(msg)) this.emit(event);
       return;
     }
     if (type === "session.status") {

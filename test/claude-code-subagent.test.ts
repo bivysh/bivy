@@ -184,4 +184,32 @@ async function newSession() {
   assert.ok(!events.some((e) => String(e.type).startsWith("tool_execution")), "a hook wait opens no tool card");
 }
 
+// ── compaction: status "compacting", then compact_result, then the boundary
+//    with its token counts (the SDK's order, checked live on 0.3.330) — the
+//    shared agent_compaction status plus one notice that survives a reload; a
+//    failed compaction has no boundary and ends on its result ──
+{
+  const { session, queries, events } = await newSession();
+  await session.prompt("/compact");
+  await waitFor(() => queries.length === 1);
+  const q = queries[0]!;
+  q.emit({ type: "system", subtype: "status", status: "compacting" });
+  q.emit({ type: "system", subtype: "status", status: null, compact_result: "success" });
+  q.emit({ type: "system", subtype: "compact_boundary", compact_metadata: { trigger: "auto", pre_tokens: 148_200, post_tokens: 12_400 } });
+  q.emit({ type: "system", subtype: "status", status: "compacting" });
+  q.emit({ type: "system", subtype: "status", status: null, compact_result: "failed", compact_error: "Not enough messages to compact." });
+  await waitFor(() => events.filter((e) => e.type === "session.notice").length === 2);
+  assert.deepEqual(events.filter((e) => e.type === "agent_compaction"), [
+    { type: "agent_compaction" }, { type: "agent_compaction", done: true, trigger: "auto" },
+    { type: "agent_compaction" }, { type: "agent_compaction", done: true },
+  ]);
+  const notices = events.filter((e) => e.type === "session.notice").map((e) => [e.level, e.message]);
+  assert.deepEqual(notices, [
+    ["info", "The conversation filled the context window, so the agent summarized it (148k → 12k tokens). It continues from that summary, so it may not recall every earlier detail."],
+    ["warning", "The agent couldn't summarize the conversation: Not enough messages to compact."],
+  ]);
+  const reloaded = renderHistory(session.getMessages() as any[]);
+  assert.equal(reloaded.filter((e) => e.role === "system").length, 2);
+}
+
 console.log("ok claude-code sub-agent nesting");

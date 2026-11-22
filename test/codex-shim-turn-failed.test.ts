@@ -161,7 +161,7 @@ test("a Codex reconnect it recovers from shows as a retry, not a failed turn", a
   }
 });
 
-test("a Codex hook in the turn shows as agent_hook; a thread-scoped hook does not", async () => {
+test("a Codex hook in the turn shows as agent_hook (a thread-scoped hook does not), and a compaction as agent_compaction", async () => {
   const runtime = makeRuntime("hook");
   const { session } = await runtime.createSession({ workspace: process.cwd(), toolInterceptor: async () => undefined });
   const events: RuntimeEvent[] = [];
@@ -170,6 +170,8 @@ test("a Codex hook in the turn shows as agent_hook; a thread-scoped hook does no
     await session.prompt("say the word");
     await waitFor(events, (event) => event.type === "agent_end");
     assert.deepEqual(events.filter((event) => event.type === "agent_hook"), [{ type: "agent_hook", hook: "PreToolUse" }, { type: "agent_hook", hook: "PreToolUse", done: true }]);
+    assert.deepEqual(events.filter((event) => event.type === "agent_compaction"), [{ type: "agent_compaction" }, { type: "agent_compaction", done: true, trigger: "auto" }]);
+    assert.equal(events.filter((event) => event.type === "session.notice").length, 1);
   } finally {
     session.dispose();
   }

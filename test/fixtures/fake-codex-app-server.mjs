@@ -25,7 +25,8 @@
 //                      own), then the "ok" reply: the turn recovered and must
 //                      not end failed.
 //   "hook"           → hook/started + hook/completed for a preToolUse hook inside
-//                      the turn, and a sessionStart hook with no turnId, then "ok".
+//                      the turn, a sessionStart hook with no turnId, and a
+//                      contextCompaction item started + completed, then "ok".
 //   "moderated"      → a shown commentary item, then an answer item whose
 //                      item/completed carries moderation.display with the mode in
 //                      FAKE_CODEX_DISPLAY (hide | block): the answer is withdrawn.
@@ -98,6 +99,9 @@ rl.on("line", (line) => {
           notify("hook/started", { threadId: params?.threadId, turnId: null, run: run("sessionStart") });
           notify("hook/started", { threadId: params?.threadId, turnId: "turn-1", run: run("preToolUse") });
           notify("hook/completed", { threadId: params?.threadId, turnId: "turn-1", run: { ...run("preToolUse"), status: "completed" } });
+          const compaction = { threadId: params?.threadId, turnId: "turn-1", item: { type: "contextCompaction", id: "compact-1" } };
+          notify("item/started", compaction);
+          notify("item/completed", compaction);
         }
         if (MODE === "moderated") {
           const item = (id, text, moderation) => ({ threadId: params?.threadId, turnId: "turn-1", item: { type: "agentMessage", id, text, ...(moderation ? { moderation } : {}) } });

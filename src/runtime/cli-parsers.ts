@@ -26,6 +26,7 @@ import { mapToolCall, mapToolResult, type ToolCallMapContext } from "./tool-call
 import { traceToolPayload } from "./tool-trace.js";
 import { agentRetryEvent } from "./retry.js";
 import { agentHookEvent } from "./hook.js";
+import { agentCompactionEvents } from "./compaction.js";
 
 export interface CliParser {
   /** Feed one complete stdout line; return normalized events to emit. */
@@ -284,6 +285,8 @@ export function bivyProtocolParser(): CliParser {
         events.push(agentRetryEvent(msg));
       } else if (type === "session.hook") {
         events.push(agentHookEvent(msg));
+      } else if (type === "session.compaction") {
+        events.push(...agentCompactionEvents(msg));
       } else if (type === "session.done") {
         acc.finish(events);
       } else if (type === "session.error") {

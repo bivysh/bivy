@@ -655,9 +655,14 @@ function onNotification(m) {
       if (item?.type === "dynamicToolCall") emitToolObserved(itemId, text(item.tool || "tool"), updateInput(itemId), parent);
       if (item?.type === "collabAgentToolCall") emitToolObserved(itemId, "spawn_agent", updateInput(itemId), parent);
       if (item?.type === "subAgentActivity") emitToolObserved(itemId, "subagent_activity", updateInput(itemId), parent);
+      // Codex is summarizing the thread because the window filled (Bivy never
+      // sends thread/compact/start, so it is always automatic): a status until
+      // the item completes. A sub-agent's compaction is its own business.
+      if (item?.type === "contextCompaction" && fromCurrentThread) bivy({ type: "session.compaction" });
       return;
     }
     case "item/completed": {
+      if (params?.item?.type === "contextCompaction" && fromCurrentThread) bivy({ type: "session.compaction", done: true, trigger: "auto" });
       handleCompletedItem(params);
       activeObservedItems.delete(paramsItemId(params));
       approvedMcpItems.delete(paramsItemId(params));

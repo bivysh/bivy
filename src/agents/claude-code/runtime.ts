@@ -46,6 +46,7 @@ import { mapToolCall, mapToolResult } from "../../runtime/tool-call-map.js";
 import { agentRetryEvent } from "../../runtime/retry.js";
 import { commandArgumentHint } from "../../runtime/command-hint.js";
 import { agentHookEvent } from "../../runtime/hook.js";
+import { agentCompactionEvents, type AgentCompaction } from "../../runtime/compaction.js";
 import { resolveExecutable } from "../../executable.js";
 import fs from "node:fs";
 import { depCacheEnv } from "../../harness/dep-cache.js";
@@ -1347,6 +1348,15 @@ class ClaudeSession implements RuntimeSession {
   /** Drop stored messages the SDK retracted, and tell clients the transcript
    *  changed behind the live stream (they re-read it when the turn settles).
    *  Unknown uuids are a no-op, so the same retraction twice is harmless. */
+  /** The shared compaction status, with its closing notice kept in the
+   *  transcript like the other notices Claude Code raises. */
+  private emitCompaction(compaction: AgentCompaction): void {
+    for (const event of agentCompactionEvents(compaction)) {
+      if (event.type === "session.notice") this.messages.push({ role: "system", content: String(event.message), timestamp: Date.now() });
+      this.emit(event);
+    }
+  }
+
   private retractMessages(uuids: unknown[]): void {
     const gone = new Set(uuids.map((uuid) => this.messagesByUuid.get(String(uuid))).filter(Boolean));
     if (!gone.size) return;
@@ -1618,10 +1628,26 @@ class ClaudeSession implements RuntimeSession {
           this.setCommands(claudeCommandsWithDetails([], message.commands));
           break;
         }
-        // Task-completion notifications and compaction boundaries are injected
-        // for the model, not the human — don't forward them as chat. (init still
-        // falls through so its capabilities/commands reach the client.)
-        if (message?.subtype === "task_notification" || message?.subtype === "compact_boundary") break;
+        // Compaction: `status: "compacting"` while the summary is written, then
+        // `compact_result`, then the boundary with the trigger and token counts.
+        // A failure has no boundary, so it ends on the result.
+        if (message?.subtype === "status" && message.status === "compacting") {
+          this.emitCompaction({});
+          break;
+        }
+        if (message?.subtype === "status" && message.compact_result === "failed") {
+          this.emitCompaction({ done: true, error: message.compact_error || "the summary failed" });
+          break;
+        }
+        if (message?.subtype === "compact_boundary") {
+          const meta = message.compact_metadata ?? {};
+          this.emitCompaction({ done: true, trigger: meta.trigger, tokensBefore: meta.pre_tokens, tokensAfter: meta.post_tokens });
+          break;
+        }
+        // Task-completion notifications are injected for the model, not the
+        // human — don't forward them as chat. (init still falls through so its
+        // capabilities/commands reach the client.)
+        if (message?.subtype === "task_notification") break;
         // The API call failed and Claude Code is retrying it: say so instead of
         // looking stuck on "Thinking…" through the backoff.
         if (message?.subtype === "api_retry") {

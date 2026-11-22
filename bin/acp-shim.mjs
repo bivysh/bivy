@@ -495,7 +495,17 @@ function publishRetry(u) {
 // The session updates an agent may send inside a vendor extension notification
 // (`_<vendor>/…` with the same `{ sessionId, update }` params). Every other kind
 // in an extension notification stays the agent's own business.
-const EXTENSION_UPDATE_KINDS = new Set(["retry_state", "response_completed"]);
+// Compaction progress some agents report outside ACP (Grok's
+// `_x.ai/session_notification`), as the `session.compaction` fields each kind
+// carries. ACP has no compaction update of its own yet.
+const COMPACTION_UPDATES = {
+  auto_compact_started: () => ({}),
+  auto_compact_completed: (u) => ({ done: true, tokensBefore: u.tokens_before, tokensAfter: u.tokens_after }),
+  auto_compact_failed: (u) => ({ done: true, error: String(u.error || u.reason || u.message || "the summary failed") }),
+  auto_compact_cancelled: () => ({ cancelled: true }),
+};
+
+const EXTENSION_UPDATE_KINDS = new Set(["retry_state", "response_completed", ...Object.keys(COMPACTION_UPDATES)]);
 
 // --- ACP → bivy: streamed session/update notifications ----------------------
 function onSessionUpdate(params) {
@@ -612,6 +622,7 @@ function onSessionUpdate(params) {
       reportUsage();
       break;
     default:
+      if (!child && Object.hasOwn(COMPACTION_UPDATES, kind)) bivy({ type: "session.compaction", ...COMPACTION_UPDATES[kind](u) });
       break;
   }
 }
