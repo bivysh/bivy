@@ -21,6 +21,9 @@ export interface SlashCommand {
   name: string;
   /** One-line description shown in the command menu. */
   description?: string;
+  /** What the command expects after its name, e.g. "<file>" (shown beside it
+   *  in the menu and once the command is picked). */
+  argumentHint?: string;
   /** Alternate spellings (with leading slash). */
   aliases?: string[];
   /**
@@ -120,6 +123,19 @@ export function resolveSlash(parsed: ParsedSlash, extra: SlashCommand[] = []): S
   const command = valid.find((c) => c.name.toLowerCase() === parsed.name.toLowerCase());
   if (command) return { kind: "agent", command, args: parsed.args };
   return { kind: "unknown", name: parsed.name, hasCatalog };
+}
+
+/**
+ * The command the composer holds with nothing typed after it yet ("/review "),
+ * when that command advertises an argument hint — so the composer can say what
+ * to type next. Null otherwise.
+ */
+export function pendingCommandArguments(text: string, extra: SlashCommand[] = []): SlashCommand | null {
+  if (!/^\s*\/\S+\s+$/.test(text) || /\n/.test(text)) return null;
+  const parsed = parseSlash(text);
+  if (!parsed) return null;
+  const resolved = resolveSlash(parsed, extra);
+  return resolved.kind === "agent" && resolved.command.argumentHint ? resolved.command : null;
 }
 
 /**

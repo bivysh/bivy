@@ -164,7 +164,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       }
       // The agent's own slash commands and its running session cost.
       if (process.env.ACP_SESSION_INFO === "1") {
-        notify("session/update", { sessionId, update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "compact", description: "Summarize the conversation" }, { name: "init", description: "" }] } });
+        notify("session/update", { sessionId, update: { sessionUpdate: "available_commands_update", availableCommands: [{ name: "compact", description: "Summarize the conversation", input: { hint: "[instructions]" } }, { name: "init", description: "" }] } });
         notify("session/update", { sessionId, update: { sessionUpdate: "usage_update", used: 1200, size: 200000, cost: { amount: 0.25, currency: "USD" } } });
       }
       if (process.env.ACP_PLAN === "1") {

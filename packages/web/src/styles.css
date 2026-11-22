@@ -1280,6 +1280,8 @@ button.sheet-action:last-child { border-bottom: 0; }
 .slash-empty { padding: 10px 12px; color: var(--muted); font-size: 13px; }
 .slash-name { font-weight: 600; font-size: 14px; flex: none; min-width: 74px; }
 .slash-desc { color: var(--muted); font-size: 13px; }
+.slash-hint { color: var(--muted); font-weight: 400; font-family: var(--font-mono); font-size: var(--text-sm); overflow-wrap: anywhere; }
+.slash-desc > .slash-hint { display: block; }
 .composer-card:focus-within { border-color: color-mix(in srgb, var(--ink) 30%, transparent); }
 /* Keep two readable lines even when autosize runs inside the hidden onboarding shell. */
 .composer-input {

@@ -123,7 +123,7 @@ await check("acp: the agent's slash commands and session usage reach the node", 
     await session.prompt("hello");
     await waitFor(events, (event) => event.type === "agent_end");
     assert.ok(events.some((event) => event.type === "runtime.commands"), "the node hears the commands arrived");
-    assert.deepEqual(session.getCommands?.(), [{ name: "/compact", description: "Summarize the conversation" }, { name: "/init" }], "offered as slash commands");
+    assert.deepEqual(session.getCommands?.(), [{ name: "/compact", description: "Summarize the conversation", argumentHint: "[instructions]" }, { name: "/init" }], "offered as slash commands, with what to type after them");
     assert.deepEqual(await session.getUsage?.(), { tokens: { input: 100, output: 20, cacheRead: 40, cacheWrite: 0, total: 120 }, costUsd: 0.25, context: { used: 1200, size: 200000 } }, "turn tokens, the agent's session cost and how full its window is");
     session.dispose();
   } finally {

@@ -582,7 +582,12 @@ function onSessionUpdate(params) {
       if (!child && Array.isArray(u.availableCommands)) {
         const commands = u.availableCommands
           .filter((c) => c && typeof c.name === "string" && c.name.trim())
-          .map((c) => ({ name: `/${c.name.trim().replace(/^\//, "")}`, ...(typeof c.description === "string" && c.description.trim() ? { description: c.description.trim() } : {}) }));
+          .map((c) => ({
+            name: `/${c.name.trim().replace(/^\//, "")}`,
+            ...(typeof c.description === "string" && c.description.trim() ? { description: c.description.trim() } : {}),
+            // ACP's unstructured command input carries a hint for what to type after the name.
+            ...(typeof c.input?.hint === "string" && c.input.hint.trim() ? { argumentHint: c.input.hint.trim() } : {}),
+          }));
         bivy({ type: "runtime.commands", commands });
       }
       break;

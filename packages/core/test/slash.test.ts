@@ -9,6 +9,7 @@ import {
   isValidAgentCommand,
   skillPrompt,
   skillInvocationOf,
+  pendingCommandArguments,
 } from "../src/slash.js";
 
 describe("isSlashInput", () => {
@@ -135,5 +136,15 @@ describe("resolveSlash", () => {
   it("ignores malformed advertised commands (no catalog if all are junk)", () => {
     const junk = [{ name: "bad" } as any, null as any];
     expect(resolveSlash(parseSlash("/x")!, junk)).toEqual({ kind: "unknown", name: "/x", hasCatalog: false });
+  });
+});
+
+describe("pendingCommandArguments", () => {
+  const commands = [{ name: "/review", argumentHint: "[pr-number]" }, { name: "/compact" }];
+  it("names the hint only for a picked command with nothing typed after it", () => {
+    expect(pendingCommandArguments("/review ", commands)?.argumentHint).toBe("[pr-number]");
+    expect(pendingCommandArguments("/review 12", commands)).toBeNull();
+    expect(pendingCommandArguments("/review", commands)).toBeNull();
+    expect(pendingCommandArguments("/compact ", commands)).toBeNull();
   });
 });

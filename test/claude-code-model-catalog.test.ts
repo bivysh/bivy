@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { ClaudeCodeRuntime, claudeCommandsFromInit } from "../src/runtime/claude-code.js";
+import { ClaudeCodeRuntime, claudeCommandsFromInit, claudeCommandsWithDetails } from "../src/runtime/claude-code.js";
 import type { CredentialStore, ProviderCredential } from "../src/runtime/types.js";
 
 // Regression: a running session's model picker used to show a different, staler
@@ -193,6 +193,21 @@ console.log("claude-code model catalog: all tests passed");
   assert.deepEqual(claudeCommandsFromInit({}), []);
   assert.deepEqual(claudeCommandsFromInit({ slash_commands: "not-an-array" }), []);
   assert.deepEqual(claudeCommandsFromInit(undefined), []);
+
+  // supportedCommands() / commands_changed add descriptions and argument hints;
+  // a name only init reported keeps its bare row.
+  assert.deepEqual(
+    claudeCommandsWithDetails(claudeCommandsFromInit(init), [
+      { name: "review", description: "Review a pull request", argumentHint: "  [pr-number] " },
+      { name: "compact", description: "Clear history but keep a summary", argumentHint: "" },
+    ]),
+    [
+      { name: "/review", description: "Review a pull request", argumentHint: "[pr-number]" },
+      { name: "/compact", description: "Clear history but keep a summary" },
+      { name: "/clear" },
+      { name: "/deep-research" },
+    ],
+  );
 
   console.log("claude-commands: all tests passed");
 }

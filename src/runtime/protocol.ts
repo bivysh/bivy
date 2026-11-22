@@ -34,6 +34,7 @@ import type {
 import { withExactCapabilitySurface } from "./types.js";
 import { extractTokenUsage } from "./cli-parsers.js";
 import { contextUsage } from "./context-usage.js";
+import { commandArgumentHint } from "./command-hint.js";
 import { mapToolCall, mapToolResult } from "./tool-call-map.js";
 import { stripAnsi } from "./ansi.js";
 import { agentRetryEvent } from "./retry.js";
@@ -312,6 +313,8 @@ export function parseAgentCommands(raw: unknown): AgentCommand[] | undefined {
     const mode = e.mode === "protocol" ? "protocol" : e.mode === "prompt" ? "prompt" : undefined;
     const command: AgentCommand = { name };
     if (description) command.description = description;
+    const argumentHint = commandArgumentHint(e.argumentHint);
+    if (argumentHint) command.argumentHint = argumentHint;
     if (mode) command.mode = mode;
     out.push(command);
   }

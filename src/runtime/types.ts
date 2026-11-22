@@ -669,6 +669,9 @@ export interface AgentCommand {
   name: string;
   /** One-line description shown in the composer's command menu. */
   description?: string;
+  /** What the command expects after its name, e.g. "<file>" or "[pr-number]",
+   *  shown beside it in the menu and once it's picked. */
+  argumentHint?: string;
   /**
    * How the client invokes the command. Absent/"prompt" (the default) sends the
    * raw slash line as a prompt; "protocol" issues a `command.invoke` message the
