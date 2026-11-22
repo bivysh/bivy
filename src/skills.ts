@@ -21,6 +21,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
 import { defaultDataDir } from "./data-dir.js";
+import { commandArgumentHint } from "./runtime/command-hint.js";
 import { installedContributions } from "./plugins/contributions.js";
 
 export const SKILL_FILE = "SKILL.md";
@@ -34,6 +35,8 @@ const MAX_SKILL_COPY_BYTES = 20 * 1024 * 1024;
 export interface Skill {
   name: string;
   description: string;
+  /** `argument-hint` front matter: what to type after `/name`. */
+  argumentHint?: string;
   /** The folder holding SKILL.md and the files it refers to. */
   dir: string;
   /** "user" for `<data-dir>/skills`, otherwise the plugin's id. */
@@ -46,7 +49,7 @@ export function userSkillsDir(dataDir = defaultDataDir()): string {
 
 /** Front matter and body of a SKILL.md. Missing or malformed front matter
  *  leaves the description empty; the skill is still usable. */
-export function parseSkillFile(text: string): { name?: string; description: string; body: string } {
+export function parseSkillFile(text: string): { name?: string; description: string; argumentHint?: string; body: string } {
   const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/.exec(text);
   if (!match) return { description: "", body: text };
   let meta: Record<string, unknown> = {};
@@ -54,9 +57,11 @@ export function parseSkillFile(text: string): { name?: string; description: stri
     const parsed = parseYaml(match[1]!) as unknown;
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) meta = parsed as Record<string, unknown>;
   } catch { /* treat as no front matter */ }
+  const argumentHint = commandArgumentHint(meta["argument-hint"]);
   return {
     ...(typeof meta.name === "string" ? { name: meta.name.trim() } : {}),
     description: typeof meta.description === "string" ? meta.description.replace(/\s+/g, " ").trim() : "",
+    ...(argumentHint ? { argumentHint } : {}),
     body: text.slice(match[0].length),
   };
 }
@@ -66,7 +71,8 @@ function readSkill(dir: string, name: string, source: string): Skill | undefined
   try {
     const stat = fs.statSync(file);
     if (!stat.isFile() || stat.size > MAX_SKILL_BYTES) return undefined;
-    return { name, description: parseSkillFile(fs.readFileSync(file, "utf8")).description, dir, source };
+    const { description, argumentHint } = parseSkillFile(fs.readFileSync(file, "utf8"));
+    return { name, description, ...(argumentHint ? { argumentHint } : {}), dir, source };
   } catch {
     return undefined;
   }
@@ -103,10 +109,11 @@ export function renderSkill(skill: Skill): string {
 
 /** The skills as `/name` commands for the composer's menu, any agent. The
  *  client turns one into a prompt to use that skill (core's skillPrompt). */
-export function skillCommands(skills: Skill[]): Array<{ name: string; description?: string; mode: "skill" }> {
+export function skillCommands(skills: Skill[]): Array<{ name: string; description?: string; argumentHint?: string; mode: "skill" }> {
   return skills.slice(0, MAX_INDEXED_SKILLS).map((skill) => ({
     name: `/${skill.name}`,
     ...(skill.description ? { description: skill.description.length > MAX_INDEX_DESCRIPTION ? `${skill.description.slice(0, MAX_INDEX_DESCRIPTION - 1)}…` : skill.description } : {}),
+    ...(skill.argumentHint ? { argumentHint: skill.argumentHint } : {}),
     mode: "skill",
   }));
 }

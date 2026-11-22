@@ -147,7 +147,9 @@ instructions and the skill's folder. Only the short list rides on every turn.
 You can also pick a skill yourself: type `/` in the composer and each skill is
 listed as `/<name>`, whatever the agent. Sending `/release-notes for v2` asks
 the agent to read that skill first, then do the rest of the line. An agent's
-own command of the same name wins.
+own command of the same name wins. A skill whose front matter sets
+`argument-hint` (for example `argument-hint: "[version]"`) shows that hint
+beside its name and once you pick it.
 
 You don't need a plugin for one skill: `bivy skill install <folder|github:owner/repo/path>`
 copies an existing skill folder into `<data-dir>/skills/<name>`, and a folder

@@ -44,6 +44,7 @@ import type {
 import { withExactCapabilitySurface } from "../../runtime/types.js";
 import { mapToolCall, mapToolResult } from "../../runtime/tool-call-map.js";
 import { agentRetryEvent } from "../../runtime/retry.js";
+import { commandArgumentHint } from "../../runtime/command-hint.js";
 import { agentHookEvent } from "../../runtime/hook.js";
 import { resolveExecutable } from "../../executable.js";
 import fs from "node:fs";
@@ -351,12 +352,39 @@ export function claudeCommandsFromInit(message: any): AgentCommand[] {
   return out;
 }
 
-/** Order-insensitive equality on command names — so we only re-advertise (and
- *  re-render the composer menu) when the set actually changed. */
+/**
+ * The SDK's detailed command list (Query.supportedCommands() or a
+ * system/commands_changed push: name, description, argumentHint, aliases)
+ * laid over the names system/init reported. Rows the detailed list lacks keep
+ * their bare name, so nothing init offered disappears.
+ */
+export function claudeCommandsWithDetails(base: AgentCommand[], detailed: unknown): AgentCommand[] {
+  if (!Array.isArray(detailed)) return base;
+  const out: AgentCommand[] = [];
+  const seen = new Set<string>();
+  for (const raw of detailed) {
+    const bare = typeof raw?.name === "string" ? raw.name.trim().replace(/^\/+/, "") : "";
+    if (!bare || seen.has(`/${bare}`)) continue;
+    seen.add(`/${bare}`);
+    const command: AgentCommand = { name: `/${bare}` };
+    if (typeof raw.description === "string" && raw.description.trim()) command.description = raw.description.trim();
+    const argumentHint = commandArgumentHint(raw.argumentHint);
+    if (argumentHint) command.argumentHint = argumentHint;
+    out.push(command);
+  }
+  for (const command of base) if (!seen.has(command.name)) out.push(command);
+  return out;
+}
+
+/** Order-insensitive equality on what the menu shows — so we only re-advertise
+ *  (and re-render the composer menu) when something actually changed. */
 function sameCommands(a: AgentCommand[], b: AgentCommand[]): boolean {
   if (a.length !== b.length) return false;
-  const names = new Set(b.map((c) => c.name));
-  return a.every((c) => names.has(c.name));
+  const byName = new Map(b.map((c) => [c.name, c]));
+  return a.every((c) => {
+    const other = byName.get(c.name);
+    return other !== undefined && other.description === c.description && other.argumentHint === c.argumentHint;
+  });
 }
 
 function extractText(message: any): string {
@@ -968,6 +996,31 @@ class ClaudeSession implements RuntimeSession {
     return this.commands;
   }
 
+  private setCommands(next: AgentCommand[]): void {
+    if (!next.length || sameCommands(next, this.commands)) return;
+    this.commands = next;
+    this.emit({ type: "runtime.commands", commands: next });
+  }
+
+  /** Best-effort: descriptions and argument hints from the live query. A
+   *  build without supportedCommands(), or a slow one, keeps init's names. */
+  private async refreshSupportedCommands(base: AgentCommand[]): Promise<void> {
+    const q: any = this.query;
+    if (!q || typeof q.supportedCommands !== "function") return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const detailed = await Promise.race([
+        q.supportedCommands(),
+        new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), 1500); }),
+      ]);
+      if (Array.isArray(detailed) && detailed.length) this.setCommands(claudeCommandsWithDetails(base, detailed));
+    } catch {
+      // Keep the names init reported.
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   subscribe(listener: (event: RuntimeEvent) => void): () => void {
     this.emitter.on("event", listener);
     return () => this.emitter.off("event", listener);
@@ -1553,10 +1606,17 @@ class ClaudeSession implements RuntimeSession {
         if (message?.subtype === "init") {
           if (typeof message.effort === "string") this.appliedEffort = message.effort;
           const next = claudeCommandsFromInit(message);
-          if (next.length && !sameCommands(next, this.commands)) {
-            this.commands = next;
-            this.emit({ type: "runtime.commands", commands: next });
+          if (next.length) {
+            // Init names the commands only; the query's own list adds what
+            // each one does and the arguments it takes.
+            const names = new Set(next.map((c) => c.name));
+            this.setCommands(claudeCommandsWithDetails(next, this.commands.filter((c) => names.has(c.name))));
+            void this.refreshSupportedCommands(next);
           }
+        }
+        if (message?.subtype === "commands_changed") {
+          this.setCommands(claudeCommandsWithDetails([], message.commands));
+          break;
         }
         // Task-completion notifications and compaction boundaries are injected
         // for the model, not the human — don't forward them as chat. (init still

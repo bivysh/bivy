@@ -9,7 +9,7 @@ import path from "node:path";
 import test from "node:test";
 import { sessionInstructions } from "../src/agent-instructions.js";
 import { installPlugin } from "../src/plugins/store.js";
-import { findSkill, installSkill, listSkills, removeSkill, renderSkill } from "../src/skills.js";
+import { findSkill, installSkill, listSkills, removeSkill, renderSkill, skillCommands } from "../src/skills.js";
 
 function skillFolder(name: string, description: string): string {
   const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bivy-skill-src-")), name);
@@ -62,6 +62,19 @@ test("user and plugin skills reach every session's instructions; a user skill sh
     assert.throws(() => installSkill(skillFolder("pdf", "again"), { dataDir: data }), /already installed/);
     assert.equal(removeSkill("pdf", data), true);
     assert.equal(findSkill("pdf", data)?.source, "team-skills", "the plugin's skill is used once the user's is gone");
+  } finally {
+    fs.rmSync(data, { recursive: true, force: true });
+  }
+});
+
+test("a skill's argument-hint front matter rides on its slash command", () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-skills-data-"));
+  try {
+    const dir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "bivy-skill-src-")), "review");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "SKILL.md"), "---\nname: review\ndescription: Review a PR.\nargument-hint: \"[pr-number]\"\n---\nBody.\n");
+    installSkill(dir, { dataDir: data });
+    assert.deepEqual(skillCommands(listSkills(data)), [{ name: "/review", description: "Review a PR.", argumentHint: "[pr-number]", mode: "skill" }]);
   } finally {
     fs.rmSync(data, { recursive: true, force: true });
   }

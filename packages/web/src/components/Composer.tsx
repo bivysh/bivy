@@ -3,7 +3,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ImageViewer } from "./ImageViewer.js";
 import type { AppState, PromptAttachment, SlashCommand } from "@bivy/core";
-import { isSlashInput, parseSlash, matchSlashCommands, resolveSlash, skillPrompt } from "@bivy/core";
+import { isSlashInput, parseSlash, matchSlashCommands, pendingCommandArguments, resolveSlash, skillPrompt } from "@bivy/core";
 import { useModalEscape } from "../modalStack.js";
 import { modelSelectionAvailable } from "../modelSelection.js";
 import { RepoPicker, AgentPicker, ModelPicker, SandboxPicker, ActionsPicker } from "./Pickers.js";
@@ -462,6 +462,8 @@ export function Composer({
     return p.startsWith("/") && !/\s/.test(p);
   })();
   const slashEmpty = inSlashWord && slashMenu.length === 0;
+  // A picked command that takes arguments says what to type after it.
+  const argsFor = !disabled ? pendingCommandArguments(text, agentCommands) : null;
 
   function autosize() {
     const ta = taRef.current;
@@ -772,7 +774,10 @@ export function Composer({
                   onMouseDown={(e) => { e.preventDefault(); chooseFromMenu(cmd); }}
                 >
                   <span className="slash-name">{cmd.name}</span>
-                  <span className="slash-desc">{cmd.description}</span>
+                  <span className="slash-desc">
+                    {cmd.argumentHint && <span className="slash-hint">{cmd.argumentHint}</span>}
+                    {cmd.description}
+                  </span>
                 </button>
                 );
               })}
@@ -783,6 +788,11 @@ export function Composer({
               {agentCommands.length === 0
                 ? "This agent has no slash commands."
                 : "No matching command — press Esc to send as a message."}
+            </div>
+          )}
+          {argsFor && (
+            <div className="menu slash-menu slash-empty" role="status">
+              <span><span className="slash-name">{argsFor.name}</span> <span className="slash-hint">{argsFor.argumentHint}</span></span>
             </div>
           )}
           {recoveredAttachments.length > 0 && (

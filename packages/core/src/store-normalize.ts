@@ -41,6 +41,7 @@ export function normalizeAgentCommands(raw: unknown): SlashCommand[] {
     seen.add(c.name);
     const cmd: SlashCommand = { name: c.name };
     if (typeof c.description === "string" && c.description) cmd.description = c.description;
+    if (typeof c.argumentHint === "string" && c.argumentHint) cmd.argumentHint = c.argumentHint;
     if (c.mode && (SLASH_COMMAND_MODES as readonly string[]).includes(c.mode)) cmd.mode = c.mode;
     out.push(cmd);
   }
@@ -52,7 +53,7 @@ export function normalizeAgentCommands(raw: unknown): SlashCommand[] {
 export function sameCommandList(a: SlashCommand[], b: SlashCommand[]): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
-    if (a[i]!.name !== b[i]!.name || a[i]!.description !== b[i]!.description || a[i]!.mode !== b[i]!.mode) return false;
+    if (a[i]!.name !== b[i]!.name || a[i]!.description !== b[i]!.description || a[i]!.argumentHint !== b[i]!.argumentHint || a[i]!.mode !== b[i]!.mode) return false;
   }
   return true;
 }

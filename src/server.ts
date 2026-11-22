@@ -23,6 +23,7 @@ import { SessionRerouteController, type ResumePlan } from "./policy/session-rero
 import { detectSessionLimit, limitResumePlan, sessionLimitNotice, type SessionLimit } from "./policy/session-limit.js";
 import { asRuntimeCondition, type RuntimeCondition } from "./policy/conditions.js";
 import { activeRulesetFor } from "./runtime/ruleset-store.js";
+import { commandArgumentHint } from "./runtime/command-hint.js";
 import { createRulesetController } from "./controllers/rulesets.js";
 import { createAuditLog, readAuditEvents } from "./audit/index.js";
 import { loadOrCreateAuditKey, readChainState } from "./audit/integrity.js";
@@ -1079,6 +1080,8 @@ function sanitizeAgentCommands(commands: unknown, session: RuntimeSession): Agen
     const mode = e.mode === "protocol" && canProtocol ? "protocol" : e.mode === "prompt" ? "prompt" : undefined;
     const command: AgentCommand = { name };
     if (description) command.description = description;
+    const argumentHint = commandArgumentHint(e.argumentHint);
+    if (argumentHint) command.argumentHint = argumentHint;
     if (mode) command.mode = mode;
     out.push(command);
   }
