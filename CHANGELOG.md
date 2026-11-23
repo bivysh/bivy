@@ -11,6 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **See when an agent compacts its conversation.** When an agent summarizes its history to free up context, on its own or after `/compact`, the chat now shows "Compacting the conversation…" instead of looking stuck. Afterwards a note says it happened, with the token drop when the agent reports one, so you know it may not recall every earlier detail. A failed compaction says why. It works for Claude Code, Codex, Pi and Grok, and for any agent that sends the protocol's new `session.compaction` event.
 - **Mention a file with `@`.** In a session, type `@` and part of a name to pick a file or folder from the session's workspace; arrows and Enter (or a tap) put `@path` in your message. Picking a folder lists what is inside it. Matches come from the session's machine (git's file list, so ignored files stay out), and the path goes in as plain text, so it works with every agent.
 
+### Changed
+- Control plane: cron-parser 5.10.4 and express-rate-limit 8.7.4. Relay: ws 8.23.0.
+
 ## [0.22.24] - 2026-11-22
 
 ### Added
