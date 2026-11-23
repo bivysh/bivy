@@ -85,6 +85,15 @@ const startupFailure = {
 }
 
 {
+  // A start refused because the sign-in ended names its reason; the turn's
+  // condition comes from it, so the client offers sign-in instead of a retry.
+  const { query, events } = await start();
+  query.emit({ ...startupFailure, errors: ["The gateway ended this sign-in."], startup_failure_reason: "gateway_signin_required" });
+  await waitFor(() => events.some((e) => e.type === "agent_end"));
+  assert.equal(events.find((e) => e.type === "agent_end").condition, "auth_failed");
+}
+
+{
   const { session, query, events } = await start();
   await session.abort();
   query.emit({ ...startupFailure, errors: ["Request was aborted."] });
