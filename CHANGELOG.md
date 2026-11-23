@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **See when an agent compacts its conversation.** When an agent summarizes its history to free up context, on its own or after `/compact`, the chat now shows "Compacting the conversation…" instead of looking stuck. Afterwards a note says it happened, with the token drop when the agent reports one, so you know it may not recall every earlier detail. A failed compaction says why. It works for Claude Code, Codex, Pi and Grok, and for any agent that sends the protocol's new `session.compaction` event.
 
+### Changed
+- Control plane: cron-parser 5.10.4 and express-rate-limit 8.7.4. Relay: ws 8.23.0.
+
 ## [0.22.24] - 2026-11-22
 
 ### Added
