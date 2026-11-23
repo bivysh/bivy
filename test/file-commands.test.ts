@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { MAX_DOWNLOAD_BYTES, createFileCommands, downloadWorkspaceFile, listWorkspaceDir, readWorkspaceFile } from "../src/controllers/file-commands.js";
+import { MAX_DOWNLOAD_BYTES, createFileCommands, downloadWorkspaceFile, listWorkspaceDir, readWorkspaceFile, searchWorkspace } from "../src/controllers/file-commands.js";
 
 function repo(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-files-"));
@@ -68,4 +68,28 @@ test("a download carries any file whole, within the workspace and the size ceili
   fs.writeFileSync(path.join(root, "big.txt"), Buffer.alloc(MAX_DOWNLOAD_BYTES + 1, 97));
   await assert.rejects(downloadWorkspaceFile(root, "big.txt"), /can't be downloaded/);
   await assert.rejects(downloadWorkspaceFile(root, "../outside"));
+});
+
+test("search finds files and folders by name, uncommitted ones too, and skips ignored and hidden paths", async () => {
+  const root = repo();
+  fs.writeFileSync(path.join(root, ".gitignore"), "dist/\n");
+  fs.mkdirSync(path.join(root, "dist"));
+  fs.writeFileSync(path.join(root, "dist", "new.js"), "x\n");
+  const found = await searchWorkspace(root, "new");
+  assert.deepEqual(found.entries, [{ path: "src/new.ts", type: "file" }], "untracked counts, ignored does not");
+  const top = (await searchWorkspace(root, "")).entries.map((e) => e.path);
+  assert.deepEqual(top.slice(0, 4).sort(), [".gitignore", "README.md", "blob.bin", "src"], "an empty query lists the top first");
+  assert.deepEqual((await searchWorkspace(root, "src/")).entries.map((e) => e.path), ["src/a.ts", "src/new.ts"], "a folder path lists what is inside it");
+  assert.equal((await searchWorkspace(root, "config")).entries.length, 0, ".git is never searched");
+
+  // Not a checkout: a walk that skips node_modules and never follows a link out.
+  const plain = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-plain-"));
+  fs.mkdirSync(path.join(plain, "node_modules", "pkg"), { recursive: true });
+  fs.writeFileSync(path.join(plain, "node_modules", "pkg", "notes.md"), "x\n");
+  fs.mkdirSync(path.join(plain, "docs"));
+  fs.writeFileSync(path.join(plain, "docs", "notes.md"), "x\n");
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-outside-"));
+  fs.writeFileSync(path.join(outside, "notes-secret.md"), "s");
+  fs.symlinkSync(outside, path.join(plain, "out"));
+  assert.deepEqual((await searchWorkspace(plain, "notes")).entries, [{ path: "docs/notes.md", type: "file" }]);
 });
