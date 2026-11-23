@@ -177,6 +177,22 @@ test("a Codex hook in the turn shows as agent_hook (a thread-scoped hook does no
   }
 });
 
+test("/compact is offered and runs Codex's own compaction as a turn, not a prompt to the model", async () => {
+  const runtime = makeRuntime("ok");
+  const { session } = await runtime.createSession({ workspace: process.cwd(), toolInterceptor: async () => undefined });
+  const events: RuntimeEvent[] = [];
+  session.subscribe((event) => events.push(event));
+  try {
+    await session.prompt("/compact");
+    await waitFor(events, (event) => event.type === "agent_end");
+    assert.ok(session.getCommands?.().some((command) => command.name === "/compact"));
+    assert.deepEqual(events.filter((event) => event.type === "agent_compaction"), [{ type: "agent_compaction" }, { type: "agent_compaction", done: true, trigger: "manual" }]);
+    assert.ok(!events.some((event) => event.type === "message_update"), "the line never reached the model");
+  } finally {
+    session.dispose();
+  }
+});
+
 test("Codex receives the original image bytes with the prompt, including an image-only turn", async () => {
   const runtime = makeRuntime("echo-input");
   const { session } = await runtime.createSession({ workspace: process.cwd() });

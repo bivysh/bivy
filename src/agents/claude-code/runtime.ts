@@ -427,8 +427,9 @@ function isApiErrorMessage(message: any): boolean {
   return Boolean(message?.error) || message?.isApiErrorMessage === true;
 }
 
-/** The SDK's failure codes (assistant `error`, result `terminal_reason`) as
- *  Bivy's stable conditions. Codes missing here fall back to the text match. */
+/** The SDK's failure codes (assistant `error`, result `terminal_reason` and
+ *  `startup_failure_reason`) as Bivy's stable conditions. Codes missing here
+ *  fall back to the text match. */
 const FAILURE_CONDITIONS: Record<string, RuntimeCondition> = {
   authentication_failed: "auth_failed",
   oauth_org_not_allowed: "auth_failed",
@@ -437,6 +438,14 @@ const FAILURE_CONDITIONS: Record<string, RuntimeCondition> = {
   rate_limit: "rate_limited",
   overloaded: "rate_limited",
   prompt_too_long: "context_overflow",
+  // Refused to start: signing in (again, or as another account) is the fix.
+  gateway_signin_required: "auth_failed",
+  org_config_refused: "auth_failed",
+  org_pin_mismatch: "auth_failed",
+  org_pin_api_key_conflict: "auth_failed",
+  // Refused to start: the organization's settings didn't load; a retry may work.
+  org_config_required_unavailable: "transport_error",
+  remote_settings_required_unavailable: "transport_error",
 };
 
 /** A model id the live list doesn't name ("claude-opus-4-8"), named from the
@@ -1601,7 +1610,7 @@ class ClaudeSession implements RuntimeSession {
         this.emit({
           type: "agent_end",
           subtype: message.subtype,
-          ...(failure ? { error: failure, ...failureCondition(message.terminal_reason) } : apiError ?? {}),
+          ...(failure ? { error: failure, ...failureCondition(message.startup_failure_reason ?? message.terminal_reason) } : apiError ?? {}),
         });
         break;
       }

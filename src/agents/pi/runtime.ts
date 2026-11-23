@@ -95,6 +95,20 @@ export function piSessionCommands(session: unknown): AgentCommand[] {
   }
 }
 
+/**
+ * Commands Pi's own TUI runs itself, so its SDK prompt() would send them to the
+ * model as text. Bivy runs them through the SDK instead; an extension command
+ * of the same name wins. The name is matched exactly, the rest is `args`.
+ */
+const PI_BUILTIN_COMMANDS: ReadonlyArray<AgentCommand & { run: (session: any, args: string) => Promise<unknown> }> = [
+  {
+    name: "/compact",
+    description: "Summarize the conversation to free up context.",
+    argumentHint: "[instructions]",
+    run: (session, args) => session.compact(args || undefined),
+  },
+];
+
 /** The operator's Pi command; Bivy never launches a bundled private TUI. */
 /** A run's last assistant message: the one whose stopReason ended the turn. */
 function lastAssistant(messages: unknown): any {
@@ -212,6 +226,8 @@ function toolProviderFactory(provider: ToolProvider): ExtensionFactory {
 
 class PiSession implements RuntimeSession {
   private readonly toolDetails = new Map<string, ReturnType<typeof mapToolCall>>();
+  /** Subscribers that a built-in command (which runs outside an agent run) ends the turn for. */
+  private readonly builtinListeners = new Set<(event: any) => void>();
 
   constructor(
     private readonly runtime: AgentSessionRuntime,
@@ -274,7 +290,31 @@ class PiSession implements RuntimeSession {
   }
 
   prompt(text: string, options?: PromptOptions): Promise<void> {
+    const builtin = options?.images?.length ? undefined : this.builtinCommand(text);
+    if (builtin) return this.runBuiltin(builtin.command, builtin.args);
     return this.session.prompt(text, options as any);
+  }
+
+  private builtinCommand(text: string): { command: (typeof PI_BUILTIN_COMMANDS)[number]; args: string } | undefined {
+    const match = /^(\/\S+)(?:\s+([\s\S]*))?$/.exec(text.trim());
+    const command = match && PI_BUILTIN_COMMANDS.find((c) => c.name === match[1]);
+    if (!command || piSessionCommands(this.session).some((c) => c.name === command.name)) return undefined;
+    return { command, args: match[2]?.trim() ?? "" };
+  }
+
+  /** A built-in runs outside an agent run, so its turn ends here. A failure
+   *  that Pi reported as a compaction notice is not reported twice. */
+  private async runBuiltin(command: (typeof PI_BUILTIN_COMMANDS)[number], args: string): Promise<void> {
+    let reported = false;
+    const unsubscribe = this.session.subscribe((event: any) => { if (event?.type === "compaction_end") reported = true; });
+    try {
+      await command.run(this.session, args);
+    } catch (error) {
+      if (!reported) throw error;
+    } finally {
+      unsubscribe();
+    }
+    for (const listener of this.builtinListeners) listener({ type: "agent_end", messages: [], willRetry: false });
   }
 
   abort(): Promise<void> {
@@ -291,6 +331,7 @@ class PiSession implements RuntimeSession {
   }
 
   subscribe(listener: (event: any) => void): () => void {
+    this.builtinListeners.add(listener);
     const unsubscribeBackground = this.backgroundShells.subscribe((count) => {
       listener({ type: "background_tasks_changed", count });
     });
@@ -324,7 +365,8 @@ class PiSession implements RuntimeSession {
           trigger: event.reason,
           tokensBefore: event.result?.tokensBefore,
           tokensAfter: event.result?.estimatedTokensAfter,
-          ...(end && !event.result ? { error: event.errorMessage || "the summary failed" } : {}),
+          // Pi words it "Compaction failed: …"; the notice already says so.
+          ...(end && !event.result ? { error: String(event.errorMessage || "").replace(/^compaction failed:\s*/i, "") || "the summary failed" } : {}),
         })) listener(step);
         return;
       }
@@ -346,6 +388,7 @@ class PiSession implements RuntimeSession {
       listener(event);
     });
     return () => {
+      this.builtinListeners.delete(listener);
       unsubscribeBackground();
       unsubscribeSession();
     };
@@ -371,7 +414,11 @@ class PiSession implements RuntimeSession {
    * win a name collision in the composer, so we don't filter them here.
    */
   getCommands(): AgentCommand[] {
-    return piSessionCommands(this.session);
+    const own = piSessionCommands(this.session);
+    const builtins = PI_BUILTIN_COMMANDS
+      .filter((c) => !own.some((o) => o.name === c.name))
+      .map(({ name, description, argumentHint }) => ({ name, description, argumentHint }));
+    return [...own, ...builtins];
   }
 
   /**

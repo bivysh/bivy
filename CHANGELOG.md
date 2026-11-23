@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`/compact` works for Codex and Pi.** The composer now offers `/compact` in Codex and Pi sessions, and running it has the agent summarize the conversation to free up context. Before, the line went to the model as an ordinary message. With Pi you can add instructions, such as `/compact keep the plan`. Claude Code, Grok and OpenCode already handled it themselves.
+
+### Changed
+- Claude Code SDK 0.3.331 (Claude Code 2.1.331).
+
+### Fixed
+- When Claude Code refuses to start because the sign-in ended or the organization turned it down, the session now offers to sign in again instead of a retry. If the organization's settings failed to load, it says a retry may work.
+
 ## [0.22.25] - 2026-11-23
 
 ### Added

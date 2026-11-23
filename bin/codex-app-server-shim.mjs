@@ -156,6 +156,12 @@ let selectedEffort = null;
 let activeTurnId = null;
 // The turn/start request in flight, until the app-server answers it.
 let pendingTurnStart = null;
+// The user ran /compact (thread/compact/start): the next compaction is theirs.
+let compactRequested = false;
+// `/compact` summarizes the thread instead of sending the line to the model.
+// Codex takes no instructions for it, so anything after the name is ignored.
+const COMPACT_COMMAND = /^\/compact(?:\s|$)/;
+const COMMANDS = [{ name: "/compact", description: "Summarize the conversation to free up context." }];
 const itemInputs = new Map();
 const itemOutputs = new Map();
 const agentMessageItems = new Set();
@@ -655,14 +661,17 @@ function onNotification(m) {
       if (item?.type === "dynamicToolCall") emitToolObserved(itemId, text(item.tool || "tool"), updateInput(itemId), parent);
       if (item?.type === "collabAgentToolCall") emitToolObserved(itemId, "spawn_agent", updateInput(itemId), parent);
       if (item?.type === "subAgentActivity") emitToolObserved(itemId, "subagent_activity", updateInput(itemId), parent);
-      // Codex is summarizing the thread because the window filled (Bivy never
-      // sends thread/compact/start, so it is always automatic): a status until
-      // the item completes. A sub-agent's compaction is its own business.
+      // Codex is summarizing the thread (the window filled, or the user ran
+      // /compact): a status until the item completes. A sub-agent's
+      // compaction is its own business.
       if (item?.type === "contextCompaction" && fromCurrentThread) bivy({ type: "session.compaction" });
       return;
     }
     case "item/completed": {
-      if (params?.item?.type === "contextCompaction" && fromCurrentThread) bivy({ type: "session.compaction", done: true, trigger: "auto" });
+      if (params?.item?.type === "contextCompaction" && fromCurrentThread) {
+        bivy({ type: "session.compaction", done: true, trigger: compactRequested ? "manual" : "auto" });
+        compactRequested = false;
+      }
       handleCompletedItem(params);
       activeObservedItems.delete(paramsItemId(params));
       approvedMcpItems.delete(paramsItemId(params));
@@ -852,6 +861,16 @@ async function onBivyCommand(msg) {
         // That rejected the prompt ("chat.send timed out"), stranded the session,
         // and forced a fresh thread on the next message.
         bivy({ replyTo: id, ok: true });
+        // Compaction runs as a turn of its own (turn/started … turn/completed),
+        // so it ends like any prompt.
+        if (!msg.images?.length && COMPACT_COMMAND.test(String(msg.text ?? "").trim())) {
+          compactRequested = true;
+          asRequest("thread/compact/start", { threadId }).catch((error) => {
+            compactRequested = false;
+            bivy({ type: "session.error", error: error instanceof Error ? error.message : String(error) });
+          });
+          return;
+        }
         const input = [
           { type: "text", text: String(msg.text ?? "") },
           ...(msg.images ?? []).map((image) => ({
@@ -963,7 +982,7 @@ async function announceHello() {
     process.stderr.write("[codex-app-server] model discovery failed: " + String(error) + "\n");
   }
   // `steer`: a message sent mid-turn joins the running turn (turn/steer).
-  bivy({ type: "hello", runtime: { models, ...(selectedModel ? { currentModel: selectedModel } : {}), capabilities: { toolInterception: true, modelSelection: models.length > 0, resume: true, streamingBehaviors: ["steer"] } } });
+  bivy({ type: "hello", runtime: { models, ...(selectedModel ? { currentModel: selectedModel } : {}), capabilities: { toolInterception: true, modelSelection: models.length > 0, resume: true, streamingBehaviors: ["steer"], commands: COMMANDS } } });
   publishEfforts();
 }
 

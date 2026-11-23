@@ -7,7 +7,7 @@
 // or model credentials. The shim spawns `$BIVY_CODEX_BIN app-server`; point
 // BIVY_CODEX_BIN at this file and it speaks just the surfaces the shim uses:
 // initialize / model/list / thread/start / thread/resume / turn/start /
-// turn/interrupt, plus the turn-lifecycle notifications.
+// turn/interrupt / thread/compact/start, plus the turn-lifecycle notifications.
 //
 // FAKE_CODEX_MODE controls how a turn ends:
 //   "ok"   (default) → item/agentMessage/delta "BANANA", thread/tokenUsage/updated,
@@ -76,6 +76,16 @@ rl.on("line", (line) => {
     case "turn/interrupt":
       reply(id, {});
       return;
+    // /compact: the summary runs as a turn holding one contextCompaction item.
+    case "thread/compact/start": {
+      const compaction = { threadId: params?.threadId, turnId: "turn-c", item: { type: "contextCompaction", id: "compact-c" } };
+      reply(id, {});
+      notify("turn/started", { threadId: params?.threadId, turn: { id: "turn-c" } });
+      notify("item/started", compaction);
+      notify("item/completed", compaction);
+      notify("turn/completed", { threadId: params?.threadId });
+      return;
+    }
     case "turn/start": {
       // The real app-server streams the turn's lifecycle as notifications, then
       // replies to turn/start. Emit notifications first so the shim processes the
