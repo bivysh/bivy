@@ -1282,6 +1282,9 @@ button.sheet-action:last-child { border-bottom: 0; }
 .slash-desc { color: var(--muted); font-size: 13px; }
 .slash-hint { color: var(--muted); font-weight: 400; font-family: var(--font-mono); font-size: var(--text-sm); overflow-wrap: anywhere; }
 .slash-desc > .slash-hint { display: block; }
+/* @ picker rows: file name, then its folder, cut from the end on narrow screens. */
+.file-mention-item .slash-name { flex: 0 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.file-mention-item .slash-desc { flex: 1 1 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .composer-card:focus-within { border-color: color-mix(in srgb, var(--ink) 30%, transparent); }
 /* Keep two readable lines even when autosize runs inside the hidden onboarding shell. */
 .composer-input {

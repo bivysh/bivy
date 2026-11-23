@@ -1716,6 +1716,13 @@ export class AppController {
     return this.awaitAck({ kind, sessionId, path }, 30_000);
   }
 
+  /** The composer's @ picker: files and folders in the session's workspace
+   *  whose path matches `query`, best first. Rejects with the node's reason. */
+  async searchFiles(sessionId: string, query: string): Promise<ServerEvent> {
+    if (this.store.getState().connection.status !== "online") throw new Error("Connect to the machine to find files.");
+    return this.awaitAck({ kind: "files.search", sessionId, query }, 15_000);
+  }
+
   /** A chat widget's saved state and tools, on the machine its session runs
    *  on (see src/controllers/widget-commands.ts). Rejects with the node's reason. */
   async widgetCommand(kind: "widgets.state.get" | "widgets.state.set" | "widgets.source" | "widgets.tool", sessionId: string, fields: Record<string, unknown> = {}): Promise<ServerEvent> {

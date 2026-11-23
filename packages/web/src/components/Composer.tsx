@@ -22,6 +22,8 @@ import { clearComposerDraft, composerDraftKey, holdComposerAttachments, restoreC
 import { setComposerLifecycle } from "../pwaLifecycle.js";
 import { isImeKey } from "../ime.js";
 import { longPasteName } from "../longPaste.js";
+import { fileMentionAt, insertFileMention } from "../fileMention.js";
+import { useFileSearch, type FileSearchEntry } from "../useFileSearch.js";
 
 /** "model-to-send": Send was pressed before a model was chosen. */
 type Picker = "repo" | "agent" | "model" | "model-to-send" | "sandbox" | "actions" | null;
@@ -185,6 +187,7 @@ export function Composer({
   const [recoveredAttachments, setRecoveredAttachments] = useState<PendingAttachmentMetadata[]>(() => initialDraft.current?.recovered ?? []);
   const [menuIndex, setMenuIndex] = useState(0);
   const [menuDismissed, setMenuDismissed] = useState(false);
+  const [caret, setCaret] = useState(0);
   const [recording, setRecording] = useState<null | DictationEngine>(null);
   const [dragging, setDragging] = useState(false);
   const [stopping, setStopping] = useState(false);
@@ -464,6 +467,11 @@ export function Composer({
   const slashEmpty = inSlashWord && slashMenu.length === 0;
   // A picked command that takes arguments says what to type after it.
   const argsFor = !disabled ? pendingCommandArguments(text, agentCommands) : null;
+  // The @ picker: an `@word` at the caret in a session finds files in its workspace.
+  const mentionSessionId = state.activeSession.activeSessionId || undefined;
+  const mention = !disabled && !menuDismissed && mentionSessionId && slashMenu.length === 0 && !inSlashWord ? fileMentionAt(text, caret) : null;
+  const fileSearch = useFileSearch(mentionSessionId, mention ? mention.query : null);
+  const fileMatches = mention && (fileSearch.status === "done" || fileSearch.status === "loading") ? fileSearch.entries : [];
 
   function autosize() {
     const ta = taRef.current;
@@ -587,6 +595,19 @@ export function Composer({
     requestAnimationFrame(() => {
       autosize();
       taRef.current?.focus();
+    });
+  }
+
+  function chooseFile(entry: FileSearchEntry) {
+    if (!mention) return;
+    const next = insertFileMention(text, mention, entry);
+    setText(next.text);
+    setCaret(next.caret);
+    setMenuIndex(0);
+    requestAnimationFrame(() => {
+      const ta = taRef.current;
+      if (ta) { ta.focus(); ta.setSelectionRange(next.caret, next.caret); }
+      autosize();
     });
   }
 
@@ -783,6 +804,32 @@ export function Composer({
               })}
             </div>
           )}
+          {fileMatches.length > 0 && (
+            <div className="menu slash-menu" role="listbox" aria-label="Files">
+              {fileMatches.map((entry, i) => {
+                const activeIndex = Math.min(menuIndex, fileMatches.length - 1);
+                const slash = entry.path.lastIndexOf("/");
+                return (
+                  <button
+                    type="button"
+                    key={entry.path}
+                    className={`menu-item slash-item file-mention-item${i === activeIndex ? " active" : ""}`}
+                    role="option"
+                    aria-selected={i === activeIndex}
+                    onMouseDown={(e) => { e.preventDefault(); chooseFile(entry); }}
+                  >
+                    <span className="slash-name">{entry.path.slice(slash + 1)}{entry.type === "dir" ? "/" : ""}</span>
+                    {slash > 0 && <span className="slash-desc">{entry.path.slice(0, slash)}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          {mention && fileMatches.length === 0 && fileSearch.status !== "idle" && (
+            <div className="menu slash-menu slash-empty" role="status">
+              {fileSearch.status === "error" ? fileSearch.error : fileSearch.status === "loading" ? "Finding files…" : "No matching files."}
+            </div>
+          )}
           {slashEmpty && (
             <div className="menu slash-menu slash-empty" role="status">
               {agentCommands.length === 0
@@ -861,8 +908,10 @@ export function Composer({
                 void addFiles([new File([pasted], name, { type: "text/markdown" })]);
               }
             }}
+            onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
             onChange={(e) => {
               setText(e.target.value);
+              setCaret(e.target.selectionStart ?? e.target.value.length);
               setMenuDismissed(false);
               setMenuIndex(0);
               autosize();
@@ -882,6 +931,17 @@ export function Composer({
                   return;
                 }
               }
+              if (fileMatches.length > 0) {
+                if (e.key === "ArrowDown") { e.preventDefault(); setMenuIndex((i) => Math.min(i + 1, fileMatches.length - 1)); return; }
+                if (e.key === "ArrowUp") { e.preventDefault(); setMenuIndex((i) => Math.max(i - 1, 0)); return; }
+                if ((e.key === "Enter" && !e.shiftKey) || e.key === "Tab") {
+                  e.preventDefault();
+                  const entry = fileMatches[Math.min(menuIndex, fileMatches.length - 1)];
+                  if (entry) chooseFile(entry);
+                  return;
+                }
+              }
+              if (mention && e.key === "Escape") { e.preventDefault(); setMenuDismissed(true); return; }
               if (e.key !== "Enter" || e.shiftKey) return;
               if (isMobileViewport()) return; // let Enter insert a newline; tap Send to submit
               e.preventDefault();

@@ -2,7 +2,8 @@
 // Copyright (c) 2026 Petter André Sjulstad
 //
 // Read-only file browser over a session's workspace (its worktree, or the
-// directory it runs in): list one directory, read one file. Lets a person look
+// directory it runs in): list one directory, read one file, find files by
+// name for the composer's @ picker. Lets a person look
 // at what the agent is working on before anything is committed or pushed. Every
 // path is confined to the workspace — `..`, absolute paths and symlinks that
 // resolve outside it are refused — and nothing here ever writes.
@@ -175,6 +176,75 @@ export async function listWorkspaceDir(root: string, input?: string): Promise<Wo
   return { path: rel, entries: entries.slice(0, MAX_DIR_ENTRIES), git: status !== null };
 }
 
+/** How many matches one search returns: a picker, not a listing. */
+export const MAX_SEARCH_RESULTS = 30;
+/** A workspace bigger than this is searched by its first files only. */
+const MAX_SEARCH_FILES = 50_000;
+/** Not walked when the workspace is not a git checkout (git skips them by .gitignore). */
+const UNWALKED = new Set([".git", "node_modules"]);
+
+/** Every file in the workspace, workspace-relative: git's own list (tracked
+ *  plus untracked, minus ignored) in a checkout, else a bounded walk. */
+async function workspaceFiles(root: string): Promise<string[]> {
+  try {
+    const opts = { cwd: root, maxBuffer: 64 * 1024 * 1024, timeout: 10_000 };
+    // The index still lists a file deleted in the working tree; drop those.
+    const [{ stdout }, { stdout: deleted }] = await Promise.all([
+      exec("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], opts),
+      exec("git", ["ls-files", "-z", "--deleted"], opts),
+    ]);
+    const gone = new Set(deleted.split("\0"));
+    return [...new Set(stdout.split("\0"))].filter((file) => file && !gone.has(file)).slice(0, MAX_SEARCH_FILES);
+  } catch { /* not a checkout: walk it */ }
+  const files: string[] = [];
+  const queue = [""];
+  while (queue.length && files.length < MAX_SEARCH_FILES) {
+    const dir = queue.shift()!;
+    const dirents = await fs.readdir(path.join(root, dir), { withFileTypes: true }).catch(() => []);
+    for (const dirent of dirents) {
+      if (UNWALKED.has(dirent.name)) continue;
+      const rel = dir ? `${dir}/${dirent.name}` : dirent.name;
+      // isDirectory() does not follow symlinks, so a link out of the workspace is never walked.
+      if (dirent.isDirectory()) queue.push(rel);
+      else files.push(rel);
+    }
+  }
+  return files;
+}
+
+/** Lower is better; null: no match. Name prefix, then name, then path, then
+ *  the query's characters in order anywhere in the path. */
+export function searchRank(entryPath: string, query: string): number | null {
+  const q = query.toLowerCase();
+  const p = entryPath.toLowerCase();
+  const name = p.slice(p.lastIndexOf("/") + 1);
+  if (!q) return 0;
+  if (name.startsWith(q)) return 0;
+  if (name.includes(q)) return 1;
+  if (p.includes(q)) return 2;
+  let i = 0;
+  for (const ch of p) if (ch === q[i]) i++;
+  return i === q.length ? 3 : null;
+}
+
+/** Files and folders whose path matches `query`, best first, for the
+ *  composer's @ picker. An empty query lists the top of the workspace. */
+export async function searchWorkspace(root: string, query: string): Promise<{ query: string; entries: Array<{ path: string; type: "dir" | "file" }> }> {
+  const q = query.replace(/\\/g, "/").replace(/^\.?\//, "").trim();
+  const realRoot = await fs.realpath(root).catch(() => { throw new WorkspacePathError("This session's folder no longer exists."); });
+  const files = await workspaceFiles(realRoot);
+  const dirs = new Set<string>();
+  for (const file of files) for (let i = file.indexOf("/"); i > 0; i = file.indexOf("/", i + 1)) dirs.add(file.slice(0, i));
+  const candidates = [...[...dirs].map((p) => ({ path: p, type: "dir" as const })), ...files.map((p) => ({ path: p, type: "file" as const }))]
+    .filter((entry) => !entry.path.split("/").some((part) => HIDDEN.has(part)));
+  const depth = (p: string) => p.split("/").length;
+  const ranked = candidates
+    .map((entry) => ({ entry, rank: searchRank(entry.path, q) }))
+    .filter((r): r is { entry: typeof candidates[number]; rank: number } => r.rank !== null)
+    .sort((a, b) => a.rank - b.rank || depth(a.entry.path) - depth(b.entry.path) || a.entry.path.length - b.entry.path.length || a.entry.path.localeCompare(b.entry.path));
+  return { query, entries: ranked.slice(0, MAX_SEARCH_RESULTS).map((r) => r.entry) };
+}
+
 function looksBinary(bytes: Buffer): boolean {
   const head = bytes.subarray(0, 8000);
   return head.includes(0);
@@ -224,6 +294,7 @@ export function createFileCommands(workspaceFor: (sessionId: string) => string |
     "files.list": (root, msg) => listWorkspaceDir(root, typeof msg.path === "string" ? msg.path : undefined),
     "files.read": async (root, msg) => ({ file: await readWorkspaceFile(root, String(msg.path ?? "")) }),
     "files.download": async (root, msg) => ({ file: await downloadWorkspaceFile(root, String(msg.path ?? "")) }),
+    "files.search": (root, msg) => searchWorkspace(root, typeof msg.query === "string" ? msg.query : ""),
   };
   return Object.fromEntries(Object.entries(operations).map(([kind, run]) => [kind, async (msg, ctx) => {
     try {
