@@ -988,6 +988,14 @@ class ProtocolSession implements RuntimeSession {
     }
     if (type === "session.compaction") {
       for (const event of agentCompactionEvents(msg)) this.emit(event);
+      // The window's fill from before the summary no longer holds (Codex's
+      // last report is the summary request itself, the whole history): take
+      // the agent's after-count, or leave it unknown until the next report.
+      if (msg.done === true && !msg.error && !msg.cancelled && this.lastUsage?.context) {
+        const context = contextUsage({ used: msg.tokensAfter, size: this.lastUsage.context.size });
+        const { context: _stale, ...rest } = this.lastUsage;
+        this.lastUsage = context ? { ...rest, context } : rest;
+      }
       return;
     }
     if (type === "session.status") {

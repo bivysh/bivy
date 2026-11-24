@@ -162,8 +162,9 @@ const CLASSIFIERS: { condition: RuntimeCondition; test: (raw: string) => boolean
     // qualifier (weekly/daily/5-hour/7-day) is optional and may sit between
     // "your" and "limit", so it must not break the match (it did before — the
     // word "weekly" left these limits classified "unknown" and never resumed).
+    // An API key, project or organization spend limit counts too.
     test: (r) =>
-      /\b402\b|payment required|insufficient\s+(?:credit|quota|balance|funds)|credit balance (?:is )?too low|quota (?:exceeded|exhausted)|billing|(?:usage|session|weekly|daily|monthly|5[\s-]?hour|7[\s-]?day)[\s-]?limit(?:\s+(?:reached|hit))?|(?:you(?:'ve| have)\s+)?hit your (?:(?:weekly|daily|monthly|session|usage|5[\s-]?hour|7[\s-]?day)\s+)?limit|out of credits|plan (?:limit|allowance)/i.test(
+      /\b402\b|payment required|insufficient\s+(?:credit|quota|balance|funds)|credit balance (?:is )?too low|quota (?:exceeded|exhausted)|billing|(?:usage|session|weekly|daily|monthly|5[\s-]?hour|7[\s-]?day)[\s-]?limit(?:\s+(?:reached|hit))?|(?:you(?:'ve| have)\s+)?hit your (?:(?:weekly|daily|monthly|session|usage|5[\s-]?hour|7[\s-]?day)\s+)?limit|spend[\s_-]?limit|out of credits|plan (?:limit|allowance)/i.test(
         r,
       ),
   },
