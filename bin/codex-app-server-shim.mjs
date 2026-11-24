@@ -89,6 +89,11 @@ const FAILURE_CONDITIONS = {
   contextWindowExceeded: "context_overflow",
   usageLimitExceeded: "credits_exhausted",
   sessionBudgetExceeded: "credits_exhausted",
+  // An API key's, project's or organization's spend limit (Codex 0.172):
+  // spent until someone raises it, so it needs another route, not a retry.
+  apiKeySpendLimitExceeded: "credits_exhausted",
+  projectSpendLimitExceeded: "credits_exhausted",
+  organizationSpendLimitExceeded: "credits_exhausted",
   rateLimitExceeded: "rate_limited",
   serverOverloaded: "rate_limited",
   unauthorized: "auth_failed",

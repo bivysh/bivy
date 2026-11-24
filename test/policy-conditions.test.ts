@@ -23,6 +23,7 @@ const cases: [string, string][] = [
   ["You've hit your 5-hour limit", "credits_exhausted"],
   ["7-day limit reached for this account", "credits_exhausted"],
   ["Session limit reached; try later", "credits_exhausted"],
+  ["Your API project has reached its spend limit.", "credits_exhausted"],
   ["This model's maximum context length is 200000 tokens", "context_overflow"],
   ["prompt is too long: 250000 tokens", "context_overflow"],
   // Wording from pi-ai's per-provider table (xAI here), not Bivy's own regex.

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Codex 0.172.0.
+
+### Fixed
+- When an API key, project or organization reaches its spend limit, the session now says the agent reached its usage limit and offers to fork to another agent. Before, it showed an unexplained failure. Codex 0.172 reports these limits by code, and the same wording from any other agent is recognized too.
+- After Codex or another protocol agent compacts the conversation, the run sheet's Context row no longer shows the window as fuller than before. It is hidden until the agent reports the new fill, or shows the agent's own after-count.
+
 ## [0.22.26] - 2026-11-24
 
 ### Added

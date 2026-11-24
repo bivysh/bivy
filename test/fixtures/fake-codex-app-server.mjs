@@ -82,6 +82,13 @@ rl.on("line", (line) => {
       reply(id, {});
       notify("turn/started", { threadId: params?.threadId, turn: { id: "turn-c" } });
       notify("item/started", compaction);
+      // As the real one does: the summary request's own usage (the whole
+      // history read once more) lands before the item completes.
+      notify("thread/tokenUsage/updated", {
+        threadId: params?.threadId,
+        turnId: "turn-c",
+        tokenUsage: { total: { totalTokens: 45000 }, last: { totalTokens: 15000 }, modelContextWindow: 272000 },
+      });
       notify("item/completed", compaction);
       notify("turn/completed", { threadId: params?.threadId });
       return;

@@ -188,6 +188,9 @@ test("/compact is offered and runs Codex's own compaction as a turn, not a promp
     assert.ok(session.getCommands?.().some((command) => command.name === "/compact"));
     assert.deepEqual(events.filter((event) => event.type === "agent_compaction"), [{ type: "agent_compaction" }, { type: "agent_compaction", done: true, trigger: "manual" }]);
     assert.ok(!events.some((event) => event.type === "message_update"), "the line never reached the model");
+    const usage = await session.getUsage();
+    assert.equal(usage?.tokens?.total, 45000);
+    assert.equal(usage?.context, undefined, "the summary request's usage isn't the compacted window's fill");
   } finally {
     session.dispose();
   }
