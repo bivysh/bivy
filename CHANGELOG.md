@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - When Claude Code refuses to start because the sign-in ended or the organization turned it down, the session now offers to sign in again instead of a retry. If the organization's settings failed to load, it says a retry may work.
+- Opening a session that is no longer on the machine (a stale link or a deleted session) on a machine reached directly now shows "Session not found" in the chat, once, instead of a toast over a "Fetching transcript…" spinner that never stopped.
 
 ## [0.22.25] - 2026-11-23
 

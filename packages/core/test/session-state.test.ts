@@ -59,4 +59,15 @@ describe("re-offered notices", () => {
     store.apply({ ...offer, actions: ["fork"] } as never);
     expect(store.getState().activeSession.transcript.map((e) => e.actions)).toEqual([offer.actions, ["fork"]]);
   });
+
+  it("a session that fails each of its loads the same way shows the error once and stops opening", () => {
+    const store = new SessionStore();
+    store.apply({ type: "sessions.list", sessions: [] } as never);
+    store.beginOpen("gone");
+    expect(store.getState().activeSession.opening).toBe(true);
+    for (let i = 0; i < 3; i++) store.apply({ type: "session.error", sessionId: "gone", error: "Session not found" } as never);
+    const { transcript, opening } = store.getState().activeSession;
+    expect(opening).toBe(false);
+    expect(transcript.map((e) => [e.role, e.text])).toEqual([["error", "Session not found"]]);
+  });
 });

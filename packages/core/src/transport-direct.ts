@@ -970,7 +970,19 @@ export class DirectTransport implements Transport {
           }
       }
     } catch (e) {
-      this.handlers.onError?.((e as Error)?.message || String(e));
+      const message = (e as Error)?.message || String(e);
+      // Loading a session the node can't serve (deleted, or a stale link) must
+      // answer for that session, as the relay's node does with session.error:
+      // the chat's "Fetching transcript…" spinner waits on it, and a bare toast
+      // would leave the pane spinning forever.
+      if (SESSION_VIEW_KINDS.has(obj.kind) && obj.sessionId) {
+        this.emit({ type: "session.error", sessionId: String(obj.sessionId), error: message });
+        return;
+      }
+      this.handlers.onError?.(message);
     }
   }
 }
+
+/** Commands that load what the chat shows for one session. */
+const SESSION_VIEW_KINDS = new Set<string>(["session.open", "history", "models.list"]);
