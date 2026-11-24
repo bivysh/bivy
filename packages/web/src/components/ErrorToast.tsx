@@ -59,7 +59,7 @@ export function ErrorToast() {
           >{accountAction.busy === action.id ? "Working…" : action.label}</button>)}
         </div>}
       </div>
-      <button className="error-toast-close" onClick={() => controller.store.setError("")} aria-label="Dismiss">
+      <button type="button" className="btn ghost icon error-toast-close" onClick={() => controller.store.setError("")} aria-label="Dismiss">
         ×
       </button>
     </Toast>

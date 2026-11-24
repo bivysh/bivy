@@ -108,7 +108,7 @@ const LAYOUT_ONLY = [
     ".session-actions-menu", ".row-menu-pop", ".session-filter-menu", ".reasoning-menu", ".term-attach-menu",
     ".node-menu", ".slash-menu"] },
   { shell: ".btn", owns: /(?:background|border(?!-collapse)|border-radius|color|font-size|font-weight|padding)\s*:/, selectors: [
-    ".fork-submit", ".import-session-action", ".banner-action"] },
+    ".fork-submit", ".import-session-action", ".banner-action", ".error-toast-close", ".notice-toast-close"] },
 ];
 
 function walk(dir) {

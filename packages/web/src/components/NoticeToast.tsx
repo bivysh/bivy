@@ -27,7 +27,7 @@ export function NoticeToast() {
     <Toast tone="ok" className="notice-toast" role="status">
       <StatusIcon tone="ok">✓</StatusIcon>
       <span className="notice-toast-text">{notice.trim()}</span>
-      <button className="notice-toast-close" onClick={() => controller.store.setNotice("")} aria-label="Dismiss">
+      <button type="button" className="btn ghost icon notice-toast-close" onClick={() => controller.store.setNotice("")} aria-label="Dismiss">
         ×
       </button>
     </Toast>
