@@ -307,6 +307,13 @@ export class PostgresTeams implements TeamRepository {
     if (current === role) return;
     if (current === "admin" && [...roles.values()].filter((r) => r === "admin").length === 1) throw teamError("last-admin");
     await this.query(`UPDATE team_members SET role = $3 WHERE team_id = $1 AND account_id = $2`, [teamId, accountId, role]);
+    if (current === "admin") await this.revokeInvitesBy(teamId, accountId);
+  }
+
+  /** An invite speaks for the admin who made it, so it ends when they stop
+   *  being one: leaving, being removed, or being made a member. */
+  private async revokeInvitesBy(teamId: string, accountId: string): Promise<void> {
+    await this.query(`UPDATE team_invites SET revoked_at = now() WHERE team_id = $1 AND created_by = $2 AND revoked_at IS NULL`, [teamId, accountId]);
   }
 
   async removeMember(teamId: string, accountId: string): Promise<{ teamDeleted: boolean }> {
@@ -323,6 +330,7 @@ export class PostgresTeams implements TeamRepository {
     // turned sharing on. Leaving ends that, so it can't carry into a next team.
     await this.query(`DELETE FROM team_shared_nodes WHERE node_id IN (SELECT id FROM nodes WHERE account_id = $1)`, [accountId]);
     await this.query(`DELETE FROM team_members WHERE team_id = $1 AND account_id = $2`, [teamId, accountId]);
+    await this.revokeInvitesBy(teamId, accountId);
     return { teamDeleted: false };
   }
 

@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When Claude Code refuses to start because the sign-in ended or the organization turned it down, the session now offers to sign in again instead of a retry. If the organization's settings failed to load, it says a retry may work.
 - Opening a session that is no longer on the machine (a stale link or a deleted session) on a machine reached directly now shows "Session not found" in the chat, once, instead of a toast over a "Fetching transcript…" spinner that never stopped.
 - The close button on error and confirmation toasts is a full-size tap target (it was 23×20 px).
+- A team admin's open invites now end when they stop being an admin: when they leave, are removed, or are made a member.
 
 ## [0.22.25] - 2026-11-23
 

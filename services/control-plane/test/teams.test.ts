@@ -95,4 +95,24 @@ async function rejects(promise: Promise<unknown>, expected: string) {
   assert.deepEqual((await teams.listMembers(team.id)).map((m) => [m.email, m.role]), [["bo@example.com", "admin"], ["cy@example.com", "member"]]);
 }
 
+// An admin's invites end when they stop being an admin, so a removed or
+// demoted admin can't use one of their own links to come back.
+{
+  const { teams, ada, bo, cy } = await setup();
+  const { team } = await teams.createTeam(ada.id, "Acme");
+  const { token: boLink } = await teams.createInvite(team.id, ada.id, normalizeTeamInvite({ role: "admin" }));
+  await teams.acceptInvite(boLink, bo);
+  const { token: demoted } = await teams.createInvite(team.id, bo.id, normalizeTeamInvite({ role: "admin" }));
+  const { token: removed } = await teams.createInvite(team.id, bo.id, normalizeTeamInvite({}));
+  const { token: kept } = await teams.createInvite(team.id, ada.id, normalizeTeamInvite({}));
+  await teams.setMemberRole(team.id, bo.id, "member");
+  assert.equal(await teams.previewInvite(demoted), undefined, "demoted admin's invite");
+  await teams.setMemberRole(team.id, bo.id, "admin");
+  const { token: again } = await teams.createInvite(team.id, bo.id, normalizeTeamInvite({}));
+  await teams.removeMember(team.id, bo.id);
+  assert.equal(await teams.previewInvite(again), undefined, "removed admin's invite");
+  await rejects(teams.acceptInvite(removed, bo), "invite-unavailable");
+  assert.equal((await teams.acceptInvite(kept, cy)).role, "member", "other admins' invites stay open");
+}
+
 console.log("teams: ok");
