@@ -3243,12 +3243,15 @@ select.picker-search { appearance: auto; }
 .error-toast-text { min-width: 0; font-size: 13px; line-height: 1.4; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .error-toast.expanded .error-toast-text { display: block; overflow: visible; }
 .error-toast-details { justify-self: start; border: 0; background: transparent; color: var(--accent); padding: 0; font: inherit; font-size: 12px; font-weight: 600; }
-.error-toast-close { flex: none; border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; position: sticky; top: 0; }
+.error-toast-close { flex: none; position: sticky; top: 0; }
 
 /* Success/confirmation toast — same shape as the error toast, positive accent. */
 .notice-toast { box-sizing: border-box; max-height: min(60vh, calc(100dvh - 160px)); overflow-y: auto; }
 .notice-toast-text { flex: 1; min-width: 0; font-size: 13px; line-height: 1.4; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
-.notice-toast-close { flex: none; border: 0; background: transparent; color: var(--muted); font-size: 18px; line-height: 1; position: sticky; top: 0; }
+.notice-toast-close { flex: none; position: sticky; top: 0; }
+/* The toast's close is the icon button at one size for touch and mouse, big
+   enough to hit and centred on the first line without growing the toast. */
+.btn.icon.error-toast-close, .btn.icon.notice-toast-close { min-width: var(--space-6); min-height: var(--space-6); margin-block: calc(-1 * var(--space-2)); }
 
 /* ---- Setup / sign-in ---- */
 /* Center within the *visual* viewport (--app-h from viewport.ts), not the
