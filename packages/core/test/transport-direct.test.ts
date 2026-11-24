@@ -131,6 +131,21 @@ describe("DirectTransport", () => {
     expect(events[1]).toMatchObject({ sessionId: "s1", runtimeId: "claude-code-sdk", capabilities });
   });
 
+  it("a session the node can't open answers for that session instead of a global toast", async () => {
+    const events: ServerEvent[] = [];
+    const errors: string[] = [];
+    const transport = new DirectTransport({
+      origin: "http://node.local",
+      tokenStore: mem({ bivy_local_token: "token" }),
+      fetchImpl: (async () => ({ ok: false, status: 404, json: async () => ({ error: "Session not found" }) }) as unknown as Response) as typeof fetch,
+      webSocketImpl: FakeWS as unknown as typeof WebSocket,
+      handlers: { onEvent: (event) => events.push(event), onStatus: () => {}, onError: (m) => errors.push(m) },
+    });
+    await transport.send({ kind: "session.open", sessionId: "gone" });
+    expect(events).toEqual([{ type: "session.error", sessionId: "gone", error: "Session not found" }]);
+    expect(errors).toEqual([]);
+  });
+
   it("fetches setup readiness in direct mode and emits the result", async () => {
     const calls: string[] = [];
     const events: ServerEvent[] = [];

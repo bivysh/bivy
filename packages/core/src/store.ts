@@ -3117,10 +3117,12 @@ export class SessionStore {
   }
 
   /** A node re-offers a pending notice (a limit's Fork / Retry) each time the
-   *  session is opened or its history re-sent; the same row twice is noise. */
+   *  session is opened or its history re-sent, and a session that can't load
+   *  fails each of its open/history/models requests the same way; the same row
+   *  twice is noise. */
   private repeatsLastNotice(entry: { role: string; text: string; actions?: string[] }): boolean {
     const last = this.state.activeSession.transcript.at(-1);
-    return entry.role === "system" && last?.role === "system" && last.text === entry.text
+    return (entry.role === "system" || entry.role === "error") && last?.role === entry.role && last.text === entry.text
       && (last.actions ?? []).join("\n") === (entry.actions ?? []).join("\n");
   }
 
