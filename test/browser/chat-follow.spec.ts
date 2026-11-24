@@ -115,6 +115,18 @@ for (const theme of themes) {
     await page.evaluate(() => (window as unknown as { append(): void }).append());
     await expect(page.locator('.msg')).toHaveCount(21);
     await expect(page.locator('.msg').first()).toContainText('Message 0');
+    // Scrolled up, "↑ Prompt" lands a prompt at the top of the view; a second
+    // tap steps back to the one before it.
+    await chat.evaluate(el => { el.scrollTop = el.scrollHeight / 2; el.dispatchEvent(new Event('scroll')); });
+    const promptAtTop = () => chat.evaluate(el => [...el.querySelectorAll('.msg.user')]
+      .map(m => Math.round(m.getBoundingClientRect().top - el.getBoundingClientRect().top))
+      .find(gap => gap >= 0 && gap <= 16) ?? null);
+    await page.getByRole('button', { name: 'Previous prompt' }).click();
+    await expect.poll(promptAtTop).not.toBeNull();
+    const firstStop = await chat.evaluate(el => el.scrollTop);
+    await page.getByRole('button', { name: 'Previous prompt' }).click();
+    await expect.poll(() => chat.evaluate(el => el.scrollTop)).toBeLessThan(firstStop - 50);
+    await expect.poll(promptAtTop).not.toBeNull();
     await replace(0);
     await expect(page.getByText('No messages yet')).toBeVisible();
     // Persist the empty viewport before reloading. Native scroll delivery can
