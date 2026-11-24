@@ -609,8 +609,14 @@ input, textarea, select { font-family: inherit; font-size: 16px; }
 .transcript-error { flex: 1; display: flex; flex-direction: column; gap: var(--space-2); overflow-wrap: anywhere; }
 .transcript-error .settings-disclosure-body { margin: 0; padding: 0; white-space: pre-wrap; font-size: var(--text-xs); color: var(--muted); }
 .turn-response-body { display: flex; flex-direction: column; gap: var(--space-2); min-width: 0; }
+/* Floating over the transcript once the reader scrolls up: back to the prompt
+   being answered, or down to the latest line. */
+.chat-jumps {
+  position: absolute; left: 50%; bottom: var(--space-4); transform: translateX(-50%);
+  display: flex; gap: var(--space-2);
+}
 .jump-latest {
-  position: absolute; left: 50%; bottom: 16px; transform: translateX(-50%);
+  white-space: nowrap;
   border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink);
   border-radius: var(--radius-full); padding: 6px 14px; font-size: 13px; box-shadow: var(--shadow-md);
 }

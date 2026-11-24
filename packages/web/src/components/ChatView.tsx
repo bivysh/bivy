@@ -26,7 +26,7 @@ import { writeClipboard } from "../clipboard.js";
 import { quoteForReply, selectedTextWithin } from "../quote.js";
 import { getSpeechPreferences, markdownToSpeech, readAloudSupported, speechSynthesisSupported, speechToneInstructions } from "../speech.js";
 import { controller } from "../store/useStore.js";
-import { captureChatScroll, restoredChatScrollTop, type ChatScrollMemory } from "../chatScroll.js";
+import { captureChatScroll, previousPromptTop, restoredChatScrollTop, type ChatScrollMemory } from "../chatScroll.js";
 
 
 // Friendly label for an inline notice action button. Falls back to the raw
@@ -764,6 +764,17 @@ export function ChatView({
     setPinnedState(true);
   }, [setPinnedState]);
 
+  // Back to the start of the prompt being answered, then the one before it:
+  // in a long reply, the way back to what was asked.
+  const jumpToPrompt = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const base = el.getBoundingClientRect().top - el.scrollTop;
+    const tops = [...el.querySelectorAll<HTMLElement>(".msg.user")].map((msg) => msg.getBoundingClientRect().top - base);
+    el.scrollTo({ top: previousPromptTop(tops, el.scrollTop), behavior: "smooth" });
+  }, []);
+  const hasPrompt = useMemo(() => source.some((entry) => entry.role === "user"), [source]);
+
   // Remember a session's distance from the bottom rather than its absolute
   // scrollTop. If content grows while it is in the background, returning still
   // lands on the same passage. A first visit starts at the latest message.
@@ -928,9 +939,16 @@ export function ChatView({
         </div>
       </div>
       {!pinned && total > 0 && (
-        <button className="jump-latest" onClick={jumpToLatest} aria-label="Jump to latest">
-          ↓ Latest
-        </button>
+        <div className="chat-jumps">
+          {hasPrompt && (
+            <button type="button" className="jump-latest" onClick={jumpToPrompt} aria-label="Previous prompt">
+              ↑ Prompt
+            </button>
+          )}
+          <button type="button" className="jump-latest" onClick={jumpToLatest} aria-label="Jump to latest">
+            ↓ Latest
+          </button>
+        </div>
       )}
     </div>
   );

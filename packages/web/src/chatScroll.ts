@@ -23,3 +23,11 @@ export function restoredChatScrollTop(metrics: ScrollMetrics, memory?: ChatScrol
   if (!memory || memory.pinned) return metrics.scrollHeight;
   return Math.max(0, metrics.scrollHeight - metrics.clientHeight - memory.distanceFromBottom);
 }
+
+/** Where "↑ Prompt" scrolls: the start of the nearest prompt above the top of
+ *  the view, `inset` px below the edge, so a repeated tap steps further back.
+ *  With no prompt above, the top of what is loaded (where "Show earlier" is). */
+export function previousPromptTop(promptTops: readonly number[], scrollTop: number, inset = 12): number {
+  const above = promptTops.map((top) => top - inset).filter((top) => top < scrollTop - 1);
+  return Math.max(0, above.length ? Math.max(...above) : 0);
+}
