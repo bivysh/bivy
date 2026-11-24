@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.26] - 2026-11-24
+
 ### Added
 - **`/compact` works for Codex and Pi.** The composer now offers `/compact` in Codex and Pi sessions, and running it has the agent summarize the conversation to free up context. Before, the line went to the model as an ordinary message. With Pi you can add instructions, such as `/compact keep the plan`. Claude Code, Grok and OpenCode already handled it themselves.
 - **Jump back to your prompt.** When you scroll up in a chat, a **↑ Prompt** button now sits next to **↓ Latest**. It brings the prompt being answered to the top of the view, and each further tap goes back one more prompt. Useful in a long reply on a phone.
