@@ -141,7 +141,8 @@ import { EPHEMERAL_MACHINES_ENABLED } from "../flags.js";
 import { setMachineTheme } from "../theme.js";
 import { runtimeBoolean } from "../runtime-config.js";
 import type { AccessReport, TailnetMachine } from "../access.js";
-import { markFirstSuccessfulResponse } from "../pwaLifecycle.js";
+import { isStandalone, markFirstSuccessfulResponse } from "../pwaLifecycle.js";
+import { placeToResume, readLastPlace, writeLastPlace } from "../lastPlace.js";
 import { SessionOrchestrator } from "./coordinators/session-orchestrator.js";
 import { NodeConnectionCoordinator } from "./coordinators/node-connection-coordinator.js";
 import { CredentialsModelsCoordinator } from "./coordinators/credentials-models-coordinator.js";
@@ -611,6 +612,14 @@ export class AppController {
     // the owning node so the initial open can switch to it first (cross-node), then
     // strip the param so it neither lingers in the address bar nor re-fires on reload.
     this.pendingRouteNode = this.consumeDeepLinkNode();
+    // An installed app the phone ended in the background relaunches at `/`:
+    // reopen the chat it was on (lastPlace.ts).
+    const resume = placeToResume(this.pendingRoute, readLastPlace(), Date.now(), isStandalone());
+    if (resume) {
+      this.pendingRoute = { kind: "session", id: resume.sessionId };
+      this.pendingRouteNode = resume.nodeId ?? null;
+      navigate(this.pendingRoute, { replace: true });
+    }
   }
 
   /**
@@ -1115,6 +1124,19 @@ export class AppController {
    * backgrounded (here, the CLI/TUI, or another device) would otherwise stay
    * invisible until the next manual action. Mirrors legacy refreshAfterForeground.
    */
+  /** Note the chat on screen as the app is hidden, so a relaunch soon after
+   *  reopens it (lastPlace.ts). An overlay (Settings, Automations…) counts as
+   *  the chat behind it; a draft forgets the last place. */
+  private rememberPlace(): void {
+    const route = parseRoute();
+    const sessionId = route.kind === "session" ? route.id
+      : route.kind === "root" || route.kind === "new" ? null
+      : this.store.getState().activeSession.activeSessionId;
+    writeLastPlace(sessionId && !this.isProvisionalSessionId(sessionId)
+      ? { sessionId, nodeId: this.local.cur || undefined, at: Date.now() }
+      : null);
+  }
+
   installLifecycleHandlers(): void {
     if (typeof document === "undefined") return;
     const onForeground = (): void => {
@@ -1130,6 +1152,7 @@ export class AppController {
         onForeground();
         return;
       }
+      this.rememberPlace();
       // A hidden hosted PWA cannot render live session events, yet the relay
       // otherwise keeps delivering every cumulative assistant update from every
       // running session. Give quick app switches a grace period, then disconnect;
