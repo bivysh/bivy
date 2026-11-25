@@ -129,6 +129,7 @@ function tokenOf(q: FakeQuery): string | undefined {
 
   const redriven = await nextWithin(queries[1].prompt!);
   assert.equal(redriven?.message?.content, "do the thing", "the interrupted prompt is re-driven into the new query");
+  assert.equal(redriven?.isSynthetic, undefined, "the user's own prompt stays the user's");
 
   assert.ok(
     events.some((e) => e.type === "session.notice" && /refreshing credentials/i.test(String(e.message))),
@@ -231,6 +232,7 @@ function tokenOf(q: FakeQuery): string | undefined {
   assert.equal(tokenOf(queries[2]), "tok-c", "the self-woken turn's 401 refreshes the credential");
   const nudge = await nextWithin(queries[2].prompt!);
   assert.match(String(nudge?.message?.content), /^<system-reminder>/, "the resumed query is nudged with a hidden continuation");
+  assert.equal(nudge?.isSynthetic, true, "the nudge is marked as Bivy's, not the user's");
   assert.ok(!events.some((e) => e.type === "session.error"), "the recoverable 401 is not shown as an error");
 
   session.dispose();
