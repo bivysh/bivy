@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.27] - 2026-11-25
+
 ### Added
 - **Pick up where you left off.** When your phone closes the installed app in the background and you open it again within an hour, it reopens the chat you were in instead of a new one. Opening it from a link, or leaving it on a new chat, works as before.
 
