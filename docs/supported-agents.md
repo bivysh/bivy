@@ -6,9 +6,9 @@
 
 | Agent | Runtime id | Validated range | Platforms | Required mode | Release-tested capabilities |
 | --- | --- | --- | --- | --- | --- |
-| Claude Code | `claude-code-sdk` | `>=0.3.331 <=0.3.331` (pin `0.3.331`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| Claude Code | `claude-code-sdk` | `>=0.3.332 <=0.3.332` (pin `0.3.332`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
 | Codex (governed) | `codex-approvals` | `>=0.172.0 <=0.172.0` (pin `0.172.0`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
-| Pi | `pi` | `>=1.6.0 <=1.6.0` (pin `1.6.0`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
+| Pi | `pi` | `>=1.6.1 <=1.6.1` (pin `1.6.1`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
 | OpenCode ACP | `opencode` | `>=1.19.6 <=1.19.6` (pin `1.19.6`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
 | Grok | `grok` | `>=1.0.92 <=1.0.92` (pin `1.0.92`) | linux-x64, linux-arm64, darwin-x64, darwin-arm64 | `protocol` | toolInterception, modelSelection, resume, attachments, cancellation, structuredStreaming, tokenRefresh |
 

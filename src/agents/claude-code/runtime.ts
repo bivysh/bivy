@@ -1345,7 +1345,9 @@ class ClaudeSession implements RuntimeSession {
     this.reloadedThisTurn = true;
     if (!(await this.restartWithFreshCredential(this.spawnedToken))) return false;
     this.streaming = true;
-    this.input.push({ type: "user", message: { role: "user", content: this.inFlightPrompt ?? AUTH_RECOVERY_CONTINUE }, parent_tool_use_id: null });
+    // The nudge is Bivy's, not the user's: auto mode counts unmarked mid-turn text as the user's.
+    const nudge = this.inFlightPrompt === undefined;
+    this.input.push({ type: "user", message: { role: "user", content: nudge ? AUTH_RECOVERY_CONTINUE : this.inFlightPrompt }, parent_tool_use_id: null, ...(nudge ? { isSynthetic: true } : {}) });
     return true;
   }
 

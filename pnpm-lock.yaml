@@ -16,13 +16,13 @@ overrides:
   undici: 8.12.4
   '@earendil-works/pi-coding-agent>brace-expansion': 5.0.13
   '@earendil-works/pi-coding-agent>undici': 8.12.4
-  '@earendil-works/chord': 1.6.0
-  '@earendil-works/pi-agent-core': 1.6.0
-  '@earendil-works/pi-codemode': 1.6.0
-  '@earendil-works/pi-mcp': 1.6.0
-  '@earendil-works/pi-telemetry': 1.6.0
-  '@earendil-works/pi-schema': 1.6.0
-  '@earendil-works/pi-tui': 1.6.0
+  '@earendil-works/chord': 1.6.1
+  '@earendil-works/pi-agent-core': 1.6.1
+  '@earendil-works/pi-codemode': 1.6.1
+  '@earendil-works/pi-mcp': 1.6.1
+  '@earendil-works/pi-telemetry': 1.6.1
+  '@earendil-works/pi-schema': 1.6.1
+  '@earendil-works/pi-tui': 1.6.1
 
 importers:
 
@@ -109,14 +109,14 @@ importers:
         version: 8.72.1(eslint@10.14.0(jiti@2.7.0))(typescript@6.0.3)
     optionalDependencies:
       '@anthropic-ai/claude-agent-sdk':
-        specifier: 0.3.331
-        version: 0.3.331(@anthropic-ai/sdk@0.129.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(zod@4.6.7)
+        specifier: 0.3.332
+        version: 0.3.332(@anthropic-ai/sdk@0.129.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(zod@4.6.7)
       '@earendil-works/pi-ai':
-        specifier: 1.6.0
-        version: 1.6.0(@aws-sdk/credential-provider-node@3.972.82)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
+        specifier: 1.6.1
+        version: 1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
       '@earendil-works/pi-coding-agent':
-        specifier: 1.6.0
-        version: 1.6.0(@aws-sdk/credential-provider-node@3.972.82)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(ws@8.23.0)(zod@4.6.7)
+        specifier: 1.6.1
+        version: 1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(ws@8.23.0)(zod@4.6.7)
 
   packages/automation-core:
     devDependencies:
@@ -247,52 +247,52 @@ packages:
   '@antfu/install-pkg@1.1.0':
     resolution: {integrity: sha512-MGQsmw10ZyI+EJo45CdSER4zEb+p31LpDAFp2Z3gkSd1yqVZGi0Ebx++YTEMonJy4oChEMLsxZ64j8FH6sSqtQ==}
 
-  '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.331':
-    resolution: {integrity: sha512-PQrn7YTiSV5Bg+ueF2hNvswc+wI7YKC2c32XNedvs6vfMCUUnIlq93VEbZiRY23b+JIVkEm8gb1VhkJTjsYISQ==}
+  '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.332':
+    resolution: {integrity: sha512-EFqYJyg1zpgQM3NxfOsOLCi2ktm8uYwgSR1DP9D6Z/InlQ0KSBbWAXL/s11itvLTAj6Pn15VeFtNJS7Ehw4xpg==}
     cpu: [arm64]
     os: [darwin]
 
-  '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.331':
-    resolution: {integrity: sha512-dc3iB+CY3jDpKpDpmvYc4V+UKSkudY29iJ62p0s5TK3h+b7Wqa2Hv0bPow0LUs4ZzDUXxEtCEHzk9X29VfLovw==}
+  '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.332':
+    resolution: {integrity: sha512-vHanIaflUZ5OGgkefYjLjUBfQfiduETCqFlnpvh3DjelEdpphDkBvVmYnPLgH1Lx/eAQBLbIwR8z0qry30u8Dw==}
     cpu: [x64]
     os: [darwin]
 
-  '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.331':
-    resolution: {integrity: sha512-KdIClOdBUIpvf4PTFe2qedtPCOM3tC/jbsjh8U6WXF0QS8VjYkP0QR9i2AXG1PSAnI24T5xTxQb1scPAgRTIUQ==}
+  '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.332':
+    resolution: {integrity: sha512-dlt1/pFZ4PNTsmSa/cS3m/DD4D17c5S7LEtlD0I8Ue4jbTIdYaNZOIUOYulhy9iD4Eoa47rWfP9L8MkmCrCMUg==}
     cpu: [arm64]
     os: [linux]
     libc: [musl]
 
-  '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.331':
-    resolution: {integrity: sha512-xiRxBxoM8Qa5fnjCFk5iFheL5GUroLuHPJ7UnD4v2Sv1tWxGoSL67AYnMZ6OdjMguZK09X4WlgOn1nL1m6NEOA==}
+  '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.332':
+    resolution: {integrity: sha512-sFApHjuWc+1+1cPoEvC9OpSKv+1LxWQJisjgGK2zIVXE+tBGYSodbsVvhLfLHFKc3pWEnqm90QqUqEQ+v+5vWA==}
     cpu: [arm64]
     os: [linux]
     libc: [glibc]
 
-  '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.331':
-    resolution: {integrity: sha512-CSeT1JF++Vckf6TSXjQeuSjQ/sJnoTVL/XX44v4jHNAtU5i22nI9b27E6wkzudYVxoRoLWIU00V05dXhYYCvlg==}
+  '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.332':
+    resolution: {integrity: sha512-weDfrdbgQVDuIKjk4kMoQA2x+/FPCpWno/5a9tDKeYg+jbqjIhlpvfvniteEjViL7GVf/U3SfTrjHljylsvSSg==}
     cpu: [x64]
     os: [linux]
     libc: [musl]
 
-  '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.331':
-    resolution: {integrity: sha512-nfHSiLJdkpsVAFsXTriyW3r64gS1sp5zxvaoF2dmNqKixR4rf9ISDDi81gF9L1uk/bAEcBGRx34U6Itw+NYIEg==}
+  '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.332':
+    resolution: {integrity: sha512-jcy9+qHfZp8chlyAzugVCDSVoMv3lNIrDxuWo8ukM2SkZWJn0pr4K8sXhJIKbUIvbGrZhZeY5E68zPHNfpv6Sw==}
     cpu: [x64]
     os: [linux]
     libc: [glibc]
 
-  '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.331':
-    resolution: {integrity: sha512-FsPHWUpgHBFgSZESwM53JsbEoQiWPnigSCyjSfHDyiWnH66e0NsuksuJ/Nu9qI8UVgBDh/y1NOnnd4eGrB3eFQ==}
+  '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.332':
+    resolution: {integrity: sha512-FWzNarl2AiOzNlF6FQZRFMN1t75elEdDsgVfrB+yIlMZeoMZG9OhFv38oWfgcVbZe4Hv+sR0VEQ5aYRtFDh0AQ==}
     cpu: [arm64]
     os: [win32]
 
-  '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.331':
-    resolution: {integrity: sha512-AsLur4ov9MGTQTrnZ49ZDPasQ35U3X/rZDdF/rPhytN3h1F3w/0IkC6esW3OzldvPlci60QvggOLVGnFlUzdxw==}
+  '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.332':
+    resolution: {integrity: sha512-UgAe9yBXZJU3km8SY2/jRetE16HpPtWhEcfmQscS4PQFwqGvKHbpUjIZ6J917gAKA8jpJ2PRtDNpDHvCcgrOqg==}
     cpu: [x64]
     os: [win32]
 
-  '@anthropic-ai/claude-agent-sdk@0.3.331':
-    resolution: {integrity: sha512-ml/MPqgO95tG5zcApBFxEyoDk57d9htP09R8AtPbKPUCHpsobf84IjkN4zhGvQgk8zsA9dXoeMGrQcCc8gQE/w==}
+  '@anthropic-ai/claude-agent-sdk@0.3.332':
+    resolution: {integrity: sha512-N0ejnrTLMNJYXkvhdmLEy8QSfjym2ljJCkUBCrLKesYNGgqooi8zHDHawNsi+An6zav/ImPnpi27sbRsRjfcOw==}
     engines: {node: '>=18.14.0'}
     peerDependencies:
       '@anthropic-ai/sdk': '>=0.93.0'
@@ -907,38 +907,38 @@ packages:
   '@chevrotain/types@11.1.2':
     resolution: {integrity: sha512-U+HFai5+zmJCkK86QsaJtoITlboZHBqrVketcO2ROv865xfCMSFpELQoz1GkX5GzME8pTa+3kbKrZHQtI0gdbw==}
 
-  '@earendil-works/pi-agent-core@1.6.0':
-    resolution: {integrity: sha512-IU/x+2XtE4KIdIkEndZssdLPbIUR38Btj+Q7vjIIXIK7GSamLtDH5jOw/dzBWAvWFAgZ2dslF5sPc6GcGOnS+w==}
+  '@earendil-works/pi-agent-core@1.6.1':
+    resolution: {integrity: sha512-1pkZKTaO1sSY0xVw/W45ULLQRg0rOOt6oJdeTG06upAeIq1UGHA0o+MR9UN6efPi7yW48uVinlFId7fwQilxvg==}
     engines: {node: '>=22.19.0'}
 
-  '@earendil-works/pi-ai@1.6.0':
-    resolution: {integrity: sha512-9hL+eygFDEiFp//cydeUfmFsKmEqpmvsNPb10Y1W8+m5K9O+sx1hMStfu6nukrBD5sl6mP4RykCYBBNEgsVLfw==}
-    engines: {node: '>=22.19.0'}
-    hasBin: true
-
-  '@earendil-works/pi-codemode@1.6.0':
-    resolution: {integrity: sha512-GAgAy7iJCVbeiuqq2dTIuNj3aXTMUeTF8Nu8LZs72e8ueGGDU5L3/D8VxzTHALIpQ1/q8u1tfmB3iYS2Nopchw==}
-    engines: {node: '>=22.19.0'}
-
-  '@earendil-works/pi-coding-agent@1.6.0':
-    resolution: {integrity: sha512-zX1BVEsshx7A2MRuQ6jfr3RJGWw4Wn+vLq5ZfmlvS1RskhRmByaSZVXH/zcwRrWHO7qPgs98pNCbPOEti/t0fQ==}
+  '@earendil-works/pi-ai@1.6.1':
+    resolution: {integrity: sha512-EyorgVyA2s4MxNl7YOapzOpdxrc8HUgxHEIOo8QRMK35P7PCOsSiWzMLf6ixKl3/obkg7I3wGJWHq+FdbUz43g==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
-  '@earendil-works/pi-mcp@1.6.0':
-    resolution: {integrity: sha512-dhqAR6MP8Fp3b8LEcBFOyxMZpGSozUAdzF0Dbl7OvojsjZrQsDV3ZKn85WRbwjHb4WjQUCVBsIZXwoyQxXeunw==}
+  '@earendil-works/pi-codemode@1.6.1':
+    resolution: {integrity: sha512-xogcFe38Ek/9cabCz6sP52FjUKtuNDwLmqeM1aQiwOF5rg7jZ//FRpnMeYyhvRyod2UYhhf/ojfg6rRdXi0peQ==}
     engines: {node: '>=22.19.0'}
 
-  '@earendil-works/pi-schema@1.6.0':
-    resolution: {integrity: sha512-jD0VRCUcFzWQ5zN82pOuoHNN42/3pu4E5krtpiKknvPq4g2m+fuO38lj+xnZhuVpYcd2G0qlmr8lE6ZMzkad7Q==}
+  '@earendil-works/pi-coding-agent@1.6.1':
+    resolution: {integrity: sha512-+VSb95N4PB+G7TLceg7wkbJT31BEeIBnUT9500g9a1rOsCx78CUw1YFGtLcRhS6jj8pdfm0fFwrakrMLu6lVAQ==}
+    engines: {node: '>=22.19.0'}
+    hasBin: true
+
+  '@earendil-works/pi-mcp@1.6.1':
+    resolution: {integrity: sha512-qGdAuqMsXjvOURevlc5alxPO1tRthTumFiSHU+QtNfCQpFIEMaec3RZC3mdjqLxRTKHjPBkJXzYPBGdB8bf1Zg==}
     engines: {node: '>=22.19.0'}
 
-  '@earendil-works/pi-telemetry@1.6.0':
-    resolution: {integrity: sha512-MNL0TvtpgoSfX7mBLSVgzxTW6yvT8VLEpHvbWnZsIp92FtqVvx+4q9DxWZdX8KvcQqBs0GseAgVnLdVFinjN9Q==}
+  '@earendil-works/pi-schema@1.6.1':
+    resolution: {integrity: sha512-Q/6W4IiDdIQUochCuvXFpglTByNTFTuMYvMqXjcRiOnxOl/3mQYLAZpZTpBSRWiS4WgeV7NyH/8dQp6ipYZeNg==}
     engines: {node: '>=22.19.0'}
 
-  '@earendil-works/pi-tui@1.6.0':
-    resolution: {integrity: sha512-nVtWZ4rYr3KHDla3skGAWG5XoITEUJCoEx1AsWv1yKxV7+v86ulD2hxVn/P+COI6jsoeQmj3orqHbCHZwAUsUg==}
+  '@earendil-works/pi-telemetry@1.6.1':
+    resolution: {integrity: sha512-3gyjVQlVrPwEq7ZCea8++prMwUkuNXM3v/mzTJ9knJAhqrYLxSVAjYzA1iC3KLq8ismmSQIcnFp++qTwQwNToA==}
+    engines: {node: '>=22.19.0'}
+
+  '@earendil-works/pi-tui@1.6.1':
+    resolution: {integrity: sha512-6WQPbhuoQKCIiu5Jp4S/cFdeqdm4SbAXlgCytsY/4ycR1sqHY4nB8xPTfGUucn61hVnN7hkOzI1CWNmE8UDQ3A==}
     engines: {node: '>=22.19.0'}
 
   '@esbuild/aix-ppc64@0.28.2':
@@ -1136,9 +1136,9 @@ packages:
     resolution: {integrity: sha512-IkO+/KEUvwbVpiURZg+P7zF74z5Jxe0UgJxVni+RtoHQ6IZieXaO02kmadomap/q+l6bc/jdPGGqTjhuZnuz1Q==}
     engines: {node: ^20.19.0 || ^22.13.0 || >=24}
 
-  '@google/genai@2.32.0':
-    resolution: {integrity: sha512-60c79uXpR0a47bmGqDxbXEBuQUalNmwo5mx5kqb91jIW4FoqpsLSt86DeVhRhtH5+s/16Wqxt3sXzFQn2U1OHQ==}
-    engines: {node: '>=20.0.0'}
+  '@google/genai@3.6.1':
+    resolution: {integrity: sha512-DQIkZkl+VoZc+RUSaJ41vRuywjQDpP0t/oUf5/ddQhNW6JsPjVULW2EgHmuJ1mrr6ACtrmUdPlqtNXF1yfKySg==}
+    engines: {node: '>=22.0.0'}
     peerDependencies:
       '@modelcontextprotocol/sdk': 1.32.2
     peerDependenciesMeta:
@@ -4215,44 +4215,44 @@ snapshots:
       package-manager-detector: 1.8.0
       tinyexec: 1.3.1
 
-  '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.331':
+  '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.332':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.331':
+  '@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.332':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.331':
+  '@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.332':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.331':
+  '@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.332':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.331':
+  '@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.332':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.331':
+  '@anthropic-ai/claude-agent-sdk-linux-x64@0.3.332':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.331':
+  '@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.332':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.331':
+  '@anthropic-ai/claude-agent-sdk-win32-x64@0.3.332':
     optional: true
 
-  '@anthropic-ai/claude-agent-sdk@0.3.331(@anthropic-ai/sdk@0.129.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(zod@4.6.7)':
+  '@anthropic-ai/claude-agent-sdk@0.3.332(@anthropic-ai/sdk@0.129.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(zod@4.6.7)':
     dependencies:
       '@anthropic-ai/sdk': 0.129.0(zod@4.6.7)
       '@modelcontextprotocol/sdk': 1.32.2(zod@4.6.7)
       zod: 4.6.7
     optionalDependencies:
-      '@anthropic-ai/claude-agent-sdk-darwin-arm64': 0.3.331
-      '@anthropic-ai/claude-agent-sdk-darwin-x64': 0.3.331
-      '@anthropic-ai/claude-agent-sdk-linux-arm64': 0.3.331
-      '@anthropic-ai/claude-agent-sdk-linux-arm64-musl': 0.3.331
-      '@anthropic-ai/claude-agent-sdk-linux-x64': 0.3.331
-      '@anthropic-ai/claude-agent-sdk-linux-x64-musl': 0.3.331
-      '@anthropic-ai/claude-agent-sdk-win32-arm64': 0.3.331
-      '@anthropic-ai/claude-agent-sdk-win32-x64': 0.3.331
+      '@anthropic-ai/claude-agent-sdk-darwin-arm64': 0.3.332
+      '@anthropic-ai/claude-agent-sdk-darwin-x64': 0.3.332
+      '@anthropic-ai/claude-agent-sdk-linux-arm64': 0.3.332
+      '@anthropic-ai/claude-agent-sdk-linux-arm64-musl': 0.3.332
+      '@anthropic-ai/claude-agent-sdk-linux-x64': 0.3.332
+      '@anthropic-ai/claude-agent-sdk-linux-x64-musl': 0.3.332
+      '@anthropic-ai/claude-agent-sdk-win32-arm64': 0.3.332
+      '@anthropic-ai/claude-agent-sdk-win32-x64': 0.3.332
     optional: true
 
   '@anthropic-ai/sdk@0.129.0(zod@4.6.7)':
@@ -5150,12 +5150,11 @@ snapshots:
 
   '@chevrotain/types@11.1.2': {}
 
-  '@earendil-works/pi-agent-core@1.6.0(@aws-sdk/credential-provider-node@3.972.82)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)':
+  '@earendil-works/pi-agent-core@1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)':
     dependencies:
-      '@earendil-works/pi-ai': 1.6.0(@aws-sdk/credential-provider-node@3.972.82)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
-      '@earendil-works/pi-schema': 1.6.0
+      '@earendil-works/pi-ai': 1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
+      '@earendil-works/pi-schema': 1.6.1
     transitivePeerDependencies:
-      - '@aws-sdk/credential-provider-node'
       - '@modelcontextprotocol/sdk'
       - '@smithy/hash-node'
       - '@smithy/signature-v4'
@@ -5169,20 +5168,20 @@ snapshots:
       - zod
     optional: true
 
-  '@earendil-works/pi-ai@1.6.0(@aws-sdk/credential-provider-node@3.972.82)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)':
+  '@earendil-works/pi-ai@1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)':
     dependencies:
       '@anthropic-ai/sdk': 0.129.0(zod@4.6.7)
       '@aws-sdk/client-bedrock-runtime': 3.1127.0
-      '@earendil-works/pi-schema': 1.6.0
-      '@earendil-works/pi-telemetry': 1.6.0
-      '@google/genai': 2.32.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))
+      '@aws-sdk/credential-provider-node': 3.972.82
+      '@earendil-works/pi-schema': 1.6.1
+      '@earendil-works/pi-telemetry': 1.6.1
+      '@google/genai': 3.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))
       '@smithy/node-http-handler': 4.12.1
       http-proxy-agent: 9.1.0
       https-proxy-agent: 9.1.0
       openai: 7.59.0(@aws-sdk/credential-provider-node@3.972.82)(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
       partial-json: 0.1.7
     transitivePeerDependencies:
-      - '@aws-sdk/credential-provider-node'
       - '@modelcontextprotocol/sdk'
       - '@smithy/hash-node'
       - '@smithy/signature-v4'
@@ -5196,18 +5195,18 @@ snapshots:
       - zod
     optional: true
 
-  '@earendil-works/pi-codemode@1.6.0':
+  '@earendil-works/pi-codemode@1.6.1':
     dependencies:
       quickjs-wasi: 3.6.2
     optional: true
 
-  '@earendil-works/pi-coding-agent@1.6.0(@aws-sdk/credential-provider-node@3.972.82)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(ws@8.23.0)(zod@4.6.7)':
+  '@earendil-works/pi-coding-agent@1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(ws@8.23.0)(zod@4.6.7)':
     dependencies:
-      '@earendil-works/pi-agent-core': 1.6.0(@aws-sdk/credential-provider-node@3.972.82)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
-      '@earendil-works/pi-ai': 1.6.0(@aws-sdk/credential-provider-node@3.972.82)(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
-      '@earendil-works/pi-codemode': 1.6.0
-      '@earendil-works/pi-mcp': 1.6.0
-      '@earendil-works/pi-tui': 1.6.0
+      '@earendil-works/pi-agent-core': 1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
+      '@earendil-works/pi-ai': 1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
+      '@earendil-works/pi-codemode': 1.6.1
+      '@earendil-works/pi-mcp': 1.6.1
+      '@earendil-works/pi-tui': 1.6.1
       '@silvia-odwyer/photon-node': 0.3.4
       brace-expansion: 5.0.13
       chalk: 6.0.0
@@ -5226,7 +5225,6 @@ snapshots:
       undici: 8.12.4
       yaml: 2.9.0
     transitivePeerDependencies:
-      - '@aws-sdk/credential-provider-node'
       - '@modelcontextprotocol/sdk'
       - '@smithy/hash-node'
       - '@smithy/signature-v4'
@@ -5239,18 +5237,18 @@ snapshots:
       - zod
     optional: true
 
-  '@earendil-works/pi-mcp@1.6.0':
+  '@earendil-works/pi-mcp@1.6.1':
     dependencies:
       cross-spawn: 7.0.6
     optional: true
 
-  '@earendil-works/pi-schema@1.6.0':
+  '@earendil-works/pi-schema@1.6.1':
     optional: true
 
-  '@earendil-works/pi-telemetry@1.6.0':
+  '@earendil-works/pi-telemetry@1.6.1':
     optional: true
 
-  '@earendil-works/pi-tui@1.6.0':
+  '@earendil-works/pi-tui@1.6.1':
     dependencies:
       get-east-asian-width: 1.6.0
       marked: 18.0.11
@@ -5369,7 +5367,7 @@ snapshots:
       '@eslint/core': 1.2.1
       levn: 0.4.1
 
-  '@google/genai@2.32.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))':
+  '@google/genai@3.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))':
     dependencies:
       google-auth-library: 10.9.1
       p-retry: 4.6.2

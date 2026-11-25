@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Claude Agent SDK 0.3.332 (Claude Code 2.1.332) and Pi 1.6.1.
+
+### Fixed
+- When a Claude session's sign-in is refreshed partway through a turn that the agent started on its own, the note Bivy sends to let it continue is now marked as Bivy's, not yours. Claude's auto mode now treats unmarked mid-turn text as the user's, so it could have read the note as your instruction.
+
 ## [0.22.27] - 2026-11-25
 
 ### Added
