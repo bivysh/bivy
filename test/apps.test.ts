@@ -616,6 +616,15 @@ test("a share link can be view-only and time-boxed, and stopping sharing leaves 
     assert.match((await request(port, host, "/__bivy/inspector.js", { headers: { cookie: viewer } })).body, /REVIEWER=false/);
     assert.equal((await request(port, host, "/__bivy/notes", { method: "POST", headers: { cookie: viewer, origin }, body: JSON.stringify({ note: "x" }) })).status, 403);
     assert.equal((await request(port, host, "/__bivy/scenario", { method: "POST", headers: { cookie: viewer, origin: gateway.shellOrigin(id) }, body: "" })).status, 403);
+    // A desktop app's menus drive the one program everyone watches: not for view-only links.
+    const desktop = registry.publish("s", dir, { version: 1, name: "Editor", views: [{ kind: "display", name: "Window", command: "my-editor" }] }).views[0].id;
+    registry.getView(desktop)!.displayControl = path.join(dir, "control.sock");
+    const desktopOrigin = gateway.origin(desktop), desktopHost = new URL(desktopOrigin).host;
+    const menu = (cookie: string, method = "HEAD") => request(port, desktopHost, "/__bivy/display-menu", { method, headers: { cookie, origin: desktopOrigin }, ...(method === "POST" ? { body: JSON.stringify({ path: ["File", "Quit"] }) } : {}) });
+    const desktopViewer = (await request(port, desktopHost, "/__bivy/redeem", { method: "POST", headers: { origin: desktopOrigin }, body: new URL(gateway.share(desktop, { controls: false }).url).hash.slice(1) })).headers["set-cookie"]![0].split(";")[0];
+    assert.equal((await menu(desktopViewer)).status, 404);
+    assert.equal((await menu(desktopViewer, "POST")).status, 404);
+    assert.equal((await menu((await grant(gateway, port, desktop)).cookie)).status, 204);
     gateway.unshare(id);
     assert.equal(gateway.sharing(id), undefined);
     assert.equal((await redeem(shared.url)).status, 401);
