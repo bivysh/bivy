@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.28] - 2026-11-26
+
 ### Changed
 - Claude Agent SDK 0.3.332 (Claude Code 2.1.332) and Pi 1.6.1.
 
