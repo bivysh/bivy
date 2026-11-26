@@ -426,7 +426,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
       if (session.viewOnly) { res.writeHead(403); res.end(); return; }
       await this.note(req, res, entry); return;
     }
-    if (entry.target.kind === "display") { await this.display(req, res, entry); return; }
+    if (entry.target.kind === "display") { await this.display(req, res, entry, session); return; }
     const rule = session.scenario && matchRule(session.scenario.network, req.method, req.url);
     if (rule && await simulate(req, res, rule, responseHeaders({}, this.ancestors(id)))) return;
     const inspect = isPageLoad(req);
@@ -493,7 +493,7 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
   }
   /** A display view's origin serves only its viewer and noVNC's modules; the
    * pixels come over the WebSocket (see upgrade). */
-  private async display(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): Promise<void> {
+  private async display(req: IncomingMessage, res: ServerResponse, entry: RegisteredView, session: PreviewSession): Promise<void> {
     const id = entry.view.id;
     // The viewer's measurements (same-origin POST, checked above). Numbers only.
     if (req.url === DISPLAY_STATS_PATH && req.method === "POST") {
@@ -506,7 +506,9 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
         viewport: { width: num(input.viewport?.width, 10_000), height: num(input.viewport?.height, 10_000), scale: num(input.viewport?.scale, 8) } };
       res.writeHead(204); res.end(); return;
     }
-    if (req.url === DISPLAY_MENU_PATH) { await this.displayMenu(req, res, entry); return; }
+    // A view-only link shows the app and nothing else: its menus would let the
+    // viewer drive the one program everyone watching shares.
+    if (req.url === DISPLAY_MENU_PATH) { await this.displayMenu(req, res, entry, session.viewOnly === true); return; }
     if (!["GET", "HEAD"].includes(req.method ?? "")) { res.writeHead(405, { Allow: "GET, HEAD" }); res.end(); return; }
     const url = req.url!.split("?")[0]!;
     if (url.startsWith(NOVNC_PATH)) {
@@ -524,8 +526,8 @@ fetch('${REDEEM_PATH}',{method:'POST',headers:{'Content-Type':'text/plain'},body
   }
   /** The app's menu bar for the viewer: HEAD says whether it has one, GET
    * reads it, POST {path} chooses an item (same-origin, checked above). */
-  private async displayMenu(req: IncomingMessage, res: ServerResponse, entry: RegisteredView): Promise<void> {
-    const control = entry.displayControl;
+  private async displayMenu(req: IncomingMessage, res: ServerResponse, entry: RegisteredView, viewOnly: boolean): Promise<void> {
+    const control = viewOnly ? undefined : entry.displayControl;
     const json = (status: number, body: object) => { res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store" }); res.end(JSON.stringify(body)); };
     if (req.method === "HEAD") { res.writeHead(control ? 204 : 404); res.end(); return; }
     if (!control) { json(404, { error: "This app's menus aren't available." }); return; }
