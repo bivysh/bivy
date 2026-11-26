@@ -18,8 +18,8 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "fake-indexeddb": "^6.2.7",
+    "fake-indexeddb": "^6.2.8",
     "typescript": "^5.9.3",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   }
 }
