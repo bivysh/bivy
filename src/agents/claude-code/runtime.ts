@@ -61,6 +61,7 @@ import { hasLiveProcessForCwd } from "../../runtime/native-process-scan.js";
 import { bivySessionEnv } from "../../runtime/session-env.js";
 import { ELICITATION_TOOL } from "../../elicitation.js";
 import { contextUsage } from "../../runtime/context-usage.js";
+import { anthropicSessionTitle } from "../../runtime/session-title.js";
 import { bridgeInstalled, enableBridgeResolution } from "../../agent-bridges.mjs";
 import type { RuntimeCondition } from "../../policy/conditions.js";
 
@@ -607,17 +608,6 @@ function toModelInfo(model: any): ModelInfo {
   // Shared mapping (src/runtime/normalize.ts); Claude models default to the
   // anthropic provider when the record carries none.
   return sharedToModelInfo(model, { defaultProvider: "anthropic" });
-}
-
-function cleanSessionName(value: string) {
-  return value
-    .replace(/[\r\n"'`]/g, " ")
-    .replace(/[\p{Control}]/gu, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[.?!,:;\-–—]+$/g, "")
-    .slice(0, 60)
-    .trim();
 }
 
 /** The bearer we handed the SDK: the OAuth subscription token if present, else
@@ -1882,39 +1872,14 @@ class ClaudeSession implements RuntimeSession {
     const apiKey = env.ANTHROPIC_API_KEY || env.CLAUDE_CODE_OAUTH_TOKEN;
     if (!apiKey) return undefined;
 
-    // Claude Pro/Max OAuth tokens are only authorized for Claude Code: a raw
-    // /v1/messages call whose first system block isn't the Claude Code identity
-    // is rejected (non-200), which silently dropped session naming back to the
-    // first-line fallback. API keys have no such restriction. Send the identity
-    // as the first system block for OAuth so the naming instruction survives.
-    const useOAuth = !env.ANTHROPIC_API_KEY;
-    const namingInstruction = "Name chat sessions from the user's entire first message, not just its first line. Return only a concise title, 2-6 words. No quotes, punctuation, prefixes, or explanations.";
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01",
-        ...(useOAuth
-          ? { authorization: `Bearer ${apiKey}`, "anthropic-beta": "oauth-2025-04-20" }
-          : { "x-api-key": apiKey }),
-      },
-      body: JSON.stringify({
-        model: this.desiredModel || "claude-3-5-haiku-latest",
-        max_tokens: 24,
-        temperature: 0.2,
-        system: useOAuth
-          ? [
-              { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
-              { type: "text", text: namingInstruction },
-            ]
-          : namingInstruction,
-        messages: [{ role: "user", content: `Create a short title for this coding-agent session using the full first message below:\n\n${prompt.slice(0, 4000)}` }],
-      }),
-    });
-    if (!response.ok) return undefined;
-    const json = (await response.json()) as { content?: Array<{ type?: string; text?: string }> };
-    const text = (json.content ?? []).filter((part) => part.type === "text").map((part) => part.text ?? "").join(" ");
-    return cleanSessionName(text) || undefined;
+    // Titles always use the small current model, not the session's: the
+    // session model can be an alias the raw API rejects, or a slow, costly one.
+    // A Claude subscription token goes on `authorization` (anthropicSessionTitle
+    // then leads with the Claude Code identity block it requires).
+    const headers: Record<string, string> = env.ANTHROPIC_API_KEY
+      ? { "x-api-key": apiKey }
+      : { authorization: `Bearer ${apiKey}`, "anthropic-beta": "oauth-2025-04-20" };
+    return anthropicSessionTitle({ headers, firstPrompt: prompt, baseUrl: env.ANTHROPIC_BASE_URL });
   }
 }
 
