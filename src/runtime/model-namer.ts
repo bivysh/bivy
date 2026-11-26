@@ -16,17 +16,7 @@
 import type { Api, Model } from "@earendil-works/pi-ai/compat";
 import { createPiModelRuntime } from "./pi-oauth.js";
 import { enableBridgeResolution } from "../agent-bridges.mjs";
-
-function cleanSessionName(value: string): string {
-  return value
-    .replace(/[\r\n"'`]/g, " ")
-    .replace(/\p{Control}/gu, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[.?!,:;\-–—]+$/g, "")
-    .slice(0, 60)
-    .trim();
-}
+import { cleanSessionName, SESSION_TITLE_INSTRUCTION, SESSION_TITLE_MAX_TOKENS, sessionTitlePrompt } from "./session-title.js";
 
 /**
  * A CLI can report its model in provider-qualified (`anthropic/claude-…`) or bare
@@ -84,11 +74,10 @@ export async function suggestNameFromSelectedModel(opts: {
     const response = await completeSimple(
       model,
       {
-        systemPrompt:
-          "Name chat sessions from the user's entire first message, not just its first line. Return only a concise title, 2-6 words. No quotes, punctuation, prefixes, or explanations.",
-        messages: [{ role: "user", content: `Create a short title for this coding-agent session using the full first message below:\n\n${prompt.slice(0, 4000)}`, timestamp: Date.now() }],
+        systemPrompt: SESSION_TITLE_INSTRUCTION,
+        messages: [{ role: "user", content: sessionTitlePrompt(prompt), timestamp: Date.now() }],
       },
-      { apiKey: auth.apiKey, headers: auth.headers, env: auth.env, temperature: 0.2, maxTokens: 24, reasoning: "minimal", sessionId: `${opts.sessionId}:name` },
+      { apiKey: auth.apiKey, headers: auth.headers, env: auth.env, maxTokens: SESSION_TITLE_MAX_TOKENS, reasoning: "minimal", sessionId: `${opts.sessionId}:name` },
     );
 
     const text = response.content

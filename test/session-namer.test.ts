@@ -8,7 +8,11 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
 
+import http from "node:http";
+import type { AddressInfo } from "node:net";
+
 import { createSessionNamer, fallbackSessionName, cleanSessionName, type NamerDeps, type NamerSession } from "../src/session/session-namer.js";
+import { anthropicSessionTitle } from "../src/runtime/session-title.js";
 
 function fakeSession(over: any = {}) {
   let name: string | undefined = over.name ?? "Session abcd1234";
@@ -45,6 +49,31 @@ test("fallbackSessionName takes the first ~6 words, stripping code/urls/markdown
 
 test("cleanSessionName strips quotes, control chars, trailing punctuation, caps length", () => {
   assert.equal(cleanSessionName('  "Add login flow."  '), "Add login flow");
+});
+
+test("anthropicSessionTitle sends a request current models accept", async () => {
+  // Like the real Messages API: sampling parameters are a 400 on current
+  // models, and a subscription token needs the Claude Code identity block first.
+  const server = http.createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c) => { raw += c; });
+    req.on("end", () => {
+      const body = JSON.parse(raw);
+      const identity = Array.isArray(body.system) && /Claude Code/.test(body.system[0]?.text ?? "");
+      const ok = body.temperature === undefined && (!req.headers.authorization || identity);
+      res.writeHead(ok ? 200 : 400, { "content-type": "application/json" });
+      res.end(JSON.stringify(ok ? { content: [{ type: "text", text: '"Fix Safari login loop."' }] } : { error: { type: "invalid_request_error" } }));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  try {
+    const prompt = "fix the login redirect loop on Safari";
+    assert.equal(await anthropicSessionTitle({ headers: { authorization: "Bearer t" }, firstPrompt: prompt, baseUrl }), "Fix Safari login loop");
+    assert.equal(await anthropicSessionTitle({ headers: { "x-api-key": "k" }, firstPrompt: prompt, baseUrl }), "Fix Safari login loop");
+  } finally {
+    server.close();
+  }
 });
 
 test("an already-real name is treated as named and left untouched", async () => {

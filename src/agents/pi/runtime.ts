@@ -59,6 +59,7 @@ import { agentRetryEvent } from "../../runtime/retry.js";
 import { agentCompactionEvents } from "../../runtime/compaction.js";
 import { stopReasonNotice } from "../../runtime/stop-reason.js";
 import { contextUsage } from "../../runtime/context-usage.js";
+import { cleanSessionName, SESSION_TITLE_INSTRUCTION, SESSION_TITLE_MAX_TOKENS, sessionTitlePrompt } from "../../runtime/session-title.js";
 import { BackgroundShellTracker, createBackgroundAwareBashOperations } from "./background-shell.js";
 
 /**
@@ -150,17 +151,6 @@ function toModelInfo(model: any, configured?: boolean): ModelInfo {
   const info = sharedToModelInfo(model, configured != null ? { configured } : {});
   if (info.input === undefined) info.input = model.input;
   return info;
-}
-
-function cleanSessionName(value: string) {
-  return value
-    .replace(/[\r\n"'`]/g, " ")
-    .replace(/[\p{Control}]/gu, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[.?!,:;\-–—]+$/g, "")
-    .slice(0, 60)
-    .trim();
 }
 
 /** Builds the Pi extension that bridges tool calls to a generic interceptor. */
@@ -598,13 +588,10 @@ class PiSession implements RuntimeSession {
     const response = await completeSimple(
       model,
       {
-        systemPrompt:
-          "Name chat sessions from the user's entire first message, not just its first line. Return only a concise title, 2-6 words. No quotes, punctuation, prefixes, or explanations.",
-        messages: [
-          { role: "user", content: `Create a short title for this coding-agent session using the full first message below:\n\n${prompt.slice(0, 4000)}`, timestamp: Date.now() },
-        ],
+        systemPrompt: SESSION_TITLE_INSTRUCTION,
+        messages: [{ role: "user", content: sessionTitlePrompt(prompt), timestamp: Date.now() }],
       },
-      { apiKey: auth.auth.apiKey, headers: auth.auth.headers, env: auth.env, temperature: 0.2, maxTokens: 24, reasoning: "minimal", sessionId: `${this.id}:name` },
+      { apiKey: auth.auth.apiKey, headers: auth.auth.headers, env: auth.env, maxTokens: SESSION_TITLE_MAX_TOKENS, reasoning: "minimal", sessionId: `${this.id}:name` },
     );
 
     const text = response.content

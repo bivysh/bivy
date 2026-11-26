@@ -14,6 +14,7 @@
 // worktree/branch state directly.
 
 import { suggestNameFromSelectedModel } from "../runtime/model-namer.js";
+import { anthropicSessionTitle, cleanSessionName } from "../runtime/session-title.js";
 
 /** Only the session fields naming reads or writes. */
 export interface NamerSession {
@@ -72,18 +73,7 @@ export function fallbackSessionName(firstPrompt: string): string | undefined {
   return title.length > 80 ? `${title.slice(0, 77).trim()}…` : title;
 }
 
-/** Sanitize model/LLM output into a title: strip quotes/control chars, collapse
- *  whitespace, drop trailing punctuation, cap at 60 chars. */
-export function cleanSessionName(value: string): string {
-  return value
-    .replace(/[\r\n"'`]/g, " ")
-    .replace(/\p{Control}/gu, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/[.?!,:;\-–—]+$/g, "")
-    .slice(0, 60)
-    .trim();
-}
+export { cleanSessionName };
 
 export function createSessionNamer(deps: NamerDeps): SessionNamer {
   /**
@@ -114,38 +104,10 @@ export function createSessionNamer(deps: NamerDeps): SessionNamer {
    * returns undefined and the caller keeps the deterministic title.
    */
   async function suggestSessionNameFromNode(firstPrompt: string): Promise<string | undefined> {
-    const prompt = firstPrompt.trim();
-    if (!prompt) return undefined;
+    if (!firstPrompt.trim()) return undefined;
     try {
       const headers = await deps.anthropicHeadersFromNodeCredential();
-      if (!headers) return undefined;
-      // OAuth (Claude Pro/Max) credentials use a Bearer authorization header and
-      // are only authorized for Claude Code, so a raw /v1/messages call must lead
-      // with the Claude Code identity system block or it's rejected (which left
-      // sessions stuck on the first-line fallback name). API keys (x-api-key)
-      // carry no such restriction.
-      const useOAuth = "authorization" in headers;
-      const namingInstruction = "Name chat sessions from the user's entire first message, not just its first line. Return only a concise title, 2-6 words. No quotes, punctuation, prefixes, or explanations.";
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          model: "claude-3-5-haiku-latest",
-          max_tokens: 24,
-          temperature: 0.2,
-          system: useOAuth
-            ? [
-                { type: "text", text: "You are Claude Code, Anthropic's official CLI for Claude." },
-                { type: "text", text: namingInstruction },
-              ]
-            : namingInstruction,
-          messages: [{ role: "user", content: `Create a short title for this coding-agent session using the full first message below:\n\n${prompt.slice(0, 4000)}` }],
-        }),
-      });
-      if (!response.ok) return undefined;
-      const json = (await response.json()) as { content?: Array<{ type?: string; text?: string }> };
-      const text = (json.content ?? []).filter((part) => part.type === "text").map((part) => part.text ?? "").join(" ");
-      return cleanSessionName(text) || undefined;
+      return headers ? await anthropicSessionTitle({ headers, firstPrompt }) : undefined;
     } catch (error) {
       console.warn("Node-level session naming failed", error);
       return undefined;

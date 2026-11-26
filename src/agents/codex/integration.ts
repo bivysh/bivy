@@ -19,6 +19,7 @@ import {
   importCodexRollout,
 } from "../../runtime/codex-sessions.js";
 import { ProtocolRuntime } from "../../runtime/protocol.js";
+import { cleanSessionName, SESSION_TITLE_INSTRUCTION, sessionTitlePrompt } from "../../runtime/session-title.js";
 import { codexSlashCommands } from "../../runtime/slash-commands.js";
 import type { AgentRuntime } from "../../runtime/types.js";
 
@@ -35,12 +36,7 @@ export function codexCommandAvailable(): boolean {
 async function suggestCodexSessionName(firstPrompt: string, context: { cwd: string; model?: string }): Promise<string | undefined> {
   const prompt = firstPrompt.trim();
   if (!prompt) return undefined;
-  const instruction = [
-    "Name this coding-agent session from the user request below.",
-    "Return only a concise title of 2-6 words, with no quotes, punctuation, prefix, or explanation.",
-    "",
-    prompt.slice(0, 4000),
-  ].join("\n");
+  const instruction = `${SESSION_TITLE_INSTRUCTION}\n\n${sessionTitlePrompt(prompt)}`;
   return new Promise((resolve) => {
     const args = ["exec", "--ephemeral", "--json", "--sandbox", "read-only", "--skip-git-repo-check"];
     if (context.model) args.push("--model", context.model);
@@ -60,8 +56,7 @@ async function suggestCodexSessionName(firstPrompt: string, context: { cwd: stri
           if (event.type === "item.completed" && event.item?.type === "agent_message" && event.item.text) text = event.item.text;
         } catch { /* ignore non-JSON output */ }
       }
-      const clean = text.replace(/[\r\n'"`]/g, " ").replace(/\p{Control}/gu, "").replace(/\s+/g, " ").trim().replace(/[.?!,:;–—-]+$/g, "").slice(0, 60).trim();
-      resolve(clean || undefined);
+      resolve(cleanSessionName(text) || undefined);
     });
   });
 }
