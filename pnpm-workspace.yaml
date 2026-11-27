@@ -38,6 +38,9 @@ overrides:
   # Fix GHSA-r5fr-rjxr-66jc and GHSA-f23m-r3pf-42rh across that subtree.
   lodash-es: 4.18.1
   undici: 8.12.4
+  # serialize-javascript < 7.1.3 (via vite-plugin-pwa → workbox-build →
+  # @rollup/plugin-terser, build-time only): GHSA-m5mm-p8h7-m29v. Same major.
+  serialize-javascript: 7.1.4
   # npm expresses these as a nested object under the parent package; pnpm uses a
   # `parent>child` selector. Same intent: pi-coding-agent ships an npm-shrinkwrap
   # pinning vulnerable copies below its own node_modules.
