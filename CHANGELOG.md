@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.29] - 2026-11-27
+
 ### Added
 - **↑ and ↓ recall what you sent.** In an empty composer, ↑ brings back your last prompt in this session and each further press goes one older; ↓ steps forward and back to an empty box. Works the same for every agent. Once you edit a recalled prompt, the arrows move the cursor again.
 
