@@ -12,6 +12,7 @@ infrastructure code:
     bivy automation apply                          # ask the user, then apply
     bivy automation list --json
     bivy automation trigger <id-or-key>            # run one now
+    bivy automation pause <id-or-key>              # stop one running (resume to undo)
 
 A scheduled one (triggers: schedule, github, linear, webhook, manual; the
 format is in docs/automations-as-code.md):
