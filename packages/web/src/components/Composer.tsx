@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ImageViewer } from "./ImageViewer.js";
 import type { AppState, PromptAttachment, SlashCommand } from "@bivy/core";
 import { isSlashInput, parseSlash, matchSlashCommands, pendingCommandArguments, resolveSlash, skillPrompt } from "@bivy/core";
@@ -24,6 +24,7 @@ import { isImeKey } from "../ime.js";
 import { longPasteName } from "../longPaste.js";
 import { fileMentionAt, insertFileMention } from "../fileMention.js";
 import { useFileSearch, type FileSearchEntry } from "../useFileSearch.js";
+import { sentPrompts, stepPromptHistory, type HistoryPosition } from "../promptHistory.js";
 
 /** "model-to-send": Send was pressed before a model was chosen. */
 type Picker = "repo" | "agent" | "model" | "model-to-send" | "sandbox" | "actions" | null;
@@ -250,6 +251,9 @@ export function Composer({
   // advertised steer support can't take one, so it only offers Stop until idle.
   const blockedByTurn = working && !controller.supportsSteering();
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const transcript = state.activeSession.transcript;
+  const prompts = useMemo(() => sentPrompts(transcript), [transcript]);
+  const [historyPosition, setHistoryPosition] = useState<HistoryPosition>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const isDraft = !state.activeSession.activeSessionId;
@@ -942,6 +946,25 @@ export function Composer({
                 }
               }
               if (mention && e.key === "Escape") { e.preventDefault(); setMenuDismissed(true); return; }
+              // ↑/↓ in an empty composer step through this session's sent prompts.
+              if ((e.key === "ArrowUp" || e.key === "ArrowDown") && !e.shiftKey && !e.altKey && !e.metaKey && !e.ctrlKey && attachments.length === 0) {
+                const input = e.currentTarget;
+                const next = stepPromptHistory({ prompts, position: historyPosition, key: e.key, text, caret: input.selectionStart ?? 0 });
+                if (next !== undefined) {
+                  e.preventDefault();
+                  const value = next === null ? "" : prompts[next] ?? "";
+                  setHistoryPosition(next);
+                  setText(value);
+                  setCaret(value.length);
+                  // A recalled "/command" or "@file" shouldn't reopen its menu.
+                  setMenuDismissed(true);
+                  requestAnimationFrame(() => {
+                    taRef.current?.setSelectionRange(value.length, value.length);
+                    autosize();
+                  });
+                  return;
+                }
+              }
               if (e.key !== "Enter" || e.shiftKey) return;
               if (isMobileViewport()) return; // let Enter insert a newline; tap Send to submit
               e.preventDefault();
