@@ -27,6 +27,9 @@ import { bivySessionEnv } from "../runtime/session-env.js";
 import { listMultiplexerSessions, attachCommand, type MultiplexerKind } from "../multiplexer.js";
 import type { TerminalManager } from "../terminal.js";
 import type { ProgramStatus } from "../terminal-signals.js";
+import type { RunResumeStore, SuspendedRun } from "./run-resume-store.js";
+import fs from "node:fs";
+import path from "node:path";
 import type { WebSocket } from "ws";
 
 type TuiSpec = { command: string; args: string[]; env?: Record<string, string> };
@@ -64,6 +67,10 @@ export interface RunTerminalSpec {
   env?: Record<string, string>;
   /** Owned by something else (an app view): see TerminalMeta.background. */
   background?: boolean;
+  /** Reopen under this terminal id and start time: a run restored after a
+   *  node restart, so its session is still found from when it first began. */
+  termId?: string;
+  createdAt?: number;
 }
 
 /** What a run leaves behind when its agent exposed no session of its own:
@@ -119,6 +126,8 @@ export interface RunTerminalDeps {
   credsDir: string;
   piDir: string;
   maxRunTerminals: number;
+  /** Runs to bring back after the node restarts (see run-resume-store.ts). */
+  resumeStore?: RunResumeStore;
   /** Test/diagnostic override for lazy native-session discovery retries during terminal takeover. */
   takeoverDiscoveryAttempts?: number;
   /** Test/diagnostic override for the delay between lazy native-session discovery attempts. */
@@ -151,6 +160,10 @@ export interface RunTerminals {
   /** The live run an agent's `bivy notify`/`ask`/`app` names: by the session id
    *  it was given, or by its terminal id. */
   liveRun(ref: string): LiveRun | undefined;
+  /** The node is stopping: runs that end from here on are restored at the next start. */
+  suspendRuns(): void;
+  /** Reopen the runs the last stop, crash or update cut short. Returns how many. */
+  restoreRuns(): Promise<number>;
 }
 
 type TerminalClientMessage = { kind?: string; termId?: unknown; data?: unknown; cols?: unknown; rows?: unknown; workspace?: unknown; sessionId?: unknown; agent?: unknown; label?: unknown; name?: unknown; model?: unknown; command?: unknown; args?: unknown; mux?: unknown; standalone?: unknown };
@@ -169,15 +182,20 @@ const TAKEOVER_RUNTIME_BY_AGENT: Record<string, string> = {
   // the opencode runtime's resume template (`run -s {id}`) continues it.
   opencode: "opencode",
 };
-// The CLI command to continue an adopted session back in a terminal.
-const RESUME_CLI_BY_AGENT: Record<string, (id: string) => string> = {
-  claude: (id) => `claude --resume ${id}`,
-  codex: (id) => `codex resume ${id}`,
-  grok: (id) => `grok --resume ${id}`,
-  gemini: (id) => `gemini --resume ${id}`,
-  qwen: (id) => `qwen --resume ${id}`,
-  opencode: (id) => `opencode --session ${id}`,
+// The arguments that continue an agent's session in its TUI: the "continue in
+// a terminal" hint after a takeover, and how a run comes back after a node
+// restart when its program didn't report a resume command itself (OSC 7577).
+const RESUME_ARGS_BY_AGENT: Record<string, (id: string) => string[]> = {
+  claude: (id) => ["--resume", id],
+  codex: (id) => ["resume", id],
+  grok: (id) => ["--resume", id],
+  gemini: (id) => ["--resume", id],
+  qwen: (id) => ["--resume", id],
+  opencode: (id) => ["--session", id],
+  pi: (id) => ["--session", id],
 };
+/** Runs older than this are not brought back. */
+const RESTORE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 // When no resumable session id can be found, why — and what to do about it.
 const TAKEOVER_EMPTY_HINT_BY_AGENT: Record<string, string> = {
   codex: "Codex writes its session only after the first message. Send one message in the terminal, then continue as chat.",
@@ -490,16 +508,27 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
     const name = explicitName || (spec.mux ? undefined : defaultRunName(spec.agent, commandLine, workspace));
     // A mux attach or an app's own program is not a session of its own.
     const isSession = !spec.mux && !spec.background;
-    const createdAt = Date.now();
+    const createdAt = spec.createdAt ?? Date.now();
     // The agent inside gets the same session env a chat session's agent does, so
     // `bivy notify`/`ask`/`app` reach this run: under its pinned session id, else
     // under the terminal's own id (see liveRun). A mux attach joins a shell that
     // already has its environment.
-    const termId = `term-${randomUUID()}`;
+    const termId = spec.termId ?? `term-${randomUUID()}`;
+    // A session run launched as a plain command can be brought back after a
+    // node restart. A chat's TUI (its own env) reopens as that chat instead.
+    const restorable = isSession && !spec.env;
+    const suspended: SuspendedRun = { termId, workspace, command: spec.command, agent: spec.agent, label: spec.label, name: explicitName, model: spec.model, sessionId: spec.sessionId, createdAt, savedAt: createdAt };
+    const keepSuspended = (resume = suspended.resume) => {
+      if (!restorable || !deps.resumeStore) return;
+      suspended.resume = resume;
+      suspended.savedAt = Date.now();
+      try { deps.resumeStore.save(suspended); } catch (error) { console.warn("[run-resume] could not save run:", (error as Error).message); }
+    };
     const sessionEnv = spec.mux ? {} : bivySessionEnv(spec.sessionId ?? termId);
     try {
       const id = terminals.open({
         id: termId,
+        createdAt,
         workspace,
         command: spec.command,
         args: spec.args,
@@ -518,7 +547,10 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
           if (isSession && !terminals.reportsStatus(id)) armRunIdleNotify(id, name);
         },
         onStatus: isSession ? (status) => onProgramStatus(id, status) : undefined,
+        onResume: restorable ? (resume) => keepSuspended(resume) : undefined,
         onExit: (code, _signal, scrollback) => {
+          // Ended on its own or closed by the person: nothing to bring back.
+          if (restorable && !suspending) deps.resumeStore?.remove(termId);
           lastProgramStatus.delete(id);
           lastStatusPush.delete(id);
           runTerminals.delete(id);
@@ -580,6 +612,7 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
         },
       });
       runTerminals.add(id);
+      keepSuspended();
       if (owner) bindRun(owner, id);
       if (spec.sessionId && spec.agent && !spec.mux && !owner) {
         const runtimeId = TAKEOVER_RUNTIME_BY_AGENT[spec.agent] ?? spec.agent;
@@ -651,7 +684,8 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
     // terminal remains live and the user loses nothing.
     const record = await deps.createSession(workspace, pinned, { runtimeId, makeActive: true, source: "takeover" });
     handRunToChat(entry.id, record.id);
-    const resumeCommand = RESUME_CLI_BY_AGENT[agent]?.(pinned);
+    const resumeArgs = RESUME_ARGS_BY_AGENT[agent]?.(pinned);
+    const resumeCommand = resumeArgs ? [agent, ...resumeArgs].join(" ") : undefined;
     return { ok: true, sessionId: record.id, runtimeId, resumeCommand };
   }
 
@@ -817,5 +851,52 @@ export function createRunTerminals(deps: RunTerminalDeps): RunTerminals {
     }
   }
 
-  return { runTerminalList, openRunTerminal, takeoverRunTerminal, handleTerminalMessage, addRunViewer, dropRunViewer, hasRunTerminal, hasLiveRunForSession, adoptLiveRun, liveRun };
+  let suspending = false;
+  function suspendRuns(): void {
+    suspending = true;
+  }
+
+  /** How a suspended run comes back: what its program reported, if that is the
+   *  same program; else the agent's own resume arguments for its session, once
+   *  the agent has written it (a pinned id with no conversation has none). */
+  async function resumeArgv(run: SuspendedRun, saved: () => Promise<Array<{ id: string; path?: string }>>): Promise<{ argv: string[]; cwd: string } | undefined> {
+    const reported = run.resume;
+    if (reported && path.basename(reported.argv[0]!) === path.basename(run.command)) {
+      return { argv: reported.argv, cwd: reported.cwd ?? run.workspace };
+    }
+    const args = RESUME_ARGS_BY_AGENT[run.agent ?? ""];
+    if (!args) return undefined;
+    let ref = run.sessionId;
+    if (!ref) {
+      try { ref = await SESSION_DISCOVERY_BY_AGENT[run.agent ?? ""]?.(run.workspace, run.createdAt); }
+      catch { /* the agent never wrote a session */ }
+    }
+    if (!ref || !(await saved()).some((s) => s.id === ref || s.path === ref)) return undefined;
+    return { argv: [run.command, ...args(ref)], cwd: run.workspace };
+  }
+
+  async function restoreRuns(): Promise<number> {
+    const store = deps.resumeStore;
+    if (!store) return 0;
+    let restored = 0;
+    let sessions: Promise<Array<{ id: string; path?: string }>> | undefined;
+    const saved = () => (sessions ??= deps.listAllSessions().catch(() => []));
+    for (const run of store.takeAll()) {
+      if (Date.now() - run.savedAt > RESTORE_MAX_AGE_MS || runTerminals.has(run.termId)) continue;
+      const plan = await resumeArgv(run, saved);
+      if (!plan || !fs.statSync(plan.cwd, { throwIfNoEntry: false })?.isDirectory()) continue;
+      const [command, ...args] = plan.argv;
+      let failure: string | undefined;
+      const id = await openRunTerminal(
+        { command: command!, args, agent: run.agent, label: run.label, name: run.name, model: run.model, workspace: plan.cwd, sessionId: run.sessionId, termId: run.termId, createdAt: run.createdAt },
+        (event) => { const e = event as { type?: string; error?: string }; if (e.type === "terminal.error") failure = e.error; },
+      );
+      if (id) restored++;
+      else console.warn(`[run-resume] could not restore ${run.termId}: ${failure ?? "unknown error"}`);
+    }
+    if (restored) console.log(`[run-resume] restored ${restored} run${restored === 1 ? "" : "s"} after restart`);
+    return restored;
+  }
+
+  return { runTerminalList, openRunTerminal, takeoverRunTerminal, handleTerminalMessage, addRunViewer, dropRunViewer, hasRunTerminal, hasLiveRunForSession, adoptLiveRun, liveRun, suspendRuns, restoreRuns };
 }

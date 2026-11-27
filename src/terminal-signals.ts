@@ -11,7 +11,9 @@
 // (permission, question, sign-in) / done / error / idle. OSC 9;4 progress
 // (OpenCode and others) is mapped onto the same states until a program sends
 // OSC 7501. OSC 9 / 777 / 99 are desktop notifications. A BEL outside an
-// escape sequence is the bell; the BEL that ends an OSC is not.
+// escape sequence is the bell; the BEL that ends an OSC is not. OSC 7577
+// (Program Resume Protocol, Pi) is passed on raw: checking it needs the PTY's
+// token (see program-resume.ts).
 //
 // Adding a protocol is adding a row to OSC_READERS, not another branch.
 
@@ -39,6 +41,8 @@ export type TerminalSignal =
   /** OSC 133;A: a shell prompt started, so whatever ran before is over. */
   | { type: "prompt" }
   | { type: "notify"; title?: string; body: string }
+  /** OSC 7577 body, unverified: how to resume this program after a restart. */
+  | { type: "resume"; body: string }
   | { type: "bell" };
 
 /** Our answer to `OSC 7501 ; ?`: this terminal shows program status. */
@@ -144,9 +148,15 @@ function readOsc133(body: string, out: Out): void {
   if (body === "A" || body.startsWith("A;")) out.signals.push({ type: "prompt" });
 }
 
+/** OSC 7577 ; body — verified later against the PTY's token. */
+function readProgramResume(body: string, out: Out): void {
+  out.signals.push({ type: "resume", body });
+}
+
 type OscReader = (body: string, out: Out, kitty: Map<string, { title?: string; body?: string }>) => void;
 const OSC_READERS: Record<string, OscReader> = {
   "7501": readProgramStatus,
+  "7577": readProgramResume,
   "9": readOsc9,
   "777": readOsc777,
   "99": readOsc99,

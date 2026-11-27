@@ -666,7 +666,13 @@ export class PiRuntime implements AgentRuntime {
     };
     const session = new PiSession(runtime, tui, backgroundShells);
     await session.ensureAccountModel().catch(() => {});
-    return { session, warning: runtime.modelFallbackMessage };
+    // Setup problems Pi found (an invalid models.json, a bad settings file) are
+    // diagnostics, not errors: say them alongside any model fallback.
+    const problems = runtime.takeUnreportedDiagnostics()
+      .filter((d) => d.type !== "info")
+      .map((d) => d.message);
+    const warning = [runtime.modelFallbackMessage, ...problems].filter(Boolean).join("\n") || undefined;
+    return { session, warning };
   }
 
   createSession(options: OpenSessionOptions): Promise<OpenSessionResult> {
