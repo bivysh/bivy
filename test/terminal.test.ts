@@ -53,6 +53,7 @@ async function main() {
     await runTerminalMetaCheck();
     await bellAndInputCheck();
     await programStatusCheck();
+    await programResumeCheck();
     await closeWhileStartingCheck();
     missingCommandCheck();
     // Every terminal is closed, so the process should exit now. If a PTY or
@@ -174,6 +175,40 @@ async function programStatusCheck() {
   mgr.close(id);
   await mgr.disposeAllAndWait();
   console.log("terminal: ok (program status query + report)");
+}
+
+/**
+ * Each PTY hands its program a token (OSC7577_TOKEN), and a resume command the
+ * program signs with it (OSC 7577, as Pi does) surfaces through onResume.
+ */
+async function programResumeCheck() {
+  const mgr = new TerminalManager();
+  const child = [
+    "const { createHash } = require('node:crypto');",
+    "const b64 = (s) => Buffer.from(s).toString('base64');",
+    "const body = `pid=${process.pid}:time=${Math.floor(Date.now() / 1000)}:argv=${['pi', '--session', 'abc'].map(b64).join(',')}`;",
+    "const mac = createHash('sha256').update(`${body}:${process.env.OSC7577_TOKEN}`).digest('hex');",
+    "process.stdout.write(`\\x1b]7577;${body}:mac=${mac}\\x1b\\\\`);",
+    "setTimeout(() => process.exit(0), 2000);",
+  ].join("");
+  let id = "";
+  const command = await new Promise<unknown>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("timed out waiting for a resume report")), 10000);
+    id = mgr.open({
+      workspace: os.tmpdir(),
+      env: { OSC7577_TOKEN: "inherited-token-must-not-pass-on" },
+      command: process.execPath,
+      args: ["-e", child],
+      onData: () => {},
+      onResume: (c) => { clearTimeout(timeout); resolve(c); },
+      onExit: () => {},
+    });
+  });
+  assert.deepEqual(command, { argv: ["pi", "--session", "abc"] });
+  assert.deepEqual(mgr.resumeCommand(id), command);
+  mgr.close(id);
+  await mgr.disposeAllAndWait();
+  console.log("terminal: ok (program resume report)");
 }
 
 /**

@@ -25,6 +25,15 @@ or stops with an error, and the sidebar row shows that state. For an agent that
 doesn't report, Bivy notifies you when it has gone quiet for a while. If the run
 is pinned to a session, tapping the notification opens it.
 
+A run survives the node restarting (an update, a stop, a crash): when the node
+comes back it reopens each `bivy run` terminal that was still live, under the
+same terminal id, resuming the same conversation. A program that tells its
+terminal how to resume itself (OSC 7577, Program Resume Protocol: Pi does) comes
+back with exactly that command. Other agents come back with their own resume
+command for the session (`claude --resume <id>`, `codex resume <id>`, …) once
+that session has a message in it. A run you closed, or one that ended on its
+own, is not reopened. Set `BIVY_RESTORE_RUNS=0` to turn this off.
+
 ## What it does
 
 When you run the shadowed command, the shim decides between two paths:

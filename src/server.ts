@@ -88,6 +88,7 @@ import { createClientProjection } from "./session/client-projection.js";
 import { createTranscriptPersistence } from "./session/transcript-persistence.js";
 import { createRunTerminals } from "./session/run-terminal.js";
 import { createRunLogStore } from "./session/run-log-store.js";
+import { createRunResumeStore } from "./session/run-resume-store.js";
 import { isNativeOAuthProvider, loginModelOAuth, refreshModelOAuthState, type AuthEvent, type AuthPrompt } from "./runtime/oauth/model-oauth.js";
 import { refreshSyncedSignIns } from "./runtime/oauth/sign-in-refresh.js";
 import { decideOAuthLoginSweep } from "./runtime/oauth/oauth-login-sweep.js";
@@ -481,6 +482,7 @@ if (migrateVaultDir(piDir, credsDir)) {
 const metadata = MetadataStore.load(appDir);
 // Scrollback kept for `bivy run`s whose agent left no resumable session (see run-log-store).
 const runLogs = createRunLogStore(appDir);
+const runResume = createRunResumeStore(appDir);
 // A fresh process has no live runtimes, so any persisted "working" status is
 // stale from a prior crash/kill. Clear it at boot; otherwise those sessions'
 // worktrees are permanently exempted from cleanup (an unbounded disk leak).
@@ -10062,6 +10064,7 @@ const runTerms = createRunTerminals({
   },
   sessionListChanged: () => { broadcastSessionsList(); scheduleAdvertise(); },
   saveRunLog: (termId, log) => runLogs.save(termId, log),
+  resumeStore: process.env.BIVY_RESTORE_RUNS === "0" ? undefined : runResume,
   loadRunLog: (termId) => runLogs.load(termId),
   listAllSessions,
   listProvidersUnified,
@@ -13020,6 +13023,8 @@ const server = app.listen(port, host, async () => {
   // Recover interactive sessions a restart interrupted mid-turn (auto-continue, or
   // flag for a one-tap manual Resume) per the node's sessionResumeMode setting.
   void reconcileInterruptedSessions().catch((error) => console.warn("[resume] interrupted-session reconciliation failed", error));
+  // Reopen the `bivy run` terminals the last stop, crash or update cut short.
+  void runTerms.restoreRuns().catch((error) => console.warn("[run-resume] restoring runs failed", error));
   // Re-arm (or fire) durable auto-resume markers a limit-hit turn left behind,
   // so a session waiting out a usage/rate window still resumes after a restart.
   try { sessionResumeSweep(); } catch (error) { console.warn("[resume] auto-resume sweep failed at boot", error); }
@@ -13174,6 +13179,8 @@ let shuttingDown = false;
 function shutdown(signal: string) {
   if (shuttingDown) return;
   shuttingDown = true;
+  // Runs the stop cuts short come back when the node starts again.
+  runTerms.suspendRuns();
   appGateway?.close();
   remotePreview.close();
   relay?.stop();

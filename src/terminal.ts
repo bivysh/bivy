@@ -5,6 +5,7 @@ import { resolveExecutable } from "./executable.js";
 import { createRequire } from "node:module";
 import { depCacheEnv } from "./harness/dep-cache.js";
 import { ProgramStatusBoard, TerminalSignalReader, sameProgramStatus, type ProgramStatus } from "./terminal-signals.js";
+import { PROGRAM_RESUME_ENV, ProgramResumeBoard, newResumeToken, type ResumeCommand } from "./program-resume.js";
 
 // @lydell/node-pty is node-pty with one prebuilt binary package per platform,
 // so installs never compile a native addon or need build tools.
@@ -106,6 +107,8 @@ export interface TerminalOpenOptions {
   /** The terminal's id, when the caller needs it before the PTY starts (to put
    *  it in the child's env). Defaults to a fresh `term-<uuid>`. */
   id?: string;
+  /** When the terminal's work began, if earlier than now (a restored run). */
+  createdAt?: number;
   env?: Record<string, string>;
   /**
    * Program to run instead of the login shell (with `args`). Used to launch an
@@ -138,6 +141,11 @@ export interface TerminalOpenOptions {
   onStatus?: (status: ProgramStatus | undefined) => void;
   /** Fired when a program posts a desktop notification (OSC 9 / 777 / 99). */
   onNotify?: (notification: { title?: string; body: string }) => void;
+  /**
+   * Fired when the command that would resume the program changes (OSC 7577,
+   * checked against this PTY's own token): `undefined` once it has none.
+   */
+  onResume?: (command: ResumeCommand | undefined) => void;
 }
 
 /** A listable summary of a live terminal (for `terminal.list` / GET /api/terminals). */
@@ -200,6 +208,8 @@ interface TerminalEntry {
   signals: TerminalSignalReader;
   /** The program's status records; `current()` is what clients show. */
   status: ProgramStatusBoard;
+  /** What the program reported to resume it after a restart (OSC 7577). */
+  resume: ProgramResumeBoard;
   /** Settles when node-pty reports the child has exited. Used by tests and shutdown paths that need to prove no PTY handle is left live. */
   exitPromise: Promise<void>;
   resolveExit: () => void;
@@ -280,6 +290,8 @@ export class TerminalManager {
     // when no locale is configured — a real locale in the environment still wins.
     const hasLocale = Boolean(process.env.LC_ALL || process.env.LC_CTYPE || process.env.LANG);
     const localeDefaults = hasLocale ? {} : { LANG: "en_US.UTF-8", LC_CTYPE: "en_US.UTF-8" };
+    // Each PTY gets its own resume token, never one the node inherited.
+    const resumeToken = newResumeToken();
     const env = {
       ...localeDefaults,
       ...process.env,
@@ -288,6 +300,7 @@ export class TerminalManager {
       TERM: "xterm-256color",
       // Make it obvious in the shell that this is a Bivy terminal.
       BIVY_TERMINAL: "1",
+      [PROGRAM_RESUME_ENV]: resumeToken,
     } as Record<string, string>;
 
     // node-pty won't throw for an unresolvable command — it prints
@@ -317,7 +330,7 @@ export class TerminalManager {
     const entry: TerminalEntry = {
       proc,
       workspace: options.workspace,
-      createdAt: now,
+      createdAt: options.createdAt ?? now,
       lastActivityAt: now,
       lastInputAt: now,
       meta: options.meta ?? {},
@@ -330,6 +343,7 @@ export class TerminalManager {
       taps: new Set(),
       signals: new TerminalSignalReader(),
       status: new ProgramStatusBoard(),
+      resume: new ProgramResumeBoard(resumeToken, () => proc.pid),
       exitPromise,
       resolveExit,
     };
@@ -411,6 +425,7 @@ export class TerminalManager {
       try {
         if (signal.type === "bell") options.onBell?.();
         else if (signal.type === "notify") options.onNotify?.({ title: signal.title, body: signal.body });
+        else if (signal.type === "resume") { if (entry.resume.apply(signal.body)) options.onResume?.(entry.resume.current()); }
         else changed = entry.status.apply(signal) || changed;
       } catch { /* a signal handler must never break output delivery */ }
     }
@@ -559,6 +574,11 @@ export class TerminalManager {
   /** The program's current reported status, or undefined (none, or unknown id). */
   programStatus(id: string): ProgramStatus | undefined {
     return this.terminals.get(id)?.status.current();
+  }
+
+  /** The command the program reported to resume it after a restart (OSC 7577). */
+  resumeCommand(id: string): ResumeCommand | undefined {
+    return this.terminals.get(id)?.resume.current();
   }
 
   /** True when the program in this terminal reports OSC 7501 status itself. */

@@ -18,12 +18,12 @@ overrides:
   '@earendil-works/pi-coding-agent>brace-expansion': 5.0.13
   '@earendil-works/pi-coding-agent>undici': 8.12.4
   '@earendil-works/chord': 1.6.1
-  '@earendil-works/pi-agent-core': 1.6.1
-  '@earendil-works/pi-codemode': 1.6.1
-  '@earendil-works/pi-mcp': 1.6.1
-  '@earendil-works/pi-telemetry': 1.6.1
-  '@earendil-works/pi-schema': 1.6.1
-  '@earendil-works/pi-tui': 1.6.1
+  '@earendil-works/pi-agent-core': 1.7.0
+  '@earendil-works/pi-codemode': 1.7.0
+  '@earendil-works/pi-mcp': 1.7.0
+  '@earendil-works/pi-telemetry': 1.7.0
+  '@earendil-works/pi-schema': 1.7.0
+  '@earendil-works/pi-tui': 1.7.0
 
 importers:
 
@@ -113,11 +113,11 @@ importers:
         specifier: 0.3.332
         version: 0.3.332(@anthropic-ai/sdk@0.129.0(zod@4.6.7))(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(zod@4.6.7)
       '@earendil-works/pi-ai':
-        specifier: 1.6.1
-        version: 1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
+        specifier: 1.7.0
+        version: 1.7.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
       '@earendil-works/pi-coding-agent':
-        specifier: 1.6.1
-        version: 1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(ws@8.23.0)(zod@4.6.7)
+        specifier: 1.7.0
+        version: 1.7.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(ws@8.23.0)(zod@4.6.7)
 
   packages/automation-core:
     devDependencies:
@@ -908,38 +908,38 @@ packages:
   '@chevrotain/types@11.1.2':
     resolution: {integrity: sha512-U+HFai5+zmJCkK86QsaJtoITlboZHBqrVketcO2ROv865xfCMSFpELQoz1GkX5GzME8pTa+3kbKrZHQtI0gdbw==}
 
-  '@earendil-works/pi-agent-core@1.6.1':
-    resolution: {integrity: sha512-1pkZKTaO1sSY0xVw/W45ULLQRg0rOOt6oJdeTG06upAeIq1UGHA0o+MR9UN6efPi7yW48uVinlFId7fwQilxvg==}
+  '@earendil-works/pi-agent-core@1.7.0':
+    resolution: {integrity: sha512-pLs/wTAcrUnKDILPHjnd7RiDZSotAhJ965LwVc8x37TeWF+k+vKPMmAW6Z1T8XMQuICbIYusjkT7K0lmjgQwrg==}
     engines: {node: '>=22.19.0'}
 
-  '@earendil-works/pi-ai@1.6.1':
-    resolution: {integrity: sha512-EyorgVyA2s4MxNl7YOapzOpdxrc8HUgxHEIOo8QRMK35P7PCOsSiWzMLf6ixKl3/obkg7I3wGJWHq+FdbUz43g==}
-    engines: {node: '>=22.19.0'}
-    hasBin: true
-
-  '@earendil-works/pi-codemode@1.6.1':
-    resolution: {integrity: sha512-xogcFe38Ek/9cabCz6sP52FjUKtuNDwLmqeM1aQiwOF5rg7jZ//FRpnMeYyhvRyod2UYhhf/ojfg6rRdXi0peQ==}
-    engines: {node: '>=22.19.0'}
-
-  '@earendil-works/pi-coding-agent@1.6.1':
-    resolution: {integrity: sha512-+VSb95N4PB+G7TLceg7wkbJT31BEeIBnUT9500g9a1rOsCx78CUw1YFGtLcRhS6jj8pdfm0fFwrakrMLu6lVAQ==}
+  '@earendil-works/pi-ai@1.7.0':
+    resolution: {integrity: sha512-iKryMlUYniwWbU7YU0uS7W0+cGd9c6oJ6PzRLOn8j4+1njG4c+BQq1cNawctx/npDqGeOx8ME7Gkgl6K6arPuw==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
-  '@earendil-works/pi-mcp@1.6.1':
-    resolution: {integrity: sha512-qGdAuqMsXjvOURevlc5alxPO1tRthTumFiSHU+QtNfCQpFIEMaec3RZC3mdjqLxRTKHjPBkJXzYPBGdB8bf1Zg==}
+  '@earendil-works/pi-codemode@1.7.0':
+    resolution: {integrity: sha512-fhCoh8TLxhdRTOWSEplwp39Uv+JTsu9pCqtgu9gorO8zcaw92vsbVI/G89yFs92csTo2+yB7EsJq/+725Vj+eA==}
     engines: {node: '>=22.19.0'}
 
-  '@earendil-works/pi-schema@1.6.1':
-    resolution: {integrity: sha512-Q/6W4IiDdIQUochCuvXFpglTByNTFTuMYvMqXjcRiOnxOl/3mQYLAZpZTpBSRWiS4WgeV7NyH/8dQp6ipYZeNg==}
+  '@earendil-works/pi-coding-agent@1.7.0':
+    resolution: {integrity: sha512-opRelA1oqV/o+cByICMYU87oiHuICeCkghHMqsZsDwDz9F6qo8HFhoH4J/wZkr6tBeFor7ryOSwEmpZsusYrbA==}
+    engines: {node: '>=22.19.0'}
+    hasBin: true
+
+  '@earendil-works/pi-mcp@1.7.0':
+    resolution: {integrity: sha512-ScsDjuFXjT9eKioD5oyZqofDXtaWCMhCBa+1aDSh7WmRACLsohfGQJtAX1rv5OmEbaerrRPgyD5jgwJFBjTFNw==}
     engines: {node: '>=22.19.0'}
 
-  '@earendil-works/pi-telemetry@1.6.1':
-    resolution: {integrity: sha512-3gyjVQlVrPwEq7ZCea8++prMwUkuNXM3v/mzTJ9knJAhqrYLxSVAjYzA1iC3KLq8ismmSQIcnFp++qTwQwNToA==}
+  '@earendil-works/pi-schema@1.7.0':
+    resolution: {integrity: sha512-skji4McLg9jum3NFWzFa/4QRGEZhMGnSi3QL8b9VljJkc/QopH2/BFuGKI+VcEwYzKGwsd0I8RzvXGnZGfGltQ==}
     engines: {node: '>=22.19.0'}
 
-  '@earendil-works/pi-tui@1.6.1':
-    resolution: {integrity: sha512-6WQPbhuoQKCIiu5Jp4S/cFdeqdm4SbAXlgCytsY/4ycR1sqHY4nB8xPTfGUucn61hVnN7hkOzI1CWNmE8UDQ3A==}
+  '@earendil-works/pi-telemetry@1.7.0':
+    resolution: {integrity: sha512-QZkngqktohuFZ2TZuJSXDuUntld4sCMW1tkUPaD4moMEX/z1lwcjycXnd9ChO9HNxm/Jfo+UTiC+N2hkAF9b0w==}
+    engines: {node: '>=22.19.0'}
+
+  '@earendil-works/pi-tui@1.7.0':
+    resolution: {integrity: sha512-C6vkUYGTeDdl/cMIbFOabSEPMRy9HuaUV76PS2BhvSmWifO5y8Rz8/LgFWqGIIFS7RMqu0gdeEpdXfH8jIp05g==}
     engines: {node: '>=22.19.0'}
 
   '@emnapi/core@2.0.0-beta.2':
@@ -1190,9 +1190,6 @@ packages:
   '@isaacs/cliui@9.0.0':
     resolution: {integrity: sha512-AokJm4tuBHillT+FpMtxQ60n8ObyXBatq7jD2/JA9dxbDDokKQm8KMht5ibGzLVU9IJDIKK4TPKgMHEYMn3lMg==}
     engines: {node: '>=18'}
-
-  '@isaacs/nonrecursive-glob-match@1.0.3':
-    resolution: {integrity: sha512-SI7kyKHq4XXDRozw+r9GlRZkia1ZkFrpLW98r2IC2Bpr8YkFGE3fvjzmxCG0x78A++69HmDNrDvSMYBZmHGpKA==}
 
   '@isaacs/nonrecursive-glob-match@1.1.0':
     resolution: {integrity: sha512-GPm/Dbvk5RLmhRnxXIa7nTpK0xtl4E0wj0MslsuNiJ1FIROU+2+9lgUC/dgF7Ey4QCWhfEsgxilMRMCdHPfDfw==}
@@ -5186,10 +5183,10 @@ snapshots:
 
   '@chevrotain/types@11.1.2': {}
 
-  '@earendil-works/pi-agent-core@1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)':
+  '@earendil-works/pi-agent-core@1.7.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)':
     dependencies:
-      '@earendil-works/pi-ai': 1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
-      '@earendil-works/pi-schema': 1.6.1
+      '@earendil-works/pi-ai': 1.7.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
+      '@earendil-works/pi-schema': 1.7.0
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - '@smithy/hash-node'
@@ -5204,13 +5201,13 @@ snapshots:
       - zod
     optional: true
 
-  '@earendil-works/pi-ai@1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)':
+  '@earendil-works/pi-ai@1.7.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)':
     dependencies:
       '@anthropic-ai/sdk': 0.129.0(zod@4.6.7)
       '@aws-sdk/client-bedrock-runtime': 3.1127.0
       '@aws-sdk/credential-provider-node': 3.972.82
-      '@earendil-works/pi-schema': 1.6.1
-      '@earendil-works/pi-telemetry': 1.6.1
+      '@earendil-works/pi-schema': 1.7.0
+      '@earendil-works/pi-telemetry': 1.7.0
       '@google/genai': 3.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))
       '@smithy/node-http-handler': 4.12.1
       http-proxy-agent: 9.1.0
@@ -5231,18 +5228,18 @@ snapshots:
       - zod
     optional: true
 
-  '@earendil-works/pi-codemode@1.6.1':
+  '@earendil-works/pi-codemode@1.7.0':
     dependencies:
       quickjs-wasi: 3.6.2
     optional: true
 
-  '@earendil-works/pi-coding-agent@1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(ws@8.23.0)(zod@4.6.7)':
+  '@earendil-works/pi-coding-agent@1.7.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(ws@8.23.0)(zod@4.6.7)':
     dependencies:
-      '@earendil-works/pi-agent-core': 1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
-      '@earendil-works/pi-ai': 1.6.1(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
-      '@earendil-works/pi-codemode': 1.6.1
-      '@earendil-works/pi-mcp': 1.6.1
-      '@earendil-works/pi-tui': 1.6.1
+      '@earendil-works/pi-agent-core': 1.7.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
+      '@earendil-works/pi-ai': 1.7.0(@modelcontextprotocol/sdk@1.32.2(zod@4.6.7))(@smithy/signature-v4@5.7.3)(google-auth-library@10.9.1)(undici@8.12.4)(ws@8.23.0)(zod@4.6.7)
+      '@earendil-works/pi-codemode': 1.7.0
+      '@earendil-works/pi-mcp': 1.7.0
+      '@earendil-works/pi-tui': 1.7.0
       '@silvia-odwyer/photon-node': 0.3.4
       brace-expansion: 5.0.13
       chalk: 6.0.0
@@ -5273,18 +5270,18 @@ snapshots:
       - zod
     optional: true
 
-  '@earendil-works/pi-mcp@1.6.1':
+  '@earendil-works/pi-mcp@1.7.0':
     dependencies:
       cross-spawn: 7.0.6
     optional: true
 
-  '@earendil-works/pi-schema@1.6.1':
+  '@earendil-works/pi-schema@1.7.0':
     optional: true
 
-  '@earendil-works/pi-telemetry@1.6.1':
+  '@earendil-works/pi-telemetry@1.7.0':
     optional: true
 
-  '@earendil-works/pi-tui@1.6.1':
+  '@earendil-works/pi-tui@1.7.0':
     dependencies:
       get-east-asian-width: 1.6.0
       marked: 18.0.11
@@ -5462,9 +5459,6 @@ snapshots:
       import-meta-resolve: 4.2.0
 
   '@isaacs/cliui@9.0.0': {}
-
-  '@isaacs/nonrecursive-glob-match@1.0.3':
-    optional: true
 
   '@isaacs/nonrecursive-glob-match@1.1.0': {}
 
@@ -7628,7 +7622,7 @@ snapshots:
 
   minimatch@11.0.3:
     dependencies:
-      '@isaacs/nonrecursive-glob-match': 1.0.3
+      '@isaacs/nonrecursive-glob-match': 1.1.0
       brace-expansion: 5.0.13
     optional: true
 

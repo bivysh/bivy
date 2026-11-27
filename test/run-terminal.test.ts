@@ -6,10 +6,14 @@
 // takeover, and the #433 auth-gating (an agent-owned integration must receive NO
 // Bivy vault projection — an empty credentialEnv) through a fake TerminalManager.
 import { strict as assert } from "node:assert";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 
 import { setSessionTokenSigner } from "../src/runtime/session-env.js";
 import { createRunTerminals, type RunTerminalDeps } from "../src/session/run-terminal.js";
+import { createRunResumeStore } from "../src/session/run-resume-store.js";
 
 function fakeTerminals(over: any = {}) {
   const calls: any = { open: [], write: [], close: [], setClientSize: [] };
@@ -438,4 +442,52 @@ test("a live run adopted by its chat hands back without a second session and tel
   assert.deepEqual(created, [], "the existing chat is reused, not re-created");
   assert.deepEqual(terminals.calls.close, ["t1"]);
   assert.deepEqual(broadcasts.find((b) => b.type === "terminal.closed" && b.reason), { type: "terminal.closed", termId: "t1", reason: "chat", sessionId: "sess-abc" });
+});
+
+test("a run the node's stop cut short comes back under its id with what its program reported; one that ended does not", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-run-resume-"));
+  const resumeStore = createRunResumeStore(dir);
+  const first = harness();
+  first.deps.resumeStore = resumeStore;
+  const rt = createRunTerminals(first.deps);
+  await rt.openRunTerminal({ command: "pi", args: [], agent: "pi", name: "pi · repo", workspace: dir }, first.emit);
+  await rt.openRunTerminal({ command: "claude", args: [], agent: "claude", sessionId: "sess-9", workspace: dir }, first.emit);
+  const [pi, claude] = first.terminals.calls.open;
+  pi.onResume({ argv: ["pi", "--session", "abc"], cwd: dir });
+  claude.onExit(0); // ended on its own
+  rt.suspendRuns();
+  pi.onExit(129); // the node's stop hung it up
+
+  const next = harness();
+  next.deps.resumeStore = resumeStore;
+  assert.equal(await createRunTerminals(next.deps).restoreRuns(), 1);
+  const [restored] = next.terminals.calls.open;
+  assert.equal(restored.id, pi.id, "same terminal id, so attach links and pushes still find it");
+  assert.equal(restored.createdAt, pi.createdAt);
+  assert.equal(restored.command, "pi");
+  assert.deepEqual(restored.args, ["--session", "abc"]);
+  assert.equal(restored.meta.name, "pi · repo");
+  assert.deepEqual(resumeStore.takeAll().map((r) => r.termId), [pi.id], "the old record is taken once; the live run is saved anew");
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test("a run whose program reported nothing (or another program) comes back with its agent's resume arguments, once its session exists", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-run-resume-"));
+  const resumeStore = createRunResumeStore(dir);
+  const first = harness();
+  first.deps.resumeStore = resumeStore;
+  const rt = createRunTerminals(first.deps);
+  await rt.openRunTerminal({ command: "claude", args: ["--session-id", "sess-9"], agent: "claude", sessionId: "sess-9", workspace: dir }, first.emit);
+  await rt.openRunTerminal({ command: "claude", args: ["--session-id", "sess-empty"], agent: "claude", sessionId: "sess-empty", workspace: dir }, first.emit);
+  first.terminals.calls.open[0].onResume({ argv: ["bash", "-c", "something else"] });
+  rt.suspendRuns();
+
+  const next = harness({ listAllSessions: async () => [{ id: "sess-9" }] });
+  next.deps.resumeStore = resumeStore;
+  await createRunTerminals(next.deps).restoreRuns();
+  const [restored] = next.terminals.calls.open;
+  assert.equal(restored.command, "claude");
+  assert.deepEqual(restored.args, ["--resume", "sess-9"]);
+  assert.equal(next.terminals.calls.open.length, 1, "a pinned session that never got a message is not reopened");
+  fs.rmSync(dir, { recursive: true, force: true });
 });

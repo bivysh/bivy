@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **`bivy automation pause` and `resume`.** Pause or resume any automation from the terminal by id or config key, the same as the app's Pause. One implementation now serves both, so they follow the same rules: pausing always works, and resuming a file-managed automation needs no extra acknowledgement.
+- **`bivy run` terminals come back after the node restarts.** An update, stop or crash no longer ends your live agent terminals: the node reopens each one under the same terminal id, resuming the same conversation. Programs that tell their terminal how to resume (OSC 7577, Program Resume Protocol; Pi 1.7 does) come back with exactly that command. Claude Code, Codex, Grok, Gemini, Qwen and OpenCode come back with their own resume command once the session has a message. Terminals you closed stay closed. `BIVY_RESTORE_RUNS=0` turns it off.
+
+### Changed
+- Pi is updated to 1.7.0. When Pi finds a problem in its own setup, such as an invalid `models.json`, the chat now shows it with the session's other warnings instead of only "No models available".
 
 ## [0.22.30] - 2026-11-27
 

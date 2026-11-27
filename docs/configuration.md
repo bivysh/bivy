@@ -370,6 +370,7 @@ self-contained setups.
 | --- | --- | --- | --- | --- |
 | `BIVY_MAX_OPEN_SESSIONS` | integer | `100` | Supported | `0` disables the cap. Over the cap, the least-recently-used idle session is detached and persisted, not destroyed |
 | `BIVY_MAX_RUN_TERMINALS` | integer | `50` | Supported | `0` disables. Over the cap, new run-terminals are rejected — never killed |
+| `BIVY_RESTORE_RUNS` | `0` | on | Supported | `0` stops the node from reopening the `bivy run` terminals a restart, stop or crash cut short |
 | `BIVY_SESSION_IDLE_CLOSE_MS` | integer ms | `1800000` (30 min) | Supported | |
 | `BIVY_WORKTREE_RETENTION_MS` | integer ms | `604800000` (7 days) | Supported | Sweep interval is derived and clamped to 1–24 h |
 | `BIVY_WORKTREE_SOFT_CAP_BYTES` | integer bytes | `0` (off) | Supported (opt-in) | **Advisory only** — logs oversized worktrees, never deletes |
@@ -421,6 +422,7 @@ Two caveats worth knowing:
 | `BIVY_TERM_BELL_COOLDOWN_MS` | integer ms | `45000` | Internal / test tuning — collapses a bell storm into one notification |
 | `BIVY_MCP_ENDPOINT` | URL | `http://127.0.0.1:4317` | Internal — the daemon sets it to its real port for `bivy mcp-proxy` children |
 | `BIVY_MCP_SESSION` | session id | `""` | Internal — set by Bivy when spawning the MCP proxy |
+| `OSC7577_TOKEN` | random | — | Internal — a fresh token Bivy sets in every PTY so a program can sign its OSC 7577 resume command. Never inherited from the node's own environment |
 | `BIVY_TERMINAL` | `1` | — | Internal marker. Bivy sets it in every PTY so shells (and `bivy update`) can tell they are inside Bivy. Never read as input by the node |
 
 Watchdog reliability is measured against two explicit bounds. Silence/wedged
