@@ -3737,7 +3737,14 @@ app.put("/account/automations/:id", automationWriteRateLimit, asyncHandler(async
   // Same save gate as create (see docs/automation-evaluator.md) — evaluated
   // against the patched definition, not the stored one, so tightening (e.g.
   // switching to autonomous + danger-full-access) is caught before it saves.
-  const gate = gateFromChecks(runPreflightChecks(gatherPreflightSignals({ ...current, ...patch }, await preflightSignalContext(client.accountId))));
+  // An `enabled`-only toggle skips it when it cannot add risk: pausing only
+  // stops runs, and a file-managed definition stays exactly what the file
+  // applied (that path is ungated — the checked-in file is the approval).
+  // Gating these made an unsafe automation impossible to stop from the app.
+  const gateSkipped = pauseOnly && (!enabled || Boolean(current.configKey));
+  const gate = gateSkipped
+    ? { blocked: false, blockingChecks: [] }
+    : gateFromChecks(runPreflightChecks(gatherPreflightSignals({ ...current, ...patch }, await preflightSignalContext(client.accountId))));
   if (gate.blocked) {
     return res.status(400).json({ error: gate.blockingChecks.map((c) => `${c.label}: ${c.detail}`).join("; "), preflight: gate.blockingChecks });
   }

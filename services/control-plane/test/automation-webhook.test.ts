@@ -77,8 +77,10 @@ async function main() {
     trigger: "manual",
     templateCiphertext: "bivy-room-v1:node-as-code:opaque",
     nodeLabel: "bivy/config-runner",
-    approvalMode: "risky",
-    sandbox: "workspace-write",
+    // Autonomous + full access with no acknowledgement: the file is the
+    // approval, so apply is ungated, and the app must still be able to pause it.
+    approvalMode: "autonomous",
+    sandbox: "danger-full-access",
     maxAttempts: 2,
   };
   const managed = await json(port, "PUT", "/node/automation-config/managed-ci", managedInput, nodeToken);
@@ -95,6 +97,8 @@ async function main() {
   expect(pwaEdit.status === 409, "the account/PWA API cannot overwrite a file-managed automation");
   const pwaPause = await json(port, "PUT", `/account/automations/${managed.body.id}`, { enabled: false }, token);
   expect(pwaPause.status === 200 && pwaPause.body.enabled === false && pwaPause.body.name === "Managed CI updated", "the PWA can pause a file-managed automation without touching its definition");
+  const pwaResume = await json(port, "PUT", `/account/automations/${managed.body.id}`, { enabled: true }, token);
+  expect(pwaResume.status === 200 && pwaResume.body.enabled === true, "the PWA can resume a file-managed automation the save gate would block");
   const pwaDelete = await json(port, "DELETE", `/account/automations/${managed.body.id}`, undefined, token);
   expect(pwaDelete.status === 409, "the account/PWA API cannot delete a file-managed automation");
   const wrongNode = await json(port, "PUT", "/node/automation-config/wrong-node", { ...managedInput, configKey: "wrong-node", templateCiphertext: "bivy-room-v1:somebody-else:opaque" }, nodeToken);
