@@ -50,7 +50,7 @@ overrides:
   # released together and a newer sibling can drop exports it imports
   # (pi-codemode 1.4.0 removed MCP_TYPESCRIPT_PREAMBLE). Hold them at the
   # version pi-coding-agent itself is pinned to.
-  "@earendil-works/chord": 1.6.1
+  "@earendil-works/chord": 1.7.0
   "@earendil-works/pi-agent-core": 1.7.0
   "@earendil-works/pi-codemode": 1.7.0
   "@earendil-works/pi-mcp": 1.7.0
@@ -96,7 +96,7 @@ minimumReleaseAgeExclude:
   - '@earendil-works/pi-protocol@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4 || 1.4.0 || 1.5.0 || 1.5.2'
   - '@earendil-works/pi-telemetry@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4 || 1.4.0 || 1.5.0 || 1.5.2 || 1.6.0 || 1.6.1 || 1.7.0'
   - '@earendil-works/pi-tui@0.84.3 || 0.85.1 || 0.86.1 || 0.99.1 || 0.99.2 || 1.0.4 || 1.4.0 || 1.5.0 || 1.5.2 || 1.6.0 || 1.6.1 || 1.7.0'
-  - '@earendil-works/chord@0.99.1 || 0.99.2 || 1.0.4 || 1.4.0 || 1.5.0 || 1.5.2 || 1.6.0 || 1.6.1'
+  - '@earendil-works/chord@0.99.1 || 0.99.2 || 1.0.4 || 1.4.0 || 1.5.0 || 1.5.2 || 1.6.0 || 1.6.1 || 1.7.0'
   - '@earendil-works/pi-codemode@0.99.1 || 0.99.2 || 1.0.4 || 1.4.0 || 1.5.0 || 1.5.2 || 1.6.0 || 1.6.1 || 1.7.0'
   - '@earendil-works/pi-mcp@0.99.1 || 0.99.2 || 1.0.4 || 1.4.0 || 1.5.0 || 1.5.2 || 1.6.0 || 1.6.1 || 1.7.0'
   - '@earendil-works/pi-schema@1.5.0 || 1.5.2 || 1.6.0 || 1.6.1 || 1.7.0'
