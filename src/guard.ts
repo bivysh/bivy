@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 // Copyright (c) 2026 Petter André Sjulstad
+import fs from "node:fs";
 import path from "node:path";
 
 /**
@@ -129,11 +130,35 @@ export function toolPath(input: unknown): string | undefined {
   return undefined;
 }
 
-/** True if `p` resolves outside `workspace` (so a write there escapes the boundary). */
+function isInside(root: string, abs: string): boolean {
+  return abs === root || abs.startsWith(root.endsWith(path.sep) ? root : root + path.sep);
+}
+
+/** `p` with symlinks resolved as far as the path exists: the deepest existing
+ *  ancestor goes through realpath, the not-yet-created rest is appended. */
+function realPathSoFar(p: string): string {
+  let existing = p;
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return path.join(fs.realpathSync(existing), ...rest);
+    } catch {
+      const parent = path.dirname(existing);
+      if (parent === existing) return p;
+      rest.unshift(path.basename(existing));
+      existing = parent;
+    }
+  }
+}
+
+/** True if `p` resolves outside `workspace` (so a write there escapes the
+ *  boundary). Checked both as written and with symlinks resolved, so a write
+ *  through a link inside the workspace that points elsewhere counts as outside. */
 export function pathEscapesWorkspace(workspace: string, p: string): boolean {
   const root = path.resolve(workspace);
   const abs = path.resolve(root, p);
-  return abs !== root && !abs.startsWith(root + path.sep);
+  if (!isInside(root, abs)) return true;
+  return !isInside(realPathSoFar(root), realPathSoFar(abs));
 }
 
 // Built-in tool names arrive with runtime-specific casing: the Claude Code SDK

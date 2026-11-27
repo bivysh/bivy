@@ -380,8 +380,9 @@ including `never`:
   engine evaluates it before the full-access short-circuit
   (`catastrophicFloor` in `src/guard.ts`, `PolicyEngine.decideToolCall`), so
   nothing configurable sits above it.
-- Structured `write` and `edit` calls whose resolved path escapes the session
-  workspace are denied outright on the `read-only` and `workspace-write` tiers.
+- Structured `write` and `edit` calls whose resolved path (`..` and symlinks
+  followed as far as the path exists) escapes the session workspace are denied
+  outright on the `read-only` and `workspace-write` tiers.
   `danger-full-access` is the explicit opt-out from the workspace boundary and
   from approval prompts (that is what "full access" means) — but not from the
   catastrophic-command rule above.

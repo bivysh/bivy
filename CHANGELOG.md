@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Sessions get a model-written title again instead of staying on the first few words of your message. The title request named a retired Claude model and sent `temperature`, which current Claude models and ChatGPT reject, so every agent except Codex fell back silently. All namers now share one request: a current small model, no sampling parameters, and a timeout.
 - Build: serialize-javascript (used by the PWA's service-worker build) is pinned to 7.1.4 for GHSA-m5mm-p8h7-m29v. It only runs at build time on our own config.
+- The workspace boundary now resolves symlinks. A write or edit through a link inside the workspace that points somewhere else, such as a committed `shared -> ../other` folder, is treated as outside and blocked on the `read-only` and `workspace-write` tiers, as it is for `../`.
 
 ## [0.22.28] - 2026-11-26
 
