@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { looksCatastrophic, looksBackstop, pathEscapesWorkspace, guardToolCall } from "../src/guard.js";
 
 let failures = 0;
@@ -53,6 +56,27 @@ check("workspace boundary", () => {
   assert.equal(pathEscapesWorkspace("/home/u/ws", "src/a.ts"), false);
   assert.equal(pathEscapesWorkspace("/home/u/ws", "../secret"), true);
   assert.equal(pathEscapesWorkspace("/home/u/ws", "/etc/passwd"), true);
+});
+
+check("workspace boundary follows symlinks", () => {
+  const base = fs.mkdtempSync(path.join(os.tmpdir(), "bivy-guard-"));
+  try {
+    const ws = path.join(base, "ws");
+    const outside = path.join(base, "outside");
+    fs.mkdirSync(path.join(ws, "src"), { recursive: true });
+    fs.mkdirSync(outside);
+    fs.symlinkSync(outside, path.join(ws, "shared"));
+    fs.symlinkSync(path.join(ws, "src"), path.join(base, "ws-link"));
+    // A link inside the workspace that points out of it is outside, for new
+    // files too.
+    assert.equal(pathEscapesWorkspace(ws, "shared/new/file.ts"), true);
+    assert.equal(guardToolCall(ws, "Write", { file_path: "shared/x" }, "never", () => false).decision, "deny");
+    // A workspace reached through a link still owns its own files.
+    assert.equal(pathEscapesWorkspace(path.join(base, "ws-link"), "a.ts"), false);
+    assert.equal(pathEscapesWorkspace(ws, "src/new/a.ts"), false);
+  } finally {
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 });
 
 check("autonomous: ordinary tools run without prompting", () => {
