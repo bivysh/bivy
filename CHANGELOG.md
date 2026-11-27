@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.22.30] - 2026-11-27
+
 ### Fixed
 - You can pause any automation again. An automation set to run autonomously with full access, such as one applied from `.bivy/automations.yaml`, answered Pause with "requires an explicit acknowledgement" and kept running. Pausing only stops runs, so it no longer goes through the save-time safety check; resuming a file-managed automation doesn't either, since its file is the approval.
 
