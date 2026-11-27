@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`bivy automation pause` and `resume`.** Pause or resume any automation from the terminal by id or config key, the same as the app's Pause. One implementation now serves both, so they follow the same rules: pausing always works, and resuming a file-managed automation needs no extra acknowledgement.
+
 ## [0.22.30] - 2026-11-27
 
 ### Fixed

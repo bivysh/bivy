@@ -99,6 +99,10 @@ async function main() {
   expect(pwaPause.status === 200 && pwaPause.body.enabled === false && pwaPause.body.name === "Managed CI updated", "the PWA can pause a file-managed automation without touching its definition");
   const pwaResume = await json(port, "PUT", `/account/automations/${managed.body.id}`, { enabled: true }, token);
   expect(pwaResume.status === 200 && pwaResume.body.enabled === true, "the PWA can resume a file-managed automation the save gate would block");
+  const cliPause = await json(port, "PUT", `/node/automations/${managed.body.id}/enabled`, { enabled: false }, nodeToken);
+  expect(cliPause.status === 200 && cliPause.body.enabled === false, "the CLI pauses the same automation through the node API");
+  const cliResume = await json(port, "PUT", `/node/automations/${managed.body.id}/enabled`, { enabled: true }, nodeToken);
+  expect(cliResume.status === 200 && cliResume.body.enabled === true, "the CLI resumes it the same way");
   const pwaDelete = await json(port, "DELETE", `/account/automations/${managed.body.id}`, undefined, token);
   expect(pwaDelete.status === 409, "the account/PWA API cannot delete a file-managed automation");
   const wrongNode = await json(port, "PUT", "/node/automation-config/wrong-node", { ...managedInput, configKey: "wrong-node", templateCiphertext: "bivy-room-v1:somebody-else:opaque" }, nodeToken);

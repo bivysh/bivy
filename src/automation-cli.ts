@@ -28,6 +28,8 @@ Version-controlled, locally testable coding-agent automations.
 Commands:
   list [--json]               List automations on the enrolled account
   trigger <id|config-key>     Start an automation run (alias: run)
+  pause <id|config-key>       Stop an automation from running (any automation)
+  resume <id|config-key>      Let a paused automation run again
   init [path]                 Write a safe starter .bivy/automations.yaml
   validate [path]             Parse and validate without network access
   plan [path] [--json]        Show triggers, routing, and effective safety
@@ -50,7 +52,7 @@ Wait flags: --interval <seconds> (default 2), --timeout <seconds> (default 3600)
 --json. Wait exits 0 for succeeded, 1 for failed/cancelled, and 2 on timeout.
 
 Default path: ${DEFAULT_AUTOMATION_CONFIG_PATH}
-List, trigger, and apply require an enrolled node ('bivy setup'). Instructions
+List, trigger, pause, resume, and apply require an enrolled node ('bivy setup'). Instructions
 are encrypted on this machine before upload; the control plane receives
 ciphertext only.`);
   process.exit(0);
@@ -231,6 +233,17 @@ function appliedInput(entry: AutomationConfigEntry, configOrder: number, nodeId:
   };
 }
 
+// Resolve an `<id|config-key>` argument against the account's automations.
+async function findAutomation(relay: ReturnType<typeof relayConfig>, args: string[], verb: string) {
+  const requested = args.find((arg) => !arg.startsWith("-"));
+  if (!requested) throw new Error(`Usage: bivy automation ${verb} <id|config-key> [--json]`);
+  const listed = await request<{ automations: Array<{ id: string; name: string; configKey?: string }> }>(relay, "/node/automations");
+  const matches = listed.automations.filter((automation) => automation.id === requested || automation.configKey === requested);
+  if (matches.length === 0) throw new Error(`Automation not found: ${requested}. Run 'bivy automation list' to see available automations.`);
+  if (matches.length > 1) throw new Error(`Automation reference is ambiguous: ${requested}. Use its id instead.`);
+  return matches[0]!;
+}
+
 async function main() {
   const [command, ...args] = process.argv.slice(2);
   if (!command || ["help", "-h", "--help"].includes(command)) usage();
@@ -259,15 +272,25 @@ async function main() {
     return;
   }
 
-  if (command === "trigger" || command === "run") {
-    const requested = args.find((arg) => !arg.startsWith("-"));
-    if (!requested) throw new Error("Usage: bivy automation trigger <id|config-key> [--json]");
+  if (command === "pause" || command === "resume") {
     const relay = relayConfig(appDataDir());
-    const listed = await request<{ automations: Array<{ id: string; name: string; configKey?: string }> }>(relay, "/node/automations");
-    const matches = listed.automations.filter((automation) => automation.id === requested || automation.configKey === requested);
-    if (matches.length === 0) throw new Error(`Automation not found: ${requested}. Run 'bivy automation list' to see available automations.`);
-    if (matches.length > 1) throw new Error(`Automation reference is ambiguous: ${requested}. Use its id instead.`);
-    const automation = matches[0]!;
+    const automation = await findAutomation(relay, args, command);
+    const enabled = command === "resume";
+    const updated = await request<{ enabled: boolean; configKey?: string }>(relay, `/node/automations/${encodeURIComponent(automation.id)}/enabled`, {
+      method: "PUT",
+      body: JSON.stringify({ enabled }),
+    });
+    if (args.includes("--json")) console.log(JSON.stringify(updated, null, 2));
+    else {
+      console.log(`${enabled ? "Resumed" : "Paused"} ${automation.name}`);
+      if (updated.configKey) console.log(`  Until the next 'bivy automation apply', which sets it to what ${updated.configKey}'s file says.`);
+    }
+    return;
+  }
+
+  if (command === "trigger" || command === "run") {
+    const relay = relayConfig(appDataDir());
+    const automation = await findAutomation(relay, args, "trigger");
     const run = await request<{ id: string; status?: string }>(relay, `/node/automations/${encodeURIComponent(automation.id)}/run`, { method: "POST" });
     if (args.includes("--json")) console.log(JSON.stringify(run, null, 2));
     else {

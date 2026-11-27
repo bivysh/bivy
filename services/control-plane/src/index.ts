@@ -3214,6 +3214,32 @@ app.get("/node/automations", requireNode, asyncHandler(async (req, res) => {
   res.json({ automations: (await store.listAutomationDefinitions(node.accountId)).map((d) => nodePublicAutomation(d, req)) });
 }));
 
+// Pause or resume — the one implementation behind the app's toggle and
+// `bivy automation pause/resume`. Pausing only stops runs, so it is never
+// gated. Resuming a file-managed automation isn't either: the definition is
+// exactly what its file applied, and the checked-in file is the approval.
+// Resuming anything else passes the save gate, as an edit would.
+async function setAutomationEnabled(current: AutomationDefinition, enabled: boolean): Promise<
+  { ok: true; definition: AutomationDefinition } | { ok: false; status: number; body: Record<string, unknown> }
+> {
+  const isScheduled = !current.trigger || current.trigger === "schedule";
+  const nextRunAt = !isScheduled || !enabled
+    ? undefined
+    : current.enabled ? current.nextRunAt : current.schedule && nextOccurrence(current.schedule, new Date(Date.now() - 1));
+  if (isScheduled && enabled && !current.enabled && !nextRunAt) {
+    return { ok: false, status: 400, body: { error: "The one-time timestamp must be in the future." } };
+  }
+  const patch = { enabled, nextRunAt };
+  if (enabled && !current.configKey) {
+    const gate = gateFromChecks(runPreflightChecks(gatherPreflightSignals({ ...current, ...patch }, await preflightSignalContext(current.accountId))));
+    if (gate.blocked) {
+      return { ok: false, status: 400, body: { error: gate.blockingChecks.map((c) => `${c.label}: ${c.detail}`).join("; "), preflight: gate.blockingChecks } };
+    }
+  }
+  const definition = await store.updateAutomationDefinition(current.accountId, current.id, patch);
+  return definition ? { ok: true, definition } : { ok: false, status: 404, body: { error: "Automation not found" } };
+}
+
 app.post("/node/automations/:id/run", requireNode, asyncHandler(async (req, res) => {
   const node = (req as Request & { node: NodeRecord }).node;
   const definition = await store.getAutomationDefinition(node.accountId, String(req.params.id));
@@ -3231,6 +3257,16 @@ const automationWriteRateLimit = rateLimit({
   keyGenerator: (req) => (req as Request & { node?: NodeRecord }).node?.id ?? ipKeyGenerator(clientIp(req)),
   message: { error: "Too many automation updates. Try again shortly." },
 });
+
+app.put("/node/automations/:id/enabled", requireNode, automationWriteRateLimit, asyncHandler(async (req, res) => {
+  const node = (req as Request & { node: NodeRecord }).node;
+  if (typeof req.body?.enabled !== "boolean") return res.status(400).json({ error: "enabled must be true or false" });
+  const current = await store.getAutomationDefinition(node.accountId, String(req.params.id));
+  if (!current) return res.status(404).json({ error: "Automation not found" });
+  const result = await setAutomationEnabled(current, req.body.enabled);
+  if (!result.ok) return res.status(result.status).json(result.body);
+  res.json(nodePublicAutomation(result.definition, req));
+}));
 
 // Templates sealed for the calling node, so it can re-seal them after a room-key
 // rotation (device revoke). Only ciphertext already bound to this node is read or
@@ -3612,7 +3648,12 @@ app.put("/account/automations/:id", automationWriteRateLimit, asyncHandler(async
   // operational state, so an `enabled`-only update is allowed. The next
   // `bivy automation apply` sets it back to the file's value.
   const pauseOnly = Object.keys(req.body ?? {}).every((key) => key === "enabled") && typeof req.body?.enabled === "boolean";
-  if (current.configKey && !pauseOnly) return res.status(409).json({ error: `Automation is managed by .bivy/automations.yaml (${current.configKey})` });
+  if (pauseOnly) {
+    const result = await setAutomationEnabled(current, req.body.enabled);
+    if (!result.ok) return res.status(result.status).json(result.body);
+    return res.json(publicAutomation(result.definition, req));
+  }
+  if (current.configKey) return res.status(409).json({ error: `Automation is managed by .bivy/automations.yaml (${current.configKey})` });
   const isScheduled = !current.trigger || current.trigger === "schedule";
   const enabled = typeof req.body?.enabled === "boolean" ? req.body.enabled : current.enabled;
   // Non-schedule automations have no cron; enabling/disabling just gates intake.
@@ -3737,14 +3778,8 @@ app.put("/account/automations/:id", automationWriteRateLimit, asyncHandler(async
   // Same save gate as create (see docs/automation-evaluator.md) — evaluated
   // against the patched definition, not the stored one, so tightening (e.g.
   // switching to autonomous + danger-full-access) is caught before it saves.
-  // An `enabled`-only toggle skips it when it cannot add risk: pausing only
-  // stops runs, and a file-managed definition stays exactly what the file
-  // applied (that path is ungated — the checked-in file is the approval).
-  // Gating these made an unsafe automation impossible to stop from the app.
-  const gateSkipped = pauseOnly && (!enabled || Boolean(current.configKey));
-  const gate = gateSkipped
-    ? { blocked: false, blockingChecks: [] }
-    : gateFromChecks(runPreflightChecks(gatherPreflightSignals({ ...current, ...patch }, await preflightSignalContext(client.accountId))));
+  // (Pause/resume took the setAutomationEnabled path above.)
+  const gate = gateFromChecks(runPreflightChecks(gatherPreflightSignals({ ...current, ...patch }, await preflightSignalContext(client.accountId))));
   if (gate.blocked) {
     return res.status(400).json({ error: gate.blockingChecks.map((c) => `${c.label}: ${c.detail}`).join("; "), preflight: gate.blockingChecks });
   }
